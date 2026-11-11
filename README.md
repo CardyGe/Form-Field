@@ -29,11 +29,21 @@ Under **Motion → Animation range**, choose **Smooth between endpoints** to ani
 
 The [implementation and source register](docs/projection-media-0.11.md) documents references, engineering decisions, evidence and remaining physical projection checks. The [creative direction](docs/projection-media-direction-2026-11-10.md) retains the original staged plan. Reproduce the new software proof with `npm run test:projection`.
 
+## Flat colour & outlines
+
+Every layer has **Finish → Flat colour & outlines**. It replaces shading with hard bands of the layer palette and draws contour lines between them, for cartoon-style mapping work. **Colour bands** sets how many tone bands there are; the palette repeats beyond six. **Outline width** is measured in pixels of a 1080-line frame, so lines keep their proportions at 4K and with supersampling. **Outline colour** uses black or any palette swatch. Edges from the source are snapped to one side, so soft source edges never leave slivers of in-between colours. For the cleanest result, lower the source's Relief and Softness.
+
+**Palette cycles per loop** rotates the bands through the palette in whole turns, so the loop still closes exactly. On smooth gradients the bands flow; on flat areas whole regions change colour at once, which can read as strobing.
+
+**Library → Presets → Flat colour & outlines** has five looks: Neon Strata, Acid Drip, Pop Portal, Contour Pop and Pour Lace. Applying one turns on **Finish → Output → Exact colour**, which shows palette colours at their exact values instead of rolling off bright highlights. Leave Exact colour off for lit 3D and glowing sources.
+
 ## Projection delivery
 
 **Export → Delivery format** offers mastering formats (ProRes 4444, ProRes 422 HQ, 16-bit PNG sequence) and projection playback formats: **HAP Q** (best quality), **HAP** (smallest) and **HAP Alpha** (transparent). HAP is decoded on the GPU by MadMapper, Resolume, Millumin and TouchDesigner, so 4K loops scrub and play smoothly. HAP needs dimensions that are multiples of 4; 4K frames are written in 8 chunks for parallel decoding. Projector sizes include DCI 4K, 4K WUXGA and WUXGA.
 
 **Anti-aliasing** renders the whole composition at 2× or 3× the delivery size and filters it down with a Mitchell filter, removing edge shimmer and moiré from fine lines. 2× takes roughly 2.5× as long per 4K frame. 3× is limited to 8192 pixels per side, so it suits HD and smaller deliveries. Fine film grain is softened slightly by the filter.
+
+**Loop seam check** runs after every export. It compares the six frames either side of the loop point and reports when the step from the last frame back to the first is larger than any nearby step (a pop) or when the motion changes speed there (a hitch). A seam is reported in the export panel but never stops delivery. To check the whole library, run `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron scripts/seam-audit.cjs`, optionally followed by preset ids. Results go to `work/seam-audit/results.json`. The Ink *Evolving* looks currently grow from seed without returning, so they are reported as seams.
 
 ## Workspace
 

@@ -296,3 +296,27 @@ test('cancellation during master reconciliation cannot be overwritten by encodin
   assert.equal((await manager.listJobs())[0].status, 'cancelled');
   assert.equal((await manager.record(job.id)).process, null);
 });
+
+test('every export reports whether its loop closes, without failing a loop that pops', async () => {
+  const frameCount = 8;
+  async function exportLoop(label, phaseOf) {
+    const context = await createContext(label, 'png', true, frameCount);
+    for (let index = 0; index < frameCount; index++) {
+      const filename = path.join(root, `${label}-${index}.exr`);
+      const value = `0.5+0.4*sin(X/16*2*PI+${phaseOf(index)})`;
+      ffmpeg(['-y', '-f', 'lavfi', '-i', `nullsrc=s=16x16,format=gbrapf32le,geq=r='${value}':g='${value}':b='${value}':a=1`, '-frames:v', '1', '-c:v', 'exr', '-format', 'half', filename]);
+      await context.manager.writeFrame(context.job.id, index, await fs.readFile(filename));
+    }
+    return context.manager.finishExport(context.job.id);
+  }
+  const clean = await exportLoop('seam-clean', i => (2 * Math.PI * i) / frameCount);
+  assert.equal(clean.status, 'complete');
+  assert.equal(clean.seam.status, 'clean', clean.seam.summary);
+  assert.match(clean.seam.summary, /clean/);
+  const popping = await exportLoop('seam-pop', i => (2 * Math.PI * 0.6 * i) / frameCount);
+  assert.equal(popping.status, 'complete', 'A seam is advisory and still delivers the media.');
+  assert.equal(popping.seam.status, 'seam');
+  assert.match(popping.seam.summary, /Visible loop seam/);
+  const leftovers = (await fs.readdir(clean.directory)).filter(name => name.startsWith('seam-'));
+  assert.deepEqual(leftovers, [], 'Analysis frames are removed.');
+});

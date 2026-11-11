@@ -44,6 +44,8 @@ export interface Project {
   height: number;
   background: string;
   transparent: boolean;
+  /** Final highlight handling. Absent means 'soft' (neutral roll-off), the original behaviour. */
+  highlights?: 'soft' | 'exact';
   layers: Layer[];
 }
 export interface ParameterDefinition {
@@ -92,7 +94,13 @@ export interface ExportJob {
   outputPath?: string;
   error?: string;
   createdAt: string;
+  seam?: SeamCheck;
 }
+export interface SeamMeasure { seam: number; typical: number; ratio: number; visible: boolean }
+export type SeamCheck = { summary: string } & (
+  | { status: 'clean' | 'seam'; jump: SeamMeasure; hitch: SeamMeasure }
+  | { status: 'skipped' }
+  | { status: 'error'; message: string });
 export interface ExportProgress {
   jobId: string;
   status: ExportJob['status'];
@@ -102,6 +110,7 @@ export interface ExportProgress {
   message?: string;
   outputPath?: string;
   error?: string;
+  seam?: SeamCheck;
 }
 export interface StudioStatus {
   version: string;

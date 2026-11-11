@@ -246,6 +246,8 @@ a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .export-progress progress::-webkit-progress-bar { background: #484848; border-radius: 4px; }
 .export-progress progress::-webkit-progress-value { background: #ccc; border-radius: 4px; }
 .export-progress > p { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.export-progress > p.seam-report { margin-top: 6px; }
+.export-progress > p.seam-report.seam { color: #f0b36a; }
 .recoverable-jobs { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 24px; }
 .recoverable-jobs h3 { color: var(--ink); font-size: 13px; font-weight: 600; margin-bottom: 8px; }
 .recoverable-jobs > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0; }

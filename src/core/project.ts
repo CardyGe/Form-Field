@@ -1,4 +1,4 @@
-import {FINISH_PARAMETERS, FINISH_KEYS} from './finishing';
+import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS} from './finishing';
 import { isSimplePolygon } from './surface-layout';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import { SIGNATURE_LOOKS } from './signature-looks';
@@ -328,6 +328,23 @@ for (const look of SIGNATURE_LOOKS) {
   PRESETS.push({ ...preset(look.id, look.name, look.description, base.kind, look.palette ?? base.palette, { ...base.params, ...look.params }), signature: true });
 }
 
+// Flat colour & outlines: saturated palettes, hard bands and constant-width
+// contour lines for cartoon-style projection mapping. Motion comes from the
+// source field; palette cycling is left to the artist because it switches the
+// colour of whole flat areas at once.
+const NEON_STRATA = ['#ff2e93', '#ffe600', '#00e5ff', '#7a2cff', '#39ff14', '#0b0614'];
+const ACID_DRIP = ['#b6ff00', '#ffef00', '#ff3cac', '#2de2e6', '#ff8a00', '#120024'];
+const POP_PORTAL = ['#00f0ff', '#ff00a8', '#fff200', '#00ff6a', '#7b00ff', '#05010f'];
+const POUR = ['#e8ff00', '#00b3ff', '#c6ff1a', '#0a0a0a', '#7dff00', '#008cff'];
+export const FLAT_LOOK_IDS = ['neon-strata', 'acid-drip', 'pop-portal', 'contour-pop', 'pour-lace'];
+PRESETS.push(
+  preset('neon-strata', 'Neon Strata', 'Saturated strata flow through black-lined bands.', 'surface', NEON_STRATA, { style: 0, variant: 0, scale: 3.2, warp: 0.55, detail: 0.35, roundness: 0.7, relief: 0, softness: 0, contrast: 0.7, offset: 0.2, reveal: 0, toonMix: 1, toonBands: 6, toonOutline: 4 }),
+  preset('acid-drip', 'Acid Drip', 'Acid colour melts downward in outlined drips.', 'surface', ACID_DRIP, { style: 2, variant: 0, scale: 3, warp: 0.5, detail: 0.25, roundness: 0.9, relief: 0, softness: 0, contrast: 0.75, offset: 0.1, reveal: 0, toonMix: 1, toonBands: 5, toonOutline: 5 }),
+  preset('pop-portal', 'Pop Portal', 'Concentric neon rings pull inward through a portal.', 'surface', POP_PORTAL, { style: 3, variant: 0, scale: 4.5, warp: 0.3, roundness: 0.8, relief: 0, density: 1.2, contrast: 0.7, reveal: 0, toonMix: 1, toonBands: 8, toonOutline: 3, toonOutlineColor: 6 }),
+  preset('contour-pop', 'Contour Pop', 'Terraced contours as flat poster colour.', 'surface', NEON_STRATA, { style: 1, variant: 0, scale: 3.6, warp: 0.35, roundness: 0.75, relief: 0, density: 1, contrast: 0.7, reveal: 0, toonMix: 1, toonBands: 7, toonOutline: 3 }),
+  preset('pour-lace', 'Pour Lace', 'Acrylic-pour yellow and cyan with dark lacing.', 'surface', POUR, { style: 0, variant: 1, scale: 2.6, warp: 0.8, detail: 0.6, turbulence: 0.35, roundness: 0.85, relief: 0, softness: 0, contrast: 0.75, reveal: 0, toonMix: 1, toonBands: 4, toonSoftness: 0.05, toonOutline: 2.5 }),
+);
+
 export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
@@ -411,6 +428,9 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     const locked = d.section === 'Motion' ? locks.motion : d.section === 'Material' ? locks.material : locks.structure;
     if (locked || VARIATION_FIXED.has(key) || (locks.palette && ['hue','saturation','vibrance'].includes(key))) continue;
     // Preserve artist-authored routes and their baseline values as a unit.
+    // Flat colour is an explicit choice: never switch it on, change its palette
+    // cycling (which can strobe), or vary its controls while it is off.
+    if (TOON_KEYS.includes(key) && (key === 'toonMix' || key === 'toonCycles' || !(layer.params.toonMix > 0))) continue;
     if (layer.modulations[key] || key==='tonePivot' || key==='warpScale'&&layer.params.warp===0 || key==='sheenAngle'&&layer.params.anisotropy===0) continue;
     const span = d.max-d.min;
     const personality = character[d.section] * .7 + (random()*2-1) * .3;
@@ -662,7 +682,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
 
 export function validateProject(input: unknown): Project {
   const project = object(input, 'root');
-  keys(project, ['schemaVersion', 'id', 'name', 'seed', 'duration', 'fps', 'width', 'height', 'background', 'transparent', 'layers'], 'root');
+  keys(project, ['schemaVersion', 'id', 'name', 'seed', 'duration', 'fps', 'width', 'height', 'background', 'transparent', 'highlights', 'layers'], 'root');
   if (project.schemaVersion !== 1&&project.schemaVersion!==2) fail('schemaVersion', 'must be 1 or 2; this file version is not supported.');
   text(project.id, 'id', 100); text(project.name, 'name'); number(project.seed, 'seed', 0, 0xffffffff, true);
   number(project.duration, 'duration', 0.1, 600);
@@ -673,6 +693,7 @@ export function validateProject(input: unknown): Project {
   if (Math.round((project.duration as number) * rate) < 1 || Math.round((project.duration as number) * rate) > 72000) fail('duration', 'must produce between 1 and 72000 frames.');
   number(project.width, 'width', 64, 8192, true); number(project.height, 'height', 64, 8192, true);
   hex(project.background, 'background'); boolean(project.transparent, 'transparent');
+  if (own(project, 'highlights')) choice(project.highlights, ['soft', 'exact'] as const, 'highlights');
   if (!Array.isArray(project.layers) || project.layers.length < 1 || project.layers.length > 4) fail('layers', 'must contain between one and four layers.');
   const layers = project.layers.map((layer,i)=>validateLayer(layer,i,project.schemaVersion as 1|2));
   if(layers.some(l=>l.kind==='livingink'&&l.params.inkMode===2)&&(project.duration as number)>60)fail('duration','must be at most 60 seconds for evolving pigment.');

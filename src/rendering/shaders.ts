@@ -44,6 +44,7 @@ uniform float uSaturation,uHue,uExposure;
 uniform float uToneContrast,uTonePivot,uToneGamma,uShadowLift,uHighlightRoll,uVibrance;
 uniform float uColorMode,uColorSteps,uColorMix,uColorOffset;
 uniform vec3 uGradePalette[6];
+uniform float uToonMix,uToonBands,uToonOffset,uToonCycles,uToonSoftness,uToonOutline,uToonOutlineColor,uLoopPhase;
 const vec3 GRADE_LUMA=vec3(.2126,.7152,.0722);
 float stepIntegral(float x){float n=floor(x);return n*(n-1.)*.5+n*fract(x);}
 float strokeIntegral(float x,float width){return floor(x)*width*2.+min(fract(x),width)+max(fract(x)-(1.-width),0.);}
@@ -79,6 +80,72 @@ vec4 recolor(vec4 pixel){
   vec3 mapped=inkLuminance>.000001?ink*(luminance/inkLuminance):vec3(0.);
   mapped*=1.-stroke*.48;
   return vec4(mix(original,mapped,uColorMix)*pixel.a,pixel.a);
+}
+vec3 toonSwatch(float index){
+  return uGradePalette[int(mod(index+.5,6.))];
+}
+float toonShift(){
+  // Palette motion moves in whole six-swatch turns, so the band field after one
+  // loop is identical to the first frame: the loop closes exactly.
+  return (uToonOffset+uToonCycles*uLoopPhase/6.283185307179586)*6.;
+}
+float toonCoordinate(vec4 pixel,float shift){
+  vec3 straight=pixel.rgb/max(pixel.a,.000001);
+  float luminance=dot(max(straight,vec3(0.)),GRADE_LUMA);
+  return luminance/(.35+luminance)*uToonBands-shift;
+}
+vec4 sampleSource(vec2 uv);
+vec4 toon(vec4 pixel,vec2 uv){
+  // Separate pass over the sampled source. Derivatives and neighbour samples
+  // describe the visible tone field at the output pixel size.
+  vec3 original=pixel.rgb/max(pixel.a,.000001);
+  float shift=toonShift();
+  float coordinate=toonCoordinate(pixel,shift);
+  float footprint=max(fwidth(coordinate),.00001);
+  vec2 px=dFdx(uv),py=dFdy(uv);
+  // A source edge (or a gradient denser than one band per pixel) spans several
+  // bands between neighbours. Snap to the nearer side, so anti-aliased source
+  // edges never produce slivers of the intermediate bands.
+  float low=coordinate,high=coordinate;
+  for(int i=0;i<4;i++){
+    vec2 o=i==0?px:i==1?-px:i==2?py:-py;
+    float c=toonCoordinate(sampleSource(uv+o),shift);
+    low=min(low,c);high=max(high,c);
+  }
+  bool discontinuity=high-low>1.;
+  vec3 poster;
+  float centre;
+  if(discontinuity){
+    centre=coordinate-low<high-coordinate?low:high;
+    poster=toonSwatch(floor(centre));
+  }else{
+    centre=coordinate;
+    float band=floor(coordinate),f=coordinate-band;
+    // Signed distance to the nearest band boundary, in band units.
+    float t=f<.5?f:f-1.;
+    vec3 below=toonSwatch(f<.5?band-1.:band),above=toonSwatch(f<.5?band:band+1.);
+    float width=max(footprint,uToonSoftness*.5);
+    poster=mix(below,above,clamp(t/(2.*width)+.5,0.,1.));
+  }
+  if(uToonOutline>0.){
+    // Width is defined at 1080 lines, so every export size keeps its proportions.
+    float pixels=uToonOutline/(1080.*uTexel.y);
+    float radius=pixels*.5;
+    float band=floor(centre);
+    float inner=0.,outer=0.;
+    for(int i=0;i<8;i++){
+      float a=float(i)*.7853981633974483;
+      vec2 direction=cos(a)*px+sin(a)*py;
+      if(floor(toonCoordinate(sampleSource(uv+direction*max(radius-.5,.35)),shift))!=band)inner=1.;
+      if(floor(toonCoordinate(sampleSource(uv+direction*(radius+.5)),shift))!=band)outer=1.;
+    }
+    // Inner ring hits are fully inside the line; outer-only hits are its filtered rim.
+    float line=max(inner,outer*.5)*min(pixels,1.);
+    if(discontinuity)line=max(line,min(pixels,1.));
+    vec3 ink=uToonOutlineColor<.5?vec3(0.):uGradePalette[int(uToonOutlineColor-.5)];
+    poster=mix(poster,ink,line);
+  }
+  return vec4(mix(original,poster,uToonMix)*pixel.a,pixel.a);
 }
 vec3 grade(vec3 color) {
   // Rotate two luminance-free chroma axes in linear RGB. Neutral defaults bypass
@@ -154,6 +221,7 @@ void main() {
   }
   // Mode is uniform for the layer, so all pixels evaluate the contour footprint.
   if(uColorMode>.5)top=recolor(top);
+  if(uToonMix>0.)top=toon(top,uv);
   if(top.a>.00001 && (abs(uSaturation-1.)>.000001 || abs(uHue)>.000001 || abs(uExposure-1.)>.000001)) {
     top.rgb=grade(top.rgb/top.a)*top.a;
   }
@@ -194,13 +262,15 @@ precision highp float;
 varying vec2 vUv;
 uniform sampler2D uImage;
 uniform vec3 uBackground;
-uniform float uOpaque;
+uniform float uOpaque, uExactHighlights;
 #include <tonemapping_pars_fragment>
 void main() {
   vec4 pixel=texture2D(uImage,vUv);
   // Nonlinear look operates on unassociated colour. The result stays linear-light SDR.
   vec3 straight=pixel.a>.00001?max(pixel.rgb/pixel.a,vec3(0.)):vec3(0.);
-  vec3 color=clamp(NeutralToneMapping(straight),0.,1.);
+  // Soft roll-off compresses and desaturates bright colour. Exact mode keeps
+  // palette colours at their authored values (flat graphic and neon work).
+  vec3 color=uExactHighlights>.5?clamp(straight,0.,1.):clamp(NeutralToneMapping(straight),0.,1.);
   float alpha=clamp(pixel.a,0.,1.);
   if(uOpaque>.5) { color=color*alpha+uBackground*(1.-alpha); alpha=1.; }
   gl_FragColor=vec4(color,alpha);

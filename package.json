@@ -45,6 +45,7 @@
       "electron/main.cjs",
       "electron/preload.cjs",
       "electron/export-manager.cjs",
+      "electron/seam-check.cjs",
       "package.json"
     ],
     "mac": {

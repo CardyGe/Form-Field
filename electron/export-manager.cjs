@@ -5,6 +5,7 @@ const { existsSync } = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { checkSeam, describeSeam } = require('./seam-check.cjs');
 
 const EXR_MAGIC = 20000630;
 const CONTRACT = 'finished-sdr-linear-srgb-straight-v1';
@@ -50,6 +51,7 @@ function validateProject(project) {
       !Array.isArray(project.layers) || project.layers.length > 4 || !Number.isFinite(project.seed)) {
     throw new Error('This is not a supported Form & Field project.');
   }
+  if (project.highlights !== undefined && !['soft', 'exact'].includes(project.highlights)) throw new Error('Invalid highlight handling.');
   if (JSON.stringify(project).length > 256 * 1024 * 1024) throw new Error('Project exceeds the 256 MB local document limit.');
   for (const layer of project.layers) {
     if (!layer || !['surface', 'sculpture', 'fractal', 'oil', 'super8', 'graphic', 'image', 'caustic', 'livingink', 'magnetic', 'currents', 'relief', 'loom', 'reef', 'prism', 'resonance', 'veils'].includes(layer.kind) || typeof layer.id !== 'string' ||
@@ -468,6 +470,18 @@ class ExportManager {
     if (decoded.frames !== request.frameCount) throw new Error(`Decoded ${decoded.frames} frames; expected ${request.frameCount}.`);
   }
 
+  // Advisory: a seam is reported on the finished job but never fails delivery.
+  async checkSeam(record) {
+    let result;
+    try {
+      result = await checkSeam({ run: args => this.run(this.ffmpegPath, args, record), directory: record.job.directory, request: record.job.request, frameName, toLinear: srgbToLinear });
+    } catch (error) {
+      if (record.stopped) throw error;
+      result = { status: 'error', message: error.message.split('\n')[0] };
+    }
+    return { ...result, summary: describeSeam(result) };
+  }
+
   async finishExport(id) {
     const record = await this.record(id);
     if (record.job.status === 'complete') return clone(record.job);
@@ -489,6 +503,8 @@ class ExportManager {
       record.job.status = 'verifying'; await this.persist(record); this.emit(record);
       if (record.stopped) throw new Error('Export stopped.');
       await this.verify(record, temporary);
+      if (record.stopped) throw new Error('Export stopped.');
+      record.job.seam = await this.checkSeam(record);
       if (record.stopped) throw new Error('Export stopped.');
       let output = path.join(record.job.directory, png ? 'png' : 'media.mov');
       if (png) { try { await fs.access(output); output = path.join(record.job.directory, `png-${crypto.randomUUID().slice(0, 8)}`); } catch {} }

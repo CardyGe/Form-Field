@@ -215,10 +215,11 @@ export class StudioRenderer {
       uSaturation: {value:1}, uHue: {value:0}, uExposure:{value:1},
       uColorMode:{value:0},uColorSteps:{value:6},uColorMix:{value:1},uColorOffset:{value:0},
       uGradePalette:{value:DEFAULT_PALETTE.map(hex=>new THREE.Color(hex))},
+      uLoopPhase:{value:0},
     });
     this.finish = material(finishFragment, {
       uImage: { value: this.accumA.texture }, uBackground: { value: new THREE.Color(0) },
-      uOpaque: { value: 0 }, toneMappingExposure: { value: 1 },
+      uOpaque: { value: 0 }, uExactHighlights: { value: 0 }, toneMappingExposure: { value: 1 },
     });
     this.display = material(displayFragment, { uImage: { value: this.linearOutput.texture } });
     this.downsample = material(downsampleFragment, { uImage: { value: this.linearOutput.texture }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uFactor: { value: 1 } });
@@ -635,6 +636,7 @@ export class StudioRenderer {
       u.uColorMode.value=layer.kind==='fractal'&&number(layer,'colorMix',1)>0?number(layer,'colorMode',0):0;
       u.uColorSteps.value=number(layer,'colorSteps',6);u.uColorMix.value=number(layer,'colorMix',1);
       u.uColorOffset.value=number(layer,'offset',0);
+      u.uLoopPhase.value=wrapped;
       const gradeColors=u.uGradePalette.value as THREE.Color[];
       for(let i=0;i<6;i++)gradeColors[i].set(layer.palette[i]??DEFAULT_PALETTE[i]);
       u.uMask.value = this.fallback;
@@ -649,6 +651,7 @@ export class StudioRenderer {
     this.finish.uniforms.uImage.value = below.texture;
     (this.finish.uniforms.uBackground.value as THREE.Color).set(project.background);
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
+    this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
     this.draw(this.finish, this.linearOutput);
   }
 
