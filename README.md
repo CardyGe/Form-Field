@@ -286,6 +286,12 @@ The baseline machine is an Apple M5 Pro with 24 GB unified memory. Rendering com
 
 ## Develop and verify
 
+### Versions and automatic packaging
+
+The footer shows the version and build, for example `v0.12.0 · build 4`. The build number is the commit count, so it rises with every commit. A `+` means the build includes uncommitted changes. Hover the label for the commit and build time. The same build number is stamped into the app bundle, under Get Info → Version. Raise the version in `package.json` for releases you want to name.
+
+After every commit on `main`, a git hook (`.githooks/post-commit`) rebuilds `work/release/mac-arm64/Form & Field.app` in the background and sends a notification when it's done. If the app is open, the hook waits until you quit it. Progress and errors go to `work/auto-package.log`. To skip one commit, run `FORM_FIELD_NO_AUTOPACKAGE=1 git commit …`. A fresh clone needs `git config core.hooksPath .githooks` once.
+
 ```sh
 npm ci
 npm run dev

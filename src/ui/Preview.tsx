@@ -40,7 +40,8 @@ export function Preview({ project, playing, phase, rendererRef, onError, onEnded
       if(density!==window.devicePixelRatio){density=window.devicePixelRatio;invalidate.current=true;}
       if (state.playing) {phase.current=playbackPhase(phase.current,Math.min((now-previous)/1000,.1)/actualDuration(state.project)*TAU,state.project);if(phase.current>=TAU)state.onEnded?.();}
       previous = now;
-      if (prepared.current === state.project && (invalidate.current || phase.current !== lastPhase)) {
+      // A paused feedback layer keeps refining its history for a few frames after an edit.
+      if (prepared.current === state.project && (invalidate.current || phase.current !== lastPhase || engine.needsRefresh())) {
         const ratio = state.project.width / state.project.height;
         const size=previewSize(box.width,box.height,ratio,density);
         canvas.current!.style.width=`${size.cssWidth}px`;canvas.current!.style.height=`${size.cssHeight}px`;

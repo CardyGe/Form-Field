@@ -1,0 +1,7 @@
+#!/bin/sh
+# Rebuild the packaged app in the background after every commit on main.
+# Skip once with: FORM_FIELD_NO_AUTOPACKAGE=1 git commit ...
+[ -n "$FORM_FIELD_NO_AUTOPACKAGE" ] && exit 0
+[ "$(git branch --show-current)" = "main" ] || exit 0
+root="$(git rev-parse --show-toplevel)"
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" node "$root/scripts/auto-package.mjs" >/dev/null 2>&1 || true

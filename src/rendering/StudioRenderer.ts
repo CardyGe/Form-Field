@@ -37,14 +37,33 @@ const DEFAULT_PALETTE = ['#26cfee', '#adfc35', '#ec72dd', '#7535c0', '#ff805f', 
 type Uniforms = Record<string, THREE.IUniform>;
 interface Asset { texture: THREE.Texture; promise: Promise<THREE.Texture> }
 /** Per-layer feedback history: `current` holds the layer output at `frame`. */
-interface FeedbackState { key: string; frame: number; current: THREE.WebGLRenderTarget; next: THREE.WebGLRenderTarget }
-/** Seeks in the preview warm up this many frames at most, so editing stays
- * responsive; playback then converges on the exact steady state. */
+/**
+ * Per-layer feedback history. `current` holds the layer output at `frame`;
+ * when `previousValid`, `next` holds the output at frame - 1.
+ */
+interface FeedbackState {
+  /** Frame count and size. A change discards the history. */
+  structure: string;
+  /** The layer settings of the latest step. */
+  key: string;
+  frame: number;
+  current: THREE.WebGLRenderTarget;
+  next: THREE.WebGLRenderTarget;
+  previousValid: boolean;
+  /** The history covers the full warm-up with the current settings. */
+  exact: boolean;
+  /** Preview only: an exact history being rebuilt in the background. */
+  settle: { key: string; frame: number; step: number; a: THREE.WebGLRenderTarget; b: THREE.WebGLRenderTarget } | null;
+  spare: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null;
+}
+/** Seeks in the preview warm up this many frames at once at most. */
 const PREVIEW_WARMUP = 60;
 /** The preview steps through short forward jumps instead of warming up again. */
 const PREVIEW_STEP_LIMIT = 8;
-const feedbackKey = (layer: Layer, frames: number, width: number, height: number) =>
-  JSON.stringify([layer, frames, width, height], (key, value) => key === 'dataUrl' && typeof value === 'string' ? `${value.length}:${value.slice(-64)}` : value);
+/** Background settle steps per preview frame while paused. */
+const SETTLE_CHUNK = 6;
+const layerKey = (layer: Layer) =>
+  JSON.stringify(layer, (key, value) => key === 'dataUrl' && typeof value === 'string' ? `${value.length}:${value.slice(-64)}` : value);
 
 function viewUniforms(): Uniforms {
   return {uView:{value:new THREE.Matrix3()},uViewInverse:{value:new THREE.Matrix3()},uViewScale:{value:1}};
@@ -684,12 +703,12 @@ export class StudioRenderer {
     return original.kind === 'super8' ? super8Clock(wrapped, duration, original.params.filmFps).phase : wrapped;
   }
 
-  /** One feedback step: the source at `phase` over the faded, transformed echo. */
-  private feedbackStep(original: Layer, phase: number, duration: number, state: FeedbackState): void {
+  /** One feedback step: the source at `phase` over the faded, transformed echo in `from`. */
+  private feedbackStep(original: Layer, phase: number, duration: number, from: THREE.WebGLRenderTarget, to: THREE.WebGLRenderTarget): void {
     const layer = evaluateLayer(original, this.sourcePhase(original, phase, duration));
     const source = this.drawSource(layer, original.kind === 'super8' ? phase : this.sourcePhase(original, phase, duration), original, duration);
     const p = layer.params, u = this.feedback.uniforms;
-    u.uSource.value = source; u.uPrevious.value = state.current.texture;
+    u.uSource.value = source; u.uPrevious.value = from.texture;
     u.uAspect.value = this.width / this.height;
     u.uZoom.value = p.echoZoom ?? 1;
     u.uRotate.value = (p.echoRotate ?? 0) * Math.PI / 180;
@@ -700,51 +719,125 @@ export class StudioRenderer {
     u.uMode.value = p.echoBlend ?? 0;
     u.uHole.value = p.echoFrame ?? 0;
     u.uWindow.value = p.echoWindow ?? 0;
-    this.draw(this.feedback, state.next);
-    [state.current, state.next] = [state.next, state.current];
+    this.draw(this.feedback, to);
+  }
+
+  private clearTarget(rt: THREE.WebGLRenderTarget): void {
+    this.renderer.setRenderTarget(rt); this.renderer.setClearColor(0, 0); this.renderer.clear();
+  }
+
+  /** Advances `current` through loop frames first..last, one step each. */
+  private feedbackRun(original: Layer, state: FeedbackState, first: number, last: number, total: number, duration: number): void {
+    for (let k = first; k <= last; k++) {
+      this.feedbackStep(original, phaseAtFrame(((k % total) + total) % total, total), duration, state.current, state.next);
+      [state.current, state.next] = [state.next, state.current];
+      state.previousValid = true;
+    }
   }
 
   /**
-   * The layer's feedback output at loop frame `phase`. Consecutive frames cost
-   * one step. Anything else warms up from black over enough frames that the
-   * missing history is below half-float precision (exports), or over a short
-   * budget (preview seeks), which playback then refines.
+   * The layer's feedback output at loop frame `phase`.
+   *
+   * Exports: consecutive frames cost one step; anything else, or a history not
+   * built in full with these settings, warms up from black until the missing
+   * history is below half-float precision.
+   *
+   * Preview: edits work like a live feedback rig. They apply from the next
+   * step and older echoes age out, so a slider drag costs one step per frame.
+   * While paused, the current frame is recomputed in one step from the stored
+   * previous frame, and the exact history is rebuilt a few steps per frame in
+   * the background (see needsRefresh), then swapped in.
    */
   private feedbackSource(original: Layer, phase: number, total: number, duration: number): THREE.Texture {
     const frame = frameAtPhase(phase, total);
-    const key = feedbackKey(original, total, this.width, this.height);
+    const structure = `${total}:${this.width}x${this.height}`;
+    const key = layerKey(original);
     let state = this.feedbackStates.get(original.id);
     if (!state) {
-      state = { key, frame: -1, current: target(), next: target() };
+      // An empty structure makes the check below size the new targets.
+      state = { structure: '', key, frame: -1, current: target(), next: target(), previousValid: false, exact: false, settle: null, spare: null };
       this.feedbackStates.set(original.id, state);
     }
-    if (state.key !== key || state.current.width !== this.width || state.current.height !== this.height) {
-      state.key = key; state.frame = -1;
-      for (const rt of [state.current, state.next]) if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
+    if (state.structure !== structure) {
+      state.structure = structure; state.frame = -1; state.previousValid = false; state.exact = false; state.settle = null;
+      for (const rt of [state.current, state.next, ...(state.spare ?? [])]) rt.setSize(this.width, this.height);
     }
-    const distance = state.frame < 0 ? Infinity : (frame - state.frame + total) % total;
-    if (distance === 0) return state.current.texture;
     // Animated feedback needs the longest memory it reaches during the loop.
     let fade = 0;
     for (let k = 0; k < 16; k++) fade = Math.max(fade, persistence(evaluateLayer(original, k * TAU / 16)));
     const full = warmupFrames(fade);
-    const stepLimit = this.exactFeedback ? 1 : PREVIEW_STEP_LIMIT;
-    let steps: number;
-    if (distance <= stepLimit) steps = distance;
-    else {
-      steps = (this.exactFeedback ? full : Math.min(full, PREVIEW_WARMUP)) + 1;
-      this.renderer.setRenderTarget(state.current); this.renderer.setClearColor(0, 0); this.renderer.clear();
+    const changed = key !== state.key;
+    const distance = state.frame < 0 ? Infinity : (frame - state.frame + total) % total;
+    const warmUp = (frames: number) => {
+      this.clearTarget(state.current);
+      this.feedbackRun(original, state, frame - frames, frame, total, duration);
+      state.exact = frames >= full;
+    };
+
+    if (this.exactFeedback) {
+      state.settle = null;
+      if (!changed && state.exact && distance === 0) return state.current.texture;
+      if (!changed && state.exact && distance === 1) this.feedbackRun(original, state, frame, frame, total, duration);
+      else warmUp(full);
+    } else if (distance === 0 && !changed) {
+      // Nothing new: only continue a background settle.
+    } else if (distance === 0) {
+      if (state.previousValid) {
+        this.feedbackStep(original, phaseAtFrame(frame, total), duration, state.next, state.current);
+        state.exact = false;
+      } else warmUp(Math.min(full, PREVIEW_WARMUP));
+      this.startSettle(state, key, frame, full);
+    } else if (distance <= PREVIEW_STEP_LIMIT) {
+      this.feedbackRun(original, state, frame - distance + 1, frame, total, duration);
+      if (changed) state.exact = false;
+      state.settle = null;
+    } else {
+      warmUp(Math.min(full, PREVIEW_WARMUP));
+      if (!state.exact) this.startSettle(state, key, frame, full);
     }
-    // Frames are taken modulo the loop, so history before frame 0 is the end of the loop.
-    for (let k = frame - steps + 1; k <= frame; k++) this.feedbackStep(original, phaseAtFrame(((k % total) + total) % total, total), duration, state);
-    state.frame = frame;
+    state.key = key; state.frame = frame;
+    this.advanceSettle(original, state, key, frame, total, duration);
     return state.current.texture;
+  }
+
+  private startSettle(state: FeedbackState, key: string, frame: number, full: number): void {
+    if (!state.spare) state.spare = [target(), target()];
+    const [a, b] = state.spare;
+    for (const rt of [a, b]) if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
+    this.clearTarget(a);
+    state.settle = { key, frame, step: frame - full, a, b };
+  }
+
+  private advanceSettle(original: Layer, state: FeedbackState, key: string, frame: number, total: number, duration: number): void {
+    const settle = state.settle;
+    if (!settle) return;
+    if (settle.key !== key || settle.frame !== frame) { state.settle = null; return; }
+    for (let i = 0; i < SETTLE_CHUNK && settle.step <= frame; i++, settle.step++) {
+      this.feedbackStep(original, phaseAtFrame(((settle.step % total) + total) % total, total), duration, settle.a, settle.b);
+      [settle.a, settle.b] = [settle.b, settle.a];
+    }
+    if (settle.step <= frame) return;
+    // Settled: `a` holds this frame and `b` the one before. Swap them in and
+    // keep the old history's targets for the next settle.
+    state.spare = [state.current, state.next];
+    state.current = settle.a; state.next = settle.b;
+    state.previousValid = true; state.exact = true; state.settle = null;
+  }
+
+  /** True while a paused preview is still refining a feedback history. */
+  needsRefresh(): boolean {
+    for (const state of this.feedbackStates.values()) if (state.settle) return true;
+    return false;
+  }
+
+  private disposeFeedback(state: FeedbackState): void {
+    for (const rt of [state.current, state.next, ...(state.spare ?? [])]) rt.dispose();
   }
 
   private releaseFeedback(project: Project): void {
     for (const [id, state] of this.feedbackStates) {
       if (project.layers.some(layer => layer.id === id && layer.visible && feedbackActive(layer))) continue;
-      state.current.dispose(); state.next.dispose(); this.feedbackStates.delete(id);
+      this.disposeFeedback(state); this.feedbackStates.delete(id);
     }
   }
 
@@ -825,7 +918,7 @@ export class StudioRenderer {
     this.releaseOilTargets();
     this.graphicSource?.dispose(); this.graphicSource = null;
     this.super8Source?.dispose(); this.super8Source = null;
-    for (const state of this.feedbackStates.values()) { state.current.dispose(); state.next.dispose(); }
+    for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
     this.feedbackStates.clear();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.surface, this.fractal, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();

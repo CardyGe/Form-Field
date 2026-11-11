@@ -1,6 +1,6 @@
 {
   "name": "form-and-field",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "description": "A local visual instrument studio for seamless 2D and 3D media.",
   "type": "module",
@@ -12,7 +12,7 @@
     "test": "tsx --test tests/*.test.ts && node --test electron/*.test.cjs",
     "test:interaction": "npm run build && node scripts/verify-canvas-interaction.mjs",
     "test:zoom": "npm run build && node scripts/verify-zoom-quality.mjs",
-    "package": "npm run build && electron-builder --dir --mac --arm64",
+    "package": "node scripts/package.mjs",
     "build:media": "node scripts/build-media-tools.mjs",
     "test:ui": "npm run build && node scripts/verify-ui.mjs",
     "test:workspace": "npm run build && node scripts/verify-workspace-ui.mjs",
