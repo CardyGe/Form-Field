@@ -1,4 +1,4 @@
-import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS} from './finishing';
+import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS} from './finishing';
 import { isSimplePolygon } from './surface-layout';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import { SIGNATURE_LOOKS } from './signature-looks';
@@ -345,6 +345,14 @@ PRESETS.push(
   preset('pour-lace', 'Pour Lace', 'Acrylic-pour yellow and cyan with dark lacing.', 'surface', POUR, { style: 0, variant: 1, scale: 2.6, warp: 0.8, detail: 0.6, turbulence: 0.35, roundness: 0.85, relief: 0, softness: 0, contrast: 0.75, reveal: 0, toonMix: 1, toonBands: 4, toonSoftness: 0.05, toonOutline: 2.5 }),
 );
 
+/** Feedback looks: the source runs through its own trail of echoes. */
+export const FEEDBACK_LOOK_IDS = ['recursion-tunnel', 'echo-bloom', 'melt-trails'];
+PRESETS.push(
+  preset('recursion-tunnel', 'Recursion Tunnel', 'Flat neon frames nest inside each other and turn into the distance.', 'surface', NEON_STRATA, { style: 0, variant: 0, scale: 3.2, warp: 0.55, detail: 0.35, roundness: 0.7, relief: 0, softness: 0, contrast: 0.7, offset: 0.2, reveal: 0, toonMix: 1, toonBands: 6, toonOutline: 3, echo: 0.95, echoZoom: 0.9, echoRotate: 1.5, echoHue: 6, echoFrame: 0.62, echoBlend: 1 }),
+  preset('echo-bloom', 'Echo Bloom', 'Neon rings bloom outward, leaving glowing colour-shifted echoes.', 'surface', POP_PORTAL, { style: 3, variant: 0, scale: 4.5, warp: 0.3, roundness: 0.8, relief: 0, density: 1.2, contrast: 0.7, reveal: 0, toonMix: 1, toonBands: 8, toonOutline: 3, toonOutlineColor: 6, echo: 0.85, echoZoom: 1.035, echoRotate: -1, echoHue: 9, echoBlend: 2, echoWindow: 0.35 }),
+  preset('melt-trails', 'Melt Trails', 'Acid bands slide downward and melt along their own slopes.', 'surface', ACID_DRIP, { style: 2, variant: 0, scale: 3, warp: 0.5, detail: 0.25, roundness: 0.9, relief: 0, softness: 0, contrast: 0.75, offset: 0.1, reveal: 0, toonMix: 1, toonBands: 5, toonOutline: 4, echo: 0.9, echoZoom: 1, echoDriftY: -0.006, echoMelt: 0.7, echoHue: -4 }),
+);
+
 export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
@@ -431,6 +439,8 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     // Flat colour is an explicit choice: never switch it on, change its palette
     // cycling (which can strobe), or vary its controls while it is off.
     if (TOON_KEYS.includes(key) && (key === 'toonMix' || key === 'toonCycles' || !(layer.params.toonMix > 0))) continue;
+    // Feedback is likewise an explicit choice, and its blend and frame are structural.
+    if (FEEDBACK_KEYS.includes(key) && (['echo', 'echoBlend', 'echoFrame', 'echoWindow'].includes(key) || !(layer.params.echo > 0))) continue;
     if (layer.modulations[key] || key==='tonePivot' || key==='warpScale'&&layer.params.warp===0 || key==='sheenAngle'&&layer.params.anisotropy===0) continue;
     const span = d.max-d.min;
     const personality = character[d.section] * .7 + (random()*2-1) * .3;

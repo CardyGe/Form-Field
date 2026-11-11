@@ -1,6 +1,8 @@
 // Loop seam audit of the preset library, using the same renderer and the same
 // seam check that runs on every export.
 // Run: env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron scripts/seam-audit.cjs [preset-id ...]
+// SEAM_AUDIT_SIZE=3840x2160 renders at another size (default 640x360).
+// Set SEAM_AUDIT_STILLS=1 to also save the last and first frame of each loop as PNG.
 const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -12,9 +14,10 @@ const { checkSeam, seamFrames } = require('../electron/seam-check.cjs');
 const root = path.resolve(__dirname, '..');
 const outDir = path.join(root, 'work', 'seam-audit');
 const only = process.argv.slice(2).filter(arg => !arg.startsWith('-') && !arg.endsWith('.cjs'));
-const WIDTH = 640, HEIGHT = 360;
+const [WIDTH, HEIGHT] = (process.env.SEAM_AUDIT_SIZE || '640x360').split('x').map(Number);
 const { ffmpegPath } = resolveMediaTools();
 const results = [];
+let presetStarted = Date.now();
 
 function ffmpeg(args) {
   return new Promise((resolve, reject) => {
@@ -26,7 +29,7 @@ function ffmpeg(args) {
 
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.whenReady().then(async () => {
-  await fs.rm(outDir, { recursive: true, force: true });
+  await fs.rm(path.join(outDir, 'cache'), { recursive: true, force: true });
   await fs.mkdir(path.join(outDir, 'cache'), { recursive: true });
   await build({ entryPoints: [path.join(__dirname, 'seam-audit.browser.ts')], bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(outDir, 'bundle.js'), logLevel: 'silent' });
   await fs.writeFile(path.join(outDir, 'audit.html'), '<!doctype html><html><body><canvas id="canvas" width="640" height="360"></canvas><script type="module" src="./bundle.js"></script></body></html>');
@@ -36,9 +39,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('audit-measure', async (_, id, name, kind, frameCount) => {
     const request = { width: WIDTH, height: HEIGHT, frameCount, transparent: false, background: '#100d1c' };
     const result = await checkSeam({ run: ffmpeg, directory: outDir, request, frameName, toLinear: srgbToLinear });
-    results.push({ id, name, kind, ...result });
+    results.push({ id, name, kind, seconds: (Date.now() - presetStarted) / 1000, ...result });
+    presetStarted = Date.now();
+    // SEAM_AUDIT_STILLS=1 keeps the first and last loop frames for a visual check.
+    if (process.env.SEAM_AUDIT_STILLS === '1') {
+      for (const index of [frameCount - 1, 0]) await ffmpeg(['-hide_banner', '-loglevel', 'error', '-y', '-i', path.join(outDir, 'cache', frameName(index)), '-vf', 'format=gbrapf32le,zscale=pin=709:tin=linear:min=gbr:rin=full:p=709:t=iec61966-2-1:m=gbr:r=full,format=rgb24', path.join(outDir, `${id}-${index}.png`)]);
+    }
     const flag = result.status === 'seam' ? 'SEAM ' : 'ok   ';
-    console.log(`${flag}${id.padEnd(28)} jump ${result.jump.ratio.toFixed(2)} (${(result.jump.seam * 255).toFixed(2)}/255)  hitch ${result.hitch.ratio.toFixed(2)} (${(result.hitch.seam * 255).toFixed(2)}/255)`);
+    console.log(`${flag}${id.padEnd(28)} jump ${result.jump.ratio.toFixed(2)} (${(result.jump.seam * 255).toFixed(2)}/255)  hitch ${result.hitch.ratio.toFixed(2)} (${(result.hitch.seam * 255).toFixed(2)}/255)  ${results.at(-1).seconds.toFixed(1)} s`);
     await fs.rm(path.join(outDir, 'cache'), { recursive: true, force: true });
     await fs.mkdir(path.join(outDir, 'cache'));
   });

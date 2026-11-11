@@ -6,7 +6,8 @@ import { GraphicRenderer } from './GraphicRenderer';
 import { graphicRenderPlan } from './graphic-view';
 import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
-import { evaluateLayer, frameCount } from '../core/timeline';
+import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
+import { feedbackActive, feedbackFragment, frameAtPhase, persistence, warmupFrames } from './feedback';
 import { parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
@@ -35,6 +36,15 @@ const OIL_DEFAULTS = Object.fromEntries(parameterDefinitions('oil').map(({ key, 
 const DEFAULT_PALETTE = ['#26cfee', '#adfc35', '#ec72dd', '#7535c0', '#ff805f', '#152043'];
 type Uniforms = Record<string, THREE.IUniform>;
 interface Asset { texture: THREE.Texture; promise: Promise<THREE.Texture> }
+/** Per-layer feedback history: `current` holds the layer output at `frame`. */
+interface FeedbackState { key: string; frame: number; current: THREE.WebGLRenderTarget; next: THREE.WebGLRenderTarget }
+/** Seeks in the preview warm up this many frames at most, so editing stays
+ * responsive; playback then converges on the exact steady state. */
+const PREVIEW_WARMUP = 60;
+/** The preview steps through short forward jumps instead of warming up again. */
+const PREVIEW_STEP_LIMIT = 8;
+const feedbackKey = (layer: Layer, frames: number, width: number, height: number) =>
+  JSON.stringify([layer, frames, width, height], (key, value) => key === 'dataUrl' && typeof value === 'string' ? `${value.length}:${value.slice(-64)}` : value);
 
 function viewUniforms(): Uniforms {
   return {uView:{value:new THREE.Matrix3()},uViewInverse:{value:new THREE.Matrix3()},uViewScale:{value:1}};
@@ -106,6 +116,10 @@ export class StudioRenderer {
   private readonly finish: THREE.ShaderMaterial;
   private readonly display: THREE.ShaderMaterial;
   private readonly downsample: THREE.ShaderMaterial;
+  private readonly feedback: THREE.ShaderMaterial;
+  private readonly feedbackStates = new Map<string, FeedbackState>();
+  /** Exports need the full steady state; the preview may approximate after a seek. */
+  private exactFeedback = false;
   private readonly sculptureScene = new THREE.Scene();
   private readonly sculptureCamera = new THREE.PerspectiveCamera(40, 1, .1, 50);
   private readonly sculptureGeometry = new THREE.SphereGeometry(1, 320, 192);
@@ -223,6 +237,10 @@ export class StudioRenderer {
     });
     this.display = material(displayFragment, { uImage: { value: this.linearOutput.texture } });
     this.downsample = material(downsampleFragment, { uImage: { value: this.linearOutput.texture }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uFactor: { value: 1 } });
+    this.feedback = material(feedbackFragment, {
+      uSource: { value: null }, uPrevious: { value: null }, uAspect: { value: 1 }, uZoom: { value: 1 }, uRotate: { value: 0 },
+      uFade: { value: 0 }, uHue: { value: 0 }, uWarp: { value: 0 }, uMode: { value: 0 }, uHole: { value: 0 }, uWindow: { value: 0 }, uDrift: { value: new THREE.Vector2() },
+    });
     this.quad = new THREE.Mesh(this.quadGeometry, this.surface);
     this.quad.frustumCulled = false;
     this.quadScene.add(this.quad);
@@ -601,12 +619,19 @@ export class StudioRenderer {
     let below = this.accumA, next = this.accumB;
     const wrapped = ((phase % TAU) + TAU) % TAU;
     const duration = frameCount(project) * project.fps.den / project.fps.num;
+    const total = frameCount(project);
+    this.releaseFeedback(project);
     for (const original of project.layers) {
       if (!original.visible) continue;
-      const sourcePhase = original.kind === 'super8' ? super8Clock(wrapped, duration, original.params.filmFps).phase : wrapped;
+      // Feedback layers advance in whole loop frames: every frame of the
+      // history is a real step of the process, in preview and export alike.
+      const feedback = feedbackActive(original);
+      const framePhase = feedback ? phaseAtFrame(frameAtPhase(wrapped, total), total) : wrapped;
+      const sourcePhase = this.sourcePhase(original, framePhase, duration);
       const layer = evaluateLayer(original, sourcePhase);
       if (layer.opacity <= 0) continue;
-      const sourceTexture = this.drawSource(layer, original.kind === 'livingink'&&original.params.inkMode===2 ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration);
+      const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
+        : this.drawSource(layer, original.kind === 'livingink'&&original.params.inkMode===2 ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration);
       const u = this.composite.uniforms;
       u.uBelow.value = below.texture; u.uSource.value = sourceTexture;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
@@ -655,6 +680,74 @@ export class StudioRenderer {
     this.draw(this.finish, this.linearOutput);
   }
 
+  private sourcePhase(original: Layer, wrapped: number, duration: number): number {
+    return original.kind === 'super8' ? super8Clock(wrapped, duration, original.params.filmFps).phase : wrapped;
+  }
+
+  /** One feedback step: the source at `phase` over the faded, transformed echo. */
+  private feedbackStep(original: Layer, phase: number, duration: number, state: FeedbackState): void {
+    const layer = evaluateLayer(original, this.sourcePhase(original, phase, duration));
+    const source = this.drawSource(layer, original.kind === 'super8' ? phase : this.sourcePhase(original, phase, duration), original, duration);
+    const p = layer.params, u = this.feedback.uniforms;
+    u.uSource.value = source; u.uPrevious.value = state.current.texture;
+    u.uAspect.value = this.width / this.height;
+    u.uZoom.value = p.echoZoom ?? 1;
+    u.uRotate.value = (p.echoRotate ?? 0) * Math.PI / 180;
+    (u.uDrift.value as THREE.Vector2).set(p.echoDriftX ?? 0, p.echoDriftY ?? 0);
+    u.uFade.value = persistence(layer);
+    u.uHue.value = (p.echoHue ?? 0) * Math.PI / 180;
+    u.uWarp.value = p.echoMelt ?? 0;
+    u.uMode.value = p.echoBlend ?? 0;
+    u.uHole.value = p.echoFrame ?? 0;
+    u.uWindow.value = p.echoWindow ?? 0;
+    this.draw(this.feedback, state.next);
+    [state.current, state.next] = [state.next, state.current];
+  }
+
+  /**
+   * The layer's feedback output at loop frame `phase`. Consecutive frames cost
+   * one step. Anything else warms up from black over enough frames that the
+   * missing history is below half-float precision (exports), or over a short
+   * budget (preview seeks), which playback then refines.
+   */
+  private feedbackSource(original: Layer, phase: number, total: number, duration: number): THREE.Texture {
+    const frame = frameAtPhase(phase, total);
+    const key = feedbackKey(original, total, this.width, this.height);
+    let state = this.feedbackStates.get(original.id);
+    if (!state) {
+      state = { key, frame: -1, current: target(), next: target() };
+      this.feedbackStates.set(original.id, state);
+    }
+    if (state.key !== key || state.current.width !== this.width || state.current.height !== this.height) {
+      state.key = key; state.frame = -1;
+      for (const rt of [state.current, state.next]) if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
+    }
+    const distance = state.frame < 0 ? Infinity : (frame - state.frame + total) % total;
+    if (distance === 0) return state.current.texture;
+    // Animated feedback needs the longest memory it reaches during the loop.
+    let fade = 0;
+    for (let k = 0; k < 16; k++) fade = Math.max(fade, persistence(evaluateLayer(original, k * TAU / 16)));
+    const full = warmupFrames(fade);
+    const stepLimit = this.exactFeedback ? 1 : PREVIEW_STEP_LIMIT;
+    let steps: number;
+    if (distance <= stepLimit) steps = distance;
+    else {
+      steps = (this.exactFeedback ? full : Math.min(full, PREVIEW_WARMUP)) + 1;
+      this.renderer.setRenderTarget(state.current); this.renderer.setClearColor(0, 0); this.renderer.clear();
+    }
+    // Frames are taken modulo the loop, so history before frame 0 is the end of the loop.
+    for (let k = frame - steps + 1; k <= frame; k++) this.feedbackStep(original, phaseAtFrame(((k % total) + total) % total, total), duration, state);
+    state.frame = frame;
+    return state.current.texture;
+  }
+
+  private releaseFeedback(project: Project): void {
+    for (const [id, state] of this.feedbackStates) {
+      if (project.layers.some(layer => layer.id === id && layer.visible && feedbackActive(layer))) continue;
+      state.current.dispose(); state.next.dispose(); this.feedbackStates.delete(id);
+    }
+  }
+
   render(project: Project, phase: number, width?: number, height?: number): void {
     if (this.exporting) return;
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
@@ -693,11 +786,12 @@ export class StudioRenderer {
     this.exporting = true;
     try {
       await this.prepare(project);
+      this.exactFeedback = true;
       const output = this.renderOutput(project, phase, width, height, supersample);
       return await new EXRExporter().parse(this.renderer, output, {
         type: THREE.HalfFloatType, compression: ZIP_COMPRESSION,
       });
-    } finally { this.renderer.setRenderTarget(null); this.exporting = false; }
+    } finally { this.renderer.setRenderTarget(null); this.exporting = false; this.exactFeedback = false; }
   }
 
   async exportPNG(project: Project, phase: number, width: number, height: number, supersample = 1): Promise<Uint8Array> {
@@ -705,6 +799,7 @@ export class StudioRenderer {
     this.exporting = true;
     try {
       await this.prepare(project);
+      this.exactFeedback = true;
       const output = this.renderOutput(project, phase, width, height, supersample);
       if (this.byteOutput.width !== width || this.byteOutput.height !== height) this.byteOutput.setSize(width, height);
       this.display.uniforms.uImage.value = output.texture;
@@ -713,7 +808,7 @@ export class StudioRenderer {
       const pixels = new Uint8Array(width * height * 4);
       await this.renderer.readRenderTargetPixelsAsync(this.byteOutput, 0, 0, width, height, pixels);
       return await encodePNG(pixels, width, height);
-    } finally { this.renderer.setRenderTarget(null); this.exporting = false; }
+    } finally { this.renderer.setRenderTarget(null); this.exporting = false; this.exactFeedback = false; }
   }
 
   getStats(): { drawCalls: number; triangles: number; textures: number } {
@@ -730,8 +825,10 @@ export class StudioRenderer {
     this.releaseOilTargets();
     this.graphicSource?.dispose(); this.graphicSource = null;
     this.super8Source?.dispose(); this.super8Source = null;
+    for (const state of this.feedbackStates.values()) { state.current.dispose(); state.next.dispose(); }
+    this.feedbackStates.clear();
     this.graphics.dispose(); this.instruments.dispose();
-    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.surface, this.fractal, this.image, this.composite, this.finish, this.display, this.downsample, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
+    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.surface, this.fractal, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.filmThickness.dispose();
     this.keyLight.shadow.dispose();
     this.renderer.dispose();

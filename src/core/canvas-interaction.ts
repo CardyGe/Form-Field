@@ -1,3 +1,4 @@
+import { FINISH_KEYS } from './finishing';
 import type { Layer, LayerKind, ParameterDefinition } from '../shared/types';
 import { visibleParameterDefinitions, type VariationLocks } from './project';
 
@@ -31,7 +32,8 @@ export function canvasAxes(layer: Layer, locks: VariationLocks): ParameterDefini
     ['waveCount', 'amplitude'], ['coil', 'orbit'], ['roundness', 'tileGap'],
     ['spacing', 'glyphSize'], ['size', 'stretch'],
   ][Math.round(layer.params.style)] ?? [];
-  const available = visibleParameterDefinitions(layer).filter(d =>
+  // Finishing and feedback controls act on the finished layer, never as drag axes.
+  const available = visibleParameterDefinitions(layer).filter(d => !FINISH_KEYS.includes(d.key) &&
     d.step !== 1 && !d.preparation && !layer.modulations[d.key] &&
     (d.section === 'Shape' && !locks.structure || keys.includes(d.key) && d.section === 'Material' && !locks.material));
   return [...keys.map(key => available.find(d => d.key === key)), ...available]

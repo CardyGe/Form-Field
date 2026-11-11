@@ -37,6 +37,17 @@ Every layer has **Finish → Flat colour & outlines**. It replaces shading with 
 
 **Library → Presets → Flat colour & outlines** has five looks: Neon Strata, Acid Drip, Pop Portal, Contour Pop and Pour Lace. Applying one turns on **Finish → Output → Exact colour**, which shows palette colours at their exact values instead of rolling off bright highlights. Leave Exact colour off for lit 3D and glowing sources.
 
+## Feedback
+
+Any layer except Graphic Patterns and Ink *Evolving* can feed back into itself (Finish → Feedback). Each frame keeps a faded echo of the last one, zoomed, turned, moved and hue-shifted, and the new source is drawn with it. Flat colour and outlines then apply to the result, so echoes are re-banded into flat poster colour.
+
+- **Echo blend:** *Mix* blends the echoes across the whole source. *Behind source* shows them only through transparent areas and frames. *Brighter* keeps whichever is brighter, for glowing trails.
+- **Source frame** cuts a centred hole so the source becomes a border. With Echo zoom below 1, the borders nest inward into a tunnel.
+- **Source window** keeps only the centre of the source. With Echo zoom above 1, the echoes stream outward around it.
+- **Echo melt** pushes each echo along its own brightness slopes, so the trails smear.
+
+Motion values apply per frame. Loops close exactly, because the fading means the process forgets its start. Each export first warms up for up to about 270 frames, until the oldest frame's contribution falls below half-float precision, and then renders the loop in order. At 4K this adds a few seconds per export. In the preview, playback is exact. After a seek or an edit, the preview warms up for only 60 frames and settles as it plays. Three looks live under Library → Presets → Feedback.
+
 ## Projection delivery
 
 **Export → Delivery format** offers mastering formats (ProRes 4444, ProRes 422 HQ, 16-bit PNG sequence) and projection playback formats: **HAP Q** (best quality), **HAP** (smallest) and **HAP Alpha** (transparent). HAP is decoded on the GPU by MadMapper, Resolume, Millumin and TouchDesigner, so 4K loops scrub and play smoothly. HAP needs dimensions that are multiples of 4; 4K frames are written in 8 chunks for parallel decoding. Projector sizes include DCI 4K, 4K WUXGA and WUXGA.
