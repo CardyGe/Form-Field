@@ -1,0 +1,755 @@
+{
+  "date": "2026-11-11",
+  "version": "0.11.0",
+  "families": [
+    {
+      "kind": "surface",
+      "title": "Surface",
+      "verdict": "retain the graphic engine; redesign composition and movement",
+      "scope": "M \u2014 focused renderer redesign",
+      "file": "01-surface.md",
+      "count": 17
+    },
+    {
+      "kind": "sculpture",
+      "title": "Sculpture",
+      "verdict": "retain the 3D foundation; rebuild motion direction and framing",
+      "scope": "M; optional growth solver is L",
+      "file": "02-sculpture.md",
+      "count": 11
+    },
+    {
+      "kind": "fractal",
+      "title": "Fractals",
+      "verdict": "separate 2D ornament from 3D environment; retain the mathematics",
+      "scope": "M for 2D direction; L for world traversal",
+      "file": "03-fractal.md",
+      "count": 15
+    },
+    {
+      "kind": "oil",
+      "title": "Oil Slides",
+      "verdict": "retain the optical pass; replace the repeated behavioral setup",
+      "scope": "L for a convincing liquid instrument",
+      "file": "04-oil.md",
+      "count": 9
+    },
+    {
+      "kind": "super8",
+      "title": "Super 8 Paint",
+      "verdict": "retain film transport; redesign marks and temporal composition",
+      "scope": "M; original scanned media is an optional addition",
+      "file": "05-super8.md",
+      "count": 6
+    },
+    {
+      "kind": "graphic",
+      "title": "Graphic Patterns",
+      "verdict": "retain layout/rendering; replace synchronized motion with designed relationships",
+      "scope": "M \u2014 high return with limited renderer risk",
+      "file": "06-graphic.md",
+      "count": 32
+    },
+    {
+      "kind": "image",
+      "title": "Image / imported media",
+      "verdict": "retain still compositing; extend it into a deliberate source/input workflow",
+      "scope": "M for field inputs; L for moving-media ingest",
+      "file": "07-image.md",
+      "count": 0
+    },
+    {
+      "kind": "caustic",
+      "title": "Caustic Atlas",
+      "verdict": "replace the line-threshold look with a receiver-based light construction",
+      "scope": "M \u2014 new caustic source pass",
+      "file": "08-caustic.md",
+      "count": 4
+    },
+    {
+      "kind": "livingink",
+      "title": "Living Ink",
+      "verdict": "separate reaction patterns from ink transport; rebuild the evolving treatment",
+      "scope": "L \u2014 simulation and material direction",
+      "file": "09-livingink.md",
+      "count": 7
+    },
+    {
+      "kind": "magnetic",
+      "title": "Magnetic Skin",
+      "verdict": "replace the peak geometry model; retain a legacy cellular-metal mode",
+      "scope": "L \u2014 new 3D surface construction",
+      "file": "10-magnetic.md",
+      "count": 4
+    },
+    {
+      "kind": "currents",
+      "title": "Velvet Currents",
+      "verdict": "retain deterministic path reconstruction; rebuild emission, density and ribbon form",
+      "scope": "M/L \u2014 path composition and renderer work",
+      "file": "11-currents.md",
+      "count": 7
+    },
+    {
+      "kind": "relief",
+      "title": "Kinetic Relief",
+      "verdict": "retain actual solids; replace the square-grid choreography",
+      "scope": "M \u2014 scene, layout and event design",
+      "file": "12-relief.md",
+      "count": 7
+    },
+    {
+      "kind": "loom",
+      "title": "Holographic Loom",
+      "verdict": "replace the flat plaid construction with a deforming material surface",
+      "scope": "L for cloth; M for an authored procedural surface",
+      "file": "13-loom.md",
+      "count": 4
+    },
+    {
+      "kind": "reef",
+      "title": "Crystal Reef",
+      "verdict": "separate the polygon mosaic from an actual clustered growth instrument",
+      "scope": "L \u2014 topology, geometry and growth authoring",
+      "file": "14-reef.md",
+      "count": 4
+    },
+    {
+      "kind": "prism",
+      "title": "Prism Cathedral",
+      "verdict": "replace nested 2D outlines with a coherent optical space",
+      "scope": "L \u2014 3D scene and optics; bounded quality first",
+      "file": "15-prism.md",
+      "count": 4
+    },
+    {
+      "kind": "resonance",
+      "title": "Resonant Sand",
+      "verdict": "retain the nodal field; add actual grain organization and mode events",
+      "scope": "M/L \u2014 particle response and temporal direction",
+      "file": "16-resonance.md",
+      "count": 4
+    },
+    {
+      "kind": "veils",
+      "title": "Volumetric Veils",
+      "verdict": "retain ray integration; rebuild density structure and scene lighting",
+      "scope": "L for a convincing atmosphere; M for bounded procedural veils",
+      "file": "17-veils.md",
+      "count": 4
+    }
+  ],
+  "presetCount": 139,
+  "phaseCaptures": 417,
+  "temporalSheets": 70,
+  "additionalHDPortraitCaptures": 32,
+  "primaryReferencePages": 64,
+  "pinnedMadMapperShaders": 31,
+  "sourceRegisters": {
+    "primary": {
+      "interconnection": {
+        "title": "Limelight \u2014 Interconnection",
+        "url": "https://www.limelight.art/portfolio/interconnection",
+        "lesson": "Bucharest 2016: architectural features participate in the image. Region relationships matter more than adding surface noise.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "superreal": {
+        "title": "Moment Factory \u2014 SuperReal",
+        "url": "https://momentfactory.com/products/superreal",
+        "lesson": "Immersive scene direction and contrasting spatial worlds; a whole installation is a larger problem than a material generator.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "aura": {
+        "title": "Moment Factory / Notch \u2014 AURA Invalides",
+        "url": "https://www.notch.one/madewithnotch/aura-invalides",
+        "lesson": "Documented combination of Notch particles and lighting with Cinema 4D, Unreal and After Effects; onsite iteration via NDI. Supports a hybrid pipeline, not a claim that one shader produced the show.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "waterparticles": {
+        "title": "teamLab \u2014 Universe of Water Particles",
+        "url": "https://www.team-lab.com/news/uowp1307/",
+        "lesson": "3D water trajectories become drawn lines. This is a motion and spatial organization reference, not evidence that our analytic flow is equivalent.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "livingmural": {
+        "title": "Universal Everything \u2014 Living Mural",
+        "url": "https://www.universaleverything.com/design/sydney-opera-house-living-mural",
+        "lesson": "Architecture and hand-drawn animation organized around distinct actions such as burst, fill, chase and multiply.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "box": {
+        "title": "Bot & Dolly \u2014 Box, Ian Sherman production account",
+        "url": "https://www.ianjsherman.com/work/box/",
+        "lesson": "A participant documents virtual camera, forced perspective, synchronization and TouchDesigner compositing. Coherent scene design is essential; our app has no robotics or calibration.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "lyrique": {
+        "title": "1024 architecture \u2014 Perspective Lyrique",
+        "url": "https://www.1024architecture.net/projects/perspective-lyrique/",
+        "lesson": "Voice level drives deformation of recognizable architecture. A directed cause produces a specific spatial response.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "fuji": {
+        "title": "Studio Lemercier \u2014 FUJI",
+        "url": "https://joanielemercier.com/fuji/",
+        "lesson": "Drawing, projection and sound create a narrative with limited light. Restraint and underlying surface imagery deserve equal attention to detail density.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "strata": {
+        "title": "Quayola \u2014 Strata #1",
+        "url": "https://quayola.com/strata-1/",
+        "lesson": "Computational abstraction derives composition and color from the original fresco; relevant to image-guided generation.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "kodama": {
+        "title": "Sachiko Kodama + Minako Takeno \u2014 Protrude, Flow",
+        "url": "https://www.sachikokodama.com/en/works/protrude-flow-installation/",
+        "lesson": "Physical ferrofluid provides a material reference, not a digital effect to copy.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "kodamatech": {
+        "title": "Kodama \u2014 Protrude, Flow project account",
+        "url": "https://www.kodama.hc.uec.ac.jp/project/protrude.html",
+        "lesson": "Explains sound-controlled physical magnetic fluid, pointed peaks and flowing transformations.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "fidenza": {
+        "title": "Tyler Hobbs \u2014 Fidenza algorithm account",
+        "url": "https://www.tylerxhobbs.com/words/fidenza",
+        "lesson": "Non-overlap, varied widths, margins and weighted palettes organize flow fields. Static generative composition reference, not a motion reference.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "flora": {
+        "title": "Nervous System \u2014 Floraform",
+        "url": "https://n-e-r-v-o-u-s.com/projects/floraform/",
+        "lesson": "Differential growth changes elastic surface form. Relevant to believable folded sculpture; not crystal physics.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "joshua": {
+        "title": "Joshua Light Show \u2014 Present",
+        "url": "https://www.joshualightshow.com/about-recent/joshua-light-show-present",
+        "lesson": "Physical liquid projection, improvisation and mixed analog/digital construction. Oil reference; not a prescribed simulator.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "mclaren": {
+        "title": "NFB \u2014 Begone Dull Care, McLaren and Lambart",
+        "url": "https://collection.nfb.ca/film/begone_dull_care",
+        "lesson": "Painting and engraving directly on film, rhythm and gesture. A direct-film reference, not Super 8 capture.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "mclarennotes": {
+        "title": "NFB \u2014 McLaren technical notes",
+        "url": "https://www3.nfb.ca/archives_mclaren/notech/NT_EN.pdf",
+        "lesson": "Direct-film production and phrase-based making; different textures have different physical causes. Historical process document.",
+        "evidence": "Primary archive PDF, relevant technical passages; not an exhaustive reading of every film entry."
+      },
+      "lye": {
+        "title": "Ng\u0101 Taonga \u2014 A Colour Box, Len Lye",
+        "url": "https://www.ngataonga.org.nz/search-use-collection/search/F9061/",
+        "lesson": "Painted celluloid and rhythmic design; useful reference for expressive marks, not a source asset library.",
+        "evidence": "Primary page / author description; linked films are not fully timecoded in this audit."
+      },
+      "BoxMappingToolkit": {
+        "title": "DJVB \u2014 BoxMappingToolkit",
+        "url": "https://resolume.com/footage/BoxMappingToolkit",
+        "lesson": "Depth, internal mechanisms, face continuity and black space give a cube a coherent illusion.",
+        "evidence": "Primary product page and browser-observed trailer/preview samples; not the complete pack or an annotated full viewing."
+      },
+      "FluidMandalas": {
+        "title": "Matthias M\u00fcller \u2014 FluidMandalas",
+        "url": "https://resolume.com/footage/FluidMandalas",
+        "lesson": "Dense fluid/particle forms have bodies, wisps and several scales; do not copy the bright trailer treatment indiscriminately.",
+        "evidence": "Primary product page and browser-observed trailer/preview samples; not the complete pack or an annotated full viewing."
+      },
+      "FerroCious": {
+        "title": "HybridVisuals \u2014 FerroCious",
+        "url": "https://resolume.com/footage/FerroCious",
+        "lesson": "Physical ferrofluid footage is a useful counterexample to smooth shaded cells.",
+        "evidence": "Primary product page and browser-observed trailer/preview samples; not the complete pack or an annotated full viewing."
+      },
+      "BlueSpace": {
+        "title": "Julius Horsthuis \u2014 BlueSpace",
+        "url": "https://resolume.com/footage/BlueSpace",
+        "lesson": "Fractal structures can be staged as environments with depth hierarchy rather than isolated thumbnails.",
+        "evidence": "Primary product page and browser-observed trailer/preview samples; not the complete pack or an annotated full viewing."
+      },
+      "DeepSilk2": {
+        "title": "RAW Designs \u2014 DeepSilk2",
+        "url": "https://resolume.com/footage/DeepSilk2",
+        "lesson": "Large folds, silhouette, reflection cards and quiet regions contribute more fabric presence than a tiny thread grid.",
+        "evidence": "Primary product page and browser-observed trailer/preview samples; not the complete pack or an annotated full viewing."
+      },
+      "FeedboxAbstract": {
+        "title": "Dan Chelger \u2014 FeedboxAbstract",
+        "url": "https://resolume.com/footage/FeedboxAbstract",
+        "lesson": "Artist-programmed feedback modeled after analog equipment; feedback is a system with memory.",
+        "evidence": "Primary product page and creator/retailer description; pack not purchased or executed."
+      },
+      "ConsciousCoral": {
+        "title": "Julius Horsthuis \u2014 ConsciousCoral",
+        "url": "https://resolume.com/footage/ConsciousCoral",
+        "lesson": "Day/night treatments offer a concrete lesson in lighting the same kind of form differently.",
+        "evidence": "Primary product page and creator/retailer description; pack not purchased or executed."
+      },
+      "FogAndDust": {
+        "title": "Tristan Gieler \u2014 FogAndDust",
+        "url": "https://resolume.com/footage/FogAndDust",
+        "lesson": "Atmosphere belongs in a scene with depth references; not just a fullscreen density texture.",
+        "evidence": "Primary product page and creator/retailer description; pack not purchased or executed."
+      },
+      "AchromaticHiss": {
+        "title": "KRATATA \u2014 AchromaticHiss",
+        "url": "https://resolume.com/footage/AchromaticHiss",
+        "lesson": "Minimal patterned forms can carry the image through scale, overlap, rhythm and negative space.",
+        "evidence": "Primary product page and browser-observed trailer/preview samples; not the complete pack or an annotated full viewing."
+      },
+      "ParticleParty": {
+        "title": "Visual Lab \u2014 ParticleParty",
+        "url": "https://resolume.com/footage/ParticleParty",
+        "lesson": "Current market reference for discrete 3D particle bodies; do not infer the production algorithm from its marketing text.",
+        "evidence": "Primary product page and creator/retailer description; pack not purchased or executed."
+      },
+      "InternalCircuitry": {
+        "title": "Visual Lab \u2014 InternalCircuitry",
+        "url": "https://resolume.com/footage/InternalCircuitry",
+        "lesson": "Current market reference for deliberate graphic rhythm and impact.",
+        "evidence": "Primary product page and creator/retailer description; pack not purchased or executed."
+      },
+      "popular": {
+        "title": "Resolume \u2014 current Top 12",
+        "url": "https://resolume.com/footage/popular",
+        "lesson": "On the access date, ParticleParty, AchromaticHiss and InternalCircuitry appeared on this page. This is a retailer ranking snapshot, not independent market-share evidence.",
+        "evidence": "Primary ranking page, 11 November 2026; may change."
+      },
+      "tdnoise": {
+        "title": "TouchDesigner \u2014 Noise TOP",
+        "url": "https://derivative.ca/UserGuide/Noise_TOP",
+        "lesson": "Noise families and explicit coordinate input. Noise and domain construction can be varied separately.",
+        "evidence": "Official operator documentation, relevant summary and parameters."
+      },
+      "tdparticle": {
+        "title": "TouchDesigner \u2014 Particle POP",
+        "url": "https://derivative.ca/UserGuide/Particle_POP",
+        "lesson": "Per-point state, birth, death, forces and feedback; compare actual particle behavior rather than a texture called particles.",
+        "evidence": "Official operator documentation."
+      },
+      "tdfeedback": {
+        "title": "TouchDesigner \u2014 Feedback TOP",
+        "url": "https://derivative.ca/UserGuide/Feedback_TOP",
+        "lesson": "Explicit downstream target and reset behavior. Stateful feedback differs from a bounded analytic echo.",
+        "evidence": "Official operator documentation, summary and reset parameters."
+      },
+      "tddisplace": {
+        "title": "TouchDesigner \u2014 Displace TOP",
+        "url": "https://derivative.ca/UserGuide/Displace_TOP",
+        "lesson": "An image/field drives spatial displacement; a different operation from advection or physical fluid simulation.",
+        "evidence": "Official operator documentation, summary and channel behavior."
+      },
+      "tdpbr": {
+        "title": "TouchDesigner \u2014 PBR MAT",
+        "url": "https://derivative.ca/UserGuide/PBR_MAT",
+        "lesson": "Geometry, lighting and maps cooperate; PBR controls alone do not author a convincing material.",
+        "evidence": "Official operator documentation, summary and material parameters."
+      },
+      "tdinstance": {
+        "title": "TouchDesigner curriculum \u2014 Basics of Instancing",
+        "url": "https://learn.derivative.ca/courses/200-intermediate/lessons/201-converting-data-types-and-instancing/topic/basics-of-instancing/",
+        "lesson": "Instances can have individually sourced translation, rotation, scale, color and texture attributes.",
+        "evidence": "Official curriculum."
+      },
+      "tddrip": {
+        "title": "Crystal Jow / IIHQ \u2014 Jen Stark-inspired colour drip",
+        "url": "https://derivative.ca/community-post/tutorial/jen-stark-inspired-colour-drip-effect-touchdesigner/71765",
+        "lesson": "A concrete feedback/displacement comparison for Surface. Study the motion mechanism without reproducing an artist\u2019s signature composition.",
+        "evidence": "Author tutorial description hosted by Derivative; network not executed."
+      },
+      "tdpaint": {
+        "title": "Crystal Jow / IIHQ \u2014 Painterly Feedback",
+        "url": "https://derivative.ca/community-post/tutorial/painterly-feedback-effect-touchdesigner/71632",
+        "lesson": "Specific painterly feedback reference for Super 8 Paint and image-driven effects.",
+        "evidence": "Author tutorial description; network not executed."
+      },
+      "tdanalog": {
+        "title": "Crystal Jow / IIHQ \u2014 Audio Reactive Analog Content",
+        "url": "https://derivative.ca/community-post/tutorial/audio-reactive-analog-content-touchdesigner/63615",
+        "lesson": "Prepare analog assets, animate them and mix them with digital content; the materials themselves need variation.",
+        "evidence": "Author tutorial description; linked work not fully viewed."
+      },
+      "tdrd": {
+        "title": "Pao Olea \u2014 Reaction Diffusion 19.01",
+        "url": "https://www.youtube.com/watch?v=NmJ5rPKxF-8",
+        "lesson": "Published chapter breakdown covers diffusion, displacement, feedback, color and resolution; treat it as an authored workflow, not a single magic TOP.",
+        "evidence": "Creator video description/chapter list; not a watched full-video claim."
+      },
+      "tdaura": {
+        "title": "Pao Olea \u2014 Aura Flow [34]",
+        "url": "https://derivative.ca/community-post/tutorial/aura-flow-touchdesigner-tutorial-34/75535",
+        "lesson": "October 2026: trail form, per-point color, material, lights and a separate detail layer. Direct comparison for Currents.",
+        "evidence": "Author tutorial page; network not executed."
+      },
+      "tdplants": {
+        "title": "Pao Olea \u2014 Creating Plants [35]",
+        "url": "https://derivative.ca/community-post/tutorial/creating-plants-touchdesigner-tutorial-35/75697",
+        "lesson": "November 2026: POP attributes and trail construction. Current growth vocabulary, without assuming it simulates mineral growth.",
+        "evidence": "Author tutorial page; network not executed."
+      },
+      "tdwhitney": {
+        "title": "Pao Olea \u2014 Instancing Sine Cos [33]",
+        "url": "https://derivative.ca/community-post/tutorial/instancing-sine-cos-touchdesigner-tutorial-33/75458",
+        "lesson": "October 2026: John Whitney-inspired instancing. Sine motion can be excellent when spatial relationships are designed.",
+        "evidence": "Author tutorial page; network not executed."
+      },
+      "tdtiles": {
+        "title": "vtln \u2014 Rolling Tiles",
+        "url": "https://derivative.ca/community-post/tutorial/rolling-tiles-using-pops-chops-and-dats/75531",
+        "lesson": "October 2026: looping rows and columns, relevant to staged kinetic panels.",
+        "evidence": "Author tutorial description; network not executed."
+      },
+      "tdflip": {
+        "title": "Dean Cheesman \u2014 Flip-Dot Display",
+        "url": "https://derivative.ca/community-post/tutorial/flip-dot-display-tutorial-pops-dithering-and-feedback/74546",
+        "lesson": "Grid, sampled image attributes and feedback make geometry carry information.",
+        "evidence": "Author tutorial description; network not executed."
+      },
+      "tdcloth": {
+        "title": "tormozgh \u2014 Fabric Simulation with Spring SOP",
+        "url": "https://derivative.ca/community-post/tutorial/fabric-simulation-touchdesigner/65193",
+        "lesson": "A deforming surface plus a silk treatment, a closer cloth construction benchmark than a displaced plaid.",
+        "evidence": "Author tutorial description; example not executed."
+      },
+      "tdcrystal": {
+        "title": "Pao Olea \u2014 Crystal Material [04]",
+        "url": "https://derivative.ca/community-post/tutorial/crystal-material-touchdesigner-tutorial-04/69966",
+        "lesson": "3D base, PBR material, lighting, texture and shape refinement.",
+        "evidence": "Author tutorial description; example not executed."
+      },
+      "tdglass": {
+        "title": "IIHQ \u2014 3D Stained Glass",
+        "url": "https://derivative.ca/community-post/tutorial/3d-stained-glass-touchdesigner/68782",
+        "lesson": "HDRI and PBR give glass geometry a scene to respond to.",
+        "evidence": "Author tutorial description; example not executed."
+      },
+      "tdwave": {
+        "title": "Aristides.Lab \u2014 WaveField TOX",
+        "url": "https://derivative.ca/community-post/tutorial/wavefield-tox-pops-without-hassle/74758",
+        "lesson": "Wave equations operate on point/mesh sources and optional instances; includes Chladni modes. It is not evidence of a physical granular solver.",
+        "evidence": "Detailed author component description read; asset not executed."
+      },
+      "tdvolume": {
+        "title": "NODE / Derivative \u2014 3D Volumetrics in TouchDesigner",
+        "url": "https://derivative.ca/community-post/tutorial/3d-volumetrics-touchdesigner-course-live-node-institute/63129",
+        "lesson": "Raymarched volume shares a scene\u2019s lighting calculations and provides spatial depth cues.",
+        "evidence": "Creator course description; paid content not accessed."
+      },
+      "raytk": {
+        "title": "tekt \u2014 RayTK volumetric sampling",
+        "url": "https://derivative.ca/community-post/tutorial/raytk-v014-volumetric-sampling-tutorial/64950",
+        "lesson": "SDF/fields, reflection and volume workflows; spatial composition can be modular.",
+        "evidence": "Author tutorial/release description, historical version; not current release documentation."
+      },
+      "tdchaser": {
+        "title": "reflekkt \u2014 Chaser mapping tutorial",
+        "url": "https://derivative.ca/community-post/tutorial/chaser-effect-projection-mapping-tutorial/71750",
+        "lesson": "Separate surface regions and sequence highlights. A simple, material-independent mapping behavior.",
+        "evidence": "Author description."
+      },
+      "mmguide": {
+        "title": "MadMapper \u2014 custom GLSL materials",
+        "url": "https://docs.madmapper.com/madmapper/6/3.-media/writing-custom-glsl-materials",
+        "lesson": "Materials, typed inputs, direct surface rendering and optional render-to-texture.",
+        "evidence": "Current official documentation."
+      },
+      "mmlibrary": {
+        "title": "MadMapper \u2014 online material library",
+        "url": "https://docs.madmapper.com/madmapper/6/3.-media/online-material-library",
+        "lesson": "Built-in versus installed community materials must be distinguished.",
+        "evidence": "Current official documentation; no popularity or performance ranking inferred."
+      },
+      "mmspec": {
+        "title": "MadMapper \u2014 material extension specification",
+        "url": "https://raw.githubusercontent.com/madmappersoftware/MadMapper-Materials/main/MaterialsDoc.md",
+        "lesson": "MadMapper materials are related to ISF but have host extensions; render-to-texture can expose last-frame state.",
+        "evidence": "Official source specification; compatibility requires testing."
+      },
+      "wire": {
+        "title": "Resolume \u2014 Wire",
+        "url": "https://resolume.com/support/en/wire",
+        "lesson": "A smaller content-focused node ecosystem; slices, FFT, OSC, Syphon/Spout and ISF are separate capabilities.",
+        "evidence": "Official support index, not an executed integration."
+      },
+      "caustictech": {
+        "title": "Maxime Heckel \u2014 Caustics in WebGL",
+        "url": "https://blog.maximeheckel.com/posts/caustics-in-webgl/",
+        "lesson": "Refracted rays and receiver mapping, with explicitly approximate real-time methods.",
+        "evidence": "Author technical article with implementation explanations."
+      },
+      "evan": {
+        "title": "Evan Wallace \u2014 WebGL Water",
+        "url": "https://madebyevan.com/webgl-water/",
+        "lesson": "Heightfield waves, reflections/refractions, shadows and caustics are coupled.",
+        "evidence": "Original demo feature description; not benchmarked on this app\u2019s GPU."
+      },
+      "curl": {
+        "title": "Bridson, Hourihan & Nordenstam \u2014 Curl-Noise",
+        "url": "https://www.cs.ubc.ca/~rbridson/docs/bridson-siggraph2007-curlnoise.pdf",
+        "lesson": "Procedural incompressible noise and boundary modulation; useful without a full fluid solver.",
+        "evidence": "Primary research paper, relevant method and limitations."
+      },
+      "sims": {
+        "title": "Karl Sims \u2014 Reaction-Diffusion",
+        "url": "https://www.karlsims.com/rd.html",
+        "lesson": "Feed/kill regimes, anisotropic diffusion, spatial style maps and the distinction between chemistry and display.",
+        "evidence": "Primary author tutorial."
+      },
+      "xpbd": {
+        "title": "Macklin, M\u00fcller & Chentanez \u2014 XPBD",
+        "url": "https://matthias-research.github.io/pages/publications/XPBD.pdf",
+        "lesson": "Compliance for constrained deformation; possible cloth route, not a guarantee of seamless loops or self-collision.",
+        "evidence": "Primary research paper."
+      },
+      "filament": {
+        "title": "Google \u2014 Physically Based Rendering in Filament",
+        "url": "https://google.github.io/filament/Filament.md.html",
+        "lesson": "Separated material/lighting models including cloth and anisotropy. Avoid reusing one coat for every medium.",
+        "evidence": "Primary renderer documentation; model principles, not a proposal to replace Three.js."
+      },
+      "pbrt": {
+        "title": "PBRT \u2014 Volume Transmittance",
+        "url": "https://pbr-book.org/4ed/Volume_Scattering/Transmittance",
+        "lesson": "Light attenuation belongs along both view and light paths.",
+        "evidence": "Primary textbook, relevant section."
+      },
+      "colonize": {
+        "title": "Runions, Lane & Prusinkiewicz \u2014 Space Colonization",
+        "url": "https://www.algorithmicbotany.org/papers/colonization.egwnp2007.html",
+        "lesson": "A branching skeleton can respond to available space. Useful stylized growth mechanism, not mineral physics.",
+        "evidence": "Primary paper abstract and algorithm excerpts."
+      },
+      "physarum": {
+        "title": "Jeff Jones \u2014 Physarum transport networks",
+        "url": "https://uwe-repository.worktribe.com/output/980579/characteristics-of-pattern-formation-and-evolution-in-approximations-of-physarum-transport-networks",
+        "lesson": "Agent/trail feedback is an alternate emergent network mechanism; research option for Ink/Reef, not mandatory scope.",
+        "evidence": "Author institutional repository abstract; not an implemented solver."
+      }
+    },
+    "madmapper": [
+      {
+        "name": "Caustics",
+        "path": "Materials/Factory/Caustics/Caustics.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/Caustics/Caustics.fs",
+        "bytes": 1606,
+        "sha256": "42a7d063bcce65aae3abad9e7edf95a095fa626fada7de1d79e5fcd252e40414"
+      },
+      {
+        "name": "Dunes",
+        "path": "Materials/Factory/Dunes/NOISE_Dunes.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/Dunes/NOISE_Dunes.fs",
+        "bytes": 2465,
+        "sha256": "f10b2a3e1fbb9f5492e09b06e9797143fbeb309cac6a358e0c089c0451a12574"
+      },
+      {
+        "name": "Fluid Noise",
+        "path": "Materials/Factory/Fluid Noise/FluidNoise.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/Fluid%20Noise/FluidNoise.fs",
+        "bytes": 2796,
+        "sha256": "7b07a1c2c959825973b54b7c6b9413fb3330883f1d58d5d8cbc3683618044f35"
+      },
+      {
+        "name": "Line Patterns",
+        "path": "Materials/Factory/Line Patterns/Line Patterns.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/Line%20Patterns/Line%20Patterns.fs",
+        "bytes": 12722,
+        "sha256": "e5c64899cb46aaca32f2e83a1d985d516fd743810c82b90cdeda54a05d02f566"
+      },
+      {
+        "name": "LineRepeat",
+        "path": "Materials/Factory/LineRepeat/LineRepeat.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/LineRepeat/LineRepeat.fs",
+        "bytes": 2241,
+        "sha256": "e0a2e982bf205257bbbbdd4a17a2416f1563144ae52adaf3a618aa574dee298a"
+      },
+      {
+        "name": "MadNoise",
+        "path": "Materials/Factory/MadNoise/MadNoise.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/MadNoise/MadNoise.fs",
+        "bytes": 11087,
+        "sha256": "29d2c7bccc98892ff5c300a074b8baa0b1842f36668c524c5b61925790dcf2f8"
+      },
+      {
+        "name": "Particles",
+        "path": "Materials/Factory/Particles/Particles.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/Particles/Particles.fs",
+        "bytes": 3831,
+        "sha256": "c098205612a2c03122ba84230759a987f2943d57ae2f4378ce3f2ffda4a0361b"
+      },
+      {
+        "name": "Plane Deform",
+        "path": "Materials/Factory/Plane Deform/PlaneDeform.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/Plane%20Deform/PlaneDeform.fs",
+        "bytes": 2750,
+        "sha256": "50978c8d31fed4c0a6f40b8ad7fe030c8c700e5530c6ce03a74730b80183358f"
+      },
+      {
+        "name": "Raymarching Template",
+        "path": "Materials/Factory/Raymarching Template/Raymarching Template.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/Raymarching%20Template/Raymarching%20Template.fs",
+        "bytes": 3992,
+        "sha256": "c89a91d8a23fbd807de131c93f740204eb874fdb7c6e5af762647eb1906f4fbc"
+      },
+      {
+        "name": "Shapes",
+        "path": "Materials/Factory/Shapes/Shapes.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/Shapes/Shapes.fs",
+        "bytes": 9184,
+        "sha256": "5635d543a567cdf785adb4709178817370e391d67f9e07fe41777b8373bf51f0"
+      },
+      {
+        "name": "Wave Synth",
+        "path": "Materials/Factory/Wave Synth/waveform_synth.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Factory/Wave%20Synth/waveform_synth.fs",
+        "bytes": 4552,
+        "sha256": "acea4d8f62144f5065b78e3d184c64b70894362d64999dbf69b7baa44fb958de"
+      },
+      {
+        "name": "Crystalline Sphere",
+        "path": "Materials/Online Library/Crystalline Sphere/Crystalline Sphere.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Crystalline%20Sphere/Crystalline%20Sphere.fs",
+        "bytes": 20844,
+        "sha256": "29efba6692170ae63f7880557421e34e5ea5771a04d7338afd0ea844e19436f0"
+      },
+      {
+        "name": "DiffusedSmoke",
+        "path": "Materials/Online Library/DiffusedSmoke/DiffusedSmoke.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/DiffusedSmoke/DiffusedSmoke.fs",
+        "bytes": 3054,
+        "sha256": "be8502bc5520c321ca9343a774ac289eba8b4bf1682f752aad2bca757ada6461"
+      },
+      {
+        "name": "Feedback Grid",
+        "path": "Materials/Online Library/Feedback Grid/Feedback Grid.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Feedback%20Grid/Feedback%20Grid.fs",
+        "bytes": 1603,
+        "sha256": "aa3d57ca77cd9e413a64ef0f2a70bf02ca6bedc4b40b1360eb2691202fef61b9"
+      },
+      {
+        "name": "Fractal Oil",
+        "path": "Materials/Online Library/Fractal Oil/Fractal Oil.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Fractal%20Oil/Fractal%20Oil.fs",
+        "bytes": 14014,
+        "sha256": "836c81f753694fbbe82f39ab970c9c6db46b60690704163d013fbe53844aa32d"
+      },
+      {
+        "name": "Fractal Petri Dish",
+        "path": "Materials/Online Library/Fractal Petri Dish/Fractal Petri Dish.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Fractal%20Petri%20Dish/Fractal%20Petri%20Dish.fs",
+        "bytes": 6723,
+        "sha256": "ec359b0b12cc94fdb4eed39d1de11ec0e61c16aca9abd53959938e4784d7dea9"
+      },
+      {
+        "name": "Line Pattern Pro",
+        "path": "Materials/Online Library/Line Pattern Pro/Line Pattern Pro.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Line%20Pattern%20Pro/Line%20Pattern%20Pro.fs",
+        "bytes": 13379,
+        "sha256": "309e39f531912a9c02205d86dcd4335e1f794335cdbc6df22e035269ed627296"
+      },
+      {
+        "name": "Marble Swirl",
+        "path": "Materials/Online Library/Marble Swirl/Marble Swirl.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Marble%20Swirl/Marble%20Swirl.fs",
+        "bytes": 5003,
+        "sha256": "05adae7fb1a6c46b670c48e321b494394a6f27961378c5697d10f2a10938dc12"
+      },
+      {
+        "name": "Oil Edge",
+        "path": "Materials/Online Library/Oil Edge/Oil Edge.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Oil%20Edge/Oil%20Edge.fs",
+        "bytes": 12681,
+        "sha256": "8be146e7ca1b9cf7006581ce01b279d4b853ed7b04b523e30100c09ee2f9205a"
+      },
+      {
+        "name": "Oil Flow",
+        "path": "Materials/Online Library/Oil Flow/Oil Flow.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Oil%20Flow/Oil%20Flow.fs",
+        "bytes": 5001,
+        "sha256": "0f1c8612aa8e1e0553bc0c09b74e42b9fe78f64fb896be7a2810833370d8132a"
+      },
+      {
+        "name": "Raymarched Polyhedrons",
+        "path": "Materials/Online Library/Raymarched Polyhedrons/Raymarched Polyhedrons.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Raymarched%20Polyhedrons/Raymarched%20Polyhedrons.fs",
+        "bytes": 13245,
+        "sha256": "4b4c0aba40ba5b6f1ae22b0f87fb0fb5dd5149e9ff9956320810fd680fbb3fe7"
+      },
+      {
+        "name": "RaymarchedNoodles",
+        "path": "Materials/Online Library/RaymarchedNoodles/RaymarchedNoodles.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/RaymarchedNoodles/RaymarchedNoodles.fs",
+        "bytes": 4946,
+        "sha256": "4715ca806948c6f2319f74c22f2ea4c371acd0e8ed413ef71869712f383aaa2f"
+      },
+      {
+        "name": "ReliefNoise",
+        "path": "Materials/Online Library/ReliefNoise/ReliefNoise.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/ReliefNoise/ReliefNoise.fs",
+        "bytes": 2903,
+        "sha256": "40c612e098562ef915c4dbb378d791123d1766e4988acf1ca7ed41f3eff6cda3"
+      },
+      {
+        "name": "Runny Ink",
+        "path": "Materials/Online Library/Runny Ink/Runny Ink.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Runny%20Ink/Runny%20Ink.fs",
+        "bytes": 10403,
+        "sha256": "ecda3589e4597c67ecb25933ce9ca2ae380539aad22d2f30ba66893eaba63024"
+      },
+      {
+        "name": "Shutter scale",
+        "path": "Materials/Online Library/Shutter scale/Shutter scale.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Shutter%20scale/Shutter%20scale.fs",
+        "bytes": 1099,
+        "sha256": "7f11b1e9f7423fd859c654b82814243c5542577756ffa709ce0bb2fc31775d46"
+      },
+      {
+        "name": "Smoke Rings",
+        "path": "Materials/Online Library/Smoke Rings/Smoke Rings.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Smoke%20Rings/Smoke%20Rings.fs",
+        "bytes": 13521,
+        "sha256": "2c764df53a1f7c04abdfd320ab54c2fd3694b2bf29836eb5ebc52713709f9132"
+      },
+      {
+        "name": "Torus Fog",
+        "path": "Materials/Online Library/Torus Fog/Torus Fog.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Torus%20Fog/Torus%20Fog.fs",
+        "bytes": 14303,
+        "sha256": "850dc5de24a58b815d4a0de935a6484b71b5e26ec0b784306cb7562a60f4f628"
+      },
+      {
+        "name": "Twisted Menger",
+        "path": "Materials/Online Library/Twisted Menger/Twisted Menger.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Twisted%20Menger/Twisted%20Menger.fs",
+        "bytes": 9121,
+        "sha256": "2debc49fec2a4a0e11bc0128a3a3de566b0e2547977e501375076c2edb2a1a4d"
+      },
+      {
+        "name": "Voronoi Glass Panes",
+        "path": "Materials/Online Library/Voronoi Glass Panes/Voronoi Glass Panes.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Voronoi%20Glass%20Panes/Voronoi%20Glass%20Panes.fs",
+        "bytes": 17333,
+        "sha256": "b1a735cd2c98a798f2ddee35460361391a4cd622f3c9bbe451ce5afdc788bee1"
+      },
+      {
+        "name": "Water",
+        "path": "Materials/Online Library/Water/water.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Water/water.fs",
+        "bytes": 5890,
+        "sha256": "06c19a2442439d13412cc1820db49157f7611e85e19db7fab580f55e74958d1d"
+      },
+      {
+        "name": "Wisps",
+        "path": "Materials/Online Library/Wisps/Wisps.fs",
+        "url": "https://github.com/madmappersoftware/MadMapper-Materials/blob/d7ff211281f1878feeccd8ead05ce855c0eac5ee/Materials/Online%20Library/Wisps/Wisps.fs",
+        "bytes": 3283,
+        "sha256": "14a71db74fb0235f5fc83745d86248f243a0299e1416a48b937c424a5788d648"
+      }
+    ]
+  }
+}

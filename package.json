@@ -1,0 +1,102 @@
+{
+  "name": "form-and-field",
+  "version": "0.11.0",
+  "private": true,
+  "description": "A local visual instrument studio for seamless 2D and 3D media.",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc --noEmit && vite build",
+    "start": "npm run build && electron .",
+    "test": "tsx --test tests/*.test.ts && node --test electron/*.test.cjs",
+    "test:interaction": "npm run build && node scripts/verify-canvas-interaction.mjs",
+    "test:zoom": "npm run build && node scripts/verify-zoom-quality.mjs",
+    "package": "npm run build && electron-builder --dir --mac --arm64",
+    "build:media": "node scripts/build-media-tools.mjs",
+    "test:ui": "npm run build && node scripts/verify-ui.mjs",
+    "test:workspace": "npm run build && node scripts/verify-workspace-ui.mjs",
+    "test:packaged": "node scripts/verify-packaged.mjs",
+    "test:projection": "npm run build && node scripts/verify-projection-media.mjs --performance --native && node scripts/verify-projection-media-ui.mjs"
+  },
+  "devDependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "three": "0.187.0",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/three": "0.187.0",
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0",
+    "playwright": "1.65.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.6"
+  },
+  "build": {
+    "appId": "local.formandfield.studio",
+    "productName": "Form & Field",
+    "directories": {
+      "output": "work/release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/main.cjs",
+      "electron/preload.cjs",
+      "electron/export-manager.cjs",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "identity": null,
+      "target": "dir",
+      "icon": "build/icon.icns",
+      "minimumSystemVersion": "14.0"
+    },
+    "extraResources": [
+      {
+        "from": "build/media",
+        "to": "media",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "build/notices",
+        "to": "notices",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "README.md",
+        "to": "Form & Field Guide.md"
+      },
+      {
+        "from": "docs/professional-effect-audit-0.10.md",
+        "to": "docs/professional-effect-audit-0.10.md"
+      },
+      {
+        "from": "docs/research/professional-effects-2026-11-09.md",
+        "to": "docs/research/professional-effects-2026-11-09.md"
+      },
+      {
+        "from": "docs/research/canvas-interaction-2026-11-09.md",
+        "to": "docs/research/canvas-interaction-2026-11-09.md"
+      },
+      {
+        "from": "docs/research/workspace-ux-2026-11-10.md",
+        "to": "docs/research/workspace-ux-2026-11-10.md"
+      },
+      {
+        "from": "docs/projection-media-direction-2026-11-10.md",
+        "to": "docs/projection-media-direction-2026-11-10.md"
+      },
+      {
+        "from": "docs/projection-media-0.11.md",
+        "to": "docs/projection-media-0.11.md"
+      }
+    ]
+  }
+}

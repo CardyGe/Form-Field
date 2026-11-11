@@ -1,0 +1,23 @@
+ffmpeg is free software; you can redistribute it and/or
+modify it under the terms of the GNU Lesser General Public
+License as published by the Free Software Foundation; either
+version 2.1 of the License, or (at your option) any later version.
+
+ffmpeg is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+Lesser General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public
+License along with ffmpeg; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers
+  built with Apple clang version 21.0.0 (clang-2100.4.1.1)
+  configuration: --prefix=/var/folders/7_/snhfs8xs7rv03djr99v0qng40000gn/T/form-field-media-HRKVsk/prefix --disable-everything --disable-autodetect --disable-network --disable-gpl --disable-nonfree --disable-shared --enable-static --disable-doc --disable-debug --disable-ffplay --enable-ffmpeg --enable-ffprobe --enable-pthreads --enable-zlib --enable-libzimg --enable-libsnappy --pkg-config=/var/folders/7_/snhfs8xs7rv03djr99v0qng40000gn/T/form-field-media-HRKVsk/prefix/bin/pkgconf --pkg-config-flags='--static --keep-system-cflags --keep-system-libs' --enable-protocol='file,pipe' --enable-indev=lavfi --enable-demuxer='image2,exr_pipe,png_pipe,mov,rawvideo' --enable-muxer='image2,mov,rawvideo,null,framemd5' --enable-decoder='exr,hap,png,prores,rawvideo,wrapped_avframe' --enable-encoder='exr,hap,png,prores_ks,rawvideo,wrapped_avframe' --enable-parser=png --enable-filter='alphaextract,color,geq,nullsrc,format,scale,zscale,null,buffer,buffersink' --extra-cflags=-I/var/folders/7_/snhfs8xs7rv03djr99v0qng40000gn/T/form-field-media-HRKVsk/prefix/include --extra-ldflags='-L/var/folders/7_/snhfs8xs7rv03djr99v0qng40000gn/T/form-field-media-HRKVsk/prefix/lib -Wl,-dead_strip' --extra-libs=-lc++
+  libavutil      58. 29.100 / 58. 29.100
+  libavcodec     60. 31.102 / 60. 31.102
+  libavformat    60. 16.100 / 60. 16.100
+  libavdevice    60.  3.100 / 60.  3.100
+  libavfilter     9. 12.100 /  9. 12.100
+  libswscale      7.  5.100 /  7.  5.100
+  libswresample   4. 12.100 /  4. 12.100

@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {createRequire} from 'node:module';
+import {build} from 'esbuild';
+import {_electron as electron} from 'playwright';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),out=path.join(root,'work/projection-media/ui-'+Date.now());
+await fs.mkdir(out,{recursive:true});
+await build({stdin:{contents:`export {createProject,createLayer,applyPreset,validateProject} from './src/core/project';`,resolveDir:root,loader:'ts'},bundle:true,platform:'node',format:'cjs',outfile:path.join(out,'model.cjs'),logLevel:'silent'});
+const m=createRequire(import.meta.url)(path.join(out,'model.cjs')),fixture=path.join(out,'fixture.formfield'),savedFile=path.join(out,'saved.formfield');
+await fs.writeFile(path.join(out,'main.cjs'),`const {app,dialog}=require('electron');app.setPath('userData',${JSON.stringify(path.join(out,'profile'))});dialog.showOpenDialog=async()=>({canceled:false,filePaths:[${JSON.stringify(fixture)}]});dialog.showSaveDialog=async()=>({canceled:false,filePath:${JSON.stringify(savedFile)}});require(${JSON.stringify(path.join(root,'electron/main.cjs'))});`);
+const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;delete env.STUDIO_DEV_URL;
+const bundle=process.argv[2]?path.resolve(process.argv[2]):null;
+const app=await electron.launch(bundle?{executablePath:path.join(bundle,'Contents/MacOS/Form & Field'),args:['--user-data-dir='+path.join(out,'profile')],env}:{args:[path.join(out,'main.cjs')],env}),page=await app.firstWindow(),errors=[],checks=[];
+if(bundle)await app.evaluate(({dialog},{fixture,savedFile})=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[fixture]});dialog.showSaveDialog=async()=>({canceled:false,filePath:savedFile});},{fixture,savedFile});
+page.setDefaultTimeout(20000);page.on('pageerror',e=>errors.push(String(e)));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+const saved=async predicate=>{for(let i=0;i<150;i++){const p=await page.evaluate(()=>window.studio.loadAutosave());if(p&&predicate(p))return p;await page.waitForTimeout(100);}throw Error('Autosave timed out');};
+const open=async(kind,id,duration=20)=>{const p={...m.createProject(),duration,layers:[m.applyPreset(m.createLayer(kind),id)]};await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(q=>q.id===p.id);return p;};
+try{
+ await page.getByText('Export engine ready',{exact:true}).waitFor();await page.getByRole('button',{name:'Pause',exact:true}).click();
+ await open('currents','silk-river');assert.equal(await page.getByLabel('Fibre motion',{exact:true}).inputValue(),'1');
+ await page.locator('.surface-editor summary').click();await page.getByLabel('Surface source',{exact:true}).selectOption('polygon');await saved(p=>p.schemaVersion===2&&p.layers[0].surface?.source==='polygon');
+ const vertex=page.getByRole('slider',{name:'Surface vertex 1',exact:true});await vertex.focus();await vertex.press('ArrowRight');await saved(p=>Math.abs(p.layers[0].surface?.points[0].x-.35)<1e-10);
+ await page.getByRole('button',{name:'Add vertex',exact:true}).click();await saved(p=>p.layers[0].surface?.points.length===5);await page.getByRole('button',{name:'Remove vertex',exact:true}).click();await saved(p=>p.layers[0].surface?.points.length===4);
+ await page.getByLabel('Surface behaviour',{exact:true}).selectOption('edge');await saved(p=>p.layers[0].surface?.role==='edge');await page.getByRole('button',{name:'Undo · ⌘Z',exact:true}).click();await saved(p=>p.layers[0].surface?.role==='obstacle');await page.getByRole('button',{name:'Redo · ⇧⌘Z',exact:true}).click();await saved(p=>p.layers[0].surface?.role==='edge');
+ checks.push('Surface polygon keyboard edits, vertex count, version upgrade and undo/redo');
+ await page.getByRole('button',{name:'Motion',exact:true}).click();await page.getByLabel('Motion parameter',{exact:true}).selectOption('opacity');await page.getByLabel('Motion source',{exact:true}).selectOption('sine');await page.getByLabel('Animation range',{exact:true}).selectOption('endpoints');
+ await page.getByLabel('Lower endpoint',{exact:true}).fill('.2');await page.getByLabel('Upper endpoint',{exact:true}).fill('.8');const endpoints=await saved(p=>p.layers[0].modulations.opacity?.range?.min===.2&&p.layers[0].modulations.opacity?.range?.max===.8);m.validateProject(endpoints);
+ await page.getByRole('button',{name:'Save',exact:true}).click();await page.getByText('Project saved.',{exact:true}).waitFor();assert.deepEqual(JSON.parse(await fs.readFile(savedFile,'utf8')).layers,endpoints.layers);checks.push('Endpoint controls survive native save with version-2 surface data');
+ await page.getByRole('button',{name:'Open library',exact:true}).click();await page.getByRole('button',{name:'Presets',exact:true}).click();await page.getByLabel('Preset library filter',{exact:true}).selectOption('projection');assert.equal(await page.locator('.preset-card').count(),9);assert.equal(await page.locator('.preset-card img').count(),9);await page.getByRole('button',{name:'Close library',exact:true}).click();checks.push('Nine projection studies have actual renderer thumbnails');
+ await open('livingink','ink-estuary',1);await page.getByRole('button',{name:'Shape',exact:true}).click();await page.getByLabel('Chemical resolution',{exact:true}).selectOption('0');await saved(p=>p.layers[0].params.simulationQuality===0);await page.getByRole('button',{name:'Play',exact:true}).click();await page.getByRole('button',{name:'Pause',exact:true}).waitFor();await page.getByRole('button',{name:'Play',exact:true}).waitFor({timeout:10000});assert.equal(await page.getByText('Evolving clip',{exact:true}).count(),1);
+ await page.getByRole('button',{name:'Play',exact:true}).click();await page.getByRole('button',{name:'Pause',exact:true}).waitFor();await page.getByRole('button',{name:'Pause',exact:true}).click();checks.push('Evolving clips stop and replay without an implicit loop; quality saves');
+ await page.screenshot({path:path.join(out,'evolving-ink-ui.png')});
+ await open('relief','breathing-facade');assert.equal(await page.getByLabel('Relief construction',{exact:true}).inputValue(),'1');await page.getByLabel('Motion phrase',{exact:true}).selectOption('2');await saved(p=>p.layers[0].params.phrase===2);await page.screenshot({path:path.join(out,'relief-ui.png')});checks.push('True relief construction and authored motion phrases persist');
+ assert.equal(await page.getByRole('alert').count(),0);assert.deepEqual(errors,[]);await fs.writeFile(path.join(out,'report.json'),JSON.stringify({status:'passed',checks,errors},null,2));console.log('PASS projection UI '+JSON.stringify({out,checks}));
+}finally{await app.close();}

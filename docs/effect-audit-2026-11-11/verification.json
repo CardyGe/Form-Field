@@ -1,0 +1,23 @@
+{
+  "families": 17,
+  "presets": 139,
+  "phaseCaptures": 417,
+  "temporalSheets": 70,
+  "hdPortraitFiles": 32,
+  "dossiers": 17,
+  "readableHTMLPages": 21,
+  "sourceHashesUnchanged": true,
+  "brokenLocalHTMLLinks": [],
+  "missingDossierSections": {},
+  "captureErrors": [],
+  "primaryPages": 64,
+  "pinnedShaderSources": 31,
+  "status": "passed",
+  "browserReview": {
+    "familyFilter": "livingink shows one family",
+    "presetSearch": "ink-estuary shows one preset",
+    "planNavigation": "opens readable Living Ink dossier",
+    "renderedTables": "visually checked",
+    "accessibilityLabels": "explicit Family and Search labels verified"
+  }
+}
