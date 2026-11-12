@@ -21,7 +21,7 @@ Open **Library → Presets → Projection motion** for nine authored studies. **
 
 The ten projection instruments also have Organic motion, Flow direction, Travel and a Motion phrase: Steady travel, Gather and release, or Drift and settle. Controls follow the selected treatment. Evolving chemistry has an explicit 128/256/384 chemical resolution used by both preview and export. Its simulation clock is fixed and interpolated; transport and preparation controls rebuild deterministic state.
 
-**Evolving clips stop at their end** and export with **Render clip**. They do not claim seamless looping. Press Play to replay. Use Flowing pigment loop for a deliberately periodic treatment. Evolving chemistry supports clips up to 60 seconds.
+**Evolving chemistry loops.** Ink grows from its seeds through the loop. Over the last **Loop return** share of the loop (0.3 by default), a second copy of the simulation keeps growing past the end, and its state recedes back into the opening state in patches, so the last frame flows into the first. The two states are blended before the ink edges are cut, so the ink pulls back rather than cross-dissolving. Set Loop return to 0 for the original finite clip, which grows once, stops at its end and exports with **Render clip**. Evolving chemistry supports clips up to 60 seconds.
 
 **Shape → Surface influence** adds an editable polygon or uses an imported image mask. Choose Flow around shape, Emit inside shape, or Trace shape edges. Transported fibres and evolving chemistry use shapes during generation; other treatments use them for reveals. Drag polygon vertices or use arrow keys; add/remove vertices to describe a surface. Image masks can independently clip the final output with **Also clip output with mask**. Active obstacles stay solid while Influence blends the visible treatment.
 
@@ -65,7 +65,7 @@ Motion values apply per frame. Loops close exactly, because the fading means the
 
 **Anti-aliasing** renders the whole composition at 2× or 3× the delivery size and filters it down with a Mitchell filter, removing edge shimmer and moiré from fine lines. 2× takes roughly 2.5× as long per 4K frame. 3× is limited to 8192 pixels per side, so it suits HD and smaller deliveries. Fine film grain is softened slightly by the filter.
 
-**Loop seam check** runs after every export. It compares the six frames either side of the loop point and reports when the step from the last frame back to the first is larger than any nearby step (a pop) or when the motion changes speed there (a hitch). A seam is reported in the export panel but never stops delivery. To check the whole library, run `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron scripts/seam-audit.cjs`, optionally followed by preset ids. Results go to `work/seam-audit/results.json`. The Ink *Evolving* looks currently grow from seed without returning, so they are reported as seams.
+**Loop seam check** runs after every export. It compares the six frames either side of the loop point and reports when the step from the last frame back to the first is larger than any nearby step (a pop) or when the motion changes speed there (a hitch). A seam is reported in the export panel but never stops delivery. To check the whole library, run `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron scripts/seam-audit.cjs`, optionally followed by preset ids. Results go to `work/seam-audit/results.json`.
 
 ## Workspace
 

@@ -16,6 +16,7 @@ import { fractalFragment } from './fractal';
 import { oilFieldsFragment, oilPaintFragment, oilLensFragment } from './oil';
 import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
+import { finiteEvolving } from '../core/playback';
 import { super8Fragment } from './super8';
 import { super8ProjectorFragment } from './super8-projector';
 import { super8Clock, super8History, super8Transport, SUPER8_HISTORY } from './super8-motion';
@@ -547,7 +548,7 @@ export class StudioRenderer {
     const cycles = Math.max(1, Math.round(number(layer, 'cycles', 1)));
     const localPhase = phase * cycles;
     if (isInstrument(layer.kind)) {
-      this.instruments.draw(layer,phase,this.width,this.height,this.source,(m,t)=>this.draw(m,t),this.renderer,Math.max(0,Math.min(1,phase/TAU))*duration);
+      this.instruments.draw(layer,phase,this.width,this.height,this.source,(m,t)=>this.draw(m,t),this.renderer,Math.max(0,Math.min(1,phase/TAU))*duration,duration);
     } else if (layer.kind === 'graphic') {
       if (!this.graphicSource) {
         this.graphicSource = target(true);
@@ -671,7 +672,7 @@ export class StudioRenderer {
       if (layer.opacity <= 0) continue;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
-        : this.drawSource(layer, original.kind === 'livingink'&&original.params.inkMode===2 ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration);
+        : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration);
       const u = this.composite.uniforms;
       u.uBelow.value = below.texture; u.uSource.value = sourceTexture;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);

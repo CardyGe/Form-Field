@@ -1,7 +1,10 @@
-import type { Project } from '../shared/types';
-/** Evolving chemistry has a finite clip clock; it must never silently wrap. */
+import type { Layer, Project } from '../shared/types';
+/** Evolving chemistry with Loop return at zero has a finite clip clock; it must never silently wrap. */
+export function finiteEvolving(layer:Layer):boolean {
+  return layer.kind==='livingink'&&layer.params.inkMode===2&&!((layer.params.loopReturn??0)>0);
+}
 export function isEvolving(project:Project):boolean {
-  return project.layers.some(l=>l.visible&&l.kind==='livingink'&&l.params.inkMode===2);
+  return project.layers.some(l=>l.visible&&finiteEvolving(l));
 }
 export function playbackPhase(phase:number,advance:number,project:Project):number {
   const tau=Math.PI*2;

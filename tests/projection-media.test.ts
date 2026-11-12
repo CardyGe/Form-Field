@@ -37,7 +37,7 @@ test('endpoint routes use their full bounded range with smooth turns and preserv
  for(const range of [{min:.8,max:.2},{min:NaN,max:.8},{min:-1,max:.8},{min:0,max:2}]){const q=structuredClone(project);q.layers[0].modulations.warp.range=range;assert.throws(()=>validateProject(q),/range/);}
 });
 test('finite evolving playback stops, replay is explicit, and hidden chemistry does not disable loops',()=>{
- const p={...createProject(),layers:[createLayer('livingink')]};assert.equal(isEvolving(p),false);p.layers[0].params.inkMode=2;assert.equal(isEvolving(p),true);assert.equal(playbackPhase(TAU-.01,.1,p),TAU);assert.equal(playbackPhase(TAU,.1,p),TAU);
+ const p={...createProject(),layers:[createLayer('livingink')]};assert.equal(isEvolving(p),false);p.layers[0].params.inkMode=2;assert.equal(isEvolving(p),false,'Loop return makes evolving chemistry loop');assert.ok(Math.abs(playbackPhase(TAU-.01,.1,p)-.09)<1e-9,'a looping clip wraps');p.layers[0].params.loopReturn=0;assert.equal(isEvolving(p),true);assert.equal(playbackPhase(TAU-.01,.1,p),TAU);assert.equal(playbackPhase(TAU,.1,p),TAU);
  p.layers[0].visible=false;assert.ok(playbackPhase(TAU-.01,.1,p)<.1);
  p.duration=61;assert.throws(()=>validateProject(p),/60 seconds/);
  p.duration=20;p.layers[0].modulations.scale={kind:'sine',cycles:1,phase:0,amount:.2,points:[]};assert.throws(()=>validateProject(p),/not supported/);

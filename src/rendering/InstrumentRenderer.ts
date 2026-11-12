@@ -75,9 +75,9 @@ export class InstrumentRenderer {
   for(const layer of project.layers)if(layer.visible&&layer.kind==='livingink'&&layer.params.inkMode!==2)this.pattern(layer,draw);
   if(!project.layers.some(l=>l.visible&&l.kind==='livingink'&&l.params.inkMode!==2)){for(const t of this.patterns.values())t.dispose();this.patterns.clear();}
   const ids=new Set(project.layers.filter(l=>l.visible&&l.kind==='livingink'&&l.params.inkMode===2).map(l=>l.id));
-  for(const [id,sim] of this.simulations)if(!ids.has(id)){sim.dispose();this.simulations.delete(id);}
+  for(const [id,sim] of this.simulations)if(!ids.has(id.split('#')[0])){sim.dispose();this.simulations.delete(id);}
  }
- draw(layer:Layer,phase:number,width:number,height:number,target:THREE.WebGLRenderTarget,draw:Draw,renderer:THREE.WebGLRenderer,seconds=0):void{
+ draw(layer:Layer,phase:number,width:number,height:number,target:THREE.WebGLRenderTarget,draw:Draw,renderer:THREE.WebGLRenderer,seconds=0,clip=0):void{
   if(!isInstrument(layer.kind))throw new Error('Unsupported projection instrument');
   let m=this.materials.get(layer.kind);
   if(!m){
@@ -96,8 +96,20 @@ export class InstrumentRenderer {
   for(const d of INSTRUMENT_PARAMETERS[layer.kind])u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=layer.params[d.key];
   (u.uPalette.value as THREE.Color[]).forEach((c,i)=>c.set(layer.palette[i]));
   if(layer.kind==='livingink'&&layer.params.inkMode===2){
-   let sim=this.simulations.get(layer.id);const size=InkSimulation.resolution(layer);if(sim&&sim.size!==size){sim.dispose();this.simulations.delete(layer.id);sim=undefined;}if(!sim){sim=new InkSimulation(size);this.simulations.set(layer.id,sim);}
-   u.uPatternTexture.value=sim.sample(layer,seconds*layer.params.motion,draw,surface,width/height);
+   const simulation=(id:string)=>{let sim=this.simulations.get(id);const size=InkSimulation.resolution(layer);if(sim&&sim.size!==size){sim.dispose();this.simulations.delete(id);sim=undefined;}if(!sim){sim=new InkSimulation(size);this.simulations.set(id,sim);}return sim;};
+   const sim=simulation(layer.id),time=seconds*layer.params.motion,length=clip*layer.params.motion,ret=layer.params.loopReturn??0;
+   if(ret>0&&length>0&&time<ret*length){
+    // Loop return: the growth runs on past the end of the loop in a second
+    // simulation and its chemical state morphs back into the opening state.
+    // At the loop point both sides show the state at the clip length, so the
+    // last frame flows into the first; the patterns are cut from a blended
+    // concentration, so ink recedes rather than cross-dissolving.
+    const tail=simulation(layer.id+'#return');
+    const t=time/(ret*length),weight=t*t*(3-2*t);
+    const grown=tail.sample(layer,length+time,draw,surface,width/height);
+    const early=sim.sample(layer,time,draw,surface,width/height);
+    u.uPatternTexture.value=sim.blend(grown,early,weight,draw);
+   }else u.uPatternTexture.value=sim.sample(layer,time,draw,surface,width/height);
   }else u.uPatternTexture.value=layer.kind==='livingink'?this.pattern(layer,draw):this.fallback;
   draw(m,target);
   if(layer.kind==='currents'&&layer.params.flowMode===1){this.currents??=new CurrentRenderer();this.currents.draw(renderer,layer,phase,width,height,target,surface);}

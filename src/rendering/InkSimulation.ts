@@ -5,6 +5,8 @@ import { surfaceFieldGLSL,type PreparedSurface } from './surface-fields';
 
 type Draw=(m:THREE.ShaderMaterial,t:THREE.WebGLRenderTarget)=>void;
 const SIZE=256,RATE=24,STEPS=6,INTERVAL=48,MAX_CHECKPOINTS=8;
+// Clips are at most 60 s; a looping clip also simulates up to half a clip past its end.
+const MAX_SECONDS=90;
 const common=`precision highp float;varying vec2 vUv;uniform sampler2D uState;uniform float uSeed,uCoverage,uFeed,uKill,uTime,uTravel,uDirection,uEddy,uObstacle;uniform vec2 uSurfaceMap;
 ${surfaceFieldGLSL}
 vec2 surfaceUV(vec2 uv){return (uv-.5)/uSurfaceMap+.5;}
@@ -35,14 +37,20 @@ float pigment=texture2D(uState,vUv).b;float spread=(texture2D(uState,vUv+d).b+te
 pigment=clamp(pigment+c.g*.008*(1.-pigment)-pigment*.0002+spread*.18,0.,1.);
 if(solid(vUv)){value=vec2(1.,0.);pigment=0.;}gl_FragColor=vec4(clamp(value,0.,1.),pigment,1.);}`;
 const copy=`precision highp float;varying vec2 vUv;uniform sampler2D uState;void main(){gl_FragColor=texture2D(uState,vUv);}`;
-const interpolate=`precision highp float;varying vec2 vUv;uniform sampler2D uState,uNext;uniform float uBlend;void main(){gl_FragColor=mix(texture2D(uState,vUv),texture2D(uNext,vUv),uBlend);}`;
+// uFront 0: one blend weight everywhere (interpolating between ticks).
+// uFront 1: a receding front. Each point switches over a short window at a
+// time set by a smooth field, so ink retreats in patches instead of fading.
+const interpolate=`precision highp float;varying vec2 vUv;uniform sampler2D uState,uNext;uniform float uBlend,uFront;
+void main(){float w=uBlend;
+if(uFront>.5){vec2 p=vUv*6.2831853;float r=.5+.25*sin(p.x*1.3+1.7*sin(p.y*.9+.4))+.25*sin(p.y*1.7+1.3*sin(p.x*1.1+2.1));const float e=.12;w=smoothstep(r-e,r+e,uBlend*(1.+2.*e)-e);}
+gl_FragColor=mix(texture2D(uState,vUv),texture2D(uNext,vUv),w);}`;
 function target(size=SIZE){const t=new THREE.WebGLRenderTarget(size,size,{type:THREE.HalfFloatType,depthBuffer:false,stencilBuffer:false,minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter});t.texture.colorSpace=THREE.NoColorSpace;return t;}
 function material(fragmentShader:string){return new THREE.ShaderMaterial({vertexShader:fullscreenVertex,fragmentShader,uniforms:{...Object.fromEntries(['State','Seed','Coverage','Feed','Kill','Time','Travel','Direction','Eddy','Obstacle'].map(k=>['u'+k,{value:k==='State'?null:0}])),uSurfaceMap:{value:new THREE.Vector2(1,1)},uSurface:{value:null},uSurfaceRole:{value:0},uSurfaceInfluence:{value:0}},depthTest:false,depthWrite:false,blending:THREE.NoBlending,toneMapped:false});}
 export class InkSimulation {
   private a:THREE.WebGLRenderTarget;private b:THREE.WebGLRenderTarget;private tick=0;
-  private readonly previous:THREE.WebGLRenderTarget;private readonly interpolated:THREE.WebGLRenderTarget;private pairTick=-1;
+  private readonly previous:THREE.WebGLRenderTarget;private readonly interpolated:THREE.WebGLRenderTarget;private pairTick=-1;private looped:THREE.WebGLRenderTarget|null=null;
   private readonly init=material(init);private readonly advect=material(advect);private readonly chemical:THREE.ShaderMaterial;private readonly copy=material(copy);
-  private readonly mix=new THREE.ShaderMaterial({vertexShader:fullscreenVertex,fragmentShader:interpolate,uniforms:{uState:{value:null},uNext:{value:null},uBlend:{value:0}},depthTest:false,depthWrite:false,blending:THREE.NoBlending,toneMapped:false});
+  private readonly mix=new THREE.ShaderMaterial({vertexShader:fullscreenVertex,fragmentShader:interpolate,uniforms:{uState:{value:null},uNext:{value:null},uBlend:{value:0},uFront:{value:0}},depthTest:false,depthWrite:false,blending:THREE.NoBlending,toneMapped:false});
   private readonly checkpoints=new Map<number,THREE.WebGLRenderTarget>();
   private key='';private initialized=false;
   constructor(readonly size=SIZE){this.a=target(size);this.b=target(size);this.previous=target(size);this.interpolated=target(size);this.chemical=material(chemical.replace(`1./${SIZE}.`,`1./${size}.`));}
@@ -51,9 +59,9 @@ export class InkSimulation {
   sample(layer:Layer,seconds:number,draw:Draw,surface?:PreparedSurface,aspect=1):THREE.Texture {
     const p=layer.params,key=InkSimulation.key(layer)+JSON.stringify([surface?.key,surface?aspect:0,surface?p.scale:0]);
     for(const m of [this.init,this.advect,this.chemical]){m.uniforms.uSurface.value=surface?.texture??null;m.uniforms.uSurfaceRole.value=surface?.role??0;m.uniforms.uSurfaceInfluence.value=surface?.influence??0;m.uniforms.uSurfaceMap.value.set(p.scale*aspect/4.8,p.scale/4.8);}
-    const position=Math.round(Math.max(0,Math.min(60,seconds))*RATE*1e7)/1e7,requested=Math.floor(position),fraction=position-requested;
+    const position=Math.round(Math.max(0,Math.min(MAX_SECONDS,seconds))*RATE*1e7)/1e7,requested=Math.floor(position),fraction=position-requested;
     if(this.key!==key){this.clear();this.key=key;this.initialized=false;}
-    const blend=()=>{if(fraction===0)return this.previous.texture;this.mix.uniforms.uState.value=this.previous.texture;this.mix.uniforms.uNext.value=this.a.texture;this.mix.uniforms.uBlend.value=fraction;draw(this.mix,this.interpolated);return this.interpolated.texture;};
+    const blend=()=>{if(fraction===0)return this.previous.texture;this.mix.uniforms.uState.value=this.previous.texture;this.mix.uniforms.uNext.value=this.a.texture;this.mix.uniforms.uBlend.value=fraction;this.mix.uniforms.uFront.value=0;draw(this.mix,this.interpolated);return this.interpolated.texture;};
     if(this.pairTick===requested&&this.tick===requested+1)return blend();
     if(!this.initialized||requested<this.tick){
       const candidates=[...this.checkpoints.keys()].filter(t=>t<=requested).sort((a,b)=>b-a),checkpoint=candidates[0];
@@ -76,7 +84,13 @@ export class InkSimulation {
     }
     this.pairTick=requested;return blend();
   }
+  /** Mix another state into this simulation's own output (weight of this state). Used for the loop return. */
+  blend(from:THREE.Texture,to:THREE.Texture,weight:number,draw:Draw):THREE.Texture{
+    this.looped??=target(this.size);
+    this.mix.uniforms.uState.value=from;this.mix.uniforms.uNext.value=to;this.mix.uniforms.uBlend.value=weight;this.mix.uniforms.uFront.value=1;draw(this.mix,this.looped);
+    return this.looped.texture;
+  }
   private clear(){for(const t of this.checkpoints.values())t.dispose();this.checkpoints.clear();this.tick=0;this.pairTick=-1;}
   getStats(){return {tick:this.tick,checkpoints:this.checkpoints.size};}
-  dispose(){this.clear();this.a.dispose();this.b.dispose();this.previous.dispose();this.interpolated.dispose();for(const m of [this.init,this.advect,this.chemical,this.copy,this.mix])m.dispose();}
+  dispose(){this.clear();this.looped?.dispose();this.a.dispose();this.b.dispose();this.previous.dispose();this.interpolated.dispose();for(const m of [this.init,this.advect,this.chemical,this.copy,this.mix])m.dispose();}
 }

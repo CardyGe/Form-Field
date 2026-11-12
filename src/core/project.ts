@@ -246,7 +246,7 @@ export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[]
     return definitions.filter(d=>keys.has(d.key));
   }
   if(layer.kind==='livingink'&&layer.params.inkMode===2){
-    const keys=new Set(['inkMode','simulationQuality','pigmentCarry','scale','motion','backgroundOpacity','flowDirection','travel','eddyScale','surfaceHole','pattern','branching','seedCoverage','development','relief','pigment','edgeInk','edgeSoftness','lightAngle','lightHeight','fillLight','roughness','anisotropy','sheenAngle','clearcoat','saturation','hue','exposure',...FINISH_KEYS]);
+    const keys=new Set(['inkMode','simulationQuality','loopReturn','pigmentCarry','scale','motion','backgroundOpacity','flowDirection','travel','eddyScale','surfaceHole','pattern','branching','seedCoverage','development','relief','pigment','edgeInk','edgeSoftness','lightAngle','lightHeight','fillLight','roughness','anisotropy','sheenAngle','clearcoat','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key)).map(d=>d.key==='scale'?{...d,preparation:true}:d);
   }
   if(layer.kind==='relief'&&layer.params.reliefMode===1){
