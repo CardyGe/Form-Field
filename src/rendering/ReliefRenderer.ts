@@ -3,6 +3,7 @@ import type { Layer } from '../shared/types';
 import { sourceViewMatrix } from './source-view';
 import { flowHash, phraseTime, smooth, TAU } from './flow-field';
 import { surfaceFieldGLSL,type PreparedSurface } from './surface-fields';
+import { delayOrder, stagedTime } from '../core/timing';
 
 /** Real hinged solids, lit together in one scene. Artistic references: Limelight
  * Interconnection and Bot & Dolly Box; see the source register in the projection plan.
@@ -71,16 +72,31 @@ export class ReliefRenderer {
     const time=phraseTime(phase/TAU*p.cycles+p.phaseOffset,p.motion,p.phrase)*TAU;
     const matrix=new THREE.Matrix4(),position=new THREE.Vector3(),rotation=new THREE.Quaternion(),size=new THREE.Vector3(),axis=new THREE.Vector3();
     const color=new THREE.Color(),colors=layer.palette.map(c=>new THREE.Color(c));let count=0;
+    // Mixed panel sizes: a seeded 4×4 block becomes one large panel, or splits
+    // into 2×2 panels, each of which may split into single cells.
+    const mix=stride===1?(p.panelMix??0):0;
+    const panelAt=(ix:number,iy:number)=>{
+      if(mix<=0)return {ox:ix,oy:iy,n:1};
+      const bx=Math.floor(ix/4)*4,by=Math.floor(iy/4)*4;
+      if(flowHash(bx,by,p.seed+77)<mix*.35)return {ox:bx,oy:by,n:4};
+      const mx=Math.floor(ix/2)*2,my=Math.floor(iy/2)*2;
+      if(flowHash(mx,my,p.seed+131)<mix*.6)return {ox:mx,oy:my,n:2};
+      return {ox:ix,oy:iy,n:1};
+    };
+    const timed=(p.delaySpread??0)>0||(p.pause??0)>0;
     outer:for(let iy=Math.floor(y0/stride)*stride;iy<=y1;iy+=stride)for(let ix=Math.floor(x0/stride)*stride;ix<=x1;ix+=stride){
       if(count>=2048)break outer;
+      const panel=panelAt(ix,iy);if(panel.ox!==ix||panel.oy!==iy)continue;
+      const n=panel.n,cx=ix+n/2,cy=iy+n/2;
       const id=flowHash(ix,iy,p.seed),group=flowHash(Math.floor(ix/3),Math.floor(iy/3),p.seed+41);
-      const wave=time-(ix*.17+iy*.11)*p.waveCount+group*p.phaseSpread*2;
+      const clock=timed?stagedTime(time,delayOrder(cx*spacing/scale,cy*spacing/scale,aspect,p.delayShape),p.delaySpread,p.pause):time;
+      const wave=clock-((cx-.5)*.17+(cy-.5)*.11)*p.waveCount+group*p.phaseSpread*2;
       const opening=p.opening*(.08+.92*smooth(.5+.5*Math.sin(wave)))*p.motion;
       const angle=opening*1.55,orientation=p.axis===0?0:p.axis===1?Math.PI/2:Math.PI/4;
       axis.set(-Math.sin(orientation),Math.cos(orientation),0);rotation.setFromAxisAngle(axis,angle);
-      const piece=spacing*stride*(1-p.gap),hinge=piece*(.5+p.hingeBias*.25);
+      const piece=n===1?spacing*stride*(1-p.gap):spacing*stride*(n-p.gap),hinge=piece*(.5+p.hingeBias*.25);
       const center=new THREE.Vector3(hinge*Math.cos(orientation),hinge*Math.sin(orientation),0).applyQuaternion(rotation);
-      position.set((ix+.5+(Math.abs(iy)%2)*p.stagger*.5)*spacing+center.x-hinge*Math.cos(orientation),(iy+.5)*spacing+center.y-hinge*Math.sin(orientation),center.z);
+      position.set((cx+(n===1?(Math.abs(iy)%2)*p.stagger*.5:0))*spacing+center.x-hinge*Math.cos(orientation),cy*spacing+center.y-hinge*Math.sin(orientation),center.z);
       size.set(piece,piece*(1-p.organic*.18*id),spacing*(.08+p.depth*.22));matrix.compose(position,rotation,size);this.pieces.setMatrixAt(count,matrix);
       color.copy(colors[0]).lerp(colors[2],.15+id*.32).multiplyScalar(.85+group*.2);this.pieces.setColorAt(count,color);count++;
     }

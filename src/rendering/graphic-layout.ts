@@ -1,3 +1,4 @@
+import { delayOrder, stagedTime } from '../core/timing';
 import type { Layer } from '../shared/types';
 import { seededRandom } from '../core/project';
 
@@ -135,6 +136,8 @@ export function sampleGraphicGlyphs(layer:Layer,phase:number,aspect:number,layou
     const y0=p.style===0?0:Math.ceil(-.5-by-y),y1=p.style===0?0:Math.floor(.5+by-y);
     for(let iy=y0;iy<=y1;iy++)for(let ix=x0;ix<=x1;ix++)emit({...g,x:x+ix*aspect,y:y+iy});
   };
+  // Per-element clock: an element at (x, y) runs behind the first by its delay order.
+  const staged=(time:number,x:number,y:number)=>p.delaySpread>0||p.pause>0?stagedTime(time,delayOrder(x,y,aspect,p.delayShape),p.delaySpread,p.pause):time;
   const colour=(v:number)=>v*p.colorDensity+p.colorOffset*2+motion*p.colorDrift*oscillation;
   if(p.style===0){
     let x=-aspect/2;
@@ -142,7 +145,7 @@ export function sampleGraphicGlyphs(layer:Layer,phase:number,aspect:number,layou
       const width=fraction*aspect,half=Math.max(.00001,(width-p.gutter/1080)/2);
       // Fractional wave counts blend neighbouring closed waves; they never
       // leave a phase jump at the horizontal join.
-      const phase=i/layout.columns.length*TAU, time=t*Number(motion>0);
+      const phase=i/layout.columns.length*TAU, time=staged(t,x+width/2,0)*Number(motion>0);
       const waves=Math.floor(p.waveCount),blend=p.waveCount-waves;
       const wave=(1-blend)*Math.sin(phase*waves+time)+blend*Math.sin(phase*(waves+1)+time);
       const split=p.amplitude*wave*(.25+.75*motion),gap=p.gap;
@@ -158,9 +161,9 @@ export function sampleGraphicGlyphs(layer:Layer,phase:number,aspect:number,layou
     const n=Math.round(p.circleCount),wanted=Math.ceil(n*graphicPatternExtent(layer,phase,aspect)-1e-8);
     const stride=Math.max(1,Math.ceil(wanted/12288)),count=Math.ceil(wanted/stride);
     for(let i=count-1;i>=0;i--){
-      const index=i*stride,k=(index+1)/n,r=p.radius*k*(1+motion*p.breathing*Math.cos(t));
+      const index=i*stride,k=(index+1)/n,tk=stagedTime(t,k,p.delaySpread,p.pause),r=p.radius*k*(1+motion*p.breathing*Math.cos(tk));
       const sign=i%2?1:-1,pivot=sign*p.orbit*r;
-      const a=sign*(p.coil*index+motion*p.coilDepth*index*.12*oscillation);
+      const a=sign*(p.coil*index+motion*p.coilDepth*index*.12*Math.sin(tk));
       push(pivot*(1-Math.cos(a)),-pivot*Math.sin(a),r,r,colour(k),{type:1});
     }
   }else if(p.style===2){
@@ -171,7 +174,7 @@ export function sampleGraphicGlyphs(layer:Layer,phase:number,aspect:number,layou
       // smoothly too, so changing wave layout never exposes a cell border.
       const a=TAU*tile.x/aspect,b=TAU*tile.y;
       const spatial=p.sweep===2?(Math.cos(a)+Math.cos(b))*.18:(Math.sin(a)*Math.cos(p.sweepAngle)+Math.sin(b)*Math.sin(p.sweepAngle))*.25;
-      const relative=((t/TAU-spatial*p.sweepSpread)%1+1)%1;
+      const relative=((staged(t,tile.x,tile.y)/TAU-spatial*p.sweepSpread)%1+1)%1;
       const dist=Math.min(relative,1-relative),width=p.sweepWidth*.5;
       const pulse=p.sweep===0?0:motion*(dist<width?.5+.5*Math.cos(Math.PI*dist/width):0);
       const shrink=1-p.shrink*pulse;
@@ -180,11 +183,13 @@ export function sampleGraphicGlyphs(layer:Layer,phase:number,aspect:number,layou
       });
     }
   }else if(p.style===3){
-    const step=p.angularStep+motion*p.twistDepth*oscillation;
+    const timed=p.delaySpread>0||p.pause>0;
+    let step=p.angularStep+motion*p.twistDepth*oscillation;
     const count=Math.round(p.glyphCount);
     const wanted=Math.ceil(count*graphicPatternExtent(layer,phase,aspect)-1e-8);
     const stride=Math.max(1,Math.ceil(wanted/24576));
     for(let i=1;i<=wanted;i+=stride){
+      if(timed)step=p.angularStep+motion*p.twistDepth*Math.sin(stagedTime(t,i/Math.max(1,count),p.delaySpread,p.pause));
       const r=i*p.spacing,a=i*step;
       const radius=p.glyphSize*Math.pow(r,p.growth);
       const profile=Math.round(p.profile);
@@ -197,14 +202,14 @@ export function sampleGraphicGlyphs(layer:Layer,phase:number,aspect:number,layou
   }else if(p.style===4){
     const cell=Math.min(aspect/layout.columnsCount,1/layout.rowsCount);
     const width=cell*p.pathWidth;
-    const open=Math.min(1,(1-Math.cos(t))*.5/Math.max(.2,1-p.hold));
-    const progress=p.reveal*(1-motion+motion*open);
+    const openAt=(time:number)=>Math.min(1,(1-Math.cos(time))*.5/Math.max(.2,1-p.hold));
     const segment=(a:Point,b:Point,pathColor:number,erase:boolean)=>{
       const d=Math.hypot(b.x-a.x,b.y-a.y),thickness=width*(erase?p.hollow:1);
       push((a.x+b.x)/2,(a.y+b.y)/2,d/2+thickness/2,thickness/2,pathColor,{angle:Math.atan2(b.y-a.y,b.x-a.x),roundness:p.corners===1?1:p.corners===2?.3:0,erase});
     };
     layout.paths.forEach(path=>{
       const lengths=path.slice(1).map((pt,i)=>Math.hypot(pt.x-path[i].x,pt.y-path[i].y));
+      const progress=p.reveal*(1-motion+motion*openAt(staged(t,path[0].x,path[0].y)));
       const total=lengths.reduce((a,b)=>a+b,0),limit=total*progress;
       const color=colour(.15+.7*(1-path.length/Math.max(1,p.pathLength)));
       for(const erase of [false,true]){

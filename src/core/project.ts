@@ -1,5 +1,6 @@
 import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS} from './finishing';
 import { isSimplePolygon } from './surface-layout';
+import { TIMING_PARAMETERS, TIMING_KEYS } from './timing';
 import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW } from './palettes';
 import { supportsFeedback } from '../rendering/feedback';
 import { supportsSlitScan } from '../rendering/slitscan';
@@ -55,6 +56,7 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
     parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
     parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
+    ...TIMING_PARAMETERS.map(d => ({ ...d })),
   ],
   sculpture: [
     parameter('form', 'Form', 0, 3, 1, 0, 'Shape'),
@@ -225,12 +227,12 @@ export function parameterDefinitions(kind: LayerKind): ParameterDefinition[] {
 const FRACTAL_ADDED_FIELDS = ['variant', 'quality', 'density', 'juliaReal', 'juliaImag', 'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth'];
 const GRADING_FIELDS = ['saturation', 'hue', 'exposure'];
 const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
-  surface: ['anisotropy','sheenAngle','iridescence', 'roundness', 'relief', 'variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', ...GRADING_FIELDS],
+  surface: [...TIMING_KEYS,'anisotropy','sheenAngle','iridescence', 'roundness', 'relief', 'variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', ...GRADING_FIELDS],
   sculpture: ['opening', 'twist', 'form', 'lobes', 'thickness', 'stretch', 'curl', 'foldFrequency', 'asymmetry', 'ridgeScale', 'metallic', 'clearcoat', 'sheen', 'filmScale', 'lightPower', 'shadowStrength', 'shadowSoftness', ...GRADING_FIELDS],
   fractal: [...FRACTAL_ADDED_FIELDS, 'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue'],
   super8: [...SUPER8_PROJECTOR_KEYS, ...SUPER8_ROLL_KEYS],
   oil: ['anisotropy','sheenAngle','caustics', 'iridescence', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion'],
-  graphic: [],
+  graphic: [...TIMING_KEYS],
   image: ['mirror', 'repeat', ...GRADING_FIELDS],
 };
 
@@ -252,7 +254,7 @@ export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[]
     return definitions.filter(d=>keys.has(d.key)).map(d=>d.key==='scale'?{...d,preparation:true}:d);
   }
   if(layer.kind==='relief'&&layer.params.reliefMode===1){
-    const keys=new Set(['reliefMode','scale','columns','gap','stagger','hingeBias','opening','depth','axis','phaseSpread','organic','motion','cycles','phrase','phaseOffset','lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
+    const keys=new Set([...TIMING_KEYS,'panelMix','reliefMode','scale','columns','gap','stagger','hingeBias','opening','depth','axis','phaseSpread','organic','motion','cycles','phrase','phaseOffset','lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key));
   }
   if (layer.kind !== 'fractal') return definitions;
@@ -294,14 +296,14 @@ export const PRESETS: Preset[] = [
   preset('chromatic-slides', 'Chromatic Slides', 'Hot pink and tangerine pools with dark violet ink and blue-green glass.', 'oil', ['#ff318b', '#ffab35', '#180d38', '#22dbc8', '#13266f', '#ffd18a'], { coverage: 0.5, lensAspect: 1.45, lensSize: 0.23, drag: 0.45, relativeRotation: 0.5, wetness: 0.95 }),
   preset('cobalt-tide', 'Cobalt Tide', 'Electric blue paint and coral ink flowing over luminous turquoise.', 'oil', ['#234dff', '#05bdf5', '#2b0927', '#42f2b4', '#111044', '#e7b4ff'], { travel: 0.38, relativeRotation: 0.65, drag: 0.78, coverage: 0.64, lensSize: 0.24, deformation: 0.85, cellComplexity: 0.85, dispersion: 0.35 }),
   preset('ember-glass', 'Ember Glass', 'Amber and scarlet pigment, black branching ink and deep violet glass.', 'oil', ['#ff9d19', '#fa3154', '#160721', '#33255c', '#0b0820', '#ffe7ad'], { travel: 0.28, drag: 0.65, coverage: 0.62, lensAspect: 0.85, lensDepth: 0.85, thickness: 0.85, cellComplexity: 0.8, wetness: 1 }),
-  preset('acid-tide', 'Acid Tide', 'Luminous cyan, lime and orchid flowing through broad liquid bands.', 'surface', DEFAULT_PALETTE, { style: 0, scale: 4, warp: 0.45, detail: 0.4, roundness: 0.65, relief: 0.62, softness: 0.25, contrast: 0.55, offset: 0.2, reveal: 0.1 }),
-  preset('solar-melt', 'Solar Melt', 'Hot amber, scarlet and magenta gathered into slow molten drips.', 'surface', SOLAR, { style: 2, scale: 3.4, warp: 0.6, detail: 0.28, roundness: 0.85, relief: 0.64, softness: 0.34, contrast: 0.57, rotation: -0.18, offset: 0.08, reveal: 0.14 }),
-  preset('deep-bloom', 'Deep Bloom', 'Electric cyan, blue and violet bands cut around a deep portal.', 'surface', ELECTRIC, { style: 3, scale: 5.2, warp: 0.67, detail: 0.58, roundness: 0.3, relief: 0.7, softness: 0.2, contrast: 0.68, offset: 0.33, reveal: 0.28 }),
-  preset('citrine-braids', 'Citrine Braids', 'Interwoven liquid bands in luminous citrus, cyan and orchid.', 'surface', DEFAULT_PALETTE, { style: 0, variant: 1, scale: 5.4, warp: 0.28, roundness: 0.6, relief: 0.8, density: 0.8, stretch: 0.8, roughness: 0.24 }),
-  preset('ripple-glass', 'Ripple Glass', 'Concentric ripples in cyan, magenta and yellow.', 'surface', POP_PORTAL, { style: 1, variant: 1, scale: 4.5, warp: 0.2, roundness: 0.85, relief: 0.62, density: 0.85, roughness: 0.28 }),
-  preset('vortex-pool', 'Vortex Pool', 'A curling pool of contour lines in candy pink, cyan and yellow.', 'surface', CANDY, { style: 1, variant: 2, scale: 4, warp: 0.15, roundness: 0.8, relief: 0.8, density: 1.15, stretch: 0.8, roughness: 0.28 }),
-  preset('coral-beads', 'Coral Beads', 'Rounded molten beads in hot pink, orange and yellow.', 'surface', HOT_SIGNAL, { style: 2, variant: 1, scale: 4.2, warp: 0.5, roundness: 1, relief: 0.8, density: 0.85, roughness: 0.2 }),
-  preset('satin-strands', 'Satin Strands', 'Long glossy strands in amber, scarlet and magenta.', 'surface', SOLAR, { style: 2, variant: 2, scale: 4.5, warp: 0.25, roundness: 0.85, relief: 0.82, density: 0.8, stretch: 1.1, roughness: 0.2 }),
+  preset('acid-tide', 'Acid Tide', 'Luminous cyan, lime and orchid flowing through broad liquid bands.', 'surface', DEFAULT_PALETTE, { style: 0, scale: 4, warp: 0.45, detail: 0.4, roundness: 0.65, relief: 0.62, softness: 0.25, contrast: 0.55, offset: 0.2, reveal: 0.1, delayShape: 0, delaySpread: 0.6, pause: 0.5 }),
+  preset('solar-melt', 'Solar Melt', 'Hot amber, scarlet and magenta gathered into slow molten drips.', 'surface', SOLAR, { style: 2, scale: 3.4, warp: 0.6, detail: 0.28, roundness: 0.85, relief: 0.64, softness: 0.34, contrast: 0.57, rotation: -0.18, offset: 0.08, reveal: 0.14, delayShape: 0, delaySpread: 0.5, pause: 0.4 }),
+  preset('deep-bloom', 'Deep Bloom', 'Electric cyan, blue and violet bands cut around a deep portal.', 'surface', ELECTRIC, { style: 3, scale: 5.2, warp: 0.67, detail: 0.58, roundness: 0.3, relief: 0.7, softness: 0.2, contrast: 0.68, offset: 0.33, reveal: 0.28, delayShape: 1, delaySpread: 0.5, pause: 0.4 }),
+  preset('citrine-braids', 'Citrine Braids', 'Interwoven liquid bands in luminous citrus, cyan and orchid.', 'surface', DEFAULT_PALETTE, { style: 0, variant: 1, scale: 5.4, warp: 0.28, roundness: 0.6, relief: 0.8, density: 0.8, stretch: 0.8, roughness: 0.24, delayShape: 0, delaySpread: 0.5, pause: 0.4 }),
+  preset('ripple-glass', 'Ripple Glass', 'Concentric ripples in cyan, magenta and yellow.', 'surface', POP_PORTAL, { style: 1, variant: 1, scale: 4.5, warp: 0.2, roundness: 0.85, relief: 0.62, density: 0.85, roughness: 0.28, delayShape: 1, delaySpread: 0.8, pause: 0.6 }),
+  preset('vortex-pool', 'Vortex Pool', 'A curling pool of contour lines in candy pink, cyan and yellow.', 'surface', CANDY, { style: 1, variant: 2, scale: 4, warp: 0.15, roundness: 0.8, relief: 0.8, density: 1.15, stretch: 0.8, roughness: 0.28, delayShape: 1, delaySpread: 0.5, pause: 0.3 }),
+  preset('coral-beads', 'Coral Beads', 'Rounded molten beads in hot pink, orange and yellow.', 'surface', HOT_SIGNAL, { style: 2, variant: 1, scale: 4.2, warp: 0.5, roundness: 1, relief: 0.8, density: 0.85, roughness: 0.2, delayShape: 0, delaySpread: 0.6, pause: 0.3 }),
+  preset('satin-strands', 'Satin Strands', 'Long glossy strands in amber, scarlet and magenta.', 'surface', SOLAR, { style: 2, variant: 2, scale: 4.5, warp: 0.25, roundness: 0.85, relief: 0.82, density: 0.8, stretch: 1.1, roughness: 0.2, delayShape: 0, delaySpread: 0.5, pause: 0.3 }),
   preset('pearl-organism', 'Candy Organism', 'A curled form with tucked folds, fine fluting and slow breathing.', 'sculpture', CANDY, { fold: 0.72, ridges: 0.58, opening: 0.62, twist: -0.25, breath: 0.4, roughness: 0.3, iridescence: 0.85, cameraPitch: 0.24, lightAngle: 0.5 }),
   preset('pearl-bloom', 'Hot Bloom', 'An open bloom with seven softly fluted petals.', 'sculpture', HOT_SIGNAL, { form: 1, fold: 0.5, ridges: 0.55, opening: 0.8, lobes: 7, thickness: 0.45, curl: 0.6, twist: 0.25, cameraPitch: 0.26, roughness: 0.32, iridescence: 0.75, metallic: 0.1, clearcoat: 0.8, shadowStrength: 0.45, shadowSoftness: 0.6 }),
   preset('chrome-dahlia', 'Chrome Dahlia', 'A tightly gathered dahlia with electric highlights and fine folds.', 'sculpture', ELECTRIC, { form: 1, fold: 0.7, ridges: 0.7, opening: 0.3, lobes: 11, thickness: 0.3, curl: 0.8, twist: -0.6, stretch: 0.95, cameraPitch: 0.2, roughness: 0.22, iridescence: 0.5, metallic: 0.65, clearcoat: 0.9, lightAngle: -0.45, shadowStrength: 0.45, shadowSoftness: 0.6 }),
@@ -327,11 +329,11 @@ export const PRESETS: Preset[] = [
 // colour of whole flat areas at once.
 export const FLAT_LOOK_IDS = ['neon-strata', 'acid-drip', 'pop-portal', 'contour-pop', 'pour-lace'];
 PRESETS.push(
-  preset('neon-strata', 'Neon Strata', 'Saturated strata flow through black-lined bands.', 'surface', NEON_STRATA, { style: 0, variant: 0, scale: 3.2, warp: 0.55, detail: 0.35, roundness: 0.7, relief: 0, softness: 0, contrast: 0.7, offset: 0.2, reveal: 0, toonMix: 1, toonBands: 6, toonOutline: 4 }),
-  preset('acid-drip', 'Acid Drip', 'Acid colour melts downward in outlined drips.', 'surface', ACID_DRIP, { style: 2, variant: 0, scale: 3, warp: 0.5, detail: 0.25, roundness: 0.9, relief: 0, softness: 0, contrast: 0.75, offset: 0.1, reveal: 0, toonMix: 1, toonBands: 5, toonOutline: 5 }),
-  preset('pop-portal', 'Pop Portal', 'Concentric neon rings pull inward through a portal.', 'surface', POP_PORTAL, { style: 3, variant: 0, scale: 4.5, warp: 0.3, roundness: 0.8, relief: 0, density: 1.2, contrast: 0.7, reveal: 0, toonMix: 1, toonBands: 8, toonOutline: 3, toonOutlineColor: 6 }),
-  preset('contour-pop', 'Contour Pop', 'Terraced contours as flat poster colour.', 'surface', NEON_STRATA, { style: 1, variant: 0, scale: 3.6, warp: 0.35, roundness: 0.75, relief: 0, density: 1, contrast: 0.7, reveal: 0, toonMix: 1, toonBands: 7, toonOutline: 3 }),
-  preset('pour-lace', 'Pour Lace', 'Acrylic-pour yellow and cyan with dark lacing.', 'surface', POUR, { style: 0, variant: 1, scale: 2.6, warp: 0.8, detail: 0.6, turbulence: 0.35, roundness: 0.85, relief: 0, softness: 0, contrast: 0.75, reveal: 0, toonMix: 1, toonBands: 4, toonSoftness: 0.05, toonOutline: 2.5 }),
+  preset('neon-strata', 'Neon Strata', 'Saturated strata flow through black-lined bands.', 'surface', NEON_STRATA, { style: 0, variant: 0, scale: 3.2, warp: 0.55, detail: 0.35, roundness: 0.7, relief: 0, softness: 0, contrast: 0.7, offset: 0.2, reveal: 0, toonMix: 1, toonBands: 6, toonOutline: 4, delayShape: 2, delaySpread: 0.7, pause: 0.5 }),
+  preset('acid-drip', 'Acid Drip', 'Acid colour melts downward in outlined drips.', 'surface', ACID_DRIP, { style: 2, variant: 0, scale: 3, warp: 0.5, detail: 0.25, roundness: 0.9, relief: 0, softness: 0, contrast: 0.75, offset: 0.1, reveal: 0, toonMix: 1, toonBands: 5, toonOutline: 5, delayShape: 1, delaySpread: 0.35, pause: 0.35 }),
+  preset('pop-portal', 'Pop Portal', 'Concentric neon rings pull inward through a portal.', 'surface', POP_PORTAL, { style: 3, variant: 0, scale: 4.5, warp: 0.3, roundness: 0.8, relief: 0, density: 1.2, contrast: 0.7, reveal: 0, toonMix: 1, toonBands: 8, toonOutline: 3, toonOutlineColor: 6, delayShape: 1, delaySpread: 0.5, pause: 0.4 }),
+  preset('contour-pop', 'Contour Pop', 'Terraced contours as flat poster colour.', 'surface', NEON_STRATA, { style: 1, variant: 0, scale: 3.6, warp: 0.35, roundness: 0.75, relief: 0, density: 1, contrast: 0.7, reveal: 0, toonMix: 1, toonBands: 7, toonOutline: 3, delayShape: 1, delaySpread: 0.6, pause: 0.5 }),
+  preset('pour-lace', 'Pour Lace', 'Acrylic-pour yellow and cyan with dark lacing.', 'surface', POUR, { style: 0, variant: 1, scale: 2.6, warp: 0.8, detail: 0.6, turbulence: 0.35, roundness: 0.85, relief: 0, softness: 0, contrast: 0.75, reveal: 0, toonMix: 1, toonBands: 4, toonSoftness: 0.05, toonOutline: 2.5, delayShape: 0, delaySpread: 0.4, pause: 0.3 }),
 );
 
 /** Two Surface showcases for the feedback and time-displacement finishes. */

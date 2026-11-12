@@ -1,5 +1,6 @@
 import { projectionOpticsGLSL } from './projection-optics';
 import { sourceViewGLSL } from './source-view';
+import { timingGLSL } from '../core/timing';
 export const surfaceFragment = /* glsl */`
 precision highp float;
 varying vec2 vUv;
@@ -10,8 +11,14 @@ uniform float uAspect, uPhase, uSeed, uStyle, uScale, uWarp, uDetail;
 uniform float uSoftness, uContrast, uOffset, uReveal, uRotation, uRoundness, uRelief;
 uniform float uVariant, uDensity, uStretch, uTurbulence, uCenterX, uCenterY, uLightAngle, uRoughness;
 uniform float uIridescence,uAnisotropy,uSheenAngle;
+uniform float uDelaySpread,uDelayShape,uPause;
 ${projectionOpticsGLSL}
 const float TAU = 6.28318530718;
+${timingGLSL}
+float gPhase;
+vec2 gViewRow0, gViewRow1; float gViewScale;
+// Maps a point of the rotated, stretched pattern domain back to frame coordinates.
+vec2 dripFrame(vec2 p) { vec2 s=p/gViewScale; return vec2(dot(gViewRow0,s),dot(gViewRow1,s)); }
 
 float hash(vec3 p) { p=fract(p*.1031); p+=dot(p,p.yzx+33.33); return fract((p.x+p.y)*p.z); }
 float noise(vec3 p) {
@@ -21,7 +28,7 @@ float noise(vec3 p) {
     mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);
 }
 float field(vec2 p) {
-  vec2 orbit=vec2(cos(uPhase),sin(uPhase));
+  vec2 orbit=vec2(cos(gPhase),sin(gPhase));
   float z=mod(uSeed,4093.)*.031;
   float fine=uDetail*.13;
   return (.58*noise(vec3(p+orbit*.47,z))+.29*noise(vec3(p*2.03+orbit*.58,z+9.))
@@ -88,10 +95,10 @@ float superellipse(vec2 p, float power) {
   return m*pow(pow(unit.x,power)+pow(unit.y,power),1./power);
 }
 float bandCoordinate(vec2 p, float warp) {
-  float wave=sin(p.x*1.35+.65*sin(uPhase));
+  float wave=sin(p.x*1.35+.65*sin(gPhase));
   float tension=mix(tanh(wave*2.8)/tanh(2.8),wave,uRoundness);
   float spatial=(p.y+warp+.3*uWarp*tension)*.47;
-  return (uDensity==1.?spatial:spatial*uDensity)+uOffset-uPhase/TAU;
+  return (uDensity==1.?spatial:spatial*uDensity)+uOffset-gPhase/TAU;
 }
 float ribbonCoverage(float coordinate, float width) {
   // Filter signed edges separately, preserving a ribbon's integrated width
@@ -105,24 +112,24 @@ vec3 bandPaint(vec2 p, float warp) {
   if(uVariant<.5) return paint(bandCoordinate(p,warp),true);
   if(uVariant<1.5) {
     float carrier=(p.y+warp*.45)*.54*uDensity;
-    float angle=p.x*(1.05+.2*uDensity)+.36*sin(uPhase);
+    float angle=p.x*(1.05+.2*uDensity)+.36*sin(gPhase);
     float wave=sin(angle)*(.32+.32*uRoundness);
     float a=carrier-wave, b=carrier+wave+.5;
     float width=.17+.055*uRoundness-uReveal*.11;
-    float first=ribbonCoverage(a-uPhase/TAU,width);
-    float second=ribbonCoverage(b-uPhase/TAU,width);
-    vec3 colorA=paint(a*.37+p.x*.035+uOffset-uPhase/TAU,true);
-    vec3 colorB=paint(b*.37+p.x*.035+uOffset+.47-uPhase/TAU,true);
+    float first=ribbonCoverage(a-gPhase/TAU,width);
+    float second=ribbonCoverage(b-gPhase/TAU,width);
+    vec3 colorA=paint(a*.37+p.x*.035+uOffset-gPhase/TAU,true);
+    vec3 colorB=paint(b*.37+p.x*.035+uOffset+.47-gPhase/TAU,true);
     float over=smoothstep(-.18,.18,cos(angle));
     vec3 background=paletteMean()*(.035+.055*uSoftness);
     vec3 underA=mix(background,colorA*(1.-second*uRelief*.3),first);
     vec3 underB=mix(background,colorB*(1.-first*uRelief*.3),second);
     return mix(mix(underA,colorB,second),mix(underB,colorA,first),over);
   }
-  float wave=.65*sin(p.x*.85+.55*sin(uPhase));
-  float pleat=.3*sin(p.x*2.2+p.y*.65+.4*cos(uPhase));
+  float wave=.65*sin(p.x*.85+.55*sin(gPhase));
+  float pleat=.3*sin(p.x*2.2+p.y*.65+.4*cos(gPhase));
   float coordinate=(p.y+wave+pleat+warp*.42)*.64*uDensity;
-  return paint(coordinate+uOffset-uPhase/TAU,true);
+  return paint(coordinate+uOffset-gPhase/TAU,true);
 }
 vec3 ringPaint(vec2 p, vec2 flow, float variant) {
   vec2 center=vec2(.07*sin(uPhase),.05*cos(uPhase))*uScale;
@@ -142,15 +149,15 @@ vec3 ringPaint(vec2 p, vec2 flow, float variant) {
     // the logarithmic terraces. This smooth modulation never has an angular seam.
     radius=length(q);
     safeRadius=max(radius,radiusFloor);
-    spatial=radius*.8+.13*uWarp*sin(q.x*1.7+.4*sin(uPhase))*cos(q.y*1.7+.4*cos(uPhase));
+    spatial=radius*.8+.13*uWarp*sin(q.x*1.7+.4*sin(gPhase))*cos(q.y*1.7+.4*cos(gPhase));
   } else if(variant>1.5) {
     float angle=atan(q.y,q.x+.0000001);
     float winding=3.*angle+log(safeRadius)*3.2;
     // Only periodic functions consume angle: derivatives remain continuous at
     // atan's branch cut, unlike an unwrapped angular palette coordinate.
-    spatial=log(safeRadius)*.66+.2*sin(winding+.35*sin(uPhase));
+    spatial=log(safeRadius)*.66+.2*sin(winding+.35*sin(gPhase));
   }
-  float coordinate=spatial*uDensity+uOffset-uPhase/TAU;
+  float coordinate=spatial*uDensity+uOffset-gPhase/TAU;
   vec3 color=paint(coordinate,true);
   vec3 average=paletteMean()*(1.-uReveal*.34);
   color=mix(average,color,smoothstep(footprint,footprint*3.,radius));
@@ -161,24 +168,47 @@ vec3 dripPaint(vec2 p) {
   float bend=(field(vec2(p.y*.4,3.7))-.5)*uWarp*.65;
   vec2 q=p+vec2(bend,0.);
   if(uVariant>1.5) {
-    q.x+=.24*sin(q.y*1.6+.55*sin(uPhase))+.11*sin(q.y*3.1+.5*cos(uPhase));
+    q.x+=.24*sin(q.y*1.6+.55*sin(gPhase))+.11*sin(q.y*3.1+.5*cos(gPhase));
   }
   float column=floor(q.x*density);
   float seed=hash(vec3(column,31.,mod(uSeed,4093.)));
-  float tip=.2+1.35*sin(uPhase+seed*TAU)+.25*sin(2.*uPhase+seed*11.);
+  // Every pixel of a column must agree on its clock, so the delay is taken at
+  // the column's centre line rather than at the pixel.
+  float columnPhase=uPhase;
+  if(uDelaySpread>0.||uPause>0.){
+    vec2 centre=dripFrame(vec2((column+.5)/density,0.));
+    columnPhase=stagedTime(uPhase,delayOrder(centre,uAspect));
+  }
+  float tip=.2+1.35*sin(columnPhase+seed*TAU)+.25*sin(2.*columnPhase+seed*11.);
   float x=fract(q.x*density)-.5;
   float y=min((q.y-tip)*density,0.);
   float width=(.31+.11*seed)*(1.-uReveal*.58);
-  width*=1.+uWarp*.08*sin(q.y*2.+sin(uPhase)+seed*5.);
+  width*=1.+uWarp*.08*sin(q.y*2.+sin(columnPhase)+seed*5.);
+  if(uPause>0. && uVariant<.5) {
+    // Run, pool, release: each drip falls from above the frame to its own
+    // depth, swells there, then drains away before the next one starts.
+    float span=.5*max(uScale,.1)/sqrt(max(uStretch,.25));
+    float f=fract(columnPhase/TAU+seed*.37);
+    float run=.5-.25*uPause, poolEnd=.88;
+    float top=span*1.25, depth=span*mix(.15,-.75,hash(vec3(column,57.,mod(uSeed,4093.))));
+    float g=clamp(f/run,0.,1.);g=1.-(1.-g)*(1.-g)*(1.-g);
+    tip=mix(top,depth,g);
+    float release=smoothstep(poolEnd,1.,f);
+    float tail=mix(top+span*4.,tip,release);
+    y=q.y>tail?(q.y-tail)*density:min((q.y-tip)*density,0.);
+    float pool=smoothstep(run*.8,run,f)*(1.-release);
+    float nearTip=exp(-pow((q.y-tip)*density*1.6,2.));
+    width*=(1.+pool*.45*nearTip)*(1.-smoothstep(.92,1.,f));
+  }
   if(uVariant>.5 && uVariant<1.5) {
     // Beads are separated closed droplets rather than a clipped liquid column.
-    y=(fract(q.y*density*.7+seed*.65+.3*sin(uPhase+seed*TAU))-.5)*1.12;
+    y=(fract(q.y*density*.7+seed*.65+.3*sin(columnPhase+seed*TAU))-.5)*1.12;
     width*=.82+.15*sin(q.y*.7+seed*6.);
   } else if(uVariant>1.5) {
     // A full-length strand has no moving end cap. Its cross-section gently
     // swells along the flow, producing a continuous liquid cable.
     y=0.;
-    width*=.82+.16*sin(q.y*1.9+seed*4.+.7*sin(uPhase));
+    width*=.82+.16*sin(q.y*1.9+seed*4.+.7*sin(columnPhase));
   }
   float distance=superellipse(vec2(x,y),mix(11.,2.,uRoundness))-width;
   // Different columns have different tips. Their discontinuous distance values
@@ -186,7 +216,7 @@ vec3 dripPaint(vec2 p) {
   float aa=max(length(fwidth(q))*density,.001);
   float feather=aa+.055*uSoftness;
   float coverage=1.-smoothstep(-feather,feather,distance);
-  vec3 color=paint(column*.117+seed*.025+uOffset-uPhase/TAU,false);
+  vec3 color=paint(column*.117+seed*.025+uOffset-columnPhase/TAU,false);
   // The normal follows the capsule cross-section, giving the liquid body volume.
   vec2 profile=vec2(x,y)/max(width,.02);
   vec3 normal=normalize(vec3(profile*.8,sqrt(max(.025,1.-min(dot(profile,profile),.99)))));
@@ -201,14 +231,18 @@ vec3 dripPaint(vec2 p) {
 }
 void main() {
   vec2 world=(sourceUV(vUv)-.5)*vec2(uAspect,1.)-vec2(uCenterX,uCenterY)*.5;
+  gPhase=uDelaySpread>0.||uPause>0.?stagedTime(uPhase,delayOrder(world,uAspect)):uPhase;
   float c=cos(uRotation), s=sin(uRotation);
   vec2 p=mat2(c,-s,s,c)*world*max(uScale,.1);
   float stretch=sqrt(max(uStretch,.25));
   p*=vec2(stretch,1./stretch);
+  // Inverse of the domain transform above, for per-column clocks.
+  mat2 inverse=mat2(c,s,-s,c)*mat2(1./stretch,0.,0.,stretch);
+  gViewRow0=vec2(inverse[0][0],inverse[1][0]);gViewRow1=vec2(inverse[0][1],inverse[1][1]);gViewScale=max(uScale,.1);
   vec2 flow=vec2(field(p*.65),field(p*.65+vec2(13.7,8.2)))-.5;
   // An independently controlled curl keeps Flow useful at its original scale.
   // All time dependence is a closed orbit; density changes only spatial terms.
-  vec2 curl=uTurbulence*vec2(sin(p.y*1.6+.65*cos(uPhase)),sin(p.x*1.3+.65*sin(uPhase)))*.7;
+  vec2 curl=uTurbulence*vec2(sin(p.y*1.6+.65*cos(gPhase)),sin(p.x*1.3+.65*sin(gPhase)))*.7;
   vec2 q=p+flow*uWarp*2.6+curl;
   float warp=(field(q*.8)-.5)*uWarp*1.6;
   vec3 color;

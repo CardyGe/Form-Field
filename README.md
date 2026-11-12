@@ -119,6 +119,18 @@ Each new instrument has a fourth exploration look that demonstrates these contro
 
 Volume Banding suppression uses deterministic sampling dither; High quality reduces the resulting sampling texture. Directional highlights are filtered against rapid normal changes to reduce sparkle. All render and grading changes use the shared compositor and native output pipeline. The detailed audit and research are in [the professional effect audit](docs/professional-effect-audit-0.10.md).
 
+## Per-element timing
+
+Surface, Graphic Patterns and Kinetic Relief have three Motion controls that stop a layer moving in unison:
+
+- **Delay spread** makes each element (band, ring, drip, tile, glyph, path or panel) run behind the first by up to one whole cycle. 0 moves everything together.
+- **Delay from** chooses where the motion starts: the left side, the centre, or the top-left corner.
+- **Pause** makes each element hold still for part of every cycle, then move.
+
+Delays are fixed in time and the pause maps each cycle onto itself, so loops still close exactly. At 0 the layer renders exactly as before. With Pause on, Surface drips run down from above the frame, swell at their own depth and drain away before the next one starts.
+
+Kinetic Relief also has **Panel sizes**, which mixes large, medium and small panels in the solid relief instead of one uniform grid.
+
 ## Preset library
 
 The library has 83 presets. In 0.12 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.

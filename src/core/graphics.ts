@@ -1,3 +1,4 @@
+import { TIMING_KEYS, TIMING_PARAMETERS } from './timing';
 import { ACID_DRIP, CANDY, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL } from './palettes';
 import type { ParameterDefinition } from '../shared/types';
 
@@ -44,8 +45,9 @@ export const GRAPHIC_PARAMETERS: ParameterDefinition[] = [
   p('direction','Channel direction',-Math.PI,Math.PI,.01,0),p('bias','Direction strength',0,1,.01,.85),
   p('corners','Path corners',0,2,1,1),p('reveal','Draw amount',.05,1,.01,1,'Motion'),p('hold','Hold open',0,.8,.01,.2,'Motion'),
   p('innerRadius','Ring inner radius',.04,.45,.01,.2),p('ringWidth','Ring width',.03,.3,.01,.16),
+  ...TIMING_PARAMETERS.map(d => ({ ...d }))
 ];
-const common = ['style','variant','size','stretch','centerX','centerY','orientation','motion','cycles','turns','phaseOffset','colorOffset','colorDensity','colorDrift','colorBalance','backgroundOpacity','softness','saturation','hue','exposure'];
+const common = [...TIMING_KEYS,'style','variant','size','stretch','centerX','centerY','orientation','motion','cycles','turns','phaseOffset','colorOffset','colorDensity','colorDrift','colorBalance','backgroundOpacity','softness','saturation','hue','exposure'];
 const familyKeys = [
   ['columns','widthScatter','amplitude','waveCount','gap','gutter','roundness'],
   ['circleCount','radius','orbit','coil','coilDepth','breathing'],
@@ -74,23 +76,32 @@ const green = ['#abff91','#83d781','#54a296','#40528b','#291766','#050809'];
 const mono = ['#ffffff','#dddddd','#aaaaaa','#666666','#292929','#000000'];
 const warm = ['#fff394','#ffd078','#ffa659','#ff6a63','#ed365d','#080305'];
 const red = ['#f42d39','#e31928','#ae1322','#761020','#471019','#030205'];
-const look = (id: string,name: string,description: string,style: number,variant: number,palette: string[],params: Record<string, number>): GraphicLook => ({id,name,description,palette,params:{style,variant,...params}});
+// Each family's elements start at their own time (Delay spread) and hold still
+// for part of the cycle (Pause), so the field moves as a wave rather than in unison.
+const FAMILY_TIMING: Record<number, Record<string, number>> = {
+  0: { delayShape: 0, delaySpread: .25, pause: .4 },
+  1: { delayShape: 1, delaySpread: .6, pause: .3 },
+  2: { delayShape: 2, delaySpread: .4, pause: .4 },
+  3: { delayShape: 1, delaySpread: .5, pause: .3 },
+  4: { delayShape: 1, delaySpread: .7, pause: 0 },
+};
+const look = (id: string,name: string,description: string,style: number,variant: number,palette: string[],params: Record<string, number>): GraphicLook => ({id,name,description,palette,params:{style,variant,...FAMILY_TIMING[style],...params}});
 export const GRAPHIC_LOOKS: GraphicLook[] = [
   look('pillar-wave','Pillar Wave','Rounded opposing columns trace a travelling wave.',0,0,purple,{}),
   look('uneven-pillars','Uneven Pillars','Unequal candy-coloured columns gather into broad waves.',0,1,CANDY,{columns:32,widthScatter:.65,waveCount:1.3}),
   look('lava-columns','Lava Columns','Wide rounded columns move like graphic lava.',0,2,HOT_SIGNAL,{columns:10,widthScatter:.3,amplitude:.28,gap:.05,gutter:6,waveCount:1}),
   look('warm-curtains','Warm Curtains','Coral and amber curtains leave a flowing dark channel.',0,4,warm,{columns:100,amplitude:.05,gap:.23,gutter:1,waveCount:3}),
   look('green-tide','Green Tide','Luminous green pillars sweep through deep blue.',0,5,green,{columns:80,amplitude:.38,waveCount:2.5,gutter:2}),
-  look('concentric-halo','Concentric Halo','Fine layered circles breathe around a luminous green centre.',1,0,green,{motion:.5,orbit:.012,coil:.18,coilDepth:.08,radius:.48,colorBalance:.65}),
+  look('concentric-halo','Concentric Halo','Fine layered circles breathe around a luminous green centre.',1,0,green,{motion:.8,orbit:.012,coil:.18,coilDepth:.3,breathing:.15,radius:.48,colorBalance:.65}),
   look('orbital-bloom','Orbital Bloom','Layered lime discs unfold into a soft orbital flower.',1,1,['#edff23','#ccdf1a','#a7be16','#77930c','#405706','#102100'],{orbit:.6,coil:.62,coilDepth:.4,radius:.55,motion:.6}),
   look('circle-fans','Circle Fans','Opposite circle stacks sweep into warm fans and propellers.',1,2,warm,{orbit:.7,coil:2.75,coilDepth:.55,radius:.66,turns:1,motion:.75}),
-  look('packed-mosaic','Packed Mosaic','Seeded cyan and violet bricks pack into a crisp field.',2,0,aqua,{fill:0,tileResolution:40,roundness:.08,sweep:0}),
+  look('packed-mosaic','Packed Mosaic','Seeded cyan and violet bricks pack into a crisp field.',2,0,aqua,{fill:0,tileResolution:40,roundness:.08,sweep:1,shrink:.3}),
   look('neon-frames','Neon Frames','Large hollow frames softly round as a wave passes.',2,1,POP_PORTAL,{fill:1,tileResolution:16,tileArea:9,roundness:.25,stroke:2.4,shrink:.16}),
   look('nested-tiles','Nested Tiles','Nested neon rectangles become rings and capsules.',2,2,NEON_STRATA,{fill:2,tileResolution:22,tileArea:7,contourSpacing:5,roundness:.38,sweep:1}),
   look('tile-ripple','Tile Ripple','An expanding wave rounds and shrinks a nested tile field.',2,3,red,{fill:2,tileResolution:38,tileArea:4,roundness:.04,sweep:2,contourSpacing:3.3,sweepWidth:.2,shrink:.45}),
-  look('beaded-spiral','Beaded Spiral','Acid beads curl into a finely sampled spiral.',3,0,ACID_DRIP,{profile:0,glyphSize:.05,angularStep:1.082,turns:1,colorDensity:2}),
-  look('polygon-tunnel','Polygon Tunnel','Large seven-sided forms overlap into a green contour tunnel.',3,1,green,{profile:6,glyphSize:.5,angularStep:1.4486,spacing:.0024,stroke:.8,colorDensity:5,turns:1}),
-  look('woven-vortex','Woven Vortex','Angular candy-coloured forms weave into a pinwheel.',3,2,CANDY,{profile:6,glyphSize:.5,angularStep:.8901,spacing:.0025,stroke:1.2,colorDensity:4,turns:1}),
+  look('beaded-spiral','Beaded Spiral','Acid beads curl into a finely sampled spiral.',3,0,ACID_DRIP,{profile:0,glyphSize:.05,angularStep:1.082,turns:1,colorDensity:2,twistDepth:.004}),
+  look('polygon-tunnel','Polygon Tunnel','Large seven-sided forms overlap into a green contour tunnel.',3,1,green,{profile:6,glyphSize:.5,angularStep:1.4486,spacing:.0024,stroke:.8,colorDensity:5,turns:1,twistDepth:.003}),
+  look('woven-vortex','Woven Vortex','Angular candy-coloured forms weave into a pinwheel.',3,2,CANDY,{profile:6,glyphSize:.5,angularStep:.8901,spacing:.0025,stroke:1.2,colorDensity:4,turns:1,twistDepth:.003}),
   look('web-rosette','Web Rosette','Outlined overlapping circles reveal a scalloped neon rosette.',3,3,POP_PORTAL,{profile:0,glyphSize:.5,angularStep:.576,spacing:.0025,stroke:1.1,colorDensity:5,turns:1}),
   look('coiling-ribbon','Coiling Ribbon','Overlapping pentagons form a broad magenta spiral ribbon.',3,5,purple,{profile:4,glyphSize:.5,angularStep:.035,twistDepth:.028,spacing:.0025,stroke:.55,motion:.8,colorDensity:3}),
   look('particle-rays','Particle Rays','Warm hexagonal beads coil into luminous spokes.',3,6,warm,{profile:5,glyphSize:.065,angularStep:.91,twistDepth:.18,spacing:.0035,stroke:.5,motion:.8,turns:1,colorDensity:3}),

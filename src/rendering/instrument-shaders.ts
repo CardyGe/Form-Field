@@ -2,6 +2,7 @@ import { sourceViewGLSL } from './source-view';
 import { projectionOpticsGLSL } from './projection-optics';
 import { INSTRUMENT_PARAMETERS, type InstrumentKind } from '../core/instruments';
 import { surfaceFieldGLSL } from './surface-fields';
+import { timingGLSL } from '../core/timing';
 
 const common=/* glsl */`
 precision highp float;
@@ -124,13 +125,16 @@ void main(){
  outputField(color,coverage);
 }`,
 relief:/* glsl */`
+${timingGLSL}
 void main(){
  if(uReliefMode>.5){outputField(vec3(0.),0.);return;}
  vec2 p=domain(),q=p*uColumns;
  q.x+=mod(floor(q.y),2.)*uStagger*.5;vec2 id=floor(q),f=fract(q)-.5;
  float angle=uAxis<.5?0.:uAxis<1.5?PI*.5:PI*.25;
  vec2 local=spin(angle)*f;
- float wave=.5+.5*sin(dot(id,vec2(.23,.17))*uWaveCount+uPhase+uPhaseSpread*hash21(id)*TAU)*uMotion;
+ float clock=uPhase;
+ if(uDelaySpread>0.||uPause>0.){vec2 cell=(id+.5)/uColumns;cell.x*=uStretch;vec2 frame=spin(-uRotation)*cell/uScale;clock=stagedTime(uPhase,delayOrder(frame,uAspect));}
+ float wave=.5+.5*sin(dot(id,vec2(.23,.17))*uWaveCount+clock+uPhaseSpread*hash21(id)*TAU)*uMotion;
  float opening=uOpening*(.2+.8*wave);float hinge=opening*1.15;
  float projected=max(.2,cos(hinge));
  vec2 plate=vec2((local.x-uHingeBias*.18)/projected+uHingeBias*.18,local.y);

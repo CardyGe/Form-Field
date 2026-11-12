@@ -1,4 +1,5 @@
-import { ELECTRIC, HOT_SIGNAL, LIME_VIOLET, SOLAR, FLAT_FINISH } from './palettes';
+import { ELECTRIC, HOT_SIGNAL, LIME_VIOLET, SOLAR, CANDY, CYAN_YELLOW, FLAT_FINISH } from './palettes';
+import { TIMING_PARAMETERS } from './timing';
 import type { ParameterDefinition } from '../shared/types';
 
 export const INSTRUMENT_KINDS = ['livingink','currents','relief','resonance'] as const;
@@ -24,7 +25,7 @@ const material=[a('lightHeight','Light elevation',.2,2,.01,1,'Material'),a('fill
 const specific:Record<InstrumentKind,ParameterDefinition[]>={
  livingink:[p('pigmentCarry','Pigment carry',0,1,.01,.6,'Material'),a('edgeSoftness','Pigment softness',0,1,.01,0,'Material'),a('edgeInk','Edge pigment',0,1,.01,.24,'Material'),{...a('seedCoverage','Seed coverage',.3,.85,.01,.62,'Shape','Re-prepares the chemical texture; does not change during playback.'),preparation:true},{...a('development','Development',.65,1.4,.01,1,'Shape','Duration of deterministic chemical preparation, not playback speed.'),preparation:true}],
  currents:[a('vortex','Vortex curl',-1,1,.01,0),a('braid','Braided flow',0,1,.01,0),a('taper','Fibre taper',0,1,.01,0,'Material'),a('flowDetail','Fine eddies',0,1,.01,0)],
- relief:[a('gap','Joint spacing',.01,.24,.005,.08),a('stagger','Row stagger',0,1,.01,0),a('hingeBias','Hinge position',-1,1,.01,0),a('roundness','Plate rounding',0,1,.01,0),a('phaseSpread','Opening variation',0,1,.01,0,'Motion')],
+ relief:[...TIMING_PARAMETERS.map(d=>({...d})),{...p('panelMix','Panel sizes',0,1,.01,0),description:'Mixes large, medium and small panels instead of one uniform grid. Solid relief only.'},a('gap','Joint spacing',.01,.24,.005,.08),a('stagger','Row stagger',0,1,.01,0),a('hingeBias','Hinge position',-1,1,.01,0),a('roundness','Plate rounding',0,1,.01,0),a('phaseSpread','Opening variation',0,1,.01,0,'Motion')],
  resonance:[a('radialMix','Circular modes',0,1,.01,0),a('harmonic','Harmonic detail',0,1,.01,0),a('grainSize','Grain density',40,260,1,130,'Material'),a('nodalSoftness','Nodal softness',0,1,.01,0,'Material')],
 };
 export const INSTRUMENT_UPGRADE_KEYS:Record<InstrumentKind,string[]>=Object.fromEntries(INSTRUMENT_KINDS.map(kind=>{
@@ -72,3 +73,14 @@ const studies:Partial<Record<InstrumentKind,InstrumentInfo['looks']>>={
 for(const info of INSTRUMENTS)info.looks.push(...(studies[info.kind]??[]));
 // Relief and Resonance start from flat colour with outlines; shading stays one control away.
 for(const info of INSTRUMENTS)if(info.kind==='relief'||info.kind==='resonance')for(const look of info.looks)look.params={...FLAT_FINISH,...look.params};
+// Relief panels open outward from an origin, holding between moves; solid looks mix panel sizes.
+const RELIEF_TIMING:Record<string,Record<string,number>>={
+ 'porcelain-shutters':{reliefMode:1,panelMix:.5,motion:1,delayShape:1,delaySpread:.6,pause:.4},
+ 'basalt-scales':{reliefMode:1,panelMix:.35,motion:1,delayShape:2,delaySpread:.5,pause:.4},
+ 'breathing-facade':{panelMix:.7,delayShape:1,delaySpread:.6,pause:.35},
+ 'folding-copper':{panelMix:.5,delayShape:0,delaySpread:.5,pause:.3},
+ 'quiet-monument':{panelMix:.9,delayShape:2,delaySpread:.4,pause:.5},
+};
+for(const look of INSTRUMENTS.find(i=>i.kind==='relief')!.looks)Object.assign(look.params,RELIEF_TIMING[look.id]??{});
+const RELIEF_PALETTES:Record<string,string[]>={'porcelain-shutters':CANDY,'basalt-scales':CYAN_YELLOW};
+for(const look of INSTRUMENTS.find(i=>i.kind==='relief')!.looks)if(RELIEF_PALETTES[look.id])look.palette=RELIEF_PALETTES[look.id];
