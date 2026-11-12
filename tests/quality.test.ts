@@ -4,18 +4,18 @@ import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions,
 const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
-test('twenty signature looks retain all original presets and use ordinary saved layers', () => {
-  assert.equal(PRESETS.length,127);
-  assert.equal(PRESETS.filter(p => !p.signature).length,107);
-  const signatures=PRESETS.filter(p => p.signature);
-  assert.equal(signatures.length,20);
-  assert.equal(new Set(signatures.map(p => p.kind)).size,6);
-  for (const preset of signatures) {
+test('the curated library keeps 83 distinct presets on saturated palettes with a dark or light ground', () => {
+  assert.equal(PRESETS.length,83);
+  assert.equal(new Set(PRESETS.map(p=>p.id)).size,83);
+  for (const preset of PRESETS) {
     const layer=applyPreset(createLayer(preset.kind),preset.id);
     const project={...createProject(),layers:[layer]};
     assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))),project);
-    assert.equal('signature' in layer,false,'Collection metadata does not alter schema-1');
+    assert.equal(preset.palette.length,6,preset.id);
   }
+  // Rule: no two presets of a family share both palette and structure.
+  const shape=(p:typeof PRESETS[number])=>JSON.stringify([p.kind,p.palette,p.params.style,p.params.variant,p.params.form,p.params.mode,p.params.inkMode,p.params.flowMode,p.params.reliefMode,p.params.echo,p.params.slitShift]);
+  assert.equal(new Set(PRESETS.map(shape)).size,PRESETS.length,'Palette twins');
 });
 
 test('smart variations preserve effect identity, coverage, composition and authored animation', () => {

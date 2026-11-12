@@ -94,7 +94,7 @@ try {
    return [stats(await exr(p,.7,90,160),id+' portrait'),stats(await exr(p,.7,120,120),id+' square')];
   },preset.id);report.checks.push({signature:preset.id,aspects:result,loop:true,seek:true});
  }
- if(process.argv.includes('--production'))for(const id of ['signature-tidal-silk','signature-opal-corolla','signature-amber-julia','signature-verdigris-slide','signature-painted-leader','signature-signal-garden']) {
+ if(process.argv.includes('--production'))for(const id of ['neon-strata','pearl-organism','velvet-julia','acid-slide','painted-tunnel','web-rosette']) {
   const bytes=await page.evaluate(async id=>Array.from(await window.qa.r.exportPNG(window.qa.project(id),.7,3840,2160)),id);
   await fs.writeFile(path.join(out,id+'-4k.png'),Buffer.from(bytes));report.checks.push({production:id,width:3840,height:2160});
  }

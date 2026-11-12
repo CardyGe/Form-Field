@@ -119,9 +119,11 @@ Each new instrument has a fourth exploration look that demonstrates these contro
 
 Volume Banding suppression uses deterministic sampling dither; High quality reduces the resulting sampling texture. Directional highlights are filtered against rapid normal changes to reduce sparkle. All render and grading changes use the shared compositor and native output pipeline. The detailed audit and research are in [the professional effect audit](docs/professional-effect-audit-0.10.md).
 
-## Signature collection
+## Preset library
 
-Choose **Presets → Signature collection** for 20 additional authored looks across Surfaces, Sculptures, Fractals, Oil Slides, Super 8 Paint and Graphic Patterns. The cards show actual renderer reference frames. All 70 original presets remain available in their family filters. The collection uses the existing renderer and export pipeline and saves as ordinary schema-1 layers.
+The library has 83 presets. In 0.12 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
+
+**Presets → Finishes for any layer** holds six finishes: Tunnel, Bloom Echo and Melt (feedback), and Terraces, Block Shuffle and Ring Delay (time displacement). A finish applies to the selected layer of any kind except Graphic Patterns and Ink *Evolving*, and replaces any finish already on it. **No finish** turns both off. Recursion Tunnel and Time Terraces remain as Surface presets that show a finish on a source.
 
 The randomizer stays near an authored recipe for the current family and variant. It changes groups of related controls together and chooses a complete authored palette rather than mixing random swatches. Julia constants, algorithm switches and coverage options are held deliberately; locked or animated controls are retained. **Undo** restores the previous variation.
 
@@ -144,7 +146,7 @@ Very small rings and thin patterns filter toward their average at the pixel limi
 
 ## Light, material & space
 
-Four projection instruments (Living Ink, Velvet Currents, Kinetic Relief, Resonant Sand) share the existing rendering loop, layer compositor, masks, palette grading, smart randomizer and native output pipeline. The library includes four original looks per instrument, plus nine projection motion studies across Currents, Ink and Relief. The whole library has 127 presets.
+Four projection instruments (Living Ink, Velvet Currents, Kinetic Relief, Resonant Sand) share the existing rendering loop, layer compositor, masks, palette grading, smart randomizer and native output pipeline. The library includes original looks for each instrument plus eight projection motion studies across Currents, Ink and Relief.
 
 Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral and Volumetric Veils were retired in 0.12 because none of them looked like what its name promised. Opening an older project drops layers of those kinds; a project that only used them reports that its effects were retired.
 
@@ -310,7 +312,7 @@ npm run dev
 
 `node scripts/verify-smart-repeat.mjs` checks geometry at repeat joins, all ninety transformed presets, procedural view equivalence, finite 3D geometry, image repeat/sampler isolation and 4K output.
 
-`node scripts/verify-quality.mjs` renders all 127 presets at multiple phases, stresses every family at slider extremes, checks randomized variants and compares the 20 signature reference images. It writes a review gallery to `work/quality-pass/gallery.html`. Only `--update-references` replaces the committed thumbnails. `node scripts/verify-randomizer-ui.mjs` checks all eleven layer types, three variation amounts, locks, routes, undo/redo and the 20 signature cards through native persistence.
+`node scripts/verify-quality.mjs` renders all 83 presets at multiple phases, stresses every family at slider extremes and checks randomized variants. It writes a review gallery to `work/quality-pass/gallery.html`. `node scripts/verify-randomizer-ui.mjs` checks all eleven layer types, three variation amounts, locks, routes and undo/redo through native persistence.
 
 `npm run start` builds and opens the desktop app without a development server. `npm run build` runs TypeScript validation and produces the renderer. `npm test` runs core and native export tests with actual media tools. `node scripts/verify-graphics.mjs` checks the thirty-two graphic presets, looping, controls, transparency, 4K stills and native movie export; `node scripts/verify-graphics-ui.mjs` checks their integrated UI and persistence. `node scripts/verify-super8.mjs` checks all five film modes, every paint/projector control, frame holds, continuous transport, feedback history, exact loops, alpha, 4K output and resumed native exports. Set `SUPER8_CAPTURE_MOTION=1` to also capture a short ProRes projector preview. `node scripts/verify-super8-ui.mjs [app-path]` checks packaged projector controls, older project migration, save/open and native alpha output. `node scripts/verify-oil.mjs` checks Oil rendering, looping, alpha, mixed layers and 4K output in Electron. `node scripts/verify-ui.mjs` drives the built Electron application, including native persistence and a real transparent movie export; only file dialogs are replaced for repeatability.
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FEEDBACK_LOOK_IDS, PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer } from '../src/core/project';
+import { FINISH_LOOKS, FINISH_SHOWCASE_IDS, applyFinish, finishSupported, PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer } from '../src/core/project';
 import { FEEDBACK_KEYS } from '../src/core/finishing';
 import { phaseAtFrame } from '../src/core/timeline';
 import { feedbackActive, frameAtPhase, persistence, supportsFeedback, warmupFrames, MAX_PERSISTENCE } from '../src/rendering/feedback';
@@ -48,15 +48,27 @@ test('patterns and evolving ink cannot take feedback', () => {
   assert.equal(supportsFeedback(createLayer('surface')), true);
 });
 
-test('feedback looks are ordinary saved layers with feedback on', () => {
-  assert.equal(FEEDBACK_LOOK_IDS.length, 3);
-  for (const id of FEEDBACK_LOOK_IDS) {
-    const preset = PRESETS.find(p => p.id === id)!;
-    const layer = applyPreset(createLayer(preset.kind), id);
-    assert.ok(feedbackActive(layer), id);
-    const project = { ...createProject(), highlights: 'exact' as const, layers: [layer] };
-    assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))), project);
+test('feedback finishes apply to any supporting layer, replace each other and save as ordinary layers', () => {
+  const echoes = FINISH_LOOKS.filter(f => (f.params.echo ?? 0) > 0);
+  assert.equal(echoes.length, 3);
+  for (const kind of ['surface', 'sculpture', 'fractal', 'oil', 'super8', 'livingink', 'currents', 'relief', 'resonance', 'image'] as const) {
+    for (const finish of echoes) {
+      const source = createLayer(kind); source.modulations.echoHue = { kind: 'sine', cycles: 1, phase: 0, amount: .2, points: [] };
+      const layer = applyFinish(source, finish.id);
+      assert.ok(feedbackActive(layer), `${kind} ${finish.id}`);
+      assert.equal(layer.modulations.echoHue, undefined, 'A finish replaces modulations of its own controls');
+      assert.deepEqual(layer.palette, source.palette); assert.equal(layer.params.seed, source.params.seed);
+      const cleared = applyFinish(layer, 'finish-none');
+      assert.equal(feedbackActive(cleared), false);
+      for (const key of FEEDBACK_KEYS) assert.equal(cleared.params[key], source.params[key], `${kind} ${key} returns to neutral`);
+      const project = { ...createProject(), layers: [layer] };
+      assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))), project);
+    }
   }
+  assert.equal(finishSupported(createLayer('graphic')), false);
+  assert.throws(() => applyFinish(createLayer('graphic'), 'finish-tunnel'), /cannot be applied/);
+  assert.throws(() => applyFinish(createLayer('surface'), 'missing'), /Unknown finish/);
+  assert.ok(feedbackActive(applyPreset(createLayer('surface'), FINISH_SHOWCASE_IDS[0])));
 });
 
 test('variations never switch feedback on or change its blend and frame', () => {

@@ -21,7 +21,7 @@ test('original instruments migrate new motion settings neutrally and reject expl
  }
 });
 test('projection studies are complete native layers and variation preserves treatment, phrase and surface',()=>{
- for(const id of PROJECTION_LOOK_IDS){const kind=id.includes('facade')||['folding-copper','quiet-monument'].includes(id)?'relief':['ink-estuary','tidal-pigment','coral-development'].includes(id)?'livingink':'currents';const layer=applyPreset(createLayer(kind),id);layer.surface={source:'polygon',role:'obstacle',influence:.8,points};
+ for(const id of PROJECTION_LOOK_IDS){const kind=id.includes('facade')||['folding-copper','quiet-monument'].includes(id)?'relief':['ink-estuary','tidal-pigment'].includes(id)?'livingink':'currents';const layer=applyPreset(createLayer(kind),id);layer.surface={source:'polygon',role:'obstacle',influence:.8,points};
   const project={...createProject(),schemaVersion:2 as const,layers:[layer]};assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))),project);
   const varied=varyLayer(layer,1,{palette:false,structure:false,motion:false,material:false},42);for(const key of ['flowMode','inkMode','reliefMode','phrase','surfaceHole'])assert.equal(varied.params[key],layer.params[key]);assert.deepEqual(varied.surface,layer.surface);
  }

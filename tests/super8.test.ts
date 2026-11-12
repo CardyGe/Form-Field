@@ -8,7 +8,7 @@ const TAU = Math.PI * 2;
 
 test('five Super 8 modes roundtrip with presets, animation, masks and existing sources', () => {
   const presets = PRESETS.filter(p => p.kind === 'super8');
-  assert.deepEqual(presets.filter(p => !p.signature).map(p => p.name), SUPER8_MODES);
+  assert.deepEqual(presets.map(p => p.name), SUPER8_MODES);
   for (const preset of presets) {
     const p = createProject();
     const layer = applyPreset(createLayer('super8'), preset.id);

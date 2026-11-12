@@ -52,7 +52,7 @@ try{
     }
     const params=await page.evaluate(async()=>{
       const {project,exr,delta}=window.graphicsQA,results=[];
-      for(const [id,key,value] of [['pillar-wave','amplitude',.05],['orbital-bloom','orbit',.1],['neon-frames','stroke',6],['nested-tiles','contourSpacing',12],['tile-ripple','sweepWidth',.5],['beaded-spiral','angularStep',1.2],['web-rosette','glyphSize',.6],['line-interference','profileAngle',.7],['particle-rays','twistDepth',.03],['circuit-worms','pathWidth',.8],['circuit-channels','direction',1.57],['maze-carpet','hollow',.2],['radial-circuit','ringWidth',.06]]){
+      for(const [id,key,value] of [['pillar-wave','amplitude',.05],['orbital-bloom','orbit',.1],['neon-frames','stroke',6],['nested-tiles','contourSpacing',12],['tile-ripple','sweepWidth',.5],['beaded-spiral','angularStep',1.2],['web-rosette','glyphSize',.6],['particle-rays','twistDepth',.03],['circuit-worms','pathWidth',.8],['circuit-channels','direction',1.57],['maze-carpet','hollow',.2],['radial-circuit','ringWidth',.06]]){
         const p=project(id),a=await exr(p,1.3);p.layers[0].params[key]=value;const difference=delta(a,await exr(p,1.3));if(difference<.00005)throw Error('Inactive control '+id+' '+key);results.push({id,key,difference});
       }
       const rotating=project('circle-fans');rotating.layers[0].params.motion=0;

@@ -383,9 +383,9 @@ test('fractal defaults and all family variants roundtrip alongside existing laye
   assert.equal(layer.params.quality, 2);
   assert.equal(layer.params.morph, 0.1);
   assert.deepEqual(parameterDefinitions('fractal').filter((definition) => definition.step === 1).map((definition) => definition.key).sort(), ['colorMode', 'colorSteps', 'cycles', 'echoBlend', 'quality', 'radial', 'slitBlocks', 'slitScroll', 'slitShape', 'slitSlices', 'slitSpan', 'style', 'symmetry', 'toonBands', 'toonCycles', 'toonOutlineColor', 'variant']);
-  const presets = PRESETS.filter((preset) => preset.kind === 'fractal' && !preset.signature);
-  assert.equal(presets.length, 12);
-  assert.equal(new Set(presets.map((preset) => preset.id)).size, 12);
+  const presets = PRESETS.filter((preset) => preset.kind === 'fractal');
+  assert.equal(presets.length, 11);
+  assert.equal(new Set(presets.map((preset) => preset.id)).size, 11);
   for (const family of [0, 1, 2]) assert.deepEqual([...new Set(presets.filter((preset) => preset.params.style === family).map((preset) => preset.params.variant))].sort(), [0, 1, 2]);
   const project = createProject();
   const before = clone(project.layers[0]);
@@ -680,16 +680,15 @@ test('Fractal contour controls appear only for contour coloring without deleting
   assert.equal(varied.params.colorMode, 1, 'Gentle variations retain the chosen coloring algorithm');
 });
 
-test('expanded preset library covers twelve Surface variants, four Sculpture forms and three Fractal colorings', () => {
-  assert.equal(PRESETS.filter(p => p.kind !== 'graphic' && !p.signature).length, 81);
+test('the curated library covers every Surface pattern, four Sculpture forms and three Fractal colorings', () => {
+  assert.equal(PRESETS.filter(p => p.kind !== 'graphic').length, 59);
   assert.equal(new Set(PRESETS.map(preset => preset.id)).size, PRESETS.length);
-  const surfaces = PRESETS.filter(preset => preset.kind === 'surface' && !preset.signature);
-  assert.equal(surfaces.length, 24);
-  assert.equal(new Set(surfaces.map(preset => `${preset.params.style}:${preset.params.variant}`)).size, 12);
-  for (const family of [0, 1, 2, 3]) assert.deepEqual([...new Set(surfaces.filter(preset => preset.params.style === family).map(preset => preset.params.variant))].sort(), [0, 1, 2]);
-  const sculptures = PRESETS.filter(preset => preset.kind === 'sculpture' && !preset.signature);
-  assert.equal(sculptures.length, 8);
-  assert.deepEqual(sculptures.reduce((counts, preset) => { counts[preset.params.form]++; return counts; }, [0, 0, 0, 0]), [3, 2, 2, 1]);
+  const surfaces = PRESETS.filter(preset => preset.kind === 'surface');
+  assert.equal(surfaces.length, 15);
+  assert.deepEqual([...new Set(surfaces.map(preset => preset.params.style))].sort(), [0, 1, 2, 3]);
+  const sculptures = PRESETS.filter(preset => preset.kind === 'sculpture');
+  assert.equal(sculptures.length, 5);
+  assert.deepEqual(sculptures.reduce((counts, preset) => { counts[preset.params.form]++; return counts; }, [0, 0, 0, 0]), [1, 2, 1, 1]);
   assert.deepEqual([...new Set(PRESETS.filter(preset => preset.kind === 'fractal').map(preset => preset.params.colorMode))].sort(), [0, 1, 2]);
   for (const kind of ['surface', 'sculpture', 'fractal'] as const) {
     const layer = applyPreset(createLayer(kind), PRESETS.find(preset => preset.kind === kind && (preset.params.variant > 0 || preset.params.form > 0 || preset.params.colorMode > 0))!.id);

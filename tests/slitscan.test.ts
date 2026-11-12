@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SLIT_LOOK_IDS, PRESETS, applyPreset, parameterDefinitions, createLayer, createProject, validateProject, varyLayer } from '../src/core/project';
+import { FINISH_LOOKS, FINISH_SHOWCASE_IDS, applyFinish, PRESETS, applyPreset, parameterDefinitions, createLayer, createProject, validateProject, varyLayer } from '../src/core/project';
 import { SLIT_KEYS } from '../src/core/finishing';
 import { SLIT_SHAPES, slitActive, sliceDelays, supportsSlitScan } from '../src/rendering/slitscan';
 const unlocked = { palette: false, structure: false, motion: false, material: false };
@@ -36,11 +36,13 @@ test('patterns and evolving ink cannot take time displacement', () => {
 });
 
 test('time displacement looks are ordinary saved layers with it switched on', () => {
-  assert.equal(SLIT_LOOK_IDS.length, 3);
-  for (const id of SLIT_LOOK_IDS) {
-    const preset = PRESETS.find(p => p.id === id)!;
-    const layer = applyPreset(createLayer(preset.kind), id);
-    assert.ok(slitActive(layer), id);
+  const slits = FINISH_LOOKS.filter(f => (f.params.slitShift ?? 0) !== 0);
+  assert.equal(slits.length, 3);
+  assert.ok(slitActive(applyPreset(createLayer('surface'), FINISH_SHOWCASE_IDS[1])));
+  for (const finish of slits) {
+    const layer = applyFinish(applyFinish(createLayer('fractal'), 'finish-tunnel'), finish.id);
+    assert.ok(slitActive(layer), finish.id);
+    assert.equal(layer.params.echo, 0, 'A time finish replaces a feedback finish');
     const project = { ...createProject(), highlights: 'exact' as const, layers: [layer] };
     assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))), project);
   }

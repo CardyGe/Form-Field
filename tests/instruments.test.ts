@@ -97,7 +97,7 @@ test('smart variation holds loop phase and inactive support parameters but can v
   const layer=createLayer(kind);layer.params.phaseOffset=.37;
   const next=varyLayer(layer,1,{palette:false,structure:false,motion:false,material:false},1729);
   assert.equal(next.params.phaseOffset,.37);assert.equal(next.params.warpScale,layer.params.warpScale);
-  if('sheenAngle' in layer.params)assert.equal(next.params.sheenAngle,layer.params.sheenAngle);
+  if('sheenAngle' in layer.params&&!layer.params.anisotropy)assert.equal(next.params.sheenAngle,layer.params.sheenAngle);
   assert.equal(next.params.tonePivot,layer.params.tonePivot);
  }
  const ink=createLayer('livingink'),next=varyLayer(ink,1,{palette:true,structure:false,motion:true,material:true},42);

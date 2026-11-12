@@ -1,3 +1,4 @@
+import { ELECTRIC, HOT_SIGNAL, LIME_VIOLET, SOLAR, FLAT_FINISH } from './palettes';
 import type { ParameterDefinition } from '../shared/types';
 
 export const INSTRUMENT_KINDS = ['livingink','currents','relief','resonance'] as const;
@@ -33,29 +34,25 @@ export const INSTRUMENT_UPGRADE_KEYS:Record<InstrumentKind,string[]>=Object.from
  INSTRUMENT_PARAMETERS[kind].push(...added.map(d=>({...d})));
  return [kind,added.map(d=>d.key)];
 })) as Record<InstrumentKind,string[]>;
-const cool=['#c5eee4','#79c8d5','#407eab','#7878af','#efd8b0','#071321'];
-const warm=['#f2dbad','#d89762','#bd574f','#753a65','#d0a4a0','#160e21'];
-const pearl=['#f1ead8','#c7d4d0','#84abb5','#527783','#d7b18c','#101b24'];
+const cool=ELECTRIC,warm=HOT_SIGNAL,pearl=LIME_VIOLET;
 export interface InstrumentInfo {kind:InstrumentKind;name:string;description:string;palette:string[];looks:{id:string;name:string;params:Record<string,number>;palette?:string[]}[]}
 export const INSTRUMENTS:InstrumentInfo[]=[
- {kind:'livingink',name:'Living Ink',description:'Seeded cellular pigment · embossed lace',palette:pearl,looks:[{id:'ivory-coral',name:'Ivory Coral',params:{}},{id:'cobalt-fingerprints',name:'Cobalt Fingerprints',palette:cool,params:{pattern:1,branching:.3,scale:3.2,flow:.4,pigment:.4}},{id:'ember-cells',name:'Ember Cells',palette:warm,params:{pattern:2,branching:.65,scale:2.2,pigment:.55,relief:.85}}]},
- {kind:'currents',name:'Velvet Currents',description:'Luminous fibres · coherent eddies',palette:cool,looks:[{id:'aurora-comb',name:'Aurora Comb',params:{scale:1.8,fibres:28,coherence:.65,width:.4}},{id:'copper-estuary',name:'Copper Estuary',palette:warm,params:{scale:1.5,fibres:32,curl:.4,coherence:.9,width:.4}},{id:'ivory-undertow',name:'Ivory Undertow',palette:pearl,params:{scale:1.8,fibres:40,curl:.8,trailLength:.85,width:.22,depth:.7}}]},
- {kind:'relief',name:'Kinetic Relief',description:'Hinged ceramic shutters · architectural depth',palette:pearl,looks:[{id:'porcelain-shutters',name:'Porcelain Shutters',params:{scale:1,columns:7}},{id:'copper-accordion',name:'Copper Accordion',palette:warm,params:{scale:1,columns:9,axis:1,opening:.8,bevel:.06,depth:.75}},{id:'basalt-scales',name:'Basalt Scales',palette:cool,params:{scale:1.3,columns:6,axis:2,opening:.45,depth:.8,roughness:.65}}]},
- {kind:'resonance',name:'Resonant Sand',description:'Standing-wave figures · granular membranes',palette:pearl,looks:[{id:'salt-mandala',name:'Salt Mandala',params:{}},{id:'copper-modes',name:'Copper Modes',palette:warm,params:{modeA:4,modeB:7,modalBlend:.6,bandWidth:.12,relief:.5}},{id:'midnight-membrane',name:'Midnight Membrane',palette:cool,params:{modeA:2,modeB:5,grains:.3,relief:.8,bandWidth:.18}}]},
+ {kind:'livingink',name:'Living Ink',description:'Seeded cellular pigment · embossed lace',palette:pearl,looks:[{id:'ivory-coral',name:'Lime Coral',params:{}},{id:'cobalt-fingerprints',name:'Cobalt Fingerprints',palette:cool,params:{pattern:1,branching:.3,scale:3.2,flow:.4,pigment:.4}},{id:'ember-cells',name:'Ember Cells',palette:warm,params:{pattern:2,branching:.65,scale:2.2,pigment:.55,relief:.85}}]},
+ {kind:'currents',name:'Velvet Currents',description:'Luminous fibres · coherent eddies',palette:cool,looks:[]},
+ {kind:'relief',name:'Kinetic Relief',description:'Hinged ceramic shutters · architectural depth',palette:pearl,looks:[{id:'porcelain-shutters',name:'Neon Shutters',params:{scale:1,columns:7}},{id:'basalt-scales',name:'Basalt Scales',palette:cool,params:{scale:1.3,columns:6,axis:2,opening:.45,depth:.8,roughness:.65}}]},
+ {kind:'resonance',name:'Resonant Sand',description:'Standing-wave figures · granular membranes',palette:pearl,looks:[{id:'salt-mandala',name:'Hot Mandala',palette:HOT_SIGNAL,params:{}},{id:'midnight-membrane',name:'Midnight Membrane',palette:cool,params:{modeA:2,modeB:5,grains:.3,relief:.8,bandWidth:.18}}]},
 ];
 export function isInstrument(kind:string):kind is InstrumentKind{return (INSTRUMENT_KINDS as readonly string[]).includes(kind);}
 
-const explorations:Record<InstrumentKind,InstrumentInfo['looks'][number]>={
- livingink:{id:'porcelain-estuary',name:'Porcelain Estuary',params:{pattern:3,seedCoverage:.5,development:1.3,edgeInk:.55,warp:.28,relief:.9,stretch:1.4,scale:2}},
+const explorations:Partial<Record<InstrumentKind,InstrumentInfo['looks'][number]>>={
  currents:{id:'vortex-filaments',name:'Vortex Filaments',params:{vortex:.6,braid:.35,stretch:.8,coherence:.8,curl:.8,anisotropy:.8,flowDetail:.3,width:.55,scale:1.4,fibres:18,fillLight:.4}},
- relief:{id:'phase-shutters',name:'Phase Shutters',params:{gap:.15,stagger:.65,roundness:.5,hingeBias:-.35,phaseSpread:.5,clearcoat:.35,scale:1,columns:7,opening:.85}},
- resonance:{id:'orbital-cymatics',name:'Orbital Cymatics',params:{radialMix:.8,harmonic:.3,grainSize:180,nodalSoftness:.12,warp:.05,scale:2,bandWidth:.13}},
+ resonance:{id:'orbital-cymatics',name:'Orbital Cymatics',palette:SOLAR,params:{radialMix:.8,harmonic:.3,grainSize:180,nodalSoftness:.12,warp:.05,scale:2,bandWidth:.13}},
 };
-for(const info of INSTRUMENTS)info.looks.push(explorations[info.kind]);
+for(const info of INSTRUMENTS){const look=explorations[info.kind];if(look)info.looks.push(look);}
 
 // Authored behaviour studies within the existing instruments. References and
 // original design decisions: docs/projection-media-direction-2026-11-10.md.
-export const PROJECTION_LOOK_IDS=['silk-river','copper-confluence','gathering-light','ink-estuary','tidal-pigment','coral-development','breathing-facade','folding-copper','quiet-monument'];
+export const PROJECTION_LOOK_IDS=['silk-river','copper-confluence','gathering-light','ink-estuary','tidal-pigment','breathing-facade','folding-copper','quiet-monument'];
 const studies:Partial<Record<InstrumentKind,InstrumentInfo['looks']>>={
  currents:[
   {id:'silk-river',name:'Silk River',params:{flowMode:1,organic:.7,scale:1.4,fibres:72,width:.5,trailLength:.85,curl:.95,travel:.4,eddyScale:2,flowDetail:.5,surfaceHole:.32,motion:1,anisotropy:.8,backgroundOpacity:0,depth:.65}},
@@ -64,8 +61,7 @@ const studies:Partial<Record<InstrumentKind,InstrumentInfo['looks']>>={
  ],
  livingink:[
   {id:'ink-estuary',name:'Ink Estuary · Evolving',palette:cool,params:{inkMode:2,scale:2.2,travel:.55,pattern:3,motion:1,relief:.18,seedCoverage:.5,development:1.2,pigment:.6,edgeInk:.6,backgroundOpacity:0}},
-  {id:'tidal-pigment',name:'Tidal Pigment · Loop',palette:warm,params:{inkMode:1,organic:.55,scale:1.8,pattern:1,motion:1,flow:.5,relief:.35,edgeInk:.5,flowDirection:.35,backgroundOpacity:0}},
-  {id:'coral-development',name:'Coral Development · Evolving',palette:pearl,params:{inkMode:2,scale:2,travel:.2,pattern:2,motion:1,relief:.22,seedCoverage:.7,development:1.35,eddyScale:2.5,flowDirection:-.6,pigment:.65,edgeInk:.8,backgroundOpacity:0}},
+  {id:'tidal-pigment',name:'Tidal Pigment · Loop',palette:SOLAR,params:{inkMode:1,organic:.55,scale:1.8,pattern:1,motion:1,flow:.5,relief:.35,edgeInk:.5,flowDirection:.35,backgroundOpacity:0}},
  ],
  relief:[
   {id:'breathing-facade',name:'Breathing Facade',params:{reliefMode:1,scale:1,columns:7,motion:1,opening:.85,phaseSpread:.8,organic:.6,phrase:1,shadow:.7,backgroundOpacity:0}},
@@ -74,3 +70,5 @@ const studies:Partial<Record<InstrumentKind,InstrumentInfo['looks']>>={
  ],
 };
 for(const info of INSTRUMENTS)info.looks.push(...(studies[info.kind]??[]));
+// Relief and Resonance start from flat colour with outlines; shading stays one control away.
+for(const info of INSTRUMENTS)if(info.kind==='relief'||info.kind==='resonance')for(const look of info.looks)look.params={...FLAT_FINISH,...look.params};

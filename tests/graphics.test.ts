@@ -7,7 +7,7 @@ const looks=PRESETS.filter(p=>p.kind==='graphic');
 const layerFor=(id:string)=>applyPreset(createLayer('graphic'),id);
 
 test('all graphic looks are complete, persisted native layers with substantial family controls',()=>{
-  assert.equal(looks.length,32);
+  assert.equal(looks.length,24);
   for(const look of looks){
     const layer=layerFor(look.id),project={...createProject(),layers:[layer]};
     assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))),project);

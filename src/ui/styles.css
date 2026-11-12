@@ -438,3 +438,6 @@ a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .surface-vertex-actions,.endpoint-controls { display:flex; gap:8px; }
 .endpoint-controls label { flex:1; min-width:0; font-size:11px; color:var(--muted,#a3a9ad); }
 .endpoint-controls input { width:100%; margin-top:5px; }
+.finish-card { grid-template-columns: minmax(0,1fr); }
+.finish-card strong, .finish-card > span { grid-column: 1; }
+.finish-card:disabled { opacity: .45; cursor: not-allowed; }

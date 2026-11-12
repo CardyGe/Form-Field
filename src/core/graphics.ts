@@ -1,3 +1,4 @@
+import { ACID_DRIP, CANDY, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL } from './palettes';
 import type { ParameterDefinition } from '../shared/types';
 
 export const GRAPHIC_FAMILIES = ['Pillars', 'Circle blooms', 'Packed tiles', 'Spiral forms', 'Circuit paths'];
@@ -69,7 +70,6 @@ export function graphicVisibleKeys(style: number, variant: number, fill: number,
 export interface GraphicLook { id: string; name: string; description: string; palette: string[]; params: Record<string, number> }
 const purple = ['#c844ed','#9a2fe1','#7a25c8','#502099','#341079','#05040b'];
 const aqua = ['#9f5cfe','#816cf4','#548de9','#30b7e5','#17ffef','#03040a'];
-const pearl = ['#ffe9e3','#ff9ca9','#ae88db','#7bd3cc','#a6e2dc','#040306'];
 const green = ['#abff91','#83d781','#54a296','#40528b','#291766','#050809'];
 const mono = ['#ffffff','#dddddd','#aaaaaa','#666666','#292929','#000000'];
 const warm = ['#fff394','#ffd078','#ffa659','#ff6a63','#ed365d','#080305'];
@@ -77,29 +77,27 @@ const red = ['#f42d39','#e31928','#ae1322','#761020','#471019','#030205'];
 const look = (id: string,name: string,description: string,style: number,variant: number,palette: string[],params: Record<string, number>): GraphicLook => ({id,name,description,palette,params:{style,variant,...params}});
 export const GRAPHIC_LOOKS: GraphicLook[] = [
   look('pillar-wave','Pillar Wave','Rounded opposing columns trace a travelling wave.',0,0,purple,{}),
-  look('uneven-pillars','Uneven Pillars','Unequal purple columns gather into broad waves.',0,1,purple,{columns:32,widthScatter:.65,waveCount:1.3}),
-  look('lava-columns','Lava Columns','Wide rounded columns move like graphic lava.',0,2,purple,{columns:10,widthScatter:.3,amplitude:.28,gap:.05,gutter:6,waveCount:1}),
-  look('fine-bars','Fine Bars','Fine uneven bars pulse through interlocking waves.',0,3,purple,{columns:140,widthScatter:.5,amplitude:.4,waveCount:4,gutter:1}),
+  look('uneven-pillars','Uneven Pillars','Unequal candy-coloured columns gather into broad waves.',0,1,CANDY,{columns:32,widthScatter:.65,waveCount:1.3}),
+  look('lava-columns','Lava Columns','Wide rounded columns move like graphic lava.',0,2,HOT_SIGNAL,{columns:10,widthScatter:.3,amplitude:.28,gap:.05,gutter:6,waveCount:1}),
   look('warm-curtains','Warm Curtains','Coral and amber curtains leave a flowing dark channel.',0,4,warm,{columns:100,amplitude:.05,gap:.23,gutter:1,waveCount:3}),
   look('green-tide','Green Tide','Luminous green pillars sweep through deep blue.',0,5,green,{columns:80,amplitude:.38,waveCount:2.5,gutter:2}),
   look('concentric-halo','Concentric Halo','Fine layered circles breathe around a luminous green centre.',1,0,green,{motion:.5,orbit:.012,coil:.18,coilDepth:.08,radius:.48,colorBalance:.65}),
   look('orbital-bloom','Orbital Bloom','Layered lime discs unfold into a soft orbital flower.',1,1,['#edff23','#ccdf1a','#a7be16','#77930c','#405706','#102100'],{orbit:.6,coil:.62,coilDepth:.4,radius:.55,motion:.6}),
   look('circle-fans','Circle Fans','Opposite circle stacks sweep into warm fans and propellers.',1,2,warm,{orbit:.7,coil:2.75,coilDepth:.55,radius:.66,turns:1,motion:.75}),
   look('packed-mosaic','Packed Mosaic','Seeded cyan and violet bricks pack into a crisp field.',2,0,aqua,{fill:0,tileResolution:40,roundness:.08,sweep:0}),
-  look('neon-frames','Neon Frames','Large hollow frames softly round as a wave passes.',2,1,aqua,{fill:1,tileResolution:16,tileArea:9,roundness:.25,stroke:2.4,shrink:.16}),
-  look('nested-tiles','Nested Tiles','Nested pastel rectangles become rings and capsules.',2,2,pearl,{fill:2,tileResolution:22,tileArea:7,contourSpacing:5,roundness:.38,sweep:1}),
+  look('neon-frames','Neon Frames','Large hollow frames softly round as a wave passes.',2,1,POP_PORTAL,{fill:1,tileResolution:16,tileArea:9,roundness:.25,stroke:2.4,shrink:.16}),
+  look('nested-tiles','Nested Tiles','Nested neon rectangles become rings and capsules.',2,2,NEON_STRATA,{fill:2,tileResolution:22,tileArea:7,contourSpacing:5,roundness:.38,sweep:1}),
   look('tile-ripple','Tile Ripple','An expanding wave rounds and shrinks a nested tile field.',2,3,red,{fill:2,tileResolution:38,tileArea:4,roundness:.04,sweep:2,contourSpacing:3.3,sweepWidth:.2,shrink:.45}),
-  look('beaded-spiral','Beaded Spiral','Violet beads curl into a finely sampled spiral.',3,0,purple,{profile:0,glyphSize:.05,angularStep:1.082,turns:1,colorDensity:2}),
+  look('beaded-spiral','Beaded Spiral','Acid beads curl into a finely sampled spiral.',3,0,ACID_DRIP,{profile:0,glyphSize:.05,angularStep:1.082,turns:1,colorDensity:2}),
   look('polygon-tunnel','Polygon Tunnel','Large seven-sided forms overlap into a green contour tunnel.',3,1,green,{profile:6,glyphSize:.5,angularStep:1.4486,spacing:.0024,stroke:.8,colorDensity:5,turns:1}),
-  look('woven-vortex','Woven Vortex','Angular pink and violet forms weave into a pinwheel.',3,2,purple,{profile:6,glyphSize:.5,angularStep:.8901,spacing:.0025,stroke:1.2,colorDensity:4,turns:1}),
-  look('web-rosette','Web Rosette','Outlined overlapping circles reveal a scalloped pearl rosette.',3,3,pearl,{profile:0,glyphSize:.5,angularStep:.576,spacing:.0025,stroke:1.1,colorDensity:5,turns:1}),
-  look('line-interference','Line Interference','Fine green lines create a shifting radiation field.',3,4,green,{profile:1,glyphSize:.95,angularStep:.28,twistDepth:.07,spacing:.002,stroke:.75,motion:.5,colorDensity:2}),
+  look('woven-vortex','Woven Vortex','Angular candy-coloured forms weave into a pinwheel.',3,2,CANDY,{profile:6,glyphSize:.5,angularStep:.8901,spacing:.0025,stroke:1.2,colorDensity:4,turns:1}),
+  look('web-rosette','Web Rosette','Outlined overlapping circles reveal a scalloped neon rosette.',3,3,POP_PORTAL,{profile:0,glyphSize:.5,angularStep:.576,spacing:.0025,stroke:1.1,colorDensity:5,turns:1}),
   look('coiling-ribbon','Coiling Ribbon','Overlapping pentagons form a broad magenta spiral ribbon.',3,5,purple,{profile:4,glyphSize:.5,angularStep:.035,twistDepth:.028,spacing:.0025,stroke:.55,motion:.8,colorDensity:3}),
   look('particle-rays','Particle Rays','Warm hexagonal beads coil into luminous spokes.',3,6,warm,{profile:5,glyphSize:.065,angularStep:.91,twistDepth:.18,spacing:.0035,stroke:.5,motion:.8,turns:1,colorDensity:3}),
-  look('disc-mandala','Disc Mandala','Overlapping outlined discs open and close into spiral scales.',3,7,purple,{profile:0,glyphSize:.09,angularStep:1.134,twistDepth:.12,spacing:.003,stroke:.85,motion:.65,colorDensity:3}),
+  look('disc-mandala','Disc Mandala','Overlapping outlined discs open and close into spiral scales.',3,7,LIME_VIOLET,{profile:0,glyphSize:.09,angularStep:1.134,twistDepth:.12,spacing:.003,stroke:.85,motion:.65,colorDensity:3}),
   look('scalloped-vortex','Scalloped Vortex','Monochrome polygon bands fold into a scalloped whirlpool.',3,8,mono,{profile:9,glyphSize:.2,angularStep:.4363,twistDepth:.08,spacing:.003,stroke:.8,motion:.65,colorDensity:6}),
-  look('circuit-worms','Circuit Worms','Short hollow red paths grow and retract over a dark field.',4,0,red,{pathResolution:42,pathLength:9,pathWidth:.52,hollow:.55,motion:.85}),
+  look('circuit-worms','Circuit Worms','Short hollow hot-pink paths grow and retract over a dark field.',4,0,HOT_SIGNAL,{pathResolution:42,pathLength:9,pathWidth:.52,hollow:.55,motion:.85}),
   look('circuit-channels','Circuit Channels','Long parallel paths gather into blue and pink channels.',4,1,['#ee83f2','#ca58ed','#a144eb','#7453ea','#3c3af0','#040309'],{pathResolution:42,pathLength:120,pathWidth:.7,hollow:.2,direction:0,bias:.95,motion:.85}),
-  look('maze-carpet','Maze Carpet','Mirrored fine paths reveal a violet ornamental maze.',4,2,pearl,{pathResolution:48,pathLength:28,pathWidth:.5,hollow:.6,motion:.8}),
-  look('radial-circuit','Radial Circuit','Attractor-guided paths surround a dark ring and central core.',4,3,red,{pathResolution:52,pathLength:18,pathWidth:.55,hollow:.55,innerRadius:.2,ringWidth:.16,motion:.85}),
+  look('maze-carpet','Maze Carpet','Mirrored fine paths reveal an acid-coloured ornamental maze.',4,2,ACID_DRIP,{pathResolution:48,pathLength:28,pathWidth:.5,hollow:.6,motion:.8}),
+  look('radial-circuit','Radial Circuit','Attractor-guided paths surround a dark ring and central core.',4,3,NEON_STRATA,{pathResolution:52,pathLength:18,pathWidth:.55,hollow:.55,innerRadius:.2,ringWidth:.16,motion:.85}),
 ];

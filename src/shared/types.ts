@@ -61,7 +61,6 @@ export interface ParameterDefinition {
   section: 'Shape' | 'Motion' | 'Material' | 'Camera';
 }
 export interface Preset {
-  signature?: boolean;
   id: string;
   name: string;
   description: string;

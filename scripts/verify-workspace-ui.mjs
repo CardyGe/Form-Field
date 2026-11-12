@@ -151,10 +151,10 @@ try {
  await check('preset browsing preserves the family filter and applies normal saved looks',async()=>{
   await libraryShow();await page.getByLabel('Search library',{exact:true}).fill('');
   await library.getByRole('button',{name:'Presets',exact:true}).click();
-  await page.getByLabel('Preset library filter',{exact:true}).selectOption('signature');
-  assert.equal(await library.locator('.preset-card').count(),20);
-  await snapshot('signature-library');
-  await page.getByLabel('Search library',{exact:true}).fill('rose');
+  await page.getByLabel('Preset library filter',{exact:true}).selectOption('finish');
+  assert.equal(await library.locator('.finish-card').count(),7);
+  await snapshot('finish-library');
+  await page.getByLabel('Search library',{exact:true}).fill('tunnel');
   assert.ok(await library.locator('.preset-card').count()>0);
   await page.getByLabel('Search library',{exact:true}).fill('');
   await page.getByLabel('Preset library filter',{exact:true}).selectOption('surface');
