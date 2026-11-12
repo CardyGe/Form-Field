@@ -37,20 +37,16 @@ vec3 light(){return normalize(vec3(cos(uLightAngle)*.55,sin(uLightAngle)*.55,1.)
 
 export const oilFieldsFragment = /* glsl */`${common}
 uniform vec4 uWake[${OIL_WAKE_SAMPLES}];
-vec2 cells(vec2 p){
-  vec2 id=floor(p),f=fract(p);float first=10.,second=10.;
-  for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){
-    vec2 g=vec2(float(x),float(y));
-    vec2 jitter=vec2(hash(id+g),hash(id+g+31.7));
-    vec2 r=g+.15+.7*jitter-f;float d=dot(r,r);
-    if(d<first){second=first;first=d;}else second=min(second,d);
-  }
-  return vec2(sqrt(first),sqrt(second)-sqrt(first));
-}
+uniform sampler2D uPattern;
+uniform vec2 uPatternOffset;
+// Ink tile channels (see oil-pattern.ts): r maze, g threads along x, b holes.
+float inkEdge(float value,float level){float aa=fwidth(value)*.75+.0015;return smoothstep(level-aa,level+aa,value);}
 void main(){
   vec2 p=world(vUv),q=sheet(p),base=q/max(uPoolSize,.1);
   vec2 warp=vec2(fbm(base*4.+uSeed*.03),fbm(base*4.+17.3))-.5;
-  vec2 b=base+warp*.20;
+  // Fine edge ripple: poured paint has a wavy, crisp rim rather than a soft blob.
+  vec2 ripple=vec2(noise(base*26.+3.),noise(base*26.+41.))-.5;
+  vec2 b=base+warp*.20+ripple*.012;
   float pool=exp(-dot((b-vec2(-.18,.12))*vec2(1.35,1.05),(b-vec2(-.18,.12))*vec2(1.35,1.05))*5.);
   pool=max(pool,.8*exp(-dot((b-vec2(.40,-.26))*vec2(1.,1.25),(b-vec2(.40,-.26))*vec2(1.,1.25))*35.));
   pool=max(pool,.8*exp(-dot(b-vec2(-.55,-.34),b-vec2(-.55,-.34))*100.));
@@ -59,11 +55,13 @@ void main(){
   float edge=max(fwidth(pool)*.7,.001)+uSoftness*.015;
   float coverage=smoothstep(threshold-edge,threshold+edge,pool);
   float contact=0.;
+  vec2 drag=uDirection;
   for(int i=0;i<${OIL_WAKE_SAMPLES};i++){
     vec2 point=uWake[i].xy;
     float radius=max(uWake[i].z,.01),weight=uWake[i].w;
+    vec2 segment=vec2(0.);
     if(i>0){
-      vec2 segment=uWake[i-1].xy-point;
+      segment=uWake[i-1].xy-point;
       float along=clamp(dot(q-point,segment)/max(dot(segment,segment),.000001),0.,1.);
       point+=along*segment;
       radius=mix(radius,uWake[i-1].z,along);
@@ -71,70 +69,79 @@ void main(){
     }
     vec2 delta=q-point;
     float w=exp(-dot(delta,delta)/(radius*radius*1.8))*weight;
-    contact=max(contact,w);
+    // Threads keep the direction the glass was moving when it passed here.
+    if(w>contact){contact=w;if(dot(segment,segment)>1e-10)drag=normalize(segment);}
   }
   // Paint carried at the contact point gives the lens a real material footprint.
   float contactEdge=max(fwidth(contact),.002)+uSoftness*.015;
   coverage=max(coverage,smoothstep(.35-contactEdge,.35+contactEdge,contact)*smoothstep(0.,.10,uCoverage));
-  // A rounded meniscus extends into the pool instead of shading only one pixel.
-  float body=smoothstep(threshold,threshold+.18,pool);
-  body=max(body,smoothstep(.35,.68,contact));
-  float height=coverage*(.006+(.014+.045*uThickness)*body)*(.73+.27*fbm(q*7.));
-  height+=coverage*contact*.008*uThickness;
+  // Flat paint with a thin rounded meniscus at its rim.
+  float body=smoothstep(threshold,threshold+.16,pool);
+  body=max(body,smoothstep(.35,.5,contact));
+  float height=coverage*(.004+(.010+.030*uThickness)*body);
+  height+=coverage*contact*.006*uThickness;
   if(uCoverage<=0.){coverage=0.;height=0.;}
-  // Cell evaluation is the expensive part. Outside contact its contribution is
-  // exactly zero, so quiet pools and empty substrate need no cellular search.
-  if(contact<.006 || uInk<=0. || uCoverage<=0.){
-    gl_FragColor=vec4(height,0.,coverage,contact);return;
+  if(coverage<=0.||uInk<=0.){gl_FragColor=vec4(height,0.,coverage,contact);return;}
+  // Tile size in canvas heights; Cell size scales the whole pattern.
+  float tile=2.1*max(uCellSize,.1);
+  // Spatter: scattered drops of varied size, some stretched, in loose clusters.
+  float spatter=0.;
+  float cluster=smoothstep(.45,.7,fbm(q*2.6+uSeed*.07));
+  if(cluster>0.){
+    vec2 cellP=q*38./max(uCellSize,.1)*.8,id=floor(cellP);
+    float nearest=10.;
+    for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){
+      vec2 g=id+vec2(float(x),float(y));
+      float h=hash(g+uSeed*.013);
+      if(h>cluster*.55)continue;
+      vec2 centre=g+.2+.6*vec2(hash(g+7.1),hash(g+3.7));
+      float angle=hash(g+9.3)*6.2831853,radius=mix(.06,.32,pow(hash(g+5.9),2.2));
+      vec2 d=rot(angle)*(cellP-centre);d.x/=mix(1.,2.4,hash(g+1.3));
+      nearest=min(nearest,length(d)-radius);
+    }
+    float aa=fwidth(cellP.x)*.8;
+    spatter=1.-smoothstep(-aa,aa,nearest);
   }
-  vec2 local=q-sheet(uLens);
-  vec2 dir=uDirection,side=vec2(-dir.y,dir.x);
-  // Stretch the ink's material domain in the direction of relative sliding.
-  float stretch=1.+uStrain*contact*7.*uFilaments;
-  vec2 streak=dir*(dot(local,dir)/stretch)+side*dot(local,side);
-  vec2 inkDomain=sheet(uLens)+streak;
-  float frequency=38./uCellSize;
-  vec2 w=vec2(fbm(inkDomain*12.+9.),fbm(inkDomain*12.+38.))-.5;
-  float scaleVariation=mix(1.,.65+.65*noise(inkDomain*4.+6.),uCellComplexity);
-  vec2 cq=(inkDomain+w*mix(.045,.11,uCellComplexity))*frequency*scaleVariation;
-  // The branching material needs no nearest-cell search. Fade the regular
-  // cellular component fully out before skipping its nine-site evaluation.
-  float cellWeight=1.-smoothstep(.10,.60,uCellComplexity);
-  float cellular=0.,holes=0.;
-  if(cellWeight>0.){
-    vec2 cell=cells(cq);
-    float aa=max(fwidth(cell.y),.003);
-    float veins=1.-smoothstep(.065-aa,.065+aa,cell.y);
-    holes=1.-smoothstep(.13-max(fwidth(cell.x),.003),.13+max(fwidth(cell.x),.003),cell.x);
-    cellular=mix(veins,1.-smoothstep(.22,.46,cell.x),.55);
-  }
-  float organic=0.;
-  if(cellWeight<1.){
-    float maze=fbm(inkDomain*frequency*mix(.38,.62,uCellComplexity)+w*2.3);
-    float mazeAA=max(fwidth(maze),.001);
-    float branches=1.-smoothstep(.035-mazeAA,.035+mazeAA,abs(maze-.50));
-    organic=mix(branches,smoothstep(.58,.72,maze),.20);
-  }
-  float pattern=mix(organic,cellular,cellWeight);
-  holes*=cellWeight;
-  // Threads run along the measured slide direction, rather than the image X axis.
-  // Their bends stay attached to material coordinates as the lens moves past.
-  float across=dot(inkDomain,side)*frequency*1.1;
-  float along=dot(inkDomain,dir)*frequency*.22;
-  float fine=sin(across+sin(along*.75)*1.15+fbm(inkDomain*10.)*3.);
-  float lineAA=max(fwidth(fine),.01);
-  float threads=1.-smoothstep(.13-lineAA,.13+lineAA,abs(fine));
-  float threadMix=uStrain*uFilaments*.9;
-  pattern=mix(pattern,threads,threadMix);
-  float sparse=smoothstep(.90,.98,noise(q*115.+4.))*noise(q*5.);
-  float darkPool=smoothstep(.48,.67,fbm(inkDomain*11.+5.))*smoothstep(.20,.72,contact);
-  float rawInk=clamp(darkPool*mix(.85,.50,uCellComplexity)+pattern*smoothstep(.01,.75,contact)*1.8+holes*contact*.35+sparse*.25,0.,1.);
-  float ink=smoothstep(.10,.56,rawInk)*uInk;
-  // A dark collar belongs to the paint; it remains when the lens lifts away.
+  if(contact<.006){gl_FragColor=vec4(height,spatter*smoothstep(0.,.15,uInk),coverage,contact);return;}
+  vec2 lensSheet=sheet(uLens),local=q-lensSheet;
+  vec2 dir=drag,side=vec2(-dir.y,dir.x);
+  // Stretch the material along the drag, so pressed shapes smear with it.
+  float stretch=1.+uStrain*contact*2.5*uFilaments;
+  vec2 domain=lensSheet+dir*(dot(local,dir)/stretch)+side*dot(local,side);
+  // Where the glass has pressed hardest the ink takes over and only thin paint
+  // lines remain; at the edges of the footprint it thins to separate lines.
+  float level=mix(.25,.11,smoothstep(.3,1.,contact));
+  // Each pattern as a signed value (positive is ink). Blending these before
+  // the cut morphs one shape family into another and keeps edges crisp.
+  float maze=texture2D(uPattern,domain/tile+uPatternOffset).r-level;
+  // Foam: big ink cells with thin paint walls (inverted holes, larger scale).
+  float foam=mix(.16,.25,smoothstep(.2,.9,contact))-texture2D(uPattern,domain/(tile*1.2)+uPatternOffset.yx).b;
+  // Where foam or maze appears is a slow regional choice, set by Cell complexity.
+  float region=smoothstep(-.12,.12,fbm(domain*2.2+uSeed*.05)-1.+uCellComplexity);
+  float shape=mix(foam,maze,region);
+  // Drag threads: the striped channel turned to run along the drag.
+  vec2 along=vec2(dot(domain,dir),dot(domain,side));
+  float threads=texture2D(uPattern,along/(tile*.8)+uPatternOffset).g-level;
+  // Radial fingers just outside the glass, as when it is pressed and lifted.
   float r=length(lensCoord(p));
-  float collar=exp(-pow((r-1.08)/.17,2.))*.35*pattern;
-  ink=clamp(ink+collar*uInk,0.,1.);
-  ink=1.-pow(1.-ink,2.2);
+  float n=floor(6.2831853*uLensSize*1.2/(tile*.8)+.5);
+  vec2 polar=vec2(length(local)/(tile*.8),atan(local.y,local.x)/6.2831853*n);
+  float fingers=texture2D(uPattern,polar+uPatternOffset.yx).g-.2;
+  float rimZone=exp(-pow((r-1.2)/.22,2.))*uPresence;
+  float threadMix=clamp(uStrain*contact*1.6,0.,1.)*uFilaments;
+  shape=mix(shape,threads,threadMix);
+  shape=mix(shape,fingers,rimZone*mix(.35,.9,uFilaments));
+  // Away from the glass the pattern thins and breaks up rather than fading,
+  // so ink is always solid black with a crisp edge.
+  shape-=(1.-smoothstep(.04,.4,contact))*.3;
+  // Ink amount thickens or thins every line.
+  shape+=(uInk-.85)*.12;
+  float darkPool=fbm(domain*9.+5.)-.62-(1.-smoothstep(.15,.7,contact))*.3;
+  shape=max(shape,darkPool*mix(1.,.5,uCellComplexity));
+  // A dark contact ring belongs to the paint; it remains when the lens lifts away.
+  float collar=(exp(-pow((r-1.03)/.05,2.))-.5)*.2*uPresence;
+  shape=max(shape,collar);
+  float ink=max(inkEdge(shape,0.),spatter)*smoothstep(0.,.15,uInk);
   gl_FragColor=vec4(height,ink,coverage,contact);
 }
 `;
@@ -149,19 +156,24 @@ void main(){
   if(uSubstrate<.5 && f.b<=0.){gl_FragColor=vec4(0.);return;}
   vec3 l=light();
   float grain=(noise(p*650.)-.5)*uGrain;
-  vec3 substrate=uPalette[3]*(1.+grain*.25)+uPalette[5]*caustic*.45;
+  // Paper or felt under the paint: fine fibres and a soft mottle.
+  float paper=(noise(p*260.)-.5)*.7+(fbm(p*42.)-.5)*1.1;
+  vec3 substrate=uPalette[3]*(1.+grain*.25+paper*(.05+uGrain*.5))+uPalette[5]*caustic*.45;
   if(uSubstrate>.5 && f.b<1.){
-  float shadow=0.;
-  vec2 shadowUV=uvFor(p+l.xy*.035);
-  vec2 blurX=uvFor(p+vec2(.008,0))-uvFor(p),blurY=uvFor(p+vec2(0,.008))-uvFor(p);
-  float castShadow=(texture2D(uFields,clamp(shadowUV+blurX,vec2(0),vec2(1))).b+
-    texture2D(uFields,clamp(shadowUV-blurX,vec2(0),vec2(1))).b+
-    texture2D(uFields,clamp(shadowUV+blurY,vec2(0),vec2(1))).b+
-    texture2D(uFields,clamp(shadowUV-blurY,vec2(0),vec2(1))).b)*.25;
-  shadow+=castShadow*(1.-f.b)*.85;
-  vec2 lc=lensCoord(p+l.xy*.055);
-  shadow+=exp(-dot(lc,lc)*1.8)*uPresence*.65;
-  substrate=mix(substrate,uPalette[4],clamp(shadow*uShadow,0.,.88));
+  // Thick paint and glass stand off the surface and cast a hard, offset shadow
+  // in the deep shade colour. A small blur keeps its edge clean, not soft.
+  vec2 offset=normalize(l.xy)*(.035+.045*uThickness);
+  float castShadow=0.;
+  for(int i=0;i<8;i++){
+    float a=float(i)*.785398;
+    vec2 tap=p+offset+vec2(cos(a),sin(a))*.008;
+    castShadow+=texture2D(uFields,clamp(uvFor(tap),vec2(0),vec2(1))).b;
+  }
+  castShadow/=8.;
+  float shadow=smoothstep(.1,.6,castShadow)*(1.-f.b);
+  vec2 lc=lensCoord(p+normalize(l.xy)*(.06+.06*uThickness));
+  shadow=max(shadow,(1.-smoothstep(.85,1.05,length(lc)))*uPresence);
+  substrate=mix(substrate,uPalette[4],clamp(shadow*uShadow*1.25,0.,.94));
   }
   if(f.b<=0.){gl_FragColor=vec4(max(substrate,vec3(0.)),1.);return;}
   float hx=texture2D(uFields,vUv+vec2(texel.x,0)).r-texture2D(uFields,vUv-vec2(texel.x,0)).r;
@@ -207,7 +219,7 @@ vec4 optical(vec2 uv){
   vec3 n=normalize(vec3(slope*mix(.45,1.2,uLensDepth),height));
   // Approximate transmission through a cap onto its underlying material sheet.
   // A bounded local displacement magnifies the same ink pattern seen outside.
-  vec2 shift=rot(uLensAngle)*local*uLensSize*height*uRefraction*mix(.25,.85,uLensDepth);
+  vec2 shift=rot(uLensAngle)*local*uLensSize*height*uRefraction*mix(.12,.45,uLensDepth);
   vec2 refracted=uvFor(p-shift);
   vec4 transmitted=under(refracted);
   vec3 color=transmitted.rgb/max(transmitted.a,.00001);

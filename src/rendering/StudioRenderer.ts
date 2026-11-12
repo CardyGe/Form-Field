@@ -15,6 +15,7 @@ import { encodePNG } from './png';
 import { fractalFragment } from './fractal';
 import { oilFieldsFragment, oilPaintFragment, oilLensFragment } from './oil';
 import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
+import { OilPatternBaker } from './oil-pattern';
 import { super8Fragment } from './super8';
 import { super8ProjectorFragment } from './super8-projector';
 import { super8Clock, super8History, super8Transport, SUPER8_HISTORY } from './super8-motion';
@@ -133,6 +134,7 @@ export class StudioRenderer {
   private readonly oilPaint: THREE.ShaderMaterial;
   private readonly oilLens: THREE.ShaderMaterial;
   private oilData: THREE.WebGLRenderTarget | null = null;
+  private readonly oilPattern: OilPatternBaker;
   private oilUnderlay: THREE.WebGLRenderTarget | null = null;
   private readonly composite: THREE.ShaderMaterial;
   private readonly finish: THREE.ShaderMaterial;
@@ -216,10 +218,12 @@ export class StudioRenderer {
       uLensAngle: { value: 0 }, uLensShapePhase: { value: 0 }, uPresence: { value: 1 }, uStrain: { value: 0 },
       uWake: { value: Array.from({ length: OIL_WAKE_SAMPLES }, () => new THREE.Vector4()) },
       uFields: { value: this.fallback }, uUnderlay: { value: this.fallback },
+      uPattern: { value: this.fallback }, uPatternOffset: { value: new THREE.Vector2() },
     };
     this.oilFields = material(oilFieldsFragment, oilUniforms);
     this.oilPaint = material(oilPaintFragment, oilUniforms);
     this.oilLens = material(oilLensFragment, oilUniforms);
+    this.oilPattern = new OilPatternBaker(this.renderer);
     this.super8 = material(super8Fragment, {
       ...viewUniforms(),
       uPalette: { value: DEFAULT_PALETTE.map(hex => new THREE.Color(hex)) },
@@ -439,6 +443,8 @@ export class StudioRenderer {
     this.oilData = null; this.oilUnderlay = null;
     this.oilFields.uniforms.uFields.value = this.fallback;
     this.oilFields.uniforms.uUnderlay.value = this.fallback;
+    this.oilFields.uniforms.uPattern.value = this.fallback;
+    this.oilPattern?.release();
   }
 
   private drawOil(layer: Layer, original: Layer, phase: number): THREE.Texture {
@@ -458,6 +464,9 @@ export class StudioRenderer {
       u[`u${key[0].toUpperCase()}${key.slice(1)}`].value = number(layer, key, fallback);
     }
     u.uSeed.value = number(layer, 'seed', 0) % 1000003;
+    const patternSeed = Math.round(number(layer, 'seed', 0)) % 1000003;
+    u.uPattern.value = this.oilPattern.texture(patternSeed);
+    (u.uPatternOffset.value as THREE.Vector2).set((patternSeed * .6180339887) % 1, (patternSeed * .7548776662) % 1);
     u.uAspect.value = this.width / this.height;
     (u.uSlide.value as THREE.Vector2).set(motion.slideX, motion.slideY);
     (u.uLens.value as THREE.Vector2).set(motion.x, motion.y);
@@ -972,6 +981,7 @@ export class StudioRenderer {
     this.feedbackStates.clear();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.surface, this.fractal, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
+    this.oilPattern.dispose();
     this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.filmThickness.dispose();
     this.keyLight.shadow.dispose();
     this.renderer.dispose();
