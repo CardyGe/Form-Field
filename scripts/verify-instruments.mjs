@@ -76,7 +76,7 @@ try{
   for(let i=0;i<9;i++){const q=structuredClone(p);q.layers[0].params.seed+=i+1;await exr(q);counts.push(r.getStats().textures);}
   check(Math.max(...counts.slice(4))-Math.min(...counts.slice(4))===0,'Chemical texture cache grows after its four-entry limit');
   check(delta(a,await exr(p))===0,'Evicted chemical pattern does not reproduce');
-  await exr(project('pool-at-midnight'));const released=r.getStats().textures;
+  await exr(project('salt-mandala'));const released=r.getStats().textures;
   check(released<counts.at(-1),'Unused chemical textures were not released');
   // Equal mode choices must remain a usable figure, even with zero modal blend.
   for(const [modeA,modeB,blend] of [[5,5,0],[6,5,1]]){
@@ -107,7 +107,7 @@ try{
  }
  const mixes=await page.evaluate(async()=>{
   const {m,exr,check,delta,stats}=window.qa,results=[];
-  for(const kinds of [['livingink','caustic','magnetic','veils'],['currents','relief','loom','reef'],['prism','resonance','oil','surface']]){
+  for(const kinds of [['livingink','currents','relief','resonance'],['oil','surface','sculpture','fractal']]){
    const p={...m.createProject(),transparent:true,layers:kinds.map((kind,i)=>{
     const l=m.createLayer(kind);if('backgroundOpacity' in l.params)l.params.backgroundOpacity=0;
     l.opacity=.65;l.blend=['normal','screen','add','normal'][i];

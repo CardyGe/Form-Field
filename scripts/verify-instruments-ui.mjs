@@ -49,7 +49,6 @@ try{
    await page.getByLabel('Ink growth family',{exact:true}).selectOption('3');await saved(p=>p.layers[1].params.pattern===3);
   }
   if(info.kind==='relief'){await page.getByLabel('Relief hinge axis',{exact:true}).selectOption('2');await saved(p=>p.layers[1].params.axis===2);}
-  if(info.kind==='veils'){await page.getByLabel('Veil render quality',{exact:true}).selectOption('2');await saved(p=>p.layers[1].params.quality===2);}
   await page.getByTitle('Animate Pattern scale',{exact:true}).click();await page.getByLabel('Motion source',{exact:true}).selectOption('sine');
   await saved(p=>p.layers[1].modulations.scale?.kind==='sine');
   assert.equal(await page.getByLabel('Motion parameter',{exact:true}).locator('option[value="branching"]').count(),0);

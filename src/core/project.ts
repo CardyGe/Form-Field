@@ -367,6 +367,8 @@ PRESETS.push(
   preset('ring-delay', 'Ring Delay', 'Portal rings lag outward in smooth waves while the delay sweeps once per loop.', 'surface', POP_PORTAL, { style: 3, variant: 0, scale: 4.5, warp: 0.3, roundness: 0.8, relief: 0, density: 1.2, contrast: 0.7, reveal: 0, toonMix: 1, toonBands: 8, toonOutline: 3, toonOutlineColor: 6, cycles: 4, slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 16, slitSmooth: 1, slitScroll: 1 }),
 );
 
+/** Effect families removed in 0.12; their layers are dropped when an older project is opened. */
+export const RETIRED_KINDS: readonly string[] = ['caustic', 'magnetic', 'loom', 'reef', 'prism', 'veils'];
 export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
@@ -720,7 +722,10 @@ export function validateProject(input: unknown): Project {
   hex(project.background, 'background'); boolean(project.transparent, 'transparent');
   if (own(project, 'highlights')) choice(project.highlights, ['soft', 'exact'] as const, 'highlights');
   if (!Array.isArray(project.layers) || project.layers.length < 1 || project.layers.length > 4) fail('layers', 'must contain between one and four layers.');
-  const layers = project.layers.map((layer,i)=>validateLayer(layer,i,project.schemaVersion as 1|2));
+  // Layers from retired effect families are dropped so older films still open.
+  const kept = (project.layers as unknown[]).filter(layer => !RETIRED_KINDS.includes((layer as { kind?: string } | null)?.kind as string));
+  if (!kept.length) fail('layers', 'only uses effects that have been retired (Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral, Volumetric Veils).');
+  const layers = kept.map((layer,i)=>validateLayer(layer,i,project.schemaVersion as 1|2));
   if(layers.some(l=>l.kind==='livingink'&&l.params.inkMode===2)&&(project.duration as number)>60)fail('duration','must be at most 60 seconds for evolving pigment.');
   if (new Set(layers.map((layer) => layer.id)).size !== layers.length) fail('layers', 'contains duplicate layer IDs.');
   return { ...structuredClone(input as Project), layers };

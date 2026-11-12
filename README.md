@@ -19,7 +19,7 @@ Space plays/pauses outside text controls. Command-S saves a self-contained `.for
 
 Open **Library → Presets → Projection motion** for nine authored studies. **Velvet Currents → Fibre motion → Transported fibres** adds travelling paths, local eddies, staggered births and continuous trails. **Living Ink → Pigment motion** offers the original prepared growth, a flowing pigment loop, and evolving chemistry with transported pigment. **Kinetic Relief → Relief construction → Hinged solids** uses real geometry, perspective and shared shadows. New layers use the upgraded treatments; existing saved looks keep their original settings.
 
-The ten projection instruments also have Organic motion, Flow direction, Travel and a Motion phrase: Steady travel, Gather and release, or Drift and settle. Controls follow the selected treatment. Evolving chemistry has an explicit 128/256/384 chemical resolution used by both preview and export. Its simulation clock is fixed and interpolated; transport and preparation controls rebuild deterministic state.
+The four projection instruments also have Organic motion, Flow direction, Travel and a Motion phrase: Steady travel, Gather and release, or Drift and settle. Controls follow the selected treatment. Evolving chemistry has an explicit 128/256/384 chemical resolution used by both preview and export. Its simulation clock is fixed and interpolated; transport and preparation controls rebuild deterministic state.
 
 **Evolving chemistry loops.** Ink grows from its seeds through the loop. Over the last **Loop return** share of the loop (0.3 by default), a second copy of the simulation keeps growing past the end, and its state recedes back into the opening state in patches, so the last frame flows into the first. The two states are blended before the ink edges are cut, so the ink pulls back rather than cross-dissolving. Set Loop return to 0 for the original finite clip, which grows once, stops at its end and exports with **Render clip**. Evolving chemistry supports clips up to 60 seconds.
 
@@ -111,11 +111,11 @@ Run `npm run test:zoom` to compare 2×, 4× and 8× graphics against native-reso
 
 Every layer now has **Finish → Tonal finishing**: Tonal contrast, Contrast pivot, Midtone gamma, Shadow lift, Highlight compression and Vibrance. These work on luminance and colour before layer blending, preserving alpha. Contrast pivot takes effect when Tonal contrast differs from 1. Reset any numeric parameter with its ↺ button; this is a normal undoable edit.
 
-The ten light/material/space instruments expose **Advanced shape**, **Advanced motion** and **Advanced material** sections. Field stretch, Domain warp, Warp scale, Field twist and Motion phase are shared. Warp scale needs a nonzero Domain warp. Lit materials add Light elevation, Fill light, Directional sheen, Sheen direction and Clear coat; Sheen direction takes effect when Directional sheen is enabled. The new directional highlight is also available on Surface and Oil Slides.
+The four material instruments expose **Advanced shape**, **Advanced motion** and **Advanced material** sections. Field stretch, Domain warp, Warp scale, Field twist and Motion phase are shared. Warp scale needs a nonzero Domain warp. Lit materials add Light elevation, Fill light, Directional sheen, Sheen direction and Clear coat; Sheen direction takes effect when Directional sheen is enabled. The new directional highlight is also available on Surface and Oil Slides.
 
-Family-specific controls add aligned/asymmetric caustics; ink seed coverage, development and edge pigment; magnetic ridges; braided/vortex currents; staggered rounded shutters; interlaced cloth; mineral facet controls; twisted/off-axis vaults; circular and harmonic nodal figures; and directional volume scattering, absorption, ribbon width, turbulence and banding suppression. Ink preparation controls are not animation targets. Their cache keys include every preparation setting.
+Family-specific controls add ink seed coverage, development and edge pigment; braided/vortex currents; staggered rounded shutters; and circular and harmonic nodal figures. Ink preparation controls are not animation targets. Their cache keys include every preparation setting.
 
-Each new instrument has a fourth exploration look that demonstrates these controls. The original 120 looks remain, with neutral migration defaults preserving existing artwork. The full library now has 139 presets, including the nine projection motion studies.
+Each new instrument has a fourth exploration look that demonstrates these controls. Neutral migration defaults preserve existing artwork.
 
 Volume Banding suppression uses deterministic sampling dither; High quality reduces the resulting sampling texture. Directional highlights are filtered against rapid normal changes to reduce sparkle. All render and grading changes use the shared compositor and native output pipeline. The detailed audit and research are in [the professional effect audit](docs/professional-effect-audit-0.10.md).
 
@@ -144,26 +144,22 @@ Very small rings and thin patterns filter toward their average at the pixel limi
 
 ## Light, material & space
 
-Ten projection instruments share the existing rendering loop, layer compositor, masks, palette grading, smart randomizer and native output pipeline. The library includes four original looks per instrument, plus nine projection motion studies across Currents, Ink and Relief: 139 presets overall.
+Four projection instruments (Living Ink, Velvet Currents, Kinetic Relief, Resonant Sand) share the existing rendering loop, layer compositor, masks, palette grading, smart randomizer and native output pipeline. The library includes four original looks per instrument, plus nine projection motion studies across Currents, Ink and Relief. The whole library has 127 presets.
+
+Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral and Volumetric Veils were retired in 0.12 because none of them looked like what its name promised. Opening an older project drops layers of those kinds; a project that only used them reports that its effects were retired.
 
 | Instrument | Material and controls |
 | --- | --- |
-| Caustic Atlas | Curved wave-focusing ridges, wave mixture, focus, spectral spread and ridge width. |
 | Living Ink | A seeded Gray–Scott reaction-diffusion pattern, four growth families, branching, pigment coverage, flow distortion and embossed relief. |
-| Magnetic Skin | An irregular liquid-metal height field with magnetic pull, peak sharpness, roughness and an opal finish. |
 | Velvet Currents | Coherent luminous fibres with curl, density, trail length and depth shading. |
 | Kinetic Relief | Bevelled hinged shutters, three hinge directions, travelling opening waves and material shading. |
-| Holographic Loom | Filtered warp/weft threads, fabric folds, interference beats, tension and foil finish. |
-| Crystal Reef | Connected mineral veins and planar crystal facets with growth, density, height and inner light. |
-| Prism Cathedral | Repeated mirrored vaults with bevelled frames, perspective depth and spectral material shading. |
 | Resonant Sand | Chladni-inspired standing-wave figures, mixed modes, nodal width, grain and membrane relief. |
-| Volumetric Veils | Ray-marched pigment ribbons with erosion, optical depth, light direction and edge illumination. |
 
 **Pattern scale** reveals more of the original continuous fields. Layer transforms evaluate those sources across the full view; scaling never repeats a rectangular screenshot. Evolving Ink instead uses a finite simulation domain with a soft edge, which can become visible when zooming out. Set **Field background** to zero for transparent gaps, then enable transparent output when exporting. The original ten treatments use periodic motion and integer Cycles per loop; evolving chemistry uses a finite clip clock. Motion amount zero stops intrinsic animation. Artist-authored Motion routes remain independent.
 
 Living Ink’s **Prepared growth** treatment prepares its deterministic 384 × 384 chemical texture when its seed, Growth family or Branching changes. Those controls do not run during playback; Branching cannot receive an animation route. Four prepared textures are cached. Flow, pigment, relief, colour and transforms remain live. That treatment’s moving appearance is a periodic deformation of the prepared pattern. **Evolving chemistry** instead advances the chemical and pigment state as described in the 0.11 section above. This keeps seeks and resumed exports reproducible.
 
-Velvet Currents uses analytic strand fields, and Magnetic Skin, Kinetic Relief and Crystal Reef use shaded height fields. They are artistic material instruments rather than physical simulations or editable 3D meshes. Prism Cathedral shades a bounded sequence of mirrored architectural frames; exported alpha cannot refract a background added later in another application. Volumetric Veils uses 24, 40 or 64 depth samples for Draft, Standard and High; this setting affects both preview and export.
+Velvet Currents uses analytic strand fields and Kinetic Relief uses a shaded height field. They are artistic material instruments rather than physical simulations or editable 3D meshes.
 
 The shared optical helpers also improve existing instruments: **Surface → Optical sheen** adds a thin-film finish, while **Oil Slides → Caustic light** and **Optical sheen** add focused illumination and spectral material colour. These controls default to zero in older projects, preserving their appearance. Fine lines in the new instruments use filtering based on the target pixel footprint; Living Ink uses mipmapped chemical textures.
 
@@ -314,7 +310,7 @@ npm run dev
 
 `node scripts/verify-smart-repeat.mjs` checks geometry at repeat joins, all ninety transformed presets, procedural view equivalence, finite 3D geometry, image repeat/sampler isolation and 4K output.
 
-`node scripts/verify-quality.mjs` renders all 139 presets at multiple phases, stresses every family at slider extremes, checks randomized variants and compares the 20 signature reference images. It writes a review gallery to `work/quality-pass/gallery.html`. Only `--update-references` replaces the committed thumbnails. `node scripts/verify-randomizer-ui.mjs` checks all seventeen layer types, three variation amounts, locks, routes, undo/redo and the 20 signature cards through native persistence.
+`node scripts/verify-quality.mjs` renders all 127 presets at multiple phases, stresses every family at slider extremes, checks randomized variants and compares the 20 signature reference images. It writes a review gallery to `work/quality-pass/gallery.html`. Only `--update-references` replaces the committed thumbnails. `node scripts/verify-randomizer-ui.mjs` checks all eleven layer types, three variation amounts, locks, routes, undo/redo and the 20 signature cards through native persistence.
 
 `npm run start` builds and opens the desktop app without a development server. `npm run build` runs TypeScript validation and produces the renderer. `npm test` runs core and native export tests with actual media tools. `node scripts/verify-graphics.mjs` checks the thirty-two graphic presets, looping, controls, transparency, 4K stills and native movie export; `node scripts/verify-graphics-ui.mjs` checks their integrated UI and persistence. `node scripts/verify-super8.mjs` checks all five film modes, every paint/projector control, frame holds, continuous transport, feedback history, exact loops, alpha, 4K output and resumed native exports. Set `SUPER8_CAPTURE_MOTION=1` to also capture a short ProRes projector preview. `node scripts/verify-super8-ui.mjs [app-path]` checks packaged projector controls, older project migration, save/open and native alpha output. `node scripts/verify-oil.mjs` checks Oil rendering, looping, alpha, mixed layers and 4K output in Electron. `node scripts/verify-ui.mjs` drives the built Electron application, including native persistence and a real transparent movie export; only file dialogs are replaced for repeatability.
 

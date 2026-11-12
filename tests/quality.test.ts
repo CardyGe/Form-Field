@@ -5,8 +5,8 @@ const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
 test('twenty signature looks retain all original presets and use ordinary saved layers', () => {
-  assert.equal(PRESETS.length,151);
-  assert.equal(PRESETS.filter(p => !p.signature).length,131);
+  assert.equal(PRESETS.length,127);
+  assert.equal(PRESETS.filter(p => !p.signature).length,107);
   const signatures=PRESETS.filter(p => p.signature);
   assert.equal(signatures.length,20);
   assert.equal(new Set(signatures.map(p => p.kind)).size,6);

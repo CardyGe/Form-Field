@@ -2,12 +2,12 @@ import {FINISH_KEYS} from '../src/core/finishing';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_UPGRADE_KEYS } from '../src/core/instruments';
-import { createLayer, createProject, parameterDefinitions, PRESETS, applyPreset, validateProject, varyLayer } from '../src/core/project';
+import { createLayer, createProject, parameterDefinitions, PRESETS, applyPreset, validateProject, varyLayer, RETIRED_KINDS } from '../src/core/project';
 import { evaluateLayer } from '../src/core/timeline';
 
 const route={kind:'sine' as const,cycles:3,amount:.3,phase:.2,points:[]};
-test('ten instruments have complete original and motion-study looks and round-trip through the document schema',()=>{
- assert.equal(new Set(INSTRUMENT_KINDS).size,10);
+test('four instruments have complete original and motion-study looks and round-trip through the document schema',()=>{
+ assert.equal(new Set(INSTRUMENT_KINDS).size,4);
  assert.deepEqual(INSTRUMENTS.map(i=>i.kind),[...INSTRUMENT_KINDS]);
  for(const info of INSTRUMENTS){
   const layer=createLayer(info.kind);assert.equal(layer.name,info.name);
@@ -103,4 +103,13 @@ test('smart variation holds loop phase and inactive support parameters but can v
  const ink=createLayer('livingink'),next=varyLayer(ink,1,{palette:true,structure:false,motion:true,material:true},42);
  assert.ok(next.params.branching!==ink.params.branching||next.params.development!==ink.params.development);
  assert.deepEqual(next.modulations,ink.modulations);
+});
+
+test('layers from retired effect families are dropped when an older project opens',()=>{
+ const retired=(kind:string)=>({...createLayer('surface'),id:kind,kind});
+ const mixed={...createProject(),layers:[createLayer('surface'),retired('prism'),retired('veils')]};
+ const opened=validateProject(JSON.parse(JSON.stringify(mixed)));
+ assert.deepEqual(opened.layers.map(l=>l.kind),['surface']);
+ assert.throws(()=>validateProject({...createProject(),layers:[retired('caustic')]}),/retired/);
+ assert.deepEqual([...RETIRED_KINDS].sort(),['caustic','loom','magnetic','prism','reef','veils']);
 });

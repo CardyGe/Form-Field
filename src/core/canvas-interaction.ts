@@ -14,11 +14,9 @@ export function sameCanvasValues(a: Layer, b: Layer): boolean {
 
 const preferred: Partial<Record<LayerKind, string[]>> = {
   surface: ['warp', 'detail'], sculpture: ['fold', 'twist'], fractal: ['fold', 'twist'],
-  oil: ['deformation', 'lensSize'], super8: ['coverage', 'erosion'],
-  caustic: ['depth', 'waveSkew'], livingink: ['flow', 'warp'], magnetic: ['pull', 'sharpness'],
-  currents: ['curl', 'coherence'], relief: ['opening', 'depth'], loom: ['crossingAngle', 'tension'],
-  reef: ['height', 'branchWidth'], prism: ['aperture', 'twistDepth'],
-  resonance: ['modalBlend', 'radialMix'], veils: ['erosion', 'density'],
+  oil: ['deformation', 'lensSize'], super8: ['coverage', 'erosion'], livingink: ['flow', 'warp'],
+  currents: ['curl', 'coherence'], relief: ['opening', 'depth'],
+  resonance: ['modalBlend', 'radialMix'],
 };
 
 /** Continuous, visible controls only; never rebuild a simulation during a drag. */

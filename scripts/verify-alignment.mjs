@@ -21,7 +21,7 @@ for(let i=0;i<map.sources.length;i++){
 }
 for(const file of ['StudioRenderer','InstrumentRenderer','instrument-shaders','projection-optics','surface','sculpture','fractal','oil','super8','GraphicRenderer','CurrentRenderer','flow-field','InkSimulation','ReliefRenderer','surface-fields'])assert.ok(sourceFiles.includes(`src/rendering/${file}.ts`),file+' missing from package source map');
 assert.equal(files.filter(f=>f.includes('signature-')).length,20);
-const kinds=['caustic','livingink','magnetic','currents','relief','loom','reef','prism','resonance','veils'];
+const kinds=['livingink','currents','relief','resonance'];
 for(const kind of kinds){const assets=files.filter(f=>f.startsWith('dist/assets/'+kind+'-')&&f.endsWith('.png'));assert.equal(assets.length,1,kind+' preview missing');assert.ok((await fs.readFile('src/ui/assets/instruments/'+kind+'.png')).equals(asar.extractFile(archive,assets[0])),kind+' preview differs from source');}
 assert.ok((await fs.readFile('README.md')).equals(await fs.readFile(path.join(bundle,'Contents/Resources/Form & Field Guide.md'))),'Packaged guide differs');
 for(const doc of ['docs/professional-effect-audit-0.10.md','docs/research/professional-effects-2026-11-09.md','docs/projection-media-direction-2026-11-10.md','docs/projection-media-0.11.md'])assert.ok((await fs.readFile(doc)).equals(await fs.readFile(path.join(bundle,'Contents/Resources',doc))),doc+' differs');

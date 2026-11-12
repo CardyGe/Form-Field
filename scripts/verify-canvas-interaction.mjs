@@ -194,7 +194,7 @@ try {
     assert.equal(after.layers[0].params.detail, layer.params.detail);
   });
   await check('all 16 procedural instruments support valid shape edits and exact undo', async () => {
-    for (const kind of ['surface','sculpture','fractal','oil','super8','graphic','caustic','livingink','magnetic','currents','relief','loom','reef','prism','resonance','veils']) {
+    for (const kind of ['surface','sculpture','fractal','oil','super8','graphic','livingink','currents','relief','resonance']) {
       const layer = model.createLayer(kind), p = await load([layer], 'Interactive ' + kind);
       const axes = model.canvasAxes(layer, defaultLocks);
       await drag(.15, -.12);

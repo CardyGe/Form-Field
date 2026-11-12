@@ -53,7 +53,7 @@ try {
   assert.equal(await library.isVisible(),false);
   await bodyFocus();await page.keyboard.press('b');await library.waitFor();
   await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='Search library');
-  await page.getByLabel('Search library',{exact:true}).fill('magnetic');
+  await page.getByLabel('Search library',{exact:true}).fill('resonant');
   assert.equal(await library.locator('.instrument-card').count(),1);
   await snapshot('search');
   await page.keyboard.press('Escape');await library.waitFor({state:'hidden'});
@@ -181,9 +181,9 @@ try {
   assert.ok((await canvas.boundingBox()).width>550);
   await snapshot('small-window');
  });
- await check('all sixteen instrument inspectors retain valid editable control rows',async()=>{
+ await check('all ten source inspectors retain valid editable control rows',async()=>{
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1440,900));
-  for(const kind of ['surface','sculpture','fractal','graphic','oil','super8','caustic','livingink','magnetic','currents','relief','loom','reef','prism','resonance','veils']){
+  for(const kind of ['surface','sculpture','fractal','graphic','oil','super8','livingink','currents','relief','resonance']){
    const layer=model.createLayer(kind),p={...model.createProject(),layers:[layer]};
    await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===p.id);
    await page.getByRole('button',{name:'Shape',exact:true}).click();

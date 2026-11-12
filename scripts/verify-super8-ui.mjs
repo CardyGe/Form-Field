@@ -68,7 +68,7 @@ try {
   assert.equal(await page.getByLabel('Reel turns per loop value',{exact:true}).inputValue(),'4');
   await page.getByRole('button',{name:'Presets',exact:true}).click();
   await page.getByLabel('Preset library filter',{exact:true}).selectOption('all');
-  assert.equal(await page.locator('.preset-card').count(),139);
+  assert.equal(await page.locator('.preset-card').count(),127);
   await page.screenshot({path:path.join(out,'packaged-projector.png'),fullPage:true});
   await page.getByRole('button',{name:'Export',exact:true}).click();
   await page.getByLabel('Export resolution',{exact:true}).selectOption('960x540');
@@ -87,7 +87,7 @@ try {
   }
   assert.ok(zero>0&&soft>0&&paint>0,'Projector cutout must preserve gate, paint alpha and clean transparent RGB.');
   assert.deepEqual(errors,[]);
-  const report={status:'passed',bundle,legacyMigration:true,projectorViews:3,authoredControls:16,saveOpen:true,animatedLightLeak:true,presets:139,alpha:{zero,soft,paint},errors};
+  const report={status:'passed',bundle,legacyMigration:true,projectorViews:3,authoredControls:16,saveOpen:true,animatedLightLeak:true,presets:127,alpha:{zero,soft,paint},errors};
   await fs.writeFile(path.join(out,'packaged-ui.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 } finally {
   const timer=setTimeout(()=>app.process().kill('SIGKILL'),10000);
