@@ -43,6 +43,7 @@ const super8ControlGroups: [string, string[]][] = [
   ['Paint geometry', ['scale', 'steps', 'coverage', 'erosion', 'rotation']],
   ['Paint texture', ['texture', 'textureScale', 'roughness', 'bleed', 'emulsion']],
   ['Film motion & feedback', ['travel', 'cycles', 'filmFps', 'feedback', 'feedbackSpacing', 'feedbackZoom', 'feedbackRotation']],
+  ['Rolling shutter', ['rollAmount', 'rollBands', 'rollOrigin', 'rollSmear']],
   ['Projector transport', ['pullDown', 'shutter', 'shutterBlades', 'reelLoops', 'weave', 'flicker', 'frameLines']],
   ['Film gate', ['gateInset', 'gateRoundness', 'sprockets']],
   ['Film wear', ['scratches', 'grain', 'dust', 'hair']],

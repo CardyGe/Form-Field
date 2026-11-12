@@ -233,7 +233,7 @@ export class StudioRenderer {
       uPaint: { value: Array.from({ length: SUPER8_HISTORY * 2 }, () => new THREE.Vector4()) },
       uMotion: { value: Array.from({ length: SUPER8_HISTORY * 2 }, () => new THREE.Vector4()) },
       uEmulsion: { value: Array.from({ length: SUPER8_HISTORY * 2 }, () => new THREE.Vector2()) },
-      uTransport: { value: new THREE.Vector2() }, uDust: { value: 0 },
+      uTransport: { value: new THREE.Vector2() }, uDust: { value: 0 }, uRoll: { value: new THREE.Vector4(0, 28, 1, 0) },
       uFilm: { value: new THREE.Vector4() }, uFeedback: { value: new THREE.Vector4() },
     });
     this.super8Projector = material(super8ProjectorFragment, {
@@ -512,6 +512,7 @@ export class StudioRenderer {
     (u.uFeedback.value as THREE.Vector4).set(layer.params.feedback, layer.params.feedbackZoom, layer.params.feedbackRotation, samples[0].frame);
     (u.uTransport.value as THREE.Vector2).set(transport.pull, transport.roll);
     u.uDust.value = p.dust;
+    (u.uRoll.value as THREE.Vector4).set(p.rollAmount ?? 0, p.rollBands ?? 28, p.rollOrigin ?? 1, p.rollSmear ?? 0);
     [...samples, ...previous].forEach(({ layer: sample, phase: samplePhase, frame }, index) => {
       const p = sample.params;
       (u.uShape.value as THREE.Vector4[])[index].set(p.scale, p.steps, p.coverage, p.erosion);

@@ -16,6 +16,7 @@ const FRACTAL_PALETTE = ['#5fffe1', '#aff043', '#b77bff', '#f65aa6', '#ffb969', 
 const SUPER8_PALETTE = ['#ff6238', '#f5c842', '#408bba', '#be4266', '#171824', '#eeddb4'];
 // New looks use the projector; absent controls in saved films migrate to neutral.
 const SUPER8_PROJECTOR_LOOK = { emulsion: .55, pullDown: .6, shutter: .16, dust: .25, hair: .15, lightLeak: .22, halation: .35, vignette: .3, lensSoftness: .22, colorFade: .18 };
+export const SUPER8_ROLL_KEYS = ['rollAmount', 'rollBands', 'rollOrigin', 'rollSmear'];
 export const SUPER8_PROJECTOR_KEYS = ['emulsion', 'gateMode', 'gateInset', 'gateRoundness', 'sprockets', 'pullDown', 'shutter', 'shutterBlades', 'reelLoops', 'frameLines', 'dust', 'hair', 'lightLeak', 'halation', 'vignette', 'lensSoftness', 'colorFade'];
 
 const OIL_PALETTE = ['#eeff00', '#a7de12', '#060710', '#25b8ed', '#071275', '#e2a51c'];
@@ -156,7 +157,7 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
   ],
   super8: [
-    parameter('mode', 'Mode', 0, 3, 1, 0, 'Shape'),
+    parameter('mode', 'Mode', 0, 4, 1, 0, 'Shape'),
     parameter('scale', 'Geometry scale', 0.5, 3, 0.01, 1, 'Shape'),
     parameter('steps', 'Geometry steps', 3, 32, 1, 12, 'Shape'),
     parameter('coverage', 'Paint coverage', 0, 1, 0.01, 0.78, 'Shape'),
@@ -194,6 +195,10 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('vignette', 'Projector vignette', 0, 1, .01, 0, 'Material'),
     parameter('lensSoftness', 'Lens softness', 0, 1, .01, 0, 'Material'),
     parameter('colorFade', 'Color fading', 0, 1, .01, 0, 'Material'),
+    { ...parameter('rollAmount', 'Rolling shutter', 0, 1, .01, 0, 'Motion'), description: 'Each band of the frame is exposed a little later than the one before, so moving paint breaks into steps.' },
+    parameter('rollBands', 'Shutter bands', 4, 96, 1, 28, 'Motion'),
+    { ...parameter('rollOrigin', 'Shutter from centre', 0, 1, .01, 1, 'Motion'), description: 'At 0 the exposure rolls from top to bottom; at 1 it spreads out from the centre line in both directions.' },
+    { ...parameter('rollSmear', 'Band smear', 0, 1, .01, 0, 'Motion'), description: 'Horizontal streaks, slipped bands and light tears along band edges.' },
     parameter('substrate', 'Substrate', 0, 1, 1, 1, 'Material'),
     parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
     parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
@@ -221,7 +226,7 @@ const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
   surface: ['anisotropy','sheenAngle','iridescence', 'roundness', 'relief', 'variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', ...GRADING_FIELDS],
   sculpture: ['opening', 'twist', 'form', 'lobes', 'thickness', 'stretch', 'curl', 'foldFrequency', 'asymmetry', 'ridgeScale', 'metallic', 'clearcoat', 'sheen', 'filmScale', 'lightPower', 'shadowStrength', 'shadowSoftness', ...GRADING_FIELDS],
   fractal: [...FRACTAL_ADDED_FIELDS, 'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue'],
-  super8: SUPER8_PROJECTOR_KEYS,
+  super8: [...SUPER8_PROJECTOR_KEYS, ...SUPER8_ROLL_KEYS],
   oil: ['anisotropy','sheenAngle','caustics', 'iridescence', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion'],
   graphic: [],
   image: ['mirror', 'repeat', ...GRADING_FIELDS],
@@ -271,7 +276,7 @@ function preset(id: string, name: string, description: string, kind: Preset['kin
   return { id, name, description, kind, palette, params: { ...defaultParams(kind), ...(kind === 'super8' ? SUPER8_PROJECTOR_LOOK : {}), ...params } };
 }
 
-export const SUPER8_MODES = ['Chromatic Staircase', 'Paint Destruction', 'Scratched Negative', 'Cut-out Collage'];
+export const SUPER8_MODES = ['Chromatic Staircase', 'Paint Destruction', 'Scratched Negative', 'Cut-out Collage', 'Painted Tunnel'];
 
 export const PRESETS: Preset[] = [
   ...INSTRUMENTS.flatMap(info => info.looks.map(look => preset(look.id, look.name, info.description, info.kind, look.palette ?? info.palette, look.params))),
@@ -280,6 +285,7 @@ export const PRESETS: Preset[] = [
   preset('paint-destruction', 'Paint Destruction', 'Eroding pigment, dry brush strokes and decaying paint echoes.', 'super8', ['#e95a24', '#e8af25', '#245ba1', '#c22d53', '#17131d', '#e4cda8'], { mode: 1, erosion: 0.7, texture: 0.95, roughness: 0.85, bleed: 0.5, feedback: 0.65, travel: 0.65, scratches: 0.15, emulsion: .85, lightLeak: .4, halation: .5, dust: .4, frameLines: .3 }),
   preset('scratched-negative', 'Scratched Negative', 'Inverted stepped forms scored by shifting film scratches.', 'super8', ['#f0b458', '#cc5262', '#528f8d', '#7864a6', '#10151c', '#e2dcc4'], { mode: 2, scratches: 0.85, grain: 0.45, flicker: 0.35, weave: 0.4, filmFps: 12, feedback: 0.24, erosion: 0.38, gateMode: 2, sprockets: .85, frameLines: .85, pullDown: .9, dust: .65, hair: .6, lightLeak: .12, vignette: .5 }),
   preset('cut-out-collage', 'Cut-out Collage', 'Layered painted paper fragments with torn edges and offset impressions.', 'super8', SUPER8_PALETTE, { mode: 3, steps: 8, erosion: 0.35, texture: 0.8, roughness: 0.7, feedback: 0.4, feedbackRotation: -0.06, filmFps: 12, travel: 0.55, gateMode: 1, gateInset: .025, frameLines: .35, emulsion: .35, lensSoftness: .3, colorFade: .3 }),
+  preset('painted-tunnel', 'Painted Tunnel', 'Scanned paint arches rush through a rolling shutter and break into stepped terraces.', 'super8', ['#f6b21c', '#1e4fd6', '#f0521c', '#ec8fb0', '#1b1726', '#f2efe8'], { mode: 4, steps: 10, coverage: 0.9, erosion: 0.12, texture: 0.8, textureScale: 1.1, roughness: 0.45, bleed: 0.15, travel: 0.6, cycles: 2, filmFps: 24, feedback: 0, rotation: 0, scratches: 0.12, grain: 0.15, flicker: 0.08, weave: 0.08, rollAmount: 0.7, rollBands: 30, rollOrigin: 1, rollSmear: 0.55, emulsion: 0.12, pullDown: 0, shutter: 0, lightLeak: 0, halation: 0.12, vignette: 0.08, lensSoftness: 0.05, colorFade: 0, dust: 0.12, hair: 0 }),
   preset('acid-slide', 'Acid Slide', 'Fluorescent yellow paint, cellular black ink and a glossy lens over cyan.', 'oil', OIL_PALETTE, {}),
   preset('cellular-lift', 'Cellular Lift', 'A glassy dome lifts away to reveal its branching cellular footprint.', 'oil', OIL_PALETTE, { lift: 1, travel: 0.22, drag: 0.7, cellSize: 1.2, relativeRotation: 0.18, filaments: 0.25, cellComplexity: 0.2 }),
   preset('ink-drag', 'Ink Drag', 'Fine black filaments pulled through bright paint by a sliding lens.', 'oil', OIL_PALETTE, { travel: 0.52, drag: 0.92, filaments: 1, relativeRotation: 0.45, cellSize: 0.6, coverage: 0.68 }),

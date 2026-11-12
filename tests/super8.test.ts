@@ -6,7 +6,7 @@ import { evaluateLayer } from '../src/core/timeline';
 
 const TAU = Math.PI * 2;
 
-test('four Super 8 modes roundtrip with presets, animation, masks and existing sources', () => {
+test('five Super 8 modes roundtrip with presets, animation, masks and existing sources', () => {
   const presets = PRESETS.filter(p => p.kind === 'super8');
   assert.deepEqual(presets.filter(p => !p.signature).map(p => p.name), SUPER8_MODES);
   for (const preset of presets) {
@@ -62,7 +62,7 @@ test('feedback reconstructs past animated settings and wraps before the first fr
 test('Super 8 rejects corrupt controls and discrete Motion routes; variation respects locks', () => {
   const layer = createLayer('super8');
   const project = createProject(); project.layers = [layer];
-  for (const [key, value] of [['mode', 4], ['mode', .5], ['filmFps', 0], ['filmFps', 49], ['steps', 2], ['feedback', 1], ['texture', NaN]] as const) {
+  for (const [key, value] of [['mode', 5], ['mode', .5], ['filmFps', 0], ['filmFps', 49], ['steps', 2], ['feedback', 1], ['texture', NaN]] as const) {
     const bad = structuredClone(project); bad.layers[0].params[key] = value;
     assert.throws(() => validateProject(bad), new RegExp(key));
   }
@@ -119,4 +119,15 @@ test('projector advances between held frames, closes the shutter during pull-dow
     const neutral = super8Transport(.7, duration, fps, 0, 0, 2, 0);
     assert.equal(neutral.pull, 0); assert.equal(neutral.roll, 0); assert.equal(neutral.light, 1);
   }
+});
+
+test('rolling shutter controls default off, so older projects keep their look', () => {
+  const legacy = createProject(); legacy.layers = [createLayer('super8')];
+  for (const key of ['rollAmount', 'rollBands', 'rollOrigin', 'rollSmear']) delete legacy.layers[0].params[key];
+  const restored = validateProject(JSON.parse(JSON.stringify(legacy)));
+  assert.equal(restored.layers[0].params.rollAmount, 0);
+  assert.equal(restored.layers[0].params.rollSmear, 0);
+  const tunnel = applyPreset(createLayer('super8'), 'painted-tunnel');
+  assert.equal(SUPER8_MODES[tunnel.params.mode], 'Painted Tunnel');
+  assert.ok(tunnel.params.rollAmount > 0 && tunnel.params.rollSmear > 0);
 });

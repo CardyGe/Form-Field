@@ -681,7 +681,7 @@ test('Fractal contour controls appear only for contour coloring without deleting
 });
 
 test('expanded preset library covers twelve Surface variants, four Sculpture forms and three Fractal colorings', () => {
-  assert.equal(PRESETS.filter(p => p.kind !== 'graphic' && !p.signature).length, 104);
+  assert.equal(PRESETS.filter(p => p.kind !== 'graphic' && !p.signature).length, 105);
   assert.equal(new Set(PRESETS.map(preset => preset.id)).size, PRESETS.length);
   const surfaces = PRESETS.filter(preset => preset.kind === 'surface' && !preset.signature);
   assert.equal(surfaces.length, 24);

@@ -16,9 +16,12 @@ uniform vec4 uMotion[${SUPER8_HISTORY * 2}]; // travel, rotation, cycles, phase
 uniform vec2 uEmulsion[${SUPER8_HISTORY * 2}]; // movement, film frame
 uniform vec2 uTransport; // intermittent pull-down, continuous reel travel
 uniform float uDust;
+uniform vec4 uRoll; // rolling shutter amount, bands, from centre, smear
 uniform vec4 uFilm; // scratches, grain, flicker, weave
 uniform vec4 uFeedback; // decay, zoom, rotation, current film frame
 const float TAU = 6.28318530718;
+// Phase delay between the first and last exposed band at full Rolling shutter.
+const float ROLL_SPAN = TAU * .22;
 
 float hash(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * .1031);
@@ -89,6 +92,54 @@ vec4 painted(vec2 uv, vec4 shape, vec4 paint, vec4 motion, vec2 emulsion) {
     d += crest*.4 + (coarse-.5)*.18;
     alpha = 1.-smoothstep(-edge,edge,d);
     color = pigment(lane+floor(q.x*1.5+2.)+floor(mod(uSeed,4.)));
+  } else if (uMode > 3.5) {
+    // Painted tunnel: nested arches of flat paint rush outward past a column of
+    // stepping stones, mirrored about the horizon. Rings move in log-radius, so
+    // R rings per cycle pass each point; ring identity repeats every loop.
+    float R = max(1., floor(motion.x*4.+.5));
+    float period = R*max(motion.z,1.);
+    float flow = motion.w/TAU*motion.z*R;
+    vec2 base = rotate(motion.y)*((uv-.5)*vec2(uAspect,1.))*shape.x;
+    vec2 q = base + (warped - p);
+    q.y = abs(q.y);
+    float spacing = 6./shape.y;
+    float rho = length(q*vec2(.74,1.))+1e-5;
+    float z = log(rho)/spacing - flow;
+    float id = floor(z), ring = fract(z);
+    float key = mod(id, period);
+    float zPixel = pixel/(rho*spacing);
+    // Ring paint with a ragged gap of paper between rings.
+    float gap = 1.-shape.z;
+    float ragged = (noise(vec2(atan(q.x,q.y)*9.,key*7.)+seed)-.5)*.08*paint.x;
+    float ringEdge = max(zPixel*1.2, .002);
+    alpha = smoothstep(gap*.5-ringEdge, gap*.5+ringEdge, ring+ragged) * (1.-smoothstep(1.-gap*.5-ringEdge, 1.-gap*.5+ringEdge, ring-ragged));
+    // Fade unresolvable rings near the vanishing point into an even tone.
+    alpha = mix(alpha, 1., smoothstep(.1, .35, zPixel));
+    color = pigment(key + floor(mod(uSeed,4.)));
+    // Stepping stones: rounded tiles on a ground plane, receding to the horizon.
+    float v = .35/max(q.y,1e-4), u = q.x/max(q.y,1e-4);
+    float s = v*.9 - flow;
+    float sid = mod(floor(s), period), fs = fract(s);
+    float sPixel = pixel*.9*.35/max(q.y*q.y,1e-6);
+    float stone = box(vec2(u*1.1, fs-.5), vec2(.24, .28)) - .1;
+    float stoneEdge = max(sPixel*1.5, pixel*.55/max(q.y,1e-4));
+    float stoneMask = (1.-smoothstep(-stoneEdge, stoneEdge, stone)) * step(.25, hash(vec2(sid, seed.x+11.)));
+    stoneMask *= 1.-smoothstep(.12, .45, sPixel);
+    // Only the receding stretch of path: stones closer than this have passed the camera.
+    float stoneY = .35*.9/(floor(s)+.5+flow);
+    stoneMask *= step(0., stoneY)*step(stoneY, .24);
+    // Stones are bare paper cut through the paint, as in scanned frame cut-outs.
+    alpha *= 1.-stoneMask;
+    // Pigment texture belongs to the moving ring, not to the screen.
+    vec2 ringTex = vec2(atan(q.x,q.y)*3.2, mod(z, period)*4.)*paint.y + seed;
+    coarse = noise(ringTex*.5);
+    medium = noise(ringTex*2.1);
+    fibres = noise(ringTex*vec2(.7,14.));
+    // Dark pigment specks and pale cracks, as in scanned paint.
+    float speck = smoothstep(.80, .84, noise(ringTex*3.3+17.));
+    color *= 1.-speck*paint.x*.55;
+    float crack = 1.-smoothstep(.0, .035, abs(noise(ringTex*vec2(.9,6.)+41.)-.5));
+    color = mix(color, uPalette[5], crack*paint.x*.28);
   } else {
     // Overlapping torn paper pieces. Each has its own pivot, stepped edge and
     // flat color; the cutouts retain real alpha when the substrate is disabled.
@@ -134,6 +185,34 @@ void main() {
   float stripY = uv.y-uTransport.x-uTransport.y;
   int bank = uTransport.x+uTransport.y > 0. && stripY < 0. ? ${SUPER8_HISTORY} : 0;
   if (uTransport.x+uTransport.y > 0.) uv.y = fract(stripY);
+  // Rolling shutter: fixed horizontal bands are exposed one after another, so
+  // each shows the paint a little later. Smear holds each band near one scan
+  // line (horizontal streaks), slips some bands sideways and tears their edges.
+  float rollDelay = 0., tear = 0.;
+  if (uRoll.x > 0. || uRoll.w > 0.) {
+    float bands = max(uRoll.y, 1.);
+    float band = floor(uv.y*bands);
+    float centreY = (band+.5)/bands;
+    float order = mix(1.-centreY, abs(centreY-.5)*2., uRoll.z);
+    rollDelay = uRoll.x*ROLL_SPAN*order;
+    if (uRoll.w > 0.) {
+      vec2 key = vec2(band, mod(uSeed,997.)+floor(frame/2.));
+      float hold = smoothstep(0., .7, uRoll.w);
+      uv.y = centreY + (uv.y-centreY)*(1.-hold*.92);
+      uv.x += (hash(key)-.5)*uRoll.w*.035*step(.55, hash(key+3.));
+      float row = floor(filmUV.y*540.);
+      vec2 rowKey = vec2(row, mod(uSeed,997.)+floor(frame/3.));
+      if (hash(rowKey) < uRoll.w*.14) {
+        float anchor = hash(rowKey+5.);
+        uv.x = anchor + (uv.x-anchor)*mix(.05, .5, hash(rowKey+9.));
+      }
+      float edgeDistance = abs(fract(filmUV.y*bands+.5)-.5)/bands;
+      float lineWidth = 1.1/uResolution.y;
+      tear = (1.-smoothstep(lineWidth*.5, lineWidth*1.5, edgeDistance))
+        * step(hash(vec2(floor(filmUV.y*bands+.5), mod(uSeed,997.)+7.)), uRoll.w*.45)
+        * smoothstep(.35, .6, noise(vec2(filmUV.x*14., band+frame*.3)));
+    }
+  }
   vec4 result = vec4(0.);
   // Repeated source-over is a finite feedback expansion. History is reconstructed
   // in one pass, so no render target can leak between layers, projects or seeks.
@@ -142,13 +221,14 @@ void main() {
     float age = float(tap);
     vec2 sampleUV = .5 + rotate(age*uFeedback.z)*(uv-.5)*exp(-age*uFeedback.y);
     int index = tap+bank;
-    vec4 src = painted(sampleUV,uShape[index],uPaint[index],uMotion[index],uEmulsion[index]);
+    vec4 src = painted(sampleUV,uShape[index],uPaint[index],uMotion[index]-vec4(0.,0.,0.,rollDelay),uEmulsion[index]);
     float weight = tap == 0 ? 1. : pow(uFeedback.x,age);
     src *= weight;
     result = src+result*(1.-src.a);
   }
   vec3 paper = uMode > 1.5 && uMode < 2.5 ? uPalette[4] : uPalette[5];
   if (uSubstrate > .5) result = vec4(result.rgb+paper*(1.-result.a),1.);
+  result.rgb = mix(result.rgb, uPalette[5]*result.a, tear*.85);
 
   float px = 1./uResolution.x;
   float scratch = 0.;
