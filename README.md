@@ -37,6 +37,17 @@ Every layer has **Finish → Flat colour & outlines**. It replaces shading with 
 
 **Library → Presets → Flat colour & outlines** has five looks: Neon Strata, Acid Drip, Pop Portal, Contour Pop and Pour Lace. Applying one turns on **Finish → Output → Exact colour**, which shows palette colours at their exact values instead of rolling off bright highlights. Leave Exact colour off for lit 3D and glowing sources.
 
+## Time displacement
+
+Finish → Time displacement makes parts of the frame show the layer as it was some frames ago. This is the slit-scan look: stepped terraces, tears and block-shuffled time. It's available for every layer except Graphic Patterns and Ink *Evolving*.
+
+- **Delay map** picks which parts lag: rows, columns, rings, a diagonal or random blocks.
+- **Time shift** sets how far back the map reaches, as a share of **Time span** (in frames). Negative values flip the map.
+- **Time slices** sets how many moments are sampled. **Slice blend** goes from hard steps (0) to a continuous smear (1).
+- **Map scroll** sweeps the map across the frame a whole number of times per loop.
+
+Each slice is the looping source rendered again at an earlier moment, so no history is stored. The loop closes exactly, needs no warm-up and can be exported in any order. Each slice costs one extra render of the source, so 12 slices render about 12 times slower than the plain layer. Time displacement runs before Feedback and Flat colour, so both apply to the stitched result. It needs a source that moves: raise the source's Cycles per loop if the steps barely show. Three looks live under Library → Presets → Time displacement.
+
 ## Feedback
 
 Any layer except Graphic Patterns and Ink *Evolving* can feed back into itself (Finish → Feedback). Each frame keeps a faded echo of the last one, zoomed, turned, moved and hue-shifted, and the new source is drawn with it. Flat colour and outlines then apply to the result, so echoes are re-banded into flat poster colour.

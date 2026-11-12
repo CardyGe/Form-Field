@@ -382,7 +382,7 @@ test('fractal defaults and all family variants roundtrip alongside existing laye
   ].sort());
   assert.equal(layer.params.quality, 2);
   assert.equal(layer.params.morph, 0.1);
-  assert.deepEqual(parameterDefinitions('fractal').filter((definition) => definition.step === 1).map((definition) => definition.key).sort(), ['colorMode', 'colorSteps', 'cycles', 'echoBlend', 'quality', 'radial', 'style', 'symmetry', 'toonBands', 'toonCycles', 'toonOutlineColor', 'variant']);
+  assert.deepEqual(parameterDefinitions('fractal').filter((definition) => definition.step === 1).map((definition) => definition.key).sort(), ['colorMode', 'colorSteps', 'cycles', 'echoBlend', 'quality', 'radial', 'slitBlocks', 'slitScroll', 'slitShape', 'slitSlices', 'slitSpan', 'style', 'symmetry', 'toonBands', 'toonCycles', 'toonOutlineColor', 'variant']);
   const presets = PRESETS.filter((preset) => preset.kind === 'fractal' && !preset.signature);
   assert.equal(presets.length, 12);
   assert.equal(new Set(presets.map((preset) => preset.id)).size, 12);
@@ -681,10 +681,10 @@ test('Fractal contour controls appear only for contour coloring without deleting
 });
 
 test('expanded preset library covers twelve Surface variants, four Sculpture forms and three Fractal colorings', () => {
-  assert.equal(PRESETS.filter(p => p.kind !== 'graphic' && !p.signature).length, 101);
+  assert.equal(PRESETS.filter(p => p.kind !== 'graphic' && !p.signature).length, 104);
   assert.equal(new Set(PRESETS.map(preset => preset.id)).size, PRESETS.length);
   const surfaces = PRESETS.filter(preset => preset.kind === 'surface' && !preset.signature);
-  assert.equal(surfaces.length, 21);
+  assert.equal(surfaces.length, 24);
   assert.equal(new Set(surfaces.map(preset => `${preset.params.style}:${preset.params.variant}`)).size, 12);
   for (const family of [0, 1, 2, 3]) assert.deepEqual([...new Set(surfaces.filter(preset => preset.params.style === family).map(preset => preset.params.variant))].sort(), [0, 1, 2]);
   const sculptures = PRESETS.filter(preset => preset.kind === 'sculpture' && !preset.signature);

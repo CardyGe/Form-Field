@@ -8,6 +8,7 @@ import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { feedbackActive, feedbackFragment, frameAtPhase, persistence, warmupFrames } from './feedback';
+import { slitActive, slitFragment, sliceDelays } from './slitscan';
 import { parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
@@ -56,12 +57,14 @@ interface FeedbackState {
   settle: { key: string; frame: number; step: number; a: THREE.WebGLRenderTarget; b: THREE.WebGLRenderTarget } | null;
   spare: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null;
 }
-/** Seeks in the preview warm up this many frames at once at most. */
+/** Seeks in the preview warm up with at most this many source renders at once. */
 const PREVIEW_WARMUP = 60;
 /** The preview steps through short forward jumps instead of warming up again. */
 const PREVIEW_STEP_LIMIT = 8;
-/** Background settle steps per preview frame while paused. */
+/** Background settle source renders per preview frame while paused. */
 const SETTLE_CHUNK = 6;
+/** Source renders per feedback step: one, or one per time slice. */
+const stepCost = (layer: Layer) => slitActive(layer) ? sliceDelays(layer).length : 1;
 const layerKey = (layer: Layer) =>
   JSON.stringify(layer, (key, value) => key === 'dataUrl' && typeof value === 'string' ? `${value.length}:${value.slice(-64)}` : value);
 
@@ -136,6 +139,9 @@ export class StudioRenderer {
   private readonly display: THREE.ShaderMaterial;
   private readonly downsample: THREE.ShaderMaterial;
   private readonly feedback: THREE.ShaderMaterial;
+  private readonly slit: THREE.ShaderMaterial;
+  /** Slit-scan accumulation, consumed before the next layer is drawn. */
+  private slitTargets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null = null;
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
@@ -256,6 +262,10 @@ export class StudioRenderer {
     });
     this.display = material(displayFragment, { uImage: { value: this.linearOutput.texture } });
     this.downsample = material(downsampleFragment, { uImage: { value: this.linearOutput.texture }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uFactor: { value: 1 } });
+    this.slit = material(slitFragment, {
+      uAccum: { value: null }, uSource: { value: null }, uIndex: { value: 0 }, uCount: { value: 2 }, uSmooth: { value: 0 },
+      uShape: { value: 0 }, uBlocks: { value: 8 }, uScroll: { value: 0 }, uAspect: { value: 1 }, uReverse: { value: 0 }, uSeed: { value: 0 },
+    });
     this.feedback = material(feedbackFragment, {
       uSource: { value: null }, uPrevious: { value: null }, uAspect: { value: 1 }, uZoom: { value: 1 }, uRotate: { value: 0 },
       uFade: { value: 0 }, uHue: { value: 0 }, uWarp: { value: 0 }, uMode: { value: 0 }, uHole: { value: 0 }, uWindow: { value: 0 }, uDrift: { value: new THREE.Vector2() },
@@ -650,6 +660,7 @@ export class StudioRenderer {
       const layer = evaluateLayer(original, sourcePhase);
       if (layer.opacity <= 0) continue;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
+        : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, original.kind === 'livingink'&&original.params.inkMode===2 ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration);
       const u = this.composite.uniforms;
       u.uBelow.value = below.texture; u.uSource.value = sourceTexture;
@@ -703,10 +714,44 @@ export class StudioRenderer {
     return original.kind === 'super8' ? super8Clock(wrapped, duration, original.params.filmFps).phase : wrapped;
   }
 
+  /** The layer's own source at a loop phase, with its animation evaluated there. */
+  private plainSource(original: Layer, phase: number, duration: number): THREE.Texture {
+    const sourcePhase = this.sourcePhase(original, phase, duration);
+    return this.drawSource(evaluateLayer(original, sourcePhase), original.kind === 'super8' ? phase : sourcePhase, original, duration);
+  }
+
+  /**
+   * Time displacement: the source at evenly spaced earlier phases, stitched by
+   * the delay map. Each slice is a fresh evaluation of the looping source, so
+   * there is no history to keep and the loop closes exactly.
+   */
+  private slitSource(original: Layer, phase: number, total: number, duration: number): THREE.Texture {
+    const layer = evaluateLayer(original, phase), p = layer.params;
+    if (!this.slitTargets) this.slitTargets = [target(), target()];
+    for (const rt of this.slitTargets) if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
+    let [accum, next] = this.slitTargets;
+    this.clearTarget(accum);
+    const delays = sliceDelays(layer), u = this.slit.uniforms;
+    u.uCount.value = delays.length; u.uSmooth.value = p.slitSmooth ?? 0;
+    u.uShape.value = p.slitShape ?? 0; u.uBlocks.value = p.slitBlocks ?? 8;
+    u.uScroll.value = (((p.slitScroll ?? 0) * phase / TAU) % 1 + 1) % 1;
+    u.uAspect.value = this.width / this.height; u.uReverse.value = Number((p.slitShift ?? 0) < 0);
+    u.uSeed.value = (p.seed ?? 0) % 1000;
+    delays.forEach((delay, index) => {
+      const earlier = ((phase - delay * TAU / total) % TAU + TAU) % TAU;
+      u.uSource.value = this.plainSource(original, earlier, duration);
+      u.uAccum.value = accum.texture; u.uIndex.value = index;
+      this.draw(this.slit, next);
+      [accum, next] = [next, accum];
+    });
+    this.slitTargets = [accum, next];
+    return accum.texture;
+  }
+
   /** One feedback step: the source at `phase` over the faded, transformed echo in `from`. */
-  private feedbackStep(original: Layer, phase: number, duration: number, from: THREE.WebGLRenderTarget, to: THREE.WebGLRenderTarget): void {
+  private feedbackStep(original: Layer, phase: number, total: number, duration: number, from: THREE.WebGLRenderTarget, to: THREE.WebGLRenderTarget): void {
     const layer = evaluateLayer(original, this.sourcePhase(original, phase, duration));
-    const source = this.drawSource(layer, original.kind === 'super8' ? phase : this.sourcePhase(original, phase, duration), original, duration);
+    const source = slitActive(original) ? this.slitSource(original, phase, total, duration) : this.plainSource(original, phase, duration);
     const p = layer.params, u = this.feedback.uniforms;
     u.uSource.value = source; u.uPrevious.value = from.texture;
     u.uAspect.value = this.width / this.height;
@@ -729,7 +774,7 @@ export class StudioRenderer {
   /** Advances `current` through loop frames first..last, one step each. */
   private feedbackRun(original: Layer, state: FeedbackState, first: number, last: number, total: number, duration: number): void {
     for (let k = first; k <= last; k++) {
-      this.feedbackStep(original, phaseAtFrame(((k % total) + total) % total, total), duration, state.current, state.next);
+      this.feedbackStep(original, phaseAtFrame(((k % total) + total) % total, total), total, duration, state.current, state.next);
       [state.current, state.next] = [state.next, state.current];
       state.previousValid = true;
     }
@@ -766,6 +811,9 @@ export class StudioRenderer {
     let fade = 0;
     for (let k = 0; k < 16; k++) fade = Math.max(fade, persistence(evaluateLayer(original, k * TAU / 16)));
     const full = warmupFrames(fade);
+    // Preview budgets count source renders, so time-sliced sources warm up and
+    // settle in fewer, costlier steps at a steady frame rate.
+    const cost = stepCost(original), previewWarmup = Math.min(full, Math.max(6, Math.floor(PREVIEW_WARMUP / cost)));
     const changed = key !== state.key;
     const distance = state.frame < 0 ? Infinity : (frame - state.frame + total) % total;
     const warmUp = (frames: number) => {
@@ -783,16 +831,16 @@ export class StudioRenderer {
       // Nothing new: only continue a background settle.
     } else if (distance === 0) {
       if (state.previousValid) {
-        this.feedbackStep(original, phaseAtFrame(frame, total), duration, state.next, state.current);
+        this.feedbackStep(original, phaseAtFrame(frame, total), total, duration, state.next, state.current);
         state.exact = false;
-      } else warmUp(Math.min(full, PREVIEW_WARMUP));
+      } else warmUp(previewWarmup);
       this.startSettle(state, key, frame, full);
     } else if (distance <= PREVIEW_STEP_LIMIT) {
       this.feedbackRun(original, state, frame - distance + 1, frame, total, duration);
       if (changed) state.exact = false;
       state.settle = null;
     } else {
-      warmUp(Math.min(full, PREVIEW_WARMUP));
+      warmUp(previewWarmup);
       if (!state.exact) this.startSettle(state, key, frame, full);
     }
     state.key = key; state.frame = frame;
@@ -812,8 +860,9 @@ export class StudioRenderer {
     const settle = state.settle;
     if (!settle) return;
     if (settle.key !== key || settle.frame !== frame) { state.settle = null; return; }
-    for (let i = 0; i < SETTLE_CHUNK && settle.step <= frame; i++, settle.step++) {
-      this.feedbackStep(original, phaseAtFrame(((settle.step % total) + total) % total, total), duration, settle.a, settle.b);
+    const chunk = Math.max(1, Math.floor(SETTLE_CHUNK / stepCost(original)));
+    for (let i = 0; i < chunk && settle.step <= frame; i++, settle.step++) {
+      this.feedbackStep(original, phaseAtFrame(((settle.step % total) + total) % total, total), total, duration, settle.a, settle.b);
       [settle.a, settle.b] = [settle.b, settle.a];
     }
     if (settle.step <= frame) return;
@@ -919,9 +968,10 @@ export class StudioRenderer {
     this.graphicSource?.dispose(); this.graphicSource = null;
     this.super8Source?.dispose(); this.super8Source = null;
     for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
+    this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
     this.feedbackStates.clear();
     this.graphics.dispose(); this.instruments.dispose();
-    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.surface, this.fractal, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
+    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.surface, this.fractal, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.filmThickness.dispose();
     this.keyLight.shadow.dispose();
     this.renderer.dispose();

@@ -1,4 +1,4 @@
-import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS} from './finishing';
+import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS} from './finishing';
 import { isSimplePolygon } from './surface-layout';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import { SIGNATURE_LOOKS } from './signature-looks';
@@ -353,6 +353,14 @@ PRESETS.push(
   preset('melt-trails', 'Melt Trails', 'Acid bands slide downward and melt along their own slopes.', 'surface', ACID_DRIP, { style: 2, variant: 0, scale: 3, warp: 0.5, detail: 0.25, roundness: 0.9, relief: 0, softness: 0, contrast: 0.75, offset: 0.1, reveal: 0, toonMix: 1, toonBands: 5, toonOutline: 4, echo: 0.9, echoZoom: 1, echoDriftY: -0.006, echoMelt: 0.7, echoHue: -4 }),
 );
 
+/** Time displacement looks: the frame is stitched from moments of the past. */
+export const SLIT_LOOK_IDS = ['time-terraces', 'block-shuffle', 'ring-delay'];
+PRESETS.push(
+  preset('time-terraces', 'Time Terraces', 'Neon strata cut into horizontal terraces, each a moment further in the past.', 'surface', NEON_STRATA, { style: 0, variant: 0, scale: 3.2, warp: 0.55, detail: 0.35, roundness: 0.7, relief: 0, softness: 0, contrast: 0.7, offset: 0.2, reveal: 0, toonMix: 1, toonBands: 6, toonOutline: 3, cycles: 4, slitShift: 1, slitSpan: 60, slitShape: 0, slitSlices: 9 }),
+  preset('block-shuffle', 'Block Shuffle', 'Acid drips broken into blocks that each run at their own delay.', 'surface', ACID_DRIP, { style: 2, variant: 0, scale: 3, warp: 0.5, detail: 0.25, roundness: 0.9, relief: 0, softness: 0, contrast: 0.75, offset: 0.1, reveal: 0, toonMix: 1, toonBands: 5, toonOutline: 4, slitShift: 1, slitSpan: 90, slitShape: 4, slitSlices: 8, slitBlocks: 5 }),
+  preset('ring-delay', 'Ring Delay', 'Portal rings lag outward in smooth waves while the delay sweeps once per loop.', 'surface', POP_PORTAL, { style: 3, variant: 0, scale: 4.5, warp: 0.3, roundness: 0.8, relief: 0, density: 1.2, contrast: 0.7, reveal: 0, toonMix: 1, toonBands: 8, toonOutline: 3, toonOutlineColor: 6, cycles: 4, slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 16, slitSmooth: 1, slitScroll: 1 }),
+);
+
 export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
@@ -440,6 +448,7 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     // cycling (which can strobe), or vary its controls while it is off.
     if (TOON_KEYS.includes(key) && (key === 'toonMix' || key === 'toonCycles' || !(layer.params.toonMix > 0))) continue;
     // Feedback is likewise an explicit choice, and its blend and frame are structural.
+    if (SLIT_KEYS.includes(key) && (['slitShift', 'slitShape', 'slitScroll', 'slitSlices'].includes(key) || !((layer.params.slitShift ?? 0) !== 0))) continue;
     if (FEEDBACK_KEYS.includes(key) && (['echo', 'echoBlend', 'echoFrame', 'echoWindow'].includes(key) || !(layer.params.echo > 0))) continue;
     if (layer.modulations[key] || key==='tonePivot' || key==='warpScale'&&layer.params.warp===0 || key==='sheenAngle'&&layer.params.anisotropy===0) continue;
     const span = d.max-d.min;
