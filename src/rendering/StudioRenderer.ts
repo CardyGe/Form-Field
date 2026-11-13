@@ -594,10 +594,10 @@ export class StudioRenderer {
       for (let i = 0; i < 6; i++) colors[i].set(layer.palette[i] ?? DEFAULT_PALETTE[i]);
       if (!this.exporting && Math.round(number(layer, 'style', 0)) === 2) {
         // The ray-marched Mandelbox is the costliest source. The live preview
-        // traces it at half resolution and scales it up; exports trace every pixel.
+        // traces half as many pixels and scales them up; exports trace every pixel.
         const pw = Math.max(1, Math.round(this.width / 2)), ph = Math.max(1, Math.round(this.height / 2));
         if (this.fractalPreview.width !== pw || this.fractalPreview.height !== ph) this.fractalPreview.setSize(pw, ph);
-        (u.uResolution.value as THREE.Vector2).set(pw, ph);
+        // uResolution stays at full size so the surface keeps the same level of detail as the export.
         this.draw(this.fractal, this.fractalPreview);
         this.copy.uniforms.uImage.value = this.fractalPreview.texture;
         this.draw(this.copy, this.source);
