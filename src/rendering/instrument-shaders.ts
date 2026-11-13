@@ -156,17 +156,29 @@ void main(){
  outputField(color,cover);
 }`,
 resonance:/* glsl */`
+float chladni(vec2 q,float modeA,float modeB0,float blend){
+ float x=q.x*PI,y=q.y*PI;
+ float modeB=modeB0+(abs(modeA-modeB0)<.5?1.:0.);
+ float a=cos(modeA*x)*cos(modeB*y)-cos(modeB*x)*cos(modeA*y);
+ float other=modeB+1.;if(abs(other-modeA)<.5)other+=1.;
+ float b=sin(modeA*x)*sin(other*y)-sin(other*x)*sin(modeA*y);
+ float field=mix(a,b,blend);
+ if(uRadialMix>0.){float angle=atan(q.y,q.x+1e-10),radius=length(q);float radial=cos(modeA*angle)*sin(modeB*radius*PI);field=mix(field,radial,uRadialMix);}
+ if(uHarmonic>0.)field+=uHarmonic*.35*sin((modeA+modeB)*x*.5)*sin((modeB+2.)*y);
+ return field;
+}
 void main(){
  vec2 p=domain(),q=p*.75+orbit()*.035;
- float x=q.x*PI,y=q.y*PI;
- float modeB=uModeB+(abs(uModeA-uModeB)<.5?1.:0.);
- float a=cos(uModeA*x)*cos(modeB*y)-cos(modeB*x)*cos(uModeA*y);
- float other=modeB+1.;if(abs(other-uModeA)<.5)other+=1.;
- float b=sin(uModeA*x)*sin(other*y)-sin(other*x)*sin(uModeA*y);
  float blend=clamp(uModalBlend+sin(uPhase)*uMotion*.2,0.,1.);
- float field=mix(a,b,blend);
- if(uRadialMix>0.){float angle=atan(q.y,q.x+1e-10),radius=length(q);float radial=cos(uModeA*angle)*sin(modeB*radius*PI);field=mix(field,radial,uRadialMix);}
- if(uHarmonic>0.)field+=uHarmonic*.35*sin((uModeA+modeB)*x*.5)*sin((modeB+2.)*y);
+ float field;
+ if(uSequence>.5&&uMotion>0.){
+  // Mode score: the plate holds one figure, then the sand snaps into the next
+  // mode, and so on, returning to the first figure as the loop closes.
+  float n=uSequence+1.,f=fract(uPhase/TAU)*n,k=floor(f);
+  float snap=smoothstep(1.-.45*uSnap,1.,fract(f));
+  float kNext=mod(k+1.,n);
+  field=mix(chladni(q,uModeA+k,uModeB+k,uModalBlend),chladni(q,uModeA+kNext,uModeB+kNext,uModalBlend),snap);
+ } else field=chladni(q,uModeA,uModeB,blend);
  float aa=max(fwidth(field),.0005)+uNodalSoftness*.12;
  float cover=1.-smoothstep(uBandWidth-aa,uBandWidth+aa,abs(field));
  vec2 grainUV=q*uGrainSize;float grain=hash21(floor(grainUV));
@@ -174,7 +186,15 @@ void main(){
  float grainValue=mix(.55+grain*.45,.775,grainFilter);
  vec3 n=fieldNormal(p,field*uRelief*.018);
  vec3 color=coat(colour(.08+.22*abs(field)),n,uLightAngle,uRoughness,.15);
- color*=mix(1.,grainValue,uGrains);outputField(color,cover);
+ color*=mix(1.,grainValue,uGrains);
+ if(uFill>0.){
+  // Flat fills: the plate between nodal lines takes two palette colours by the
+  // sign of the vibration, and the sand lines are drawn over it in a third.
+  float side=smoothstep(-aa,aa,field);
+  vec3 plate=mix(uPalette[1],uPalette[3],side);
+  color=mix(plate,color,cover);cover=mix(cover,1.,uFill*uBackgroundOpacity);
+ }
+ outputField(color,cover);
 }`,
 };
 export function instrumentFragment(kind:InstrumentKind):string{

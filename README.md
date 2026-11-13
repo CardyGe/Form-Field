@@ -147,6 +147,12 @@ Oil Slides has a **Layout** control. *Slide* is the original pools pressed by a 
 
 Any layer can use the **Colour from below** blending mode. The layer keeps its shapes and its light and dark, and takes its colour from the layers under it. To use a paint scan or photograph, import it as an image layer, put the effect above it and set the effect's Blending to Colour from below.
 
+## Resonant Sand and Sculpture
+
+Resonant Sand has a **Mode score**: the plate holds one figure, then the sand snaps into the next mode, stepping through up to three changes and back to the first each loop. **Snap speed** sets how fast the sand reorganises, and **Plate fill** colours the plate between the sand lines with two palette colours.
+
+Sculpture has **Turns per loop**, which turns the form whole times each loop on a tilted axis so its silhouette keeps changing. All Sculpture presets are now framed close, in flat colour with outlines.
+
 ## Preset library
 
 The library has 83 presets. In 0.12 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.

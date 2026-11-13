@@ -646,7 +646,10 @@ export class StudioRenderer {
       if(shadowCamera.right!==extent){Object.assign(shadowCamera,{left:-extent,right:extent,top:extent,bottom:-extent});shadowCamera.updateProjectionMatrix();}
       this.sculptureMaterial.iridescence = number(layer, 'iridescence', .85);
       const breath = number(layer, 'breath', .25);
-      this.sculpture.rotation.set(breath * .12 * Math.sin(localPhase), breath * .3 * Math.sin(localPhase), -.1 + breath * .08 * Math.sin(localPhase + .6));
+      // Spin turns the form a whole number of times per loop about a tilted
+      // axis, so its silhouette keeps changing and the loop still closes.
+      const spin = Math.round(number(layer, 'spin', 0)) * localPhase;
+      this.sculpture.rotation.set(breath * .12 * Math.sin(localPhase) + spin * .35, breath * .3 * Math.sin(localPhase) + spin, -.1 + breath * .08 * Math.sin(localPhase + .6));
       const yaw = number(layer, 'cameraYaw', 0);
       const pitch = number(layer, 'cameraPitch', .2);
       const distance = 4.4 / Math.max(.2, number(layer, 'zoom', 1));

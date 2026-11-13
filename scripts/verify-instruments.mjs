@@ -54,10 +54,11 @@ try{
       if(d.key==='slitBlocks')q.layers[0].params.slitShape=4;
       if(d.key==='toonOutlineColor')q.layers[0].params.toonOutline=3;
       if(d.key.startsWith('toon')&&d.key!=='toonMix')q.layers[0].params.toonMix=1;
-      if(d.key==='delayShape')q.layers[0].params.delaySpread=.6;}
+      if(d.key==='delayShape')q.layers[0].params.delaySpread=.6;
+      if(d.key==='snap')q.layers[0].params.sequence=2;}
      a.layers[0].params[d.key]=d.min;b.layers[0].params[d.key]=['hue','rotation','lightAngle','flowDirection'].includes(d.key)?0:d.key==='sheenAngle'?.7:d.key==='facetTwist'?.31:['phaseOffset','toonOffset'].includes(d.key)?.37:d.max;
      // Evolving ink only reaches the central obstacle later in the clip.
-     const at=['surfaceHole','ageColour'].includes(d.key)?5.5:.7;const difference=delta(await exr(a,at,96,54),await exr(b,at,96,54));check(difference>.0000001,id+' inactive control '+d.key);results.push({control:d.key,difference});
+     const at=['surfaceHole','ageColour'].includes(d.key)?5.5:d.key==='snap'?1.78:.7;const difference=delta(await exr(a,at,96,54),await exr(b,at,96,54));check(difference>.0000001,id+' inactive control '+d.key);results.push({control:d.key,difference});
     }return results;
    },info.looks[0].id);report.checks.push({controls:info.kind,checks:result});console.log('Controls '+info.kind);
   }
