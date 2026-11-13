@@ -70,10 +70,13 @@ float boxShadow(vec3 p,vec3 light,float epsilon) {
 }
 vec4 traceBox(vec2 offset) {
   float size=uScale/1.7;
-  float yaw=uCameraYaw+uTravel*.25*sin(uPhase);
+  // Inside the box the camera also turns once per loop, so the space keeps changing.
+  float yaw=uCameraYaw+uTravel*.25*sin(uPhase)+(uApproach>0.?uPhase:0.);
   float pitch=uCameraPitch+uTravel*.12*cos(uPhase);
   float radius=2.*length(boxLimits())/size+.01/size;
   float framing=radius+3.6/max(uZoom,.5)-uTravel*.35*cos(uPhase);
+  // Fly in: the camera moves inside the bounding sphere toward the folded core.
+  if(uApproach>0.)framing=mix(framing,radius*(.62-.12*uApproach)-uTravel*.35*radius*.3*cos(uPhase),uApproach);
   vec3 origin=framing*vec3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch));
   vec3 forward=normalize(-origin),right=normalize(cross(forward,vec3(0,1,0))),up=cross(right,forward);
   vec2 uv=(sourceUV(vUv+offset/uResolution)-.5)*vec2(uAspect,1.);

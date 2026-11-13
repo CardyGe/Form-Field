@@ -5,10 +5,18 @@ import { flowHash, flowStep, FLOW_STEPS, phraseTime, smooth, TAU, wrapUnit, type
 import { sampleSurface } from '../core/surface-layout';
 import { surfaceFieldGLSL, type PreparedSurface } from './surface-fields';
 
-const MAX_STRANDS = 4096, MAX_VERTICES = MAX_STRANDS * FLOW_STEPS * 6;
+// Dense currents draw up to 16k strands; only the visible trail of each is
+// tessellated, so the vertex budget is set by trails rather than full paths.
+const MAX_STRANDS = 16384, MAX_VERTICES = 3_600_000;
 /** Finite-age trajectories reconstructed from their birth, not display history.
  * See the motion/lifecycle design and primary sources in docs/projection-media-direction-2026-11-10.md.
  */
+/** Width multiplier along a trail; amount 0 keeps a constant width. */
+function taper(at:number,begin:number,span:number,amount:number):number{
+  if(!(amount>0))return 1;
+  const u=Math.max(0,Math.min(1,(at-begin)/span));
+  return 1-amount+amount*1.35*Math.sin(Math.PI*u);
+}
 export class CurrentRenderer {
   private pathKey='';
   private paths=new Map<string,Float64Array>();
@@ -60,7 +68,7 @@ export class CurrentRenderer {
       if(surface&&surface.role!==1){const f=sampleSurface(surface.grid,x/(aspect*scale)+.5,y/scale+.5);if(surface.role===2?f.coverage<.5:Math.abs(f.distance)>.03)continue;}
       const key=`${ix}:${iy}:${j}`;
       let path=this.paths.get(key);
-      if(!path){path=new Float64Array((FLOW_STEPS+1)*2);path.set([x,y]);let X=x,Y=y;for(let i=1;i<=FLOW_STEPS;i++){[X,Y]=flowStep(X,Y,-identity+(i-1)/FLOW_STEPS,1/FLOW_STEPS,settings);path[i*2]=X;path[i*2+1]=Y;}this.paths.set(key,path);while(this.paths.size>8192)this.paths.delete(this.paths.keys().next().value!);}
+      if(!path){path=new Float64Array((FLOW_STEPS+1)*2);path.set([x,y]);let X=x,Y=y;for(let i=1;i<=FLOW_STEPS;i++){[X,Y]=flowStep(X,Y,-identity+(i-1)/FLOW_STEPS,1/FLOW_STEPS,settings);path[i*2]=X;path[i*2+1]=Y;}this.paths.set(key,path);while(this.paths.size>MAX_STRANDS*1.25)this.paths.delete(this.paths.keys().next().value!);}
       const tail=Math.max(.04,p.trailLength*.68),begin=Math.max(0,age-tail);
       const life=smooth(age/.08)*smooth((1-age)/.12);
       const tone=flowHash(ix+41,iy-31,seed),radius=(.0015+p.width*.005)*(1+p.depth*(identity-.5));
@@ -71,11 +79,14 @@ export class CurrentRenderer {
         const next=Math.min(at,age);
         if(at>age&&previous){const f=(age-previousAge)*FLOW_STEPS;x=previous[0]+(x-previous[0])*f;y=previous[1]+(y-previous[1])*f;}
         if(previous&&next>begin&&next>previousAge){
+          if(vertices+6>MAX_VERTICES)break outer;
+          // Taper: a strand is widest along its middle and thins to a point at both ends.
+          const span=Math.max(1e-6,age-begin),wa=taper(previousAge,begin,span,p.taper),wb=taper(next,begin,span,p.taper);
           const dx=x-previous[0],dy=y-previous[1],length=Math.max(1e-7,Math.hypot(dx,dy)),nx=-dy/length*radius,ny=dx/length*radius;
           const a=life*smooth((previousAge-begin)/(.025+tail*.12))*smooth((age-previousAge)/.04),b=life*smooth((next-begin)/(.025+tail*.12))*smooth((age-next)/.04);
           
-          vertex(previous[0]-nx,previous[1]-ny,a,tone,-1);vertex(previous[0]+nx,previous[1]+ny,a,tone,1);vertex(x+nx,y+ny,b,tone,1);
-          vertex(previous[0]-nx,previous[1]-ny,a,tone,-1);vertex(x+nx,y+ny,b,tone,1);vertex(x-nx,y-ny,b,tone,-1);
+          vertex(previous[0]-nx*wa,previous[1]-ny*wa,a,tone,-1);vertex(previous[0]+nx*wa,previous[1]+ny*wa,a,tone,1);vertex(x+nx*wb,y+ny*wb,b,tone,1);
+          vertex(previous[0]-nx*wa,previous[1]-ny*wa,a,tone,-1);vertex(x+nx*wb,y+ny*wb,b,tone,1);vertex(x-nx*wb,y-ny*wb,b,tone,-1);
         }
         previous=[x,y];previousAge=next;if(at>=age)break;
       }

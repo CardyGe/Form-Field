@@ -85,10 +85,15 @@ vec3 cells(vec2 p){vec4 s=sites(p,.6);return vec3(length(s.xy),s.z,s.w);}
 `;
 const bodies:Record<InstrumentKind,string>={
 livingink:/* glsl */`
+${timingGLSL}
 void main(){
  vec2 p=domain(),q=p+uFlow*.28*vec2(sin(p.y*1.4+orbit().x),cos(p.x*1.1+orbit().y));
  q+=orbit()*.13;vec2 uv=q*.36+.5;
- if(uInkMode>.5&&uInkMode<1.5){vec2 aligned=spin(uFlowDirection)*q;uv=aligned*.36+.5+vec2(uPhase/TAU,0.);}
+ if(uInkMode>.5&&uInkMode<1.5){vec2 aligned=spin(uFlowDirection)*q;
+  // Travel advances one whole pattern period per loop. With timing on, each
+  // region of the frame runs its own clock, so pulses of flow cross the field.
+  float clock=uDelaySpread>0.||uPause>0.?stagedTime(uPhase,delayOrder((sourceUV(vUv)-.5)*vec2(uAspect,1.),uAspect)):uPhase;
+  uv=aligned*.36+.5+vec2(clock/TAU,0.);}
  if(uInkMode>1.5)uv=(sourceUV(vUv)-.5)*vec2(uAspect,1.)*uScale/4.8+.5;
  vec4 f=textureGrad(uPatternTexture,uv,dFdx(uv),dFdy(uv));
  if(uInkMode>1.5)f.g=mix(f.g,f.b,uPigmentCarry);
@@ -98,7 +103,9 @@ void main(){
  if(uInkMode>1.5){cover=mix(cover,1.-exp(-f.b*(1.+uPigment*5.)),uPigmentCarry);float border=min(min(uv.x,uv.y),min(1.-uv.x,1.-uv.y));cover*=smoothstep(0.,.08,border);}
  float ridge=exp(-pow((h-edge)/.09,2.));
  vec3 n=fieldNormal(p,h*uRelief*.23);
- vec3 color=coat(mix(uPalette[0],uPalette[1],h*.6),n,uLightAngle,uRoughness,.12);
+ vec3 base=mix(uPalette[0],uPalette[1],h*.6);
+ if(uInkMode>1.5&&uAgeColour>0.){float age=smoothstep(.05,.85,f.b);base=mix(base,age<.5?mix(uPalette[2],uPalette[0],age*2.):mix(uPalette[0],uPalette[4],age*2.-1.),uAgeColour);}
+ vec3 color=coat(base,n,uLightAngle,uRoughness,.12);
  color=mix(color,uPalette[3],ridge*uEdgeInk);outputField(color,cover);
 }`,
 currents:/* glsl */`

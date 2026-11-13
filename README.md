@@ -131,9 +131,19 @@ Delays are fixed in time and the pause maps each cycle onto itself, so loops sti
 
 Kinetic Relief also has **Panel sizes**, which mixes large, medium and small panels in the solid relief instead of one uniform grid.
 
+## Fractal flight
+
+**Zoom flight** (Kaleidoscope and Julia) flies continuously into the pattern. Each loop zooms one step deeper while the next step fades in, so the last frame is the first. **Fly in** (Mandelbox) moves the camera inside the box toward its folded core and turns it once per loop. Both are 0 by default. The 2D presets now fill the frame and fly; the Mandelbox presets are viewed from inside.
+
+## Living Ink and Velvet Currents
+
+Loop ink travels one pattern period per loop. Delay spread, Delay from and Pause make that travel arrive in gentle pulses across the frame. Evolving ink has **Colour by age**, which colours new growth differently from old; Ink Estuary uses it with flat colour and keeps its ink between about 30% and 65% of the frame.
+
+Transported Velvet Currents allow up to 480 for Fibre density (up to 16,384 strands), and **Fibre taper** now thins each trail toward both ends. The comb-like Vortex Filaments and the sparse Gathering Light were removed.
+
 ## Preset library
 
-The library has 83 presets. In 0.12 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
+The library has 81 presets. In 0.12 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
 
 **Presets → Finishes for any layer** holds six finishes: Tunnel, Bloom Echo and Melt (feedback), and Terraces, Block Shuffle and Ring Delay (time displacement). A finish applies to the selected layer of any kind except Graphic Patterns and Ink *Evolving*, and replaces any finish already on it. **No finish** turns both off. Recursion Tunnel and Time Terraces remain as Surface presets that show a finish on a source.
 

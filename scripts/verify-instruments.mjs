@@ -6,7 +6,7 @@ import {build} from 'esbuild';
 import {_electron as electron} from 'playwright';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),out=path.join(root,'work/instruments');
 await fs.mkdir(out,{recursive:true});await fs.mkdir(path.join(root,'src/ui/assets/instruments'),{recursive:true});
-await build({stdin:{contents:`export {StudioRenderer} from './src/rendering/StudioRenderer';export {createProject,createLayer,applyPreset,PRESETS,parameterDefinitions,varyLayer,validateProject} from './src/core/project';export {INSTRUMENTS,INSTRUMENT_KINDS} from './src/core/instruments';export {EXRLoader} from 'three/addons/loaders/EXRLoader.js';export {FloatType} from 'three';`,resolveDir:root,loader:'ts'},bundle:true,format:'esm',platform:'browser',outfile:path.join(out,'renderer.js'),logLevel:'silent'});
+await build({stdin:{contents:`export {StudioRenderer} from './src/rendering/StudioRenderer';export {createProject,createLayer,applyPreset,PRESETS,parameterDefinitions,visibleParameterDefinitions,varyLayer,validateProject} from './src/core/project';export {INSTRUMENTS,INSTRUMENT_KINDS} from './src/core/instruments';export {EXRLoader} from 'three/addons/loaders/EXRLoader.js';export {FloatType} from 'three';`,resolveDir:root,loader:'ts'},bundle:true,format:'esm',platform:'browser',outfile:path.join(out,'renderer.js'),logLevel:'silent'});
 await fs.writeFile(path.join(out,'index.html'),'<!doctype html><canvas width="480" height="270"></canvas>');
 await fs.writeFile(path.join(out,'main.cjs'),`const {app,BrowserWindow}=require('electron');app.setPath('userData',${JSON.stringify(path.join(out,'gpu-profile'))});app.whenReady().then(()=>{const w=new BrowserWindow({show:false,webPreferences:{backgroundThrottling:false}});w.loadFile(${JSON.stringify(path.join(out,'index.html'))});});`);
 const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
@@ -44,12 +44,20 @@ try{
   if(!process.argv.includes('--quick')){
    const result=await page.evaluate(async id=>{
     const {m,project,exr,check,delta,stats}=window.qa,p=project(id),results=[];
-    for(const d of m.parameterDefinitions(p.layers[0].kind)){
+    for(const d of m.visibleParameterDefinitions(p.layers[0])){
      for(const edge of ['min','max']){const q=structuredClone(p);q.layers[0].params[d.key]=d[edge];results.push({key:d.key,edge,...stats(await exr(q,.7,96,54),id+' '+d.key+' '+edge)});}
      const a=structuredClone(p),b=structuredClone(p);
-     for(const q of [a,b]){if(d.key==='warpScale')q.layers[0].params.warp=.65;if(d.key==='sheenAngle')q.layers[0].params.anisotropy=.8;if(d.key==='tonePivot')q.layers[0].params.toneContrast=1.5;if(['flowDirection','travel','eddyScale'].includes(d.key))q.layers[0].params.organic=.8;if(d.key==='surfaceHole'){q.layers[0].params.motion=1;if(q.layers[0].kind==='currents')q.layers[0].params.flowMode=1;else q.layers[0].params.inkMode=2;}if(['simulationQuality','pigmentCarry'].includes(d.key))q.layers[0].params.inkMode=2;}
-     a.layers[0].params[d.key]=d.min;b.layers[0].params[d.key]=['hue','rotation','lightAngle','flowDirection'].includes(d.key)?0:d.key==='sheenAngle'?.7:d.key==='facetTwist'?.31:d.key==='phaseOffset'?.37:d.max;
-     const difference=delta(await exr(a,.7,96,54),await exr(b,.7,96,54));check(difference>.0000001,id+' inactive control '+d.key);results.push({control:d.key,difference});
+     for(const q of [a,b]){if(d.key==='warpScale')q.layers[0].params.warp=.65;if(d.key==='sheenAngle')q.layers[0].params.anisotropy=.8;if(d.key==='tonePivot')q.layers[0].params.toneContrast=1.5;if(['flowDirection','travel','eddyScale'].includes(d.key))q.layers[0].params.organic=.8;if(d.key==='surfaceHole'){q.layers[0].params.motion=1;if(q.layers[0].kind==='currents')q.layers[0].params.flowMode=1;else q.layers[0].params.inkMode=2;}if(['simulationQuality','pigmentCarry','loopReturn','ageColour'].includes(d.key))q.layers[0].params.inkMode=2;
+      // Controls that only act when their parent finish is on.
+      if(d.key.startsWith('echo')&&d.key!=='echo')q.layers[0].params.echo=.8;
+      if(d.key.startsWith('slit')&&d.key!=='slitShift')q.layers[0].params.slitShift=1;
+      if(d.key==='slitBlocks')q.layers[0].params.slitShape=4;
+      if(d.key==='toonOutlineColor')q.layers[0].params.toonOutline=3;
+      if(d.key.startsWith('toon')&&d.key!=='toonMix')q.layers[0].params.toonMix=1;
+      if(d.key==='delayShape')q.layers[0].params.delaySpread=.6;}
+     a.layers[0].params[d.key]=d.min;b.layers[0].params[d.key]=['hue','rotation','lightAngle','flowDirection'].includes(d.key)?0:d.key==='sheenAngle'?.7:d.key==='facetTwist'?.31:['phaseOffset','toonOffset'].includes(d.key)?.37:d.max;
+     // Evolving ink only reaches the central obstacle later in the clip.
+     const at=['surfaceHole','ageColour'].includes(d.key)?5.5:.7;const difference=delta(await exr(a,at,96,54),await exr(b,at,96,54));check(difference>.0000001,id+' inactive control '+d.key);results.push({control:d.key,difference});
     }return results;
    },info.looks[0].id);report.checks.push({controls:info.kind,checks:result});console.log('Controls '+info.kind);
   }

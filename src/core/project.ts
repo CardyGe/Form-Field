@@ -108,6 +108,8 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('cameraYaw', 'Orbit', -Math.PI, Math.PI, 0.01, 0, 'Camera'),
     parameter('cameraPitch', 'Elevation', -1.1, 1.1, 0.01, 0.15, 'Camera'),
     parameter('zoom', 'Framing', 0.5, 2, 0.01, 1, 'Camera'),
+    { ...parameter('zoomFlight', 'Zoom flight', 0, 1, 0.01, 0, 'Motion'), description: 'Flies continuously into the pattern; each loop zooms one step deeper and fades into the next. 0 is off.' },
+    { ...parameter('approach', 'Fly in', 0, 1, 0.01, 0, 'Camera'), description: 'Moves the camera inside the Mandelbox toward its folded core. 0 frames the whole box from outside.' },
     parameter('quality', 'Render quality', 0, 2, 1, 2, 'Material'),
     parameter('density', 'Color density', 0.25, 3, 0.01, 1, 'Material'),
     parameter('juliaReal', 'Julia real', -1.2, 0.4, 0.00001, -0.74543, 'Shape'),
@@ -224,7 +226,7 @@ export function parameterDefinitions(kind: LayerKind): ParameterDefinition[] {
   return DEFINITIONS[kind].map((definition) => ({ ...definition }));
 }
 
-const FRACTAL_ADDED_FIELDS = ['variant', 'quality', 'density', 'juliaReal', 'juliaImag', 'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth'];
+const FRACTAL_ADDED_FIELDS = ['zoomFlight', 'approach', 'variant', 'quality', 'density', 'juliaReal', 'juliaImag', 'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth'];
 const GRADING_FIELDS = ['saturation', 'hue', 'exposure'];
 const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
   surface: [...TIMING_KEYS,'anisotropy','sheenAngle','iridescence', 'roundness', 'relief', 'variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', ...GRADING_FIELDS],
@@ -246,11 +248,11 @@ export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[]
     return definitions.filter(d => keys.has(d.key)||FINISH_KEYS.includes(d.key));
   }
   if(layer.kind==='currents'&&layer.params.flowMode===1){
-    const keys=new Set(['flowMode','scale','motion','cycles','backgroundOpacity','flowDirection','travel','eddyScale','phrase','surfaceHole','fibres','curl','trailLength','width','depth','flowDetail','phaseOffset','anisotropy','saturation','hue','exposure',...FINISH_KEYS]);
+    const keys=new Set(['flowMode','scale','motion','cycles','backgroundOpacity','flowDirection','travel','eddyScale','phrase','surfaceHole','fibres','taper','curl','trailLength','width','depth','flowDetail','phaseOffset','anisotropy','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key));
   }
   if(layer.kind==='livingink'&&layer.params.inkMode===2){
-    const keys=new Set(['inkMode','simulationQuality','loopReturn','pigmentCarry','scale','motion','backgroundOpacity','flowDirection','travel','eddyScale','surfaceHole','pattern','branching','seedCoverage','development','relief','pigment','edgeInk','edgeSoftness','lightAngle','lightHeight','fillLight','roughness','anisotropy','sheenAngle','clearcoat','saturation','hue','exposure',...FINISH_KEYS]);
+    const keys=new Set(['ageColour','inkMode','simulationQuality','loopReturn','pigmentCarry','scale','motion','backgroundOpacity','flowDirection','travel','eddyScale','surfaceHole','pattern','branching','seedCoverage','development','relief','pigment','edgeInk','edgeSoftness','lightAngle','lightHeight','fillLight','roughness','anisotropy','sheenAngle','clearcoat','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key)).map(d=>d.key==='scale'?{...d,preparation:true}:d);
   }
   if(layer.kind==='relief'&&layer.params.reliefMode===1){
@@ -262,7 +264,7 @@ export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[]
   const familySpecific: Record<string, number[]> = {
     juliaReal: [1], juliaImag: [1], trap: [1],
     boxScale: [2], boxRadius: [2], radial: [2], roughness: [2], lightAngle: [2],
-    lineWidth: [0, 1],
+    lineWidth: [0, 1], zoomFlight: [0, 1], approach: [2],
   };
   return definitions.filter((definition) => {
     if (definition.key === 'colorSteps') return layer.params.colorMode === 2;
@@ -309,17 +311,17 @@ export const PRESETS: Preset[] = [
   preset('chrome-dahlia', 'Chrome Dahlia', 'A tightly gathered dahlia with electric highlights and fine folds.', 'sculpture', ELECTRIC, { form: 1, fold: 0.7, ridges: 0.7, opening: 0.3, lobes: 11, thickness: 0.3, curl: 0.8, twist: -0.6, stretch: 0.95, cameraPitch: 0.2, roughness: 0.22, iridescence: 0.5, metallic: 0.65, clearcoat: 0.9, lightAngle: -0.45, shadowStrength: 0.45, shadowSoftness: 0.6 }),
   preset('aurora-ribbon', 'Aurora Ribbon', 'A broad asymmetric ribbon in lime and violet light.', 'sculpture', LIME_VIOLET, { form: 2, fold: 0.9, ridges: 0.8, opening: 0.1, twist: -1, lobes: 5, thickness: 0.7, curl: 0.9, asymmetry: 0.35, stretch: 0.75, foldFrequency: 1.4, cameraPitch: 0.6, cameraYaw: 0.4, roughness: 0.24, iridescence: 1, filmScale: 1.45, metallic: 0.45, clearcoat: 0.9, lightAngle: -0.8, saturation: 1.25, shadowStrength: 0.45, shadowSoftness: 0.6 }),
   preset('liquid-trefoil', 'Liquid Trefoil', 'A smooth looping knot in cyan, magenta and yellow.', 'sculpture', POP_PORTAL, { form: 3, fold: 0.2, ridges: 0.3, opening: 0.55, twist: 0.4, thickness: 0.65, cameraPitch: 0.3, roughness: 0.23, iridescence: 0.62, metallic: 0.45, clearcoat: 0.9, lightAngle: 0.35, shadowStrength: 0.45, shadowSoftness: 0.6 }),
-  preset('prismatic-fold', 'Prismatic Fold', 'Luminous folded geometry arranged into a shifting neon kaleidoscope.', 'fractal', FRACTAL_PALETTE, { style: 0 }),
-  preset('velvet-petals', 'Hot Petals', 'Overlapping petals in hot pink, orange and yellow.', 'fractal', HOT_SIGNAL, { style: 0, variant: 1, scale: 1.8, detail: 0.48, fold: 0.64, symmetry: 8, twist: -0.12, morph: 0.1, travel: 0.18, relief: 0.52, glow: 0.25, density: 0.8, lineWidth: 1.15 }),
-  preset('luminous-weave', 'Luminous Weave', 'Fine interlocking ribbons in electric cyan, blue and violet.', 'fractal', ELECTRIC, { style: 0, variant: 2, scale: 2.2, detail: 0.7, fold: 0.4, symmetry: 6, twist: 0.34, morph: 0.1, travel: 0.3, density: 1.2, lineWidth: 0.8, relief: 0.58, glow: 0.18 }),
-  preset('velvet-julia', 'Lime Julia', 'Intricate Julia filigree in lime and violet.', 'fractal', LIME_VIOLET, { style: 1, variant: 0, scale: 1.55, detail: 0.7, fold: 0.42, twist: -0.16, morph: 0.07, travel: 0.08, offset: 0.32, relief: 0.52, glow: 0.16, contrast: 0.5, cameraPitch: 0.12, juliaReal: -0.74543, juliaImag: 0.11301, density: 0.9, trap: 0.55 }),
-  preset('coral-mandala', 'Coral Mandala', 'Radial Julia branches gathered into an amber, scarlet and magenta mandala.', 'fractal', SOLAR, { style: 1, variant: 1, scale: 1.65, detail: 0.75, fold: 0.45, symmetry: 8, twist: 0.08, morph: 0.08, travel: 0.1, offset: 0.12, relief: 0.42, glow: 0.14, contrast: 0.52, juliaReal: -0.4, juliaImag: 0.6, density: 0.75, trap: 0.62, lineWidth: 1.1, exposure: 1.25 }),
-  preset('spiral-garden', 'Spiral Garden', 'Curling Julia tendrils in cyan, magenta and yellow.', 'fractal', POP_PORTAL, { style: 1, variant: 2, scale: 1.75, detail: 0.8, fold: 0.55, twist: 0.16, morph: 0.06, travel: 0.08, offset: 0.2, relief: 0.5, glow: 0.12, contrast: 0.55, juliaReal: -0.70176, juliaImag: -0.3842, density: 1.15, trap: 0.48, lineWidth: 0.9, exposure: 1.3 }),
-  preset('abyssal-cathedral', 'Abyssal Cathedral', 'Folded architecture in cyan light with yellow edges.', 'fractal', CYAN_YELLOW, { style: 2, variant: 0, scale: 1.9, detail: 0.42, fold: 0, twist: 0.08, morph: 0.08, travel: 0.18, offset: 0.02, relief: 0.98, glow: 0.06, contrast: 0.5, cameraYaw: 0.65, cameraPitch: 0.35, zoom: 0.72, boxScale: 2.2, boxRadius: 0.35, roughness: 0.42, density: 0.55, exposure: 1.15, lightAngle: -0.7 }),
-  preset('ivory-vault', 'Candy Vault', 'Smooth sphere folds in candy pink, cyan and yellow.', 'fractal', CANDY, { style: 2, variant: 1, scale: 1.85, detail: 0.32, fold: 0.12, twist: -0.08, morph: 0.06, travel: 0.08, relief: 0.96, glow: 0.04, contrast: 0.5, cameraYaw: 0.55, cameraPitch: 0.32, zoom: 0.85, boxScale: 1.85, boxRadius: 0.4, roughness: 0.55, density: 0.8, lightAngle: -0.45, exposure: 1.15 }),
-  preset('chromatic-lattice', 'Chromatic Lattice', 'Open recursive lattice with crisp neon edges.', 'fractal', NEON_STRATA, { style: 2, variant: 2, scale: 2, detail: 0.42, fold: 0, twist: 0.08, morph: 0.08, travel: 0.08, relief: 0.98, glow: 0.05, contrast: 0.5, cameraYaw: -0.35, cameraPitch: 0.3, zoom: 0.9, boxScale: 2.2, boxRadius: 0.35, roughness: 0.32, density: 0.8, lightAngle: -0.8, exposure: 1.15 }),
-  preset('ink-lace', 'Ink Lace', 'Fine recursive lace in cyan and yellow on black.', 'fractal', CYAN_YELLOW, { style: 0, variant: 0, colorMode: 1, colorMix: 0.8, scale: 1.9, detail: 0.65, symmetry: 8, fold: 0.5, lineWidth: 0.85, relief: 0.5, glow: 0.12, contrast: 0.48, density: 0.8 }),
-  preset('ember-julia', 'Ember Julia', 'Julia filigree mapped into crisp amber, scarlet and magenta contour bands.', 'fractal', SOLAR, { style: 1, variant: 0, colorMode: 2, colorSteps: 8, colorMix: 0.8, scale: 1.55, detail: 0.7, fold: 0.42, twist: -0.16, morph: 0.07, travel: 0.08, offset: 0.12, relief: 0.52, glow: 0.16, contrast: 0.5, cameraPitch: 0.12, juliaReal: -0.74543, juliaImag: 0.11301, density: 0.9, trap: 0.55 }),
+  preset('prismatic-fold', 'Prismatic Fold', 'Luminous folded geometry arranged into a shifting neon kaleidoscope.', 'fractal', FRACTAL_PALETTE, { style: 0, zoom: 1.8, zoomFlight: 0.5 }),
+  preset('velvet-petals', 'Hot Petals', 'Overlapping petals in hot pink, orange and yellow.', 'fractal', HOT_SIGNAL, { style: 0, variant: 1, scale: 1.8, detail: 0.48, fold: 0.64, symmetry: 8, twist: -0.12, morph: 0.1, travel: 0.18, relief: 0.52, glow: 0.25, density: 0.8, lineWidth: 1.15, zoom: 1.8, zoomFlight: 0.5 }),
+  preset('luminous-weave', 'Luminous Weave', 'Fine interlocking ribbons in electric cyan, blue and violet.', 'fractal', ELECTRIC, { style: 0, variant: 2, scale: 2.2, detail: 0.7, fold: 0.4, symmetry: 6, twist: 0.34, morph: 0.1, travel: 0.3, density: 1.2, lineWidth: 0.8, relief: 0.58, glow: 0.18, zoom: 1.6, zoomFlight: 0.4 }),
+  preset('velvet-julia', 'Lime Julia', 'Intricate Julia filigree in lime, green and cyan.', 'fractal', ['#c6ff00', '#5cff5c', '#00ff9c', '#00e5ff', '#9cff2e', '#04120a'], { style: 1, variant: 0, scale: 1.55, detail: 0.7, fold: 0.42, twist: -0.16, morph: 0.07, travel: 0.08, offset: 0.32, relief: 0.52, glow: 0.16, contrast: 0.5, cameraPitch: 0.12, juliaReal: -0.74543, juliaImag: 0.11301, density: 0.9, trap: 0.55, zoom: 1.6, zoomFlight: 0.4 }),
+  preset('coral-mandala', 'Coral Mandala', 'Radial Julia branches gathered into an amber, scarlet and magenta mandala.', 'fractal', SOLAR, { style: 1, variant: 1, scale: 1.65, detail: 0.75, fold: 0.45, symmetry: 8, twist: 0.08, morph: 0.08, travel: 0.1, offset: 0.12, relief: 0.42, glow: 0.14, contrast: 0.52, juliaReal: -0.4, juliaImag: 0.6, density: 0.75, trap: 0.62, lineWidth: 1.1, exposure: 1.25, zoom: 1.8, zoomFlight: 0.5 }),
+  preset('spiral-garden', 'Spiral Garden', 'Curling Julia tendrils in hot pink, orange and yellow.', 'fractal', ['#ff2e93', '#ff5a1f', '#ffcc00', '#ff4fd8', '#ff8a00', '#14020c'], { style: 1, variant: 2, scale: 1.75, detail: 0.8, fold: 0.55, twist: 0.16, morph: 0.06, travel: 0.08, offset: 0.2, relief: 0.5, glow: 0.12, contrast: 0.55, juliaReal: -0.70176, juliaImag: -0.3842, density: 1.15, trap: 0.48, lineWidth: 0.9, exposure: 1.3, zoom: 1.6, zoomFlight: 0.4 }),
+  preset('abyssal-cathedral', 'Abyssal Cathedral', 'Folded architecture in cyan light with yellow edges.', 'fractal', CYAN_YELLOW, { style: 2, variant: 0, scale: 1.9, detail: 0.42, fold: 0, twist: 0.08, morph: 0.08, travel: 0.18, offset: 0.02, relief: 0.98, glow: 0.06, contrast: 0.5, cameraYaw: 0.65, cameraPitch: 0.35, boxScale: 2.2, boxRadius: 0.35, roughness: 0.42, density: 0.55, exposure: 1.15, lightAngle: -0.7, approach: 0.7 }),
+  preset('ivory-vault', 'Candy Vault', 'Smooth sphere folds in candy pink, cyan and yellow.', 'fractal', CANDY, { style: 2, variant: 1, scale: 1.85, detail: 0.32, fold: 0.12, twist: -0.08, morph: 0.06, travel: 0.08, relief: 0.96, glow: 0.04, contrast: 0.5, cameraYaw: 0.55, cameraPitch: 0.32, boxScale: 1.85, boxRadius: 0.4, roughness: 0.55, density: 0.8, lightAngle: -0.45, exposure: 1.15, approach: 0.7 }),
+  preset('chromatic-lattice', 'Chromatic Lattice', 'Open recursive lattice with crisp neon edges.', 'fractal', NEON_STRATA, { style: 2, variant: 2, scale: 2, detail: 0.42, fold: 0, twist: 0.08, morph: 0.08, travel: 0.08, relief: 0.98, glow: 0.05, contrast: 0.5, cameraYaw: -0.35, cameraPitch: 0.3, boxScale: 2.2, boxRadius: 0.35, roughness: 0.32, density: 0.8, lightAngle: -0.8, exposure: 1.15, approach: 0.6 }),
+  preset('ink-lace', 'Ink Lace', 'Fine recursive lace in cyan and yellow on black.', 'fractal', CYAN_YELLOW, { style: 0, variant: 0, colorMode: 1, colorMix: 0.8, scale: 1.9, detail: 0.65, symmetry: 8, fold: 0.5, lineWidth: 0.85, relief: 0.5, glow: 0.12, contrast: 0.48, density: 0.8, zoom: 1.8, zoomFlight: 0.5 }),
+  preset('ember-julia', 'Ember Julia', 'Julia filigree mapped into crisp amber, scarlet and magenta contour bands.', 'fractal', SOLAR, { style: 1, variant: 0, colorMode: 2, colorSteps: 8, colorMix: 0.8, scale: 1.55, detail: 0.7, fold: 0.42, twist: -0.16, morph: 0.07, travel: 0.08, offset: 0.12, relief: 0.52, glow: 0.16, contrast: 0.5, cameraPitch: 0.12, juliaReal: -0.74543, juliaImag: 0.11301, density: 0.9, trap: 0.55, zoom: 1.6, zoomFlight: 0.4 }),
 ];
 
 

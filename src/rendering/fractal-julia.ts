@@ -8,7 +8,7 @@ vec2 juliaDomainPlane(vec2 pixelOffset) {
   float denominator=1.+p.y*.18*tan(uCameraPitch);
   p/=(denominator<0.?-1.:1.)*max(abs(denominator),.08);
   p=turn(uCameraYaw+uTravel*.12*sin(uPhase))*p;
-  p*=2.8*uScale/1.7/max(uZoom,.5)*.78;
+  p*=2.8*uScale/1.7/max(uZoom,.5)*.78*gZoom;
   p+=uTravel*.18*vec2(sin(uPhase),cos(uPhase));
   return turn(uTwist*.6)*p;
 }

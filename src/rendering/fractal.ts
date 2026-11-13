@@ -14,6 +14,9 @@ uniform float uAspect,uPhase,uSeed,uStyle,uScale,uDetail,uFold,uSymmetry,uTwist;
 uniform float uMorph,uTravel,uOffset,uRelief,uGlow,uContrast,uCameraYaw,uCameraPitch,uZoom;
 uniform float uVariant,uQuality,uDensity,uJuliaReal,uJuliaImag,uTrap,uLineWidth;
 uniform float uBoxScale,uBoxRadius,uRadial,uRoughness,uLightAngle,uExposure;
+uniform float uZoomFlight,uApproach;
+// Extra magnification for Zoom flight; 1 leaves the plane unchanged.
+float gZoom=1.;
 const float TAU=6.28318530718;
 mat2 turn(float a) { float c=cos(a),s=sin(a);return mat2(c,-s,s,c); }
 vec3 meanPalette() {return (uPalette[0]+uPalette[1]+uPalette[2]+uPalette[3]+uPalette[4]+uPalette[5])/6.;}
@@ -35,7 +38,7 @@ vec2 planeAt(vec2 offset) {
   float denominator=1.+p.y*.18*tan(uCameraPitch);
   p/=(denominator<0.?-1.:1.)*max(abs(denominator),.08);
   p=turn(uCameraYaw+uTravel*.12*sin(uPhase))*p;
-  p*=2.8*uScale/1.7/max(uZoom,.5);
+  p*=2.8*uScale/1.7/max(uZoom,.5)*gZoom;
   p+=uTravel*.22*vec2(sin(uPhase),cos(uPhase));
   return p;
 }
@@ -44,7 +47,7 @@ float planePixel() {
   // Analytic, conservative plane footprint. A derivative here would become
   // undefined higher-order derivatives when the material normal is evaluated.
   float tilt=.18*abs(tan(uCameraPitch));
-  float gain=2.8*uScale/1.7/max(uZoom,.5);
+  float gain=2.8*uScale/1.7/max(uZoom,.5)*gZoom;
   return uViewScale*gain*1.414214*(1.+uAspect*tilt*.5)/(uResolution.y*pow(1.-tilt*.5,2.));
 }
 vec3 glaze(vec3 color,float height,float weight) {
@@ -111,7 +114,18 @@ ${juliaFunctions}
 ${boxFunctions}
 void main() {
   vec4 pixel;
-  if(uStyle<.5)pixel=vec4(kaleidoscope(),1.);
+  if(uStyle<1.5&&uZoomFlight>0.) {
+    // Zoom flight: two copies one zoom step apart. The nearer one magnifies
+    // across the cycle while the farther one fades in to replace it, so the
+    // last frame is the first one and the loop closes exactly.
+    float f=fract(uPhase/TAU),step=1.+5.*uZoomFlight,w=f*f*(3.-2.*f);
+    gZoom=pow(step,-f);
+    vec3 nearer=uStyle<.5?kaleidoscope():juliaBloom();
+    gZoom=pow(step,1.-f);
+    vec3 farther=uStyle<.5?kaleidoscope():juliaBloom();
+    pixel=vec4(mix(nearer,farther,w),1.);
+  }
+  else if(uStyle<.5)pixel=vec4(kaleidoscope(),1.);
   else if(uStyle<1.5)pixel=vec4(juliaBloom(),1.);
   else {
     // Fixed, deterministic subpixel samples also produce associated edge alpha.
