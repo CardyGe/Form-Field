@@ -14,7 +14,7 @@ uniform float uAspect,uPhase,uSeed,uStyle,uScale,uDetail,uFold,uSymmetry,uTwist;
 uniform float uMorph,uTravel,uOffset,uRelief,uGlow,uContrast,uCameraYaw,uCameraPitch,uZoom;
 uniform float uVariant,uQuality,uDensity,uJuliaReal,uJuliaImag,uTrap,uLineWidth;
 uniform float uBoxScale,uBoxRadius,uRadial,uRoughness,uLightAngle,uExposure;
-uniform float uZoomFlight,uApproach;
+uniform float uZoomFlight,uApproach,uOutside;
 // Extra magnification for Zoom flight; 1 leaves the plane unchanged.
 float gZoom=1.;
 const float TAU=6.28318530718;
@@ -114,11 +114,12 @@ ${juliaFunctions}
 ${boxFunctions}
 void main() {
   vec4 pixel;
-  if(uStyle<1.5&&uZoomFlight>0.) {
+  if(uStyle>.5&&uStyle<1.5&&juliaCanDive())pixel=vec4(juliaBloom(),1.);
+  else if(uStyle<1.5&&uZoomFlight>0.) {
     // Zoom flight: two copies one zoom step apart. The nearer one magnifies
-    // across the cycle while the farther one fades in to replace it, so the
-    // last frame is the first one and the loop closes exactly.
-    float f=fract(uPhase/TAU),step=1.+5.*uZoomFlight,w=f*f*(3.-2.*f);
+    // across the cycle and the farther one replaces it in a short fade at the
+    // end, so the last frame is the first one and the loop closes exactly.
+    float f=fract(uPhase/TAU),step=1.+5.*uZoomFlight,w=smoothstep(.78,1.,f);
     gZoom=pow(step,-f);
     vec3 nearer=uStyle<.5?kaleidoscope():juliaBloom();
     gZoom=pow(step,1.-f);

@@ -2,6 +2,23 @@
 // Sampling positions and animation are deterministic; no previous frame is used.
 export const juliaFunctions = /* glsl */`
 vec2 juliaSquare(vec2 z) { return vec2(z.x*z.x-z.y*z.y,2.*z.x*z.y); }
+vec2 cMul(vec2 a,vec2 b){return vec2(a.x*b.x-a.y*b.y,a.x*b.y+a.y*b.x);}
+vec2 cDiv(vec2 a,vec2 b){return vec2(a.x*b.x+a.y*b.y,a.y*b.x-a.x*b.y)/max(dot(b,b),1e-30);}
+vec2 cSqrt(vec2 z){float r=length(z);return vec2(sqrt(max(.5*(r+z.x),0.)),(z.y<0.?-1.:1.)*sqrt(max(.5*(r-z.x),0.)));}
+vec2 juliaConstant() {
+  float seed=mod(uSeed,997.)*.0137;
+  float reference=mod(1729.,997.)*.0137;
+  vec2 c=vec2(uJuliaReal,uJuliaImag);
+  c+=.0009*(vec2(sin(seed),cos(seed))-vec2(sin(reference),cos(reference)));
+  return c+uMorph*.014*vec2(cos(uPhase)-1.,sin(uPhase));
+}
+// Zoom flight dives toward a repelling period-2 point z1 of z²+c. Near it the
+// Julia set repeats exactly under the inverse map, scaled by the cycle's
+// multiplier 4(c+1). Each loop goes 2k inverse steps deep, so the last frame
+// is the first frame's own preimage: same image, no crossfade. Returns false
+// when that cycle is not repelling enough to zoom.
+float juliaDiveMultiplier() { return length(4.*(juliaConstant()+vec2(1.,0.))); }
+bool juliaCanDive() { return uZoomFlight>0.&&juliaDiveMultiplier()>1.03; }
 
 vec2 juliaDomainPlane(vec2 pixelOffset) {
   vec2 p=(sourceUV(vUv+pixelOffset/uResolution)-.5)*vec2(uAspect,1.);
@@ -51,14 +68,35 @@ vec3 juliaSample(vec2 pixelOffset) {
     float shear=2.*(.45+.9*uFold)*radius2/(1.+radius2);
     pixel*=.5*(sqrt(4.+shear*shear)+shear);
   }
-  float seed=mod(uSeed,997.)*.0137;
-  float reference=mod(1729.,997.)*.0137;
-  vec2 c=vec2(uJuliaReal,uJuliaImag);
-  c+=.0009*(vec2(sin(seed),cos(seed))-vec2(sin(reference),cos(reference)));
-  c+=uMorph*.014*vec2(cos(uPhase)-1.,sin(uPhase));
+  vec2 c=juliaConstant();
+  // shift: inverse steps the view has dived; ratio: local zoom of the dive.
+  float shift=0.,ratio=1.;
+  if(juliaCanDive()) {
+    vec2 d=cSqrt(vec2(-3.,0.)-4.*c),zp=.5*(vec2(-1.,0.)+d),zq=.5*(vec2(-1.,0.)-d);
+    vec2 lambda2=4.*(c+vec2(1.,0.));
+    float k=clamp(ceil(log(1.+5.*uZoomFlight)/log(length(lambda2))),1.,8.),n=2.*k;
+    float f=fract(uPhase/TAU);
+    vec2 delta=domain,start=zp+delta,back=start;
+    for(int j=0;j<16;j++) {
+      if(float(j)>=n)break;
+      vec2 s=cSqrt(back-c),target=mod(float(j),2.)<.5?zq:zp;
+      back=dot(s-target,s-target)<dot(-s-target,-s-target)?s:-s;
+    }
+    // Spiral zoom by the k-th power of the multiplier, corrected so that the
+    // end of the loop lands exactly on the inverse-mapped start.
+    float logLength=k*log(length(lambda2)),angle=k*atan(lambda2.y,lambda2.x);
+    vec2 lambda=exp(logLength)*vec2(cos(angle),sin(angle));
+    vec2 inward=exp(-f*logLength)*vec2(cos(-f*angle),sin(-f*angle));
+    // The residual is scaled with the zoom so the dive keeps an even pace.
+    vec2 residual=cMul(lambda,back-zp)-delta;
+    z=zp+cMul(inward,delta+f*residual);
+    shift=n*f;
+    ratio=length(fwidth(z))/max(length(fwidth(domain)),1e-12);
+    pixel*=ratio;
+  }
 
   float logDerivative=0.,count=0.,r2=dot(z,z);
-  float trap=8.,orbitSum=0.,orbitWeight=0.,weight=1.;
+  float trap=8.,orbitSum=0.,orbitWeight=0.,weight=pow(.87,-shift);
   vec3 filigree=vec3(0.);
   float trapRadius=.28+.58*uFold;
   float iterations=uQuality<.5?128.:(uQuality<1.5?192.:256.);
@@ -69,18 +107,21 @@ vec3 juliaSample(vec2 pixelOffset) {
     vec2 trapPoint=turn(.35+uFold*.9)*z;
     float circle=abs(radius-trapRadius);
     float crossLine=min(abs(trapPoint.x-.13),abs(trapPoint.y+.08));
-    trap=min(trap,mix(circle,crossLine,.4));
+    // Orbit position counted from the original view: the dived orbit has
+    // shift extra leading steps, which fade out so colours match the start.
+    float index=float(i)-shift,present=clamp(1.+index,0.,1.);
+    trap=min(trap,mix(circle,crossLine,.4)+(1.-present)*8.);
     float ornament=exp(-circle*(2.+uDensity*2.5));
     ornament+=.35*exp(-crossLine*(4.+uDensity*4.));
-    orbitSum+=ornament*weight;orbitWeight+=weight;weight*=.87;
-    if(i<28) {
+    orbitSum+=ornament*weight*present;orbitWeight+=weight*present;weight*=.87;
+    if(index<28.) {
       float orbitPixel=pixel*exp(clamp(logDerivative,-20.,20.));
       float width=.0045*uLineWidth;
       float thread=juliaTrapStroke(circle,orbitPixel,width);
       thread+=juliaTrapStroke(crossLine,orbitPixel,width*.7)*.48;
-      thread*=smoothstep(1.,6.,float(i));
-      thread=clamp(thread/(1.+float(i)*.055),0.,.9);
-      vec3 ink=pigment(uOffset+float(i)*.091+ornament*.055,.001);
+      thread*=smoothstep(1.,6.,index);
+      thread=clamp(thread/(1.+index*.055),0.,.9)*clamp(28.-index,0.,1.);
+      vec3 ink=pigment(uOffset+index*.091+ornament*.055,.001);
       filigree=mix(filigree,ink,thread);
     }
     logDerivative+=log(max(2.*radius,.000001));
@@ -89,8 +130,9 @@ vec3 juliaSample(vec2 pixelOffset) {
 
   float escaped=r2>256.?1.:0.;
   float logRadius=.5*log(max(r2,1.00001));
-  float smoothCount=count+1.-log2(max(logRadius,.00001));
-  float distance=escaped*.5*exp(clamp(logRadius+log(max(logRadius,.00001))-logDerivative,-40.,4.));
+  float smoothCount=count+1.-log2(max(logRadius,.00001))-shift;
+  // Measured in units of the undived view, so glow widths stay the same on screen.
+  float distance=escaped*.5*exp(clamp(logRadius+log(max(logRadius,.00001))-logDerivative,-40.,4.))/ratio;
   float orbit=orbitSum/max(orbitWeight,.000001);
   float trapLog=-log(max(trap,.000001));
   float density=uDensity*(.74+.56*uDetail);
@@ -104,7 +146,8 @@ vec3 juliaSample(vec2 pixelOffset) {
   float stroke=juliaStroke(exteriorCoordinate*2.4,exteriorAA*2.4,.06*uLineWidth);
   float nearSet=exp(-distance*52.);
   vec3 exterior=pigment(exteriorCoordinate,exteriorAA);
-  exterior*=mix(.006,.16+1.04*stroke,nearSet);
+  // Outside colour fills the space beyond the set with dim escape bands instead of black.
+  exterior*=mix(.006+uOutside*(.22+.5*stroke),.16+1.04*stroke,nearSet);
 
   // Early-orbit texture keeps bounded basins visible, including an attracting
   // interior whose final orbit would otherwise collapse to one flat colour.

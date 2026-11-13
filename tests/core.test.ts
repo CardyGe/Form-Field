@@ -378,7 +378,7 @@ test('fractal defaults and all family variants roundtrip alongside existing laye
     'style', 'scale', 'detail', 'fold', 'symmetry', 'twist', 'morph', 'travel', 'cycles',
     'offset', 'relief', 'glow', 'contrast', 'cameraYaw', 'cameraPitch', 'zoom',
     'variant', 'quality', 'density', 'juliaReal', 'juliaImag', 'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth',
-    'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue', 'zoomFlight', 'approach',...FINISH_KEYS,
+    'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue', 'zoomFlight', 'approach', 'outside',...FINISH_KEYS,
   ].sort());
   assert.equal(layer.params.quality, 2);
   assert.equal(layer.params.morph, 0.1);
@@ -428,7 +428,7 @@ test('fractal saves reject missing original controls, invalid ranges, fractional
   }
   for (const definition of parameterDefinitions('fractal')) {
     const missing = clone(project); delete missing.layers[0].params[definition.key];
-    if ([...FRACTAL_V5_FIELDS, ...(V6_FIELDS.fractal ?? []),...FINISH_KEYS,'zoomFlight','approach'].includes(definition.key)) assert.equal(validateProject(missing).layers[0].params[definition.key], definition.default);
+    if ([...FRACTAL_V5_FIELDS, ...(V6_FIELDS.fractal ?? []),...FINISH_KEYS,'zoomFlight','approach','outside'].includes(definition.key)) assert.equal(validateProject(missing).layers[0].params[definition.key], definition.default);
     else assert.throws(() => validateProject(missing), new RegExp(`params.${definition.key}`), 'Only additive fields may receive legacy defaults');
     for (const boundary of [definition.min, definition.max]) {
       const valid = clone(project); valid.layers[0].params[definition.key] = boundary;

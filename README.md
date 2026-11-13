@@ -133,7 +133,7 @@ Kinetic Relief also has **Panel sizes**, which mixes large, medium and small pan
 
 ## Fractal flight
 
-**Zoom flight** (Kaleidoscope and Julia) flies continuously into the pattern. Each loop zooms one step deeper while the next step fades in, so the last frame is the first. **Fly in** (Mandelbox) moves the camera inside the box toward its folded core and turns it once per loop. Both are 0 by default. The 2D presets now fill the frame and fly; the Mandelbox presets are viewed from inside.
+**Zoom flight** flies continuously into the pattern. Julia sets dive toward a repeating point of the set (a repelling period-2 cycle), where the set repeats exactly at a smaller scale. Each loop goes deep enough to land on the start's own copy, so there is no crossfade and the frame stays full of detail. If that cycle is too weak to zoom, and on Kaleidoscopes, the next zoom step fades in over the last fifth of the loop instead. **Outside colour** (Julia) fills the space beyond the set with dim colour bands instead of black. **Fly in** (Mandelbox) moves the camera inside the box toward its folded core and turns it once per loop. Both are 0 by default. The 2D presets now fill the frame and fly; the Mandelbox presets are viewed from inside.
 
 ## Living Ink and Velvet Currents
 
