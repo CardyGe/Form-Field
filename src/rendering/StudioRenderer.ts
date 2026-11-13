@@ -116,6 +116,8 @@ export class StudioRenderer {
   private readonly quadGeometry = new THREE.PlaneGeometry(2, 2);
   private readonly quad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   private readonly source = target(true);
+  private readonly fractalPreview = target();
+  private readonly copy = material(`precision highp float;varying vec2 vUv;uniform sampler2D uImage;void main(){gl_FragColor=texture2D(uImage,vUv);}`, { uImage: { value: null } });
   private readonly graphics = new GraphicRenderer();
   private readonly instruments = new InstrumentRenderer();
   private readonly accumA = target();
@@ -585,9 +587,21 @@ export class StudioRenderer {
         u[`u${key[0].toUpperCase()}${key.slice(1)}`].value = number(layer, key, fallback);
       }
       if(number(layer,'colorMode',0)>0&&number(layer,'colorMix',1)>0)u.uExposure.value=1;
+      // The live preview takes one fractal sample per pixel; Retina density
+      // already oversamples it. Exports keep the chosen Render quality.
+      if (!this.exporting) u.uQuality.value = 0;
       const colors = u.uPalette.value as THREE.Color[];
       for (let i = 0; i < 6; i++) colors[i].set(layer.palette[i] ?? DEFAULT_PALETTE[i]);
-      this.draw(this.fractal, this.source);
+      if (!this.exporting && Math.round(number(layer, 'style', 0)) === 2) {
+        // The ray-marched Mandelbox is the costliest source. The live preview
+        // traces it at half resolution and scales it up; exports trace every pixel.
+        const pw = Math.max(1, Math.round(this.width / 2)), ph = Math.max(1, Math.round(this.height / 2));
+        if (this.fractalPreview.width !== pw || this.fractalPreview.height !== ph) this.fractalPreview.setSize(pw, ph);
+        (u.uResolution.value as THREE.Vector2).set(pw, ph);
+        this.draw(this.fractal, this.fractalPreview);
+        this.copy.uniforms.uImage.value = this.fractalPreview.texture;
+        this.draw(this.copy, this.source);
+      } else this.draw(this.fractal, this.source);
     } else if (layer.kind === 'image') {
       if (!layer.image) { this.renderer.setRenderTarget(this.source); this.renderer.clear(); return this.source.texture; }
       const asset = this.assets.get(this.assetKey(layer.image.dataUrl, false,layer.params.repeat>1));
@@ -974,7 +988,7 @@ export class StudioRenderer {
     this.disposed = true;
     for (const asset of this.assets.values()) asset.texture.dispose();
     this.assets.clear();
-    for (const rt of [this.source, this.accumA, this.accumB, this.linearOutput, this.byteOutput, this.resolved, this.environment]) rt.dispose();
+    for (const rt of [this.source, this.fractalPreview, this.accumA, this.accumB, this.linearOutput, this.byteOutput, this.resolved, this.environment]) rt.dispose();
     this.releaseOilTargets();
     this.graphicSource?.dispose(); this.graphicSource = null;
     this.super8Source?.dispose(); this.super8Source = null;
@@ -982,7 +996,7 @@ export class StudioRenderer {
     this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
     this.feedbackStates.clear();
     this.graphics.dispose(); this.instruments.dispose();
-    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.surface, this.fractal, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
+    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.filmThickness.dispose();
     this.keyLight.shadow.dispose();

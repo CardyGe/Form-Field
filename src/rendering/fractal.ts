@@ -121,10 +121,10 @@ void main() {
     // end, so the last frame is the first one and the loop closes exactly.
     float f=fract(uPhase/TAU),step=1.+5.*uZoomFlight,w=smoothstep(.78,1.,f);
     gZoom=pow(step,-f);
-    vec3 nearer=uStyle<.5?kaleidoscope():juliaBloom();
-    gZoom=pow(step,1.-f);
-    vec3 farther=uStyle<.5?kaleidoscope():juliaBloom();
-    pixel=vec4(mix(nearer,farther,w),1.);
+    vec3 color=uStyle<.5?kaleidoscope():juliaBloom();
+    // The farther copy is only drawn during the fade.
+    if(w>0.){gZoom=pow(step,1.-f);color=mix(color,uStyle<.5?kaleidoscope():juliaBloom(),w);}
+    pixel=vec4(color,1.);
   }
   else if(uStyle<.5)pixel=vec4(kaleidoscope(),1.);
   else if(uStyle<1.5)pixel=vec4(juliaBloom(),1.);
