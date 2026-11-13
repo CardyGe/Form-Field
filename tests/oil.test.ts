@@ -19,7 +19,7 @@ function closeTree(a: unknown, b: unknown, tolerance = 1e-7): void {
 
 test('Oil looks retain complete saved state, palettes and new controls across JSON roundtrips', () => {
   const presets = PRESETS.filter(p => p.kind === 'oil');
-  assert.equal(presets.length, 6);
+  assert.equal(presets.length, 8);
   for (const preset of presets) {
     const p = projectWith(preset.id);
     p.layers[0].modulations.travel = { kind: 'noise', cycles: 2, phase: .2, amount: .4, points: [] };

@@ -218,7 +218,7 @@ export class StudioRenderer {
       uResolution: { value: new THREE.Vector2(1, 1) }, uAspect: { value: 1 }, uSeed: { value: 0 },
       uSlide: { value: new THREE.Vector2() }, uLens: { value: new THREE.Vector2() },
       uDirection: { value: new THREE.Vector2(1, 0) }, uSlideAngle: { value: 0 },
-      uLensAngle: { value: 0 }, uLensShapePhase: { value: 0 }, uPresence: { value: 1 }, uStrain: { value: 0 },
+      uLensAngle: { value: 0 }, uLensShapePhase: { value: 0 }, uPresence: { value: 1 }, uStrain: { value: 0 }, uLoop: { value: 0 },
       uWake: { value: Array.from({ length: OIL_WAKE_SAMPLES }, () => new THREE.Vector4()) },
       uFields: { value: this.fallback }, uUnderlay: { value: this.fallback },
       uPattern: { value: this.fallback }, uPatternOffset: { value: new THREE.Vector2() },
@@ -250,7 +250,7 @@ export class StudioRenderer {
     this.composite = material(compositeFragment, {
       uBelow: { value: this.accumA.texture }, uSource: { value: this.source.texture }, uMask: { value: this.fallback },
       uTranslation: { value: new THREE.Vector2() }, uTexel: { value: new THREE.Vector2(1, 1) },
-      uScale: { value: 1 }, uRotation: { value: 0 }, uOpacity: { value: 1 }, uBlend: { value: 0 },
+      uScale: { value: 1 }, uRotation: { value: 0 }, uOpacity: { value: 1 }, uBlend: { value: 0 }, uTopMean: { value: new THREE.Vector3(.5, .5, .5) },
       uAspect: { value: 1 }, uMaskKind: { value: 0 }, uMaskSize: { value: 1 }, uMaskSoftness: { value: .1 },
       uPatternScale: { value: new THREE.Vector2(1, 1) }, uPatternTranslation: { value: new THREE.Vector2() },
       uPatternRotation: { value: 0 }, uPatternRepeat: { value: 0 },
@@ -476,7 +476,8 @@ export class StudioRenderer {
     (u.uDirection.value as THREE.Vector2).set(motion.direction[0], motion.direction[1]);
     u.uSlideAngle.value = motion.rotation; u.uLensAngle.value = motion.angle;
     u.uLensShapePhase.value = motion.rotation + motion.slideX * 2. + motion.slideY;
-    u.uPresence.value = motion.presence; u.uStrain.value = motion.strain;
+    u.uPresence.value = motion.presence * number(layer, 'dome', 1); u.uStrain.value = motion.strain;
+    u.uLoop.value = phase * Math.max(1, Math.round(number(layer, 'cycles', 1)));
     const wakes = u.uWake.value as THREE.Vector4[];
     motion.wake.forEach((sample, index) => wakes[index].set(sample[0], sample[1], sample[2], sample[3]));
     const palette = u.uPalette.value as THREE.Color[];
@@ -703,7 +704,9 @@ export class StudioRenderer {
         (u.uPatternTranslation.value as THREE.Vector2).set(layer.params.centerX * .5, layer.params.centerY * .5);
         u.uPatternRotation.value = layer.params.orientation + (layer.params.style === 4 ? 0 : layer.params.turns * wrapped);
       }
-      u.uBlend.value = { normal: 0, screen: 1, multiply: 2, add: 3 }[layer.blend];
+      u.uBlend.value = { normal: 0, screen: 1, multiply: 2, add: 3, source: 4 }[layer.blend];
+      // Average palette brightness: Colour from below maps this to the colour underneath.
+      const mean = new THREE.Color(); for (let i = 0; i < 5; i++) mean.add(new THREE.Color(layer.palette[i] ?? '#808080')); (u.uTopMean.value as THREE.Vector3).set(mean.r / 5, mean.g / 5, mean.b / 5);
       u.uMaskKind.value = layer.surface?.source==='mask'&&!layer.surface.clipMask?0:{ none: 0, circle: 1, rectangle: 2, image: 3 }[layer.mask.kind];
       u.uMaskSize.value = layer.mask.size; u.uMaskSoftness.value = layer.mask.softness;
       u.uMaskInvert.value = Number(layer.mask.invert);

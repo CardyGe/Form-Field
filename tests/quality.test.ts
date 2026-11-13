@@ -4,9 +4,9 @@ import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions,
 const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
-test('the curated library keeps 81 distinct presets on saturated palettes with a dark or light ground', () => {
-  assert.equal(PRESETS.length,81);
-  assert.equal(new Set(PRESETS.map(p=>p.id)).size,81);
+test('the curated library keeps 83 distinct presets on saturated palettes with a dark or light ground', () => {
+  assert.equal(PRESETS.length,83);
+  assert.equal(new Set(PRESETS.map(p=>p.id)).size,83);
   for (const preset of PRESETS) {
     const layer=applyPreset(createLayer(preset.kind),preset.id);
     const project={...createProject(),layers:[layer]};
@@ -48,4 +48,14 @@ test('independent entropy changes unlocked material even while the source seed i
     assert.notDeepEqual(a.params,b.params,kind+' must get a fresh variation');
     assert.deepEqual(varyLayer(layer,.65,locks,123),a);
   }
+});
+
+test('Colour from below saves and reopens on any layer kind', () => {
+  for (const kind of ['surface', 'super8', 'oil', 'graphic', 'fractal'] as const) {
+    const layer = createLayer(kind); layer.blend = 'source';
+    const project = { ...createProject(), layers: [createLayer('image'), layer] };
+    assert.equal(validateProject(JSON.parse(JSON.stringify(project))).layers[1].blend, 'source');
+  }
+  const bad = { ...createProject() }; (bad.layers[0] as { blend: string }).blend = 'overlay';
+  assert.throws(() => validateProject(bad), /blend/);
 });

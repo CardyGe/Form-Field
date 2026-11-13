@@ -32,6 +32,8 @@ precision highp float;
 varying vec2 vUv;
 uniform sampler2D uBelow, uSource, uMask;
 uniform vec2 uTranslation, uTexel;
+uniform vec3 uTopMean;
+vec3 blendPaletteMean(){return uTopMean;}
 uniform float uScale, uRotation, uOpacity, uBlend, uAspect;
 uniform vec2 uPatternScale, uPatternTranslation;
 uniform float uPatternRotation, uPatternRepeat;
@@ -250,7 +252,13 @@ void main() {
   vec3 blended=b;
   if(uBlend>.5 && uBlend<1.5) blended=max(a+b-a*b,vec3(0.));
   else if(uBlend>1.5 && uBlend<2.5) blended=a*b;
-  else if(uBlend>2.5) blended=a+b;
+  else if(uBlend>2.5&&uBlend<3.5) blended=a+b;
+  else if(uBlend>3.5) {
+    // Colour from below: this layer keeps its shapes and shading but takes its
+    // colour from the layers under it (for example an imported paint scan).
+    float shade=dot(b,vec3(.2126,.7152,.0722))/max(dot(blendPaletteMean(),vec3(.2126,.7152,.0722)),.02);
+    blended=a*clamp(shade,0.,4.);
+  }
   vec3 rgb=below.rgb*(1.-top.a)+top.rgb*(1.-below.a)+blended*(top.a*below.a);
   float alpha=top.a+below.a*(1.-top.a);
   gl_FragColor=vec4(rgb,alpha);

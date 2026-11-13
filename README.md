@@ -141,9 +141,15 @@ Loop ink travels one pattern period per loop. Delay spread, Delay from and Pause
 
 Transported Velvet Currents allow up to 480 for Fibre density (up to 16,384 strands), and **Fibre taper** now thins each trail toward both ends. The comb-like Vortex Filaments and the sparse Gathering Light were removed.
 
+## Oil layouts and colour from an image
+
+Oil Slides has a **Layout** control. *Slide* is the original pools pressed by a moving glass. *Pour* fills the frame with one paint mass and laced cells that swell and close in their own time. *Lacing* runs ribbons edge to edge, laced inside with dark threads. **Glass dome** shows or hides the dome; at 0 only the paint remains. Acrylic Pour and Lace Ribbons use the new layouts, and Cobalt Tide is a Pour under the glass.
+
+Any layer can use the **Colour from below** blending mode. The layer keeps its shapes and its light and dark, and takes its colour from the layers under it. To use a paint scan or photograph, import it as an image layer, put the effect above it and set the effect's Blending to Colour from below.
+
 ## Preset library
 
-The library has 81 presets. In 0.12 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
+The library has 83 presets. In 0.12 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
 
 **Presets → Finishes for any layer** holds six finishes: Tunnel, Bloom Echo and Melt (feedback), and Terraces, Block Shuffle and Ring Delay (time displacement). A finish applies to the selected layer of any kind except Graphic Patterns and Ink *Evolving*, and replaces any finish already on it. **No finish** turns both off. Recursion Tunnel and Time Terraces remain as Surface presets that show a finish on a source.
 

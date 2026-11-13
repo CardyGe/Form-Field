@@ -148,6 +148,8 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('drag', 'Drag', 0, 1, 0.01, 0.55, 'Motion'),
     parameter('cycles', 'Cycles per loop', 1, 8, 1, 1, 'Motion'),
     parameter('lift', 'Lens lift', 0, 1, 0.01, 0, 'Motion'),
+    { ...parameter('layout', 'Layout', 0, 2, 1, 0, 'Shape'), description: 'Slide: pools pressed by a moving glass. Pour: one paint mass with cells opening through it. Lacing: ribbons that run edge to edge.' },
+    { ...parameter('dome', 'Glass dome', 0, 1, 0.01, 1, 'Shape'), description: 'How much of the glass dome is shown. 0 leaves only the paint.' },
     parameter('thickness', 'Thickness', 0, 1, 0.01, 0.6, 'Material'),
     parameter('refraction', 'Refraction', 0, 1, 0.01, 0.65, 'Material'),
     parameter('wetness', 'Wetness', 0, 1, 0.01, 0.8, 'Material'),
@@ -234,7 +236,7 @@ const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
   sculpture: ['opening', 'twist', 'form', 'lobes', 'thickness', 'stretch', 'curl', 'foldFrequency', 'asymmetry', 'ridgeScale', 'metallic', 'clearcoat', 'sheen', 'filmScale', 'lightPower', 'shadowStrength', 'shadowSoftness', ...GRADING_FIELDS],
   fractal: [...FRACTAL_ADDED_FIELDS, 'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue'],
   super8: [...SUPER8_PROJECTOR_KEYS, ...SUPER8_ROLL_KEYS],
-  oil: ['anisotropy','sheenAngle','caustics', 'iridescence', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion'],
+  oil: ['layout','dome','anisotropy','sheenAngle','caustics', 'iridescence', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion'],
   graphic: [...TIMING_KEYS],
   image: ['mirror', 'repeat', ...GRADING_FIELDS],
 };
@@ -288,17 +290,19 @@ export const SUPER8_MODES = ['Chromatic Staircase', 'Paint Destruction', 'Scratc
 export const PRESETS: Preset[] = [
   ...INSTRUMENTS.flatMap(info => info.looks.map(look => preset(look.id, look.name, info.description, info.kind, look.palette ?? info.palette, look.params))),
   ...GRAPHIC_LOOKS.map(look => preset(look.id, look.name, look.description, 'graphic', look.palette, look.params)),
-  preset('chromatic-staircase', 'Chromatic Staircase', 'Hand-painted terraces through a warm, softly flickering projector.', 'super8', SUPER8_PALETTE, {}),
-  preset('paint-destruction', 'Paint Destruction', 'Eroding pigment, dry brush strokes and decaying paint echoes.', 'super8', ['#e95a24', '#e8af25', '#245ba1', '#c22d53', '#17131d', '#e4cda8'], { mode: 1, erosion: 0.7, texture: 0.95, roughness: 0.85, bleed: 0.5, feedback: 0.65, travel: 0.65, scratches: 0.15, emulsion: .85, lightLeak: .4, halation: .5, dust: .4, frameLines: .3 }),
-  preset('scratched-negative', 'Scratched Negative', 'Inverted stepped forms scored by shifting film scratches.', 'super8', ['#f0b458', '#cc5262', '#528f8d', '#7864a6', '#10151c', '#e2dcc4'], { mode: 2, scratches: 0.85, grain: 0.45, flicker: 0.35, weave: 0.4, filmFps: 12, feedback: 0.24, erosion: 0.38, gateMode: 2, sprockets: .85, frameLines: .85, pullDown: .9, dust: .65, hair: .6, lightLeak: .12, vignette: .5 }),
+  preset('chromatic-staircase', 'Chromatic Staircase', 'Hand-painted terraces through a warm, softly flickering projector.', 'super8', SUPER8_PALETTE, { coverage: 1, scale: 0.5, steps: 10 }),
+  preset('paint-destruction', 'Paint Destruction', 'Eroding pigment, dry brush strokes and decaying paint echoes.', 'super8', ['#e95a24', '#e8af25', '#245ba1', '#c22d53', '#17131d', '#e4cda8'], { mode: 1, texture: 0.95, roughness: 0.85, feedback: 0.65, travel: 0.65, scratches: 0.15, emulsion: .85, lightLeak: .4, halation: .5, dust: .4, frameLines: .3, colorFade: 0, bleed: 0.2, erosion: 0.45, coverage: 0.95 }),
+  preset('scratched-negative', 'Scratched Negative', 'Inverted stepped forms scored by shifting film scratches.', 'super8', ['#f0b458', '#cc5262', '#528f8d', '#7864a6', '#10151c', '#e2dcc4'], { mode: 2, scratches: 0.85, grain: 0.45, flicker: 0.35, weave: 0.4, filmFps: 12, feedback: 0.24, erosion: 0.38, gateMode: 2, sprockets: .85, frameLines: .85, pullDown: .9, dust: .65, hair: .6, lightLeak: .12, vignette: .5, coverage: 1, scale: 0.5, rotation: -1.2, steps: 7 }),
   preset('cut-out-collage', 'Cut-out Collage', 'Layered painted paper fragments with torn edges and offset impressions.', 'super8', SUPER8_PALETTE, { mode: 3, steps: 8, erosion: 0.35, texture: 0.8, roughness: 0.7, feedback: 0.4, feedbackRotation: -0.06, filmFps: 12, travel: 0.55, gateMode: 1, gateInset: .025, frameLines: .35, emulsion: .35, lensSoftness: .3, colorFade: .3 }),
   preset('painted-tunnel', 'Painted Tunnel', 'Scanned paint arches rush through a rolling shutter and break into stepped terraces.', 'super8', ['#f6b21c', '#1e4fd6', '#f0521c', '#ec8fb0', '#1b1726', '#f2efe8'], { mode: 4, steps: 10, coverage: 0.9, erosion: 0.12, texture: 0.8, textureScale: 1.1, roughness: 0.45, bleed: 0.15, travel: 0.6, cycles: 2, filmFps: 24, feedback: 0, rotation: 0, scratches: 0.12, grain: 0.15, flicker: 0.08, weave: 0.08, rollAmount: 0.7, rollBands: 30, rollOrigin: 1, rollSmear: 0.55, emulsion: 0.12, pullDown: 0, shutter: 0, lightLeak: 0, halation: 0.12, vignette: 0.08, lensSoftness: 0.05, colorFade: 0, dust: 0.12, hair: 0 }),
   preset('acid-slide', 'Acid Slide', 'Fluorescent yellow paint, cellular black ink and a glossy lens over cyan.', 'oil', OIL_PALETTE, {}),
   preset('cellular-lift', 'Cellular Lift', 'A glassy dome lifts away from lime paint on violet to reveal its cellular footprint.', 'oil', ['#c6ff00', '#5cff5c', '#07060c', '#8a2cff', '#1a0640', '#ffd400'], { lift: 1, travel: 0.22, drag: 0.7, cellSize: 1.2, relativeRotation: 0.18, filaments: 0.25, cellComplexity: 0.2 }),
   preset('ink-drag', 'Ink Drag', 'Fine black filaments pulled through hot pink paint over yellow by a sliding lens.', 'oil', ['#ff2e93', '#ff8a00', '#0a0610', '#ffe600', '#2a0a3c', '#00e5ff'], { travel: 0.52, drag: 0.92, filaments: 1, relativeRotation: 0.45, cellSize: 0.6, coverage: 0.68 }),
   preset('chromatic-slides', 'Chromatic Slides', 'Hot pink and tangerine pools with dark violet ink and blue-green glass.', 'oil', ['#ff318b', '#ffab35', '#180d38', '#22dbc8', '#13266f', '#ffd18a'], { coverage: 0.5, lensAspect: 1.45, lensSize: 0.23, drag: 0.45, relativeRotation: 0.5, wetness: 0.95 }),
-  preset('cobalt-tide', 'Cobalt Tide', 'Electric blue paint and coral ink flowing over luminous turquoise.', 'oil', ['#234dff', '#05bdf5', '#2b0927', '#42f2b4', '#111044', '#e7b4ff'], { travel: 0.38, relativeRotation: 0.65, drag: 0.78, coverage: 0.64, lensSize: 0.24, deformation: 0.85, cellComplexity: 0.85, dispersion: 0.35 }),
+  preset('cobalt-tide', 'Cobalt Tide', 'Electric blue paint and coral ink flowing over luminous turquoise.', 'oil', ['#234dff', '#05bdf5', '#2b0927', '#42f2b4', '#111044', '#e7b4ff'], { layout: 1, travel: 0.38, relativeRotation: 0.65, drag: 0.78, coverage: 0.64, lensSize: 0.24, deformation: 0.85, cellComplexity: 0.85, dispersion: 0.35 }),
   preset('ember-glass', 'Ember Glass', 'Amber and scarlet pigment, black branching ink and deep violet glass.', 'oil', ['#ff9d19', '#fa3154', '#160721', '#33255c', '#0b0820', '#ffe7ad'], { travel: 0.28, drag: 0.65, coverage: 0.62, lensAspect: 0.85, lensDepth: 0.85, thickness: 0.85, cellComplexity: 0.8, wetness: 1 }),
+  preset('acrylic-pour', 'Acrylic Pour', 'Yellow paint poured over cyan, opening into laced cells that swell and close.', 'oil', ['#ffe600', '#ffc400', '#0a0a12', '#00b8ff', '#00508f', '#ffffff'], { layout: 1, dome: 0, coverage: 0.55, cellSize: 1.1, ink: 0.85, thickness: 0.7, travel: 0.18, relativeRotation: 0.1, wetness: 0.9 }),
+  preset('lace-ribbons', 'Lace Ribbons', 'Hot pink ribbons run edge to edge over yellow, laced with dark threads.', 'oil', ['#ff2e93', '#ff5fc0', '#14020c', '#ffe600', '#7a4a00', '#ffffff'], { layout: 2, dome: 0, coverage: 0.5, poolSize: 1, cellSize: 0.8, filaments: 0.9, ink: 0.8, thickness: 0.6, travel: 0.22, relativeRotation: 0.05 }),
   preset('acid-tide', 'Acid Tide', 'Luminous cyan, lime and orchid flowing through broad liquid bands.', 'surface', DEFAULT_PALETTE, { style: 0, scale: 4, warp: 0.45, detail: 0.4, roundness: 0.65, relief: 0.62, softness: 0.25, contrast: 0.55, offset: 0.2, reveal: 0.1, delayShape: 0, delaySpread: 0.6, pause: 0.5 }),
   preset('solar-melt', 'Solar Melt', 'Hot amber, scarlet and magenta gathered into slow molten drips.', 'surface', SOLAR, { style: 2, scale: 3.4, warp: 0.6, detail: 0.28, roundness: 0.85, relief: 0.64, softness: 0.34, contrast: 0.57, rotation: -0.18, offset: 0.08, reveal: 0.14, delayShape: 0, delaySpread: 0.5, pause: 0.4 }),
   preset('deep-bloom', 'Deep Bloom', 'Electric cyan, blue and violet bands cut around a deep portal.', 'surface', ELECTRIC, { style: 3, scale: 5.2, warp: 0.67, detail: 0.58, roundness: 0.3, relief: 0.7, softness: 0.2, contrast: 0.68, offset: 0.33, reveal: 0.28, delayShape: 1, delaySpread: 0.5, pause: 0.4 }),
@@ -652,7 +656,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
   const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
   text(layer.id, `${path}.id`, 100); text(layer.name, `${path}.name`);
   boolean(layer.visible, `${path}.visible`); number(layer.opacity, `${path}.opacity`, 0, 1);
-  choice(layer.blend, ['normal', 'screen', 'multiply', 'add'] as const, `${path}.blend`);
+  choice(layer.blend, ['normal', 'screen', 'multiply', 'add', 'source'] as const, `${path}.blend`);
   const transform = object(layer.transform, `${path}.transform`);
   keys(transform, ['x', 'y', 'scale', 'rotation'], `${path}.transform`);
   number(transform.x, `${path}.transform.x`, -2, 2); number(transform.y, `${path}.transform.y`, -2, 2);

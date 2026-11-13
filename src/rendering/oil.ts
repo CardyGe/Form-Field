@@ -17,7 +17,7 @@ uniform float uDrag,uThickness,uRefraction,uWetness,uInk,uFilaments;
 uniform float uSoftness,uLightAngle,uShadow,uGrain,uSubstrate,uQuality;
 uniform float uDeformation,uLensDepth,uCellComplexity,uDispersion,uLensShapePhase;
 uniform vec2 uSlide,uLens,uDirection;
-uniform float uSlideAngle,uLensAngle,uPresence,uStrain;
+uniform float uSlideAngle,uLensAngle,uPresence,uStrain,uLayout,uLoop;
 mat2 rot(float a){float c=cos(a),s=sin(a);return mat2(c,s,-s,c);}
 vec2 world(vec2 uv){return (sourceUV(uv)-.5)*vec2(uAspect,1.);}
 vec2 uvFor(vec2 p){return sourceScreenUV(p/vec2(uAspect,1.)+.5);}
@@ -71,6 +71,40 @@ void main(){
     float w=exp(-dot(delta,delta)/(radius*radius*1.8))*weight;
     // Threads keep the direction the glass was moving when it passed here.
     if(w>contact){contact=w;if(dot(segment,segment)>1e-10)drag=normalize(segment);}
+  }
+  if(uLayout>.5){
+    // Full-frame layouts. The paint covers the frame and the ink pattern runs
+    // through all of it, not only where the glass has pressed. Regions breathe
+    // on their own clocks, so cells open and close at different times.
+    float tile=2.1*max(uCellSize,.1);
+    float breathe=.05*sin(uLoop+fbm(q*1.3+uSeed*.02)*6.2831853);
+    float s,ink=0.;
+    if(uLayout<1.5){
+      // Pour: one paint mass with cells opening through it, two cell sizes by region.
+      float big=texture2D(uPattern,q/(tile*1.9)+uPatternOffset).b;
+      float small=texture2D(uPattern,q/(tile*.9)+uPatternOffset.yx).b;
+      float h=mix(big,small,smoothstep(.35,.65,fbm(q*.9+3.1)));
+      s=h-(mix(.34,.1,uCoverage)+breathe);
+      float aa=fwidth(s)*.75+.0015;
+      // A dark lacing ring where the paint meets each cell.
+      ink=1.-smoothstep(.03*(.6+uInk)-aa,.03*(.6+uInk)+aa,abs(s));
+    } else {
+      // Lacing: ribbons that run edge to edge, laced inside with drag threads.
+      float v=q.y+.45*(fbm(q*1.1+uSeed*.03)-.5)+.08*sin(q.x*2.3+uLoop);
+      float freq=6.2831853/(.42*max(uPoolSize,.1));
+      s=sin(v*freq)-mix(.7,-.7,uCoverage)+breathe*3.;
+      vec2 along=vec2(q.x*(1.+.3*fbm(q*2.)),v)/(tile*.8);
+      float threads=texture2D(uPattern,along+uPatternOffset).g-mix(.26,.16,uInk);
+      float aa=fwidth(s)*.75+.0015;
+      ink=inkEdge(threads,0.)*smoothstep(.25,.6,s)*uFilaments;
+      ink=max(ink,1.-smoothstep(.06-aa,.06+aa,abs(s)));
+    }
+    float aa=fwidth(s)*.75+.0015+uSoftness*.015;
+    float cover=smoothstep(-aa,aa,s);
+    if(uCoverage<=0.)cover=0.;
+    float height=cover*(.004+(.010+.030*uThickness)*smoothstep(0.,.3,s));
+    gl_FragColor=vec4(height,ink*smoothstep(0.,.15,uInk)*max(cover,.0),cover,contact);
+    return;
   }
   // Paint carried at the contact point gives the lens a real material footprint.
   float contactEdge=max(fwidth(contact),.002)+uSoftness*.015;
