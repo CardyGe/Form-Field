@@ -2,6 +2,14 @@
 
 A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.11 alpha.
 
+## What's new in 0.13
+
+- **A smaller, stronger library:** 83 presets in saturated colour, down from 151. Six effects that never delivered their look were retired; older projects open without them.
+- **Finishes for any layer:** Tunnel, Bloom Echo, Melt, Terraces, Block Shuffle and Ring Delay.
+- **Staggered motion:** Surface, Graphic Patterns, Kinetic Relief and Living Ink move element by element, with pauses, instead of all at once.
+- **Fractals that fly:** Zoom flight, Fly in for the Mandelbox, a seamless Julia dive, Outside colour, and a much faster preview.
+- **New looks:** Oil Pour and Lacing layouts, Colour from below for painting effects with an imported image, Resonant Sand mode scores and plate fills, turning flat-colour Sculptures, and dense tapered Velvet Currents.
+
 ## Start creating
 
 Open **Form & Field.app**. The packaged application includes its rendering and encoding tools and works offline.
@@ -155,7 +163,7 @@ Sculpture has **Turns per loop**, which turns the form whole times each loop on 
 
 ## Preset library
 
-The library has 83 presets. In 0.12 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
+The library has 83 presets. In 0.13 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
 
 **Presets → Finishes for any layer** holds six finishes: Tunnel, Bloom Echo and Melt (feedback), and Terraces, Block Shuffle and Ring Delay (time displacement). A finish applies to the selected layer of any kind except Graphic Patterns and Ink *Evolving*, and replaces any finish already on it. **No finish** turns both off. Recursion Tunnel and Time Terraces remain as Surface presets that show a finish on a source.
 
@@ -182,7 +190,7 @@ Very small rings and thin patterns filter toward their average at the pixel limi
 
 Four projection instruments (Living Ink, Velvet Currents, Kinetic Relief, Resonant Sand) share the existing rendering loop, layer compositor, masks, palette grading, smart randomizer and native output pipeline. The library includes original looks for each instrument plus eight projection motion studies across Currents, Ink and Relief.
 
-Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral and Volumetric Veils were retired in 0.12 because none of them looked like what its name promised. Opening an older project drops layers of those kinds; a project that only used them reports that its effects were retired.
+Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral and Volumetric Veils were retired in 0.13 because none of them looked like what its name promised. Opening an older project drops layers of those kinds; a project that only used them reports that its effects were retired.
 
 | Instrument | Material and controls |
 | --- | --- |
@@ -335,7 +343,7 @@ The baseline machine is an Apple M5 Pro with 24 GB unified memory. Rendering com
 
 ### Versions and automatic packaging
 
-The footer shows the version and build, for example `v0.12.0 · build 4`. The build number is the commit count, so it rises with every commit. A `+` means the build includes uncommitted changes. Hover the label for the commit and build time. The same build number is stamped into the app bundle, under Get Info → Version. Raise the version in `package.json` for releases you want to name.
+The footer shows the version and build, for example `v0.13.0 · build 4`. The build number is the commit count, so it rises with every commit. A `+` means the build includes uncommitted changes. Hover the label for the commit and build time. The same build number is stamped into the app bundle, under Get Info → Version. Raise the version in `package.json` for releases you want to name.
 
 After every commit on `main`, a git hook (`.githooks/post-commit`) rebuilds `work/release/mac-arm64/Form & Field.app` in the background and sends a notification when it's done. If the app is open, the hook waits until you quit it. Progress and errors go to `work/auto-package.log`. To skip one commit, run `FORM_FIELD_NO_AUTOPACKAGE=1 git commit …`. A fresh clone needs `git config core.hooksPath .githooks` once.
 
