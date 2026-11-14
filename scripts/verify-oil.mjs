@@ -87,7 +87,7 @@ try {
       const animated=projectFor('acid-slide');animated.layers[0].modulations.travel={kind:'noise',cycles:2,phase:.2,amount:.4,points:[]};
       check(delta(await exr(animated,.4),await exr(animated,.4+Math.PI*2))<.00001,'modulated wake wrap');
       const base=await exr(projectFor('acid-slide'),.7);
-      const mixed=projectFor('acid-slide');mixed.layers.push(m.applyPreset(m.createLayer('oil'),'chromatic-slides'));mixed.layers[1].opacity=.4;mixed.layers[1].blend='screen';
+      const mixed=projectFor('acid-slide');mixed.layers.push(m.applyPreset(m.createLayer('oil'),'cobalt-tide'));mixed.layers[1].opacity=.4;mixed.layers[1].blend='screen';
       check(delta(base,await exr(mixed,.7))>.001,'second Oil layer must affect composition');
       await exr(mixed,1.4);check(delta(base,await exr(projectFor('acid-slide'),.7))===0,'scratch target contamination');
       const repeated=renderer.getStats();

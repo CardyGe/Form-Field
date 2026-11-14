@@ -47,7 +47,7 @@ try{
     for(const d of m.visibleParameterDefinitions(p.layers[0])){
      for(const edge of ['min','max']){const q=structuredClone(p);q.layers[0].params[d.key]=d[edge];results.push({key:d.key,edge,...stats(await exr(q,.7,96,54),id+' '+d.key+' '+edge)});}
      const a=structuredClone(p),b=structuredClone(p);
-     for(const q of [a,b]){if(d.key==='warpScale')q.layers[0].params.warp=.65;if(d.key==='sheenAngle')q.layers[0].params.anisotropy=.8;if(d.key==='tonePivot')q.layers[0].params.toneContrast=1.5;if(['flowDirection','travel','eddyScale'].includes(d.key))q.layers[0].params.organic=.8;if(d.key==='surfaceHole'){q.layers[0].params.motion=1;if(q.layers[0].kind==='currents')q.layers[0].params.flowMode=1;else q.layers[0].params.inkMode=2;}if(['simulationQuality','pigmentCarry','loopReturn','ageColour'].includes(d.key))q.layers[0].params.inkMode=2;
+     for(const q of [a,b]){if(d.key==='warpScale')q.layers[0].params.warp=.65;if(d.key==='sheenAngle')q.layers[0].params.anisotropy=.8;if(d.key==='tonePivot')q.layers[0].params.toneContrast=1.5;if(['flowDirection','travel','eddyScale'].includes(d.key))q.layers[0].params.organic=.8;if(d.key==='surfaceHole'){q.layers[0].params.motion=1;q.layers[0].params.inkMode=2;}if(['simulationQuality','pigmentCarry','loopReturn','ageColour'].includes(d.key))q.layers[0].params.inkMode=2;
       // Controls that only act when their parent finish is on.
       if(d.key.startsWith('echo')&&d.key!=='echo')q.layers[0].params.echo=.8;
       if(d.key.startsWith('slit')&&d.key!=='slitShift')q.layers[0].params.slitShift=1;
@@ -116,7 +116,7 @@ try{
  }
  const mixes=await page.evaluate(async()=>{
   const {m,exr,check,delta,stats}=window.qa,results=[];
-  for(const kinds of [['livingink','currents','relief','resonance'],['oil','surface','sculpture','fractal']]){
+  for(const kinds of [['livingink','relief','resonance'],['oil','surface','sculpture','fractal']]){
    const p={...m.createProject(),transparent:true,layers:kinds.map((kind,i)=>{
     const l=m.createLayer(kind);if('backgroundOpacity' in l.params)l.params.backgroundOpacity=0;
     l.opacity=.65;l.blend=['normal','screen','add','normal'][i];
@@ -125,7 +125,7 @@ try{
    })};
    const a=await exr(p),s=stats(a,kinds.join('+'));
    check(delta(a,await exr(p,.7+Math.PI*2))<.00003,'Mixed routed loop');
-   for(let i=0;i<4;i++){const q=structuredClone(p);q.layers[i].visible=false;check(delta(a,await exr(q))>.000001,'Mixed layer disappeared: '+kinds[i]);}
+   for(let i=0;i<kinds.length;i++){const q=structuredClone(p);q.layers[i].visible=false;check(delta(a,await exr(q))>.000001,'Mixed layer disappeared: '+kinds[i]);}
    results.push({kinds,...s});
   }return results;
  });report.checks.push({mixedLayers:mixes});console.log('Mixed instruments, masks, blending and animated routes passed');

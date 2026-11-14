@@ -10,8 +10,8 @@ import {canvasAxes} from '../src/core/canvas-interaction';
 
 const points=[{x:.3,y:.3},{x:.7,y:.3},{x:.7,y:.7},{x:.3,y:.7}];
 test('new treatments shape useful live controls without rebuilding chemistry or changing framing',()=>{
- const locks={palette:false,structure:false,motion:false,material:false},flow=applyPreset(createLayer('currents'),'silk-river'),ink=applyPreset(createLayer('livingink'),'ink-estuary');
- assert.deepEqual(canvasAxes(flow,locks).map(d=>d.key),['curl','width']);assert.deepEqual(canvasAxes(ink,locks).map(d=>d.key),['pigment','relief']);
+ const locks={palette:false,structure:false,motion:false,material:false},ink=applyPreset(createLayer('livingink'),'ink-estuary');
+ assert.deepEqual(canvasAxes(ink,locks).map(d=>d.key),['pigment','relief']);
  assert.ok(canvasAxes(ink,locks).every(d=>!d.preparation));assert.deepEqual(canvasAxes(ink,{...locks,material:true}).map(d=>d.key),[]);
 });
 test('original instruments migrate new motion settings neutrally and reject explicit corruption',()=>{
@@ -21,7 +21,7 @@ test('original instruments migrate new motion settings neutrally and reject expl
  }
 });
 test('projection studies are complete native layers and variation preserves treatment, phrase and surface',()=>{
- for(const id of PROJECTION_LOOK_IDS){const kind=id.includes('facade')||['folding-copper','quiet-monument'].includes(id)?'relief':['ink-estuary','tidal-pigment'].includes(id)?'livingink':'currents';const layer=applyPreset(createLayer(kind),id);layer.surface={source:'polygon',role:'obstacle',influence:.8,points};
+ for(const id of PROJECTION_LOOK_IDS){const kind=id.includes('facade')||['folding-copper','quiet-monument'].includes(id)?'relief':'livingink';const layer=applyPreset(createLayer(kind),id);layer.surface={source:'polygon',role:'obstacle',influence:.8,points};
   const project={...createProject(),schemaVersion:2 as const,layers:[layer]};assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))),project);
   const varied=varyLayer(layer,1,{palette:false,structure:false,motion:false,material:false},42);for(const key of ['flowMode','inkMode','reliefMode','phrase','surfaceHole'])assert.equal(varied.params[key],layer.params[key]);assert.deepEqual(varied.surface,layer.surface);
  }
@@ -59,5 +59,5 @@ test('surface geometry rejects crossings, duplicates and collapsed areas; distan
  assert.ok(polygonDistance(.5,.5,points)<0);assert.ok(polygonDistance(.9,.5,points)>0);
  const size=64,coverage=new Float32Array(size*size);for(let y=0;y<size;y++)for(let x=0;x<size;x++)coverage[y*size+x]=polygonDistance((x+.5)/size,(y+.5)/size,points)<0?1:0;
  const grid=distanceGrid(coverage,size);assert.ok(sampleSurface(grid,.5,.5).distance<0);const edge=sampleSurface(grid,.72,.5);assert.ok(edge.distance>0&&edge.nx>.9);assert.equal(sampleSurface(grid,-1,.5).coverage,0);
- const p={...createProject(),schemaVersion:2 as const,layers:[createLayer('currents')]};p.layers[0].surface={source:'polygon',role:'obstacle',influence:1,points};validateProject(p);p.layers[0].surface.points=[points[0],points[2],points[1],points[3]];assert.throws(()=>validateProject(p),/simple polygon/);
+ const p={...createProject(),schemaVersion:2 as const,layers:[createLayer('livingink')]};p.layers[0].surface={source:'polygon',role:'obstacle',influence:1,points};validateProject(p);p.layers[0].surface.points=[points[0],points[2],points[1],points[3]];assert.throws(()=>validateProject(p),/simple polygon/);
 });

@@ -6,8 +6,8 @@ import { createLayer, createProject, parameterDefinitions, PRESETS, applyPreset,
 import { evaluateLayer } from '../src/core/timeline';
 
 const route={kind:'sine' as const,cycles:3,amount:.3,phase:.2,points:[]};
-test('four instruments have complete original and motion-study looks and round-trip through the document schema',()=>{
- assert.equal(new Set(INSTRUMENT_KINDS).size,4);
+test('three instruments have complete original and motion-study looks and round-trip through the document schema',()=>{
+ assert.equal(new Set(INSTRUMENT_KINDS).size,3);
  assert.deepEqual(INSTRUMENTS.map(i=>i.kind),[...INSTRUMENT_KINDS]);
  for(const info of INSTRUMENTS){
   const layer=createLayer(info.kind);assert.equal(layer.name,info.name);
@@ -107,9 +107,9 @@ test('smart variation holds loop phase and inactive support parameters but can v
 
 test('layers from retired effect families are dropped when an older project opens',()=>{
  const retired=(kind:string)=>({...createLayer('surface'),id:kind,kind});
- const mixed={...createProject(),layers:[createLayer('surface'),retired('prism'),retired('veils')]};
+ const mixed={...createProject(),layers:[createLayer('surface'),retired('prism'),retired('veils'),retired('currents')]};
  const opened=validateProject(JSON.parse(JSON.stringify(mixed)));
  assert.deepEqual(opened.layers.map(l=>l.kind),['surface']);
  assert.throws(()=>validateProject({...createProject(),layers:[retired('caustic')]}),/retired/);
- assert.deepEqual([...RETIRED_KINDS].sort(),['caustic','loom','magnetic','prism','reef','veils']);
+ assert.deepEqual([...RETIRED_KINDS].sort(),['caustic','currents','loom','magnetic','prism','reef','veils']);
 });

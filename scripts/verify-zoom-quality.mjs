@@ -41,7 +41,7 @@ try {
    }
    return {mean:total/a.length,significant:significant/a.length};
   };
-  for(const id of ['uneven-pillars','nested-tiles','neon-frames','circuit-worms','maze-carpet','radial-circuit']) {
+  for(const id of ['uneven-pillars','nested-tiles','packed-mosaic','circuit-worms','maze-carpet','radial-circuit']) {
    for(const factor of [2,4,8]) {
     const layer=m.applyPreset(m.createLayer('graphic'),id);
     Object.assign(layer.params,{motion:0,softness:0,backgroundOpacity:0});

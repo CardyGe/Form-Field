@@ -98,7 +98,7 @@ try {
     checks.push({ animatedSize: true, intentionalMask: true, samplerIsolation: true, targetRelease: true });
     return { status: 'passed', checks };
   });
-  for (const id of ['pillar-wave', 'nested-tiles', 'orbital-bloom', 'woven-vortex', 'maze-carpet']) {
+  for (const id of ['lava-columns', 'nested-tiles', 'circle-fans', 'web-rosette', 'maze-carpet']) {
     const bytes = await page.evaluate(async id => {
       const q = window.fillQA, p = q.project(id); Object.assign(p.layers[0].params, { size: .35, stretch: .65, orientation: .4 });
       return Array.from(await q.r.exportPNG(p, 1.3, 960, 540));

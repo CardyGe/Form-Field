@@ -20,7 +20,7 @@ try {
  await page.getByText('Export engine ready',{exact:true}).waitFor();
  const status=await page.evaluate(()=>window.studio.getStatus());
  assert.equal(status.version,JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8')).version);
- for(const kind of ['surface','sculpture','fractal','oil','super8','graphic','image','livingink','currents','relief','resonance']) {
+ for(const kind of ['surface','sculpture','fractal','oil','super8','graphic','image','livingink','relief','resonance']) {
   const layer=m.createLayer(kind);layer.name='Randomizer '+kind;
   layer.transform={x:.2,y:-.1,scale:.7,rotation:.2};layer.opacity=.8;
   layer.modulations[kind==='image'?'hue':'exposure']={kind:'noise',cycles:2,amount:.15,phase:.2,points:[]};

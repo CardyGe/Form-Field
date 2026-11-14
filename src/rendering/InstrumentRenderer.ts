@@ -4,7 +4,6 @@ import { INSTRUMENT_PARAMETERS, isInstrument, type InstrumentKind } from '../cor
 import { sourceViewMatrix } from './source-view';
 import { instrumentFragment } from './instrument-shaders';
 import { fullscreenVertex } from './shaders';
-import { CurrentRenderer } from './CurrentRenderer';
 import { phraseTime } from './flow-field';
 import { InkSimulation } from './InkSimulation';
 import { ReliefRenderer } from './ReliefRenderer';
@@ -38,7 +37,6 @@ function fieldTarget():THREE.WebGLRenderTarget{
 }
 /** Source passes only. StudioRenderer owns the renderer, clock, composition and export. */
 export class InstrumentRenderer {
- private currents:CurrentRenderer|null=null;
  private relief:ReliefRenderer|null=null;
  private readonly simulations=new Map<string,InkSimulation>();
  private readonly surfaces=new Map<string,PreparedSurface>();
@@ -112,9 +110,8 @@ export class InstrumentRenderer {
    }else u.uPatternTexture.value=sim.sample(layer,time,draw,surface,width/height);
   }else u.uPatternTexture.value=layer.kind==='livingink'?this.pattern(layer,draw):this.fallback;
   draw(m,target);
-  if(layer.kind==='currents'&&layer.params.flowMode===1){this.currents??=new CurrentRenderer();this.currents.draw(renderer,layer,phase,width,height,target,surface);}
   if(layer.kind==='relief'&&layer.params.reliefMode===1){this.relief??=new ReliefRenderer();this.relief.draw(renderer,layer,phase,width,height,target,surface);}
  }
  getStats(){return {materials:this.materials.size,patterns:this.patterns.size};}
- dispose(){this.currents?.dispose();this.relief?.dispose();for(const s of this.surfaces.values())s.texture.dispose();this.surfaces.clear();for(const sim of this.simulations.values())sim.dispose();this.simulations.clear();for(const m of this.materials.values())m.dispose();for(const t of this.patterns.values())t.dispose();this.materials.clear();this.patterns.clear();this.init.dispose();this.step.dispose();this.fallback.dispose();}
+ dispose(){this.relief?.dispose();for(const s of this.surfaces.values())s.texture.dispose();this.surfaces.clear();for(const sim of this.simulations.values())sim.dispose();this.simulations.clear();for(const m of this.materials.values())m.dispose();for(const t of this.patterns.values())t.dispose();this.materials.clear();this.patterns.clear();this.init.dispose();this.step.dispose();this.fallback.dispose();}
 }

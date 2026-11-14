@@ -7,7 +7,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),out=p
 const ffmpeg=process.env.REVIEW_FFMPEG??'/opt/homebrew/bin/ffmpeg',ffprobe=process.env.REVIEW_FFPROBE??path.join(path.dirname(ffmpeg),'ffprobe');
 const run=(binary,args)=>{const r=spawnSync(binary,['-v','error',...args],{maxBuffer:32*1024*1024,timeout:60000});assert.equal(r.status,0,r.stderr?.toString()||r.error?.message);return r.stdout;};
 const results=[];
-for(const name of ['silk-river','ink-estuary','breathing-facade']){
+for(const name of ['ink-estuary','breathing-facade']){
  const project=JSON.parse(await fs.readFile(path.join(out,name+'.formfield'),'utf8')),file=path.join(out,name+'.mp4'),frames=project.duration*24;
  const stream=JSON.parse(run(ffprobe,['-count_frames','-show_streams','-of','json',file])).streams[0];assert.equal(Number(stream.nb_read_frames),frames);assert.equal(stream.width,640);assert.equal(stream.height,360);assert.equal(stream.avg_frame_rate,'24/1');
  const select=`select=eq(n\\,0)+eq(n\\,1)+eq(n\\,${frames-2})+eq(n\\,${frames-1})`;

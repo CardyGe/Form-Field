@@ -1,6 +1,6 @@
 # Form & Field
 
-A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.11 alpha.
+A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.13 alpha.
 
 ## What's new in 0.13
 
@@ -8,7 +8,7 @@ A local visual instrument studio for Apple Silicon Macs. Create looping liquid f
 - **Finishes for any layer:** Tunnel, Bloom Echo, Melt, Terraces, Block Shuffle and Ring Delay.
 - **Staggered motion:** Surface, Graphic Patterns, Kinetic Relief and Living Ink move element by element, with pauses, instead of all at once.
 - **Fractals that fly:** Zoom flight, Fly in for the Mandelbox, a seamless Julia dive, Outside colour, and a much faster preview.
-- **New looks:** Oil Pour and Lacing layouts, Colour from below for painting effects with an imported image, Resonant Sand mode scores and plate fills, turning flat-colour Sculptures, and dense tapered Velvet Currents.
+- **New looks:** Oil Pour and Lacing layouts, Colour from below for painting effects with an imported image, Resonant Sand mode scores and plate fills, and turning flat-colour Sculptures.
 
 ## Start creating
 
@@ -25,13 +25,13 @@ Space plays/pauses outside text controls. Command-S saves a self-contained `.for
 
 ## Projection motion · 0.11
 
-Open **Library → Presets → Projection motion** for nine authored studies. **Velvet Currents → Fibre motion → Transported fibres** adds travelling paths, local eddies, staggered births and continuous trails. **Living Ink → Pigment motion** offers the original prepared growth, a flowing pigment loop, and evolving chemistry with transported pigment. **Kinetic Relief → Relief construction → Hinged solids** uses real geometry, perspective and shared shadows. New layers use the upgraded treatments; existing saved looks keep their original settings.
+Open **Library → Presets → Projection motion** for five authored studies. **Living Ink → Pigment motion** offers the original prepared growth, a flowing pigment loop, and evolving chemistry with transported pigment. **Kinetic Relief → Relief construction → Hinged solids** uses real geometry, perspective and shared shadows. New layers use the upgraded treatments; existing saved looks keep their original settings.
 
-The four projection instruments also have Organic motion, Flow direction, Travel and a Motion phrase: Steady travel, Gather and release, or Drift and settle. Controls follow the selected treatment. Evolving chemistry has an explicit 128/256/384 chemical resolution used by both preview and export. Its simulation clock is fixed and interpolated; transport and preparation controls rebuild deterministic state.
+The three projection instruments also have Organic motion, Flow direction, Travel and a Motion phrase: Steady travel, Gather and release, or Drift and settle. Controls follow the selected treatment. Evolving chemistry has an explicit 128/256/384 chemical resolution used by both preview and export. Its simulation clock is fixed and interpolated; transport and preparation controls rebuild deterministic state.
 
 **Evolving chemistry loops.** Ink grows from its seeds through the loop. Over the last **Loop return** share of the loop (0.3 by default), a second copy of the simulation keeps growing past the end, and its state recedes back into the opening state in patches, so the last frame flows into the first. The two states are blended before the ink edges are cut, so the ink pulls back rather than cross-dissolving. Set Loop return to 0 for the original finite clip, which grows once, stops at its end and exports with **Render clip**. Evolving chemistry supports clips up to 60 seconds.
 
-**Shape → Surface influence** adds an editable polygon or uses an imported image mask. Choose Flow around shape, Emit inside shape, or Trace shape edges. Transported fibres and evolving chemistry use shapes during generation; other treatments use them for reveals. Drag polygon vertices or use arrow keys; add/remove vertices to describe a surface. Image masks can independently clip the final output with **Also clip output with mask**. Active obstacles stay solid while Influence blends the visible treatment.
+**Shape → Surface influence** adds an editable polygon or uses an imported image mask. Choose Flow around shape, Emit inside shape, or Trace shape edges. Evolving chemistry uses shapes during generation; other treatments use them for reveals. Drag polygon vertices or use arrow keys; add/remove vertices to describe a surface. Image masks can independently clip the final output with **Also clip output with mask**. Active obstacles stay solid while Influence blends the visible treatment.
 
 Under **Motion → Animation range**, choose **Smooth between endpoints** to animate within explicit lower and upper values without clipping a symmetric offset. Endpoint routes and surface layouts save in document version 2. Version-1 projects remain readable and migrate neutral numeric settings; original artwork is preserved. Keep a copy for use with older application versions.
 
@@ -121,7 +121,7 @@ Every layer now has **Finish → Tonal finishing**: Tonal contrast, Contrast piv
 
 The four material instruments expose **Advanced shape**, **Advanced motion** and **Advanced material** sections. Field stretch, Domain warp, Warp scale, Field twist and Motion phase are shared. Warp scale needs a nonzero Domain warp. Lit materials add Light elevation, Fill light, Directional sheen, Sheen direction and Clear coat; Sheen direction takes effect when Directional sheen is enabled. The new directional highlight is also available on Surface and Oil Slides.
 
-Family-specific controls add ink seed coverage, development and edge pigment; braided/vortex currents; staggered rounded shutters; and circular and harmonic nodal figures. Ink preparation controls are not animation targets. Their cache keys include every preparation setting.
+Family-specific controls add ink seed coverage, development and edge pigment; staggered rounded shutters; and circular and harmonic nodal figures. Ink preparation controls are not animation targets. Their cache keys include every preparation setting.
 
 Each new instrument has a fourth exploration look that demonstrates these controls. Neutral migration defaults preserve existing artwork.
 
@@ -143,11 +143,9 @@ Kinetic Relief also has **Panel sizes**, which mixes large, medium and small pan
 
 **Zoom flight** flies continuously into the pattern. Julia sets dive toward a repeating point of the set (a repelling period-2 cycle), where the set repeats exactly at a smaller scale. Each loop goes deep enough to land on the start's own copy, so there is no crossfade and the frame stays full of detail. If that cycle is too weak to zoom, and on Kaleidoscopes, the next zoom step fades in over the last fifth of the loop instead. **Outside colour** (Julia) fills the space beyond the set with dim colour bands instead of black. To keep playback smooth, the live preview draws fractals with one sample per pixel and traces the Mandelbox at half resolution; exports always use the full Render quality at every pixel. **Fly in** (Mandelbox) moves the camera inside the box toward its folded core and turns it once per loop. Both are 0 by default. The 2D presets now fill the frame and fly; the Mandelbox presets are viewed from inside.
 
-## Living Ink and Velvet Currents
+## Living Ink
 
 Loop ink travels one pattern period per loop. Delay spread, Delay from and Pause make that travel arrive in gentle pulses across the frame. Evolving ink has **Colour by age**, which colours new growth differently from old; Ink Estuary uses it with flat colour and keeps its ink between about 30% and 65% of the frame.
-
-Transported Velvet Currents allow up to 480 for Fibre density (up to 16,384 strands), and **Fibre taper** now thins each trail toward both ends. The comb-like Vortex Filaments and the sparse Gathering Light were removed.
 
 ## Oil layouts and colour from an image
 
@@ -163,7 +161,7 @@ Sculpture has **Turns per loop**, which turns the form whole times each loop on 
 
 ## Preset library
 
-The library has 83 presets. In 0.13 it was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
+The library has 67 presets. After 0.13, Velvet Currents was retired and 14 more presets were removed: four Oil slides that repeated one composition in different colours, two Living Ink mazes, seven weak or duplicated Graphic Patterns and the Deep Bloom portal. New Graphic layers now start from Lava Columns. In 0.13 the library was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
 
 **Presets → Finishes for any layer** holds six finishes: Tunnel, Bloom Echo and Melt (feedback), and Terraces, Block Shuffle and Ring Delay (time displacement). A finish applies to the selected layer of any kind except Graphic Patterns and Ink *Evolving*, and replaces any finish already on it. **No finish** turns both off. Recursion Tunnel and Time Terraces remain as Surface presets that show a finish on a source.
 
@@ -188,14 +186,13 @@ Very small rings and thin patterns filter toward their average at the pixel limi
 
 ## Light, material & space
 
-Four projection instruments (Living Ink, Velvet Currents, Kinetic Relief, Resonant Sand) share the existing rendering loop, layer compositor, masks, palette grading, smart randomizer and native output pipeline. The library includes original looks for each instrument plus eight projection motion studies across Currents, Ink and Relief.
+Three projection instruments (Living Ink, Kinetic Relief, Resonant Sand) share the existing rendering loop, layer compositor, masks, palette grading, smart randomizer and native output pipeline. The library includes original looks for each instrument plus five projection motion studies across Ink and Relief.
 
-Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral and Volumetric Veils were retired in 0.13 because none of them looked like what its name promised. Opening an older project drops layers of those kinds; a project that only used them reports that its effects were retired.
+Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral and Volumetric Veils were retired in 0.13 because none of them looked like what its name promised. Opening an older project drops layers of those kinds; a project that only used them reports that its effects were retired. Velvet Currents was retired after 0.13 for the same reason: even at 16,000 strands it read as sparse, dim lines around an empty centre. Its layers are dropped the same way.
 
 | Instrument | Material and controls |
 | --- | --- |
 | Living Ink | A seeded Gray–Scott reaction-diffusion pattern, four growth families, branching, pigment coverage, flow distortion and embossed relief. |
-| Velvet Currents | Coherent luminous fibres with curl, density, trail length and depth shading. |
 | Kinetic Relief | Bevelled hinged shutters, three hinge directions, travelling opening waves and material shading. |
 | Resonant Sand | Chladni-inspired standing-wave figures, mixed modes, nodal width, grain and membrane relief. |
 
@@ -203,7 +200,7 @@ Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral an
 
 Living Ink’s **Prepared growth** treatment prepares its deterministic 384 × 384 chemical texture when its seed, Growth family or Branching changes. Those controls do not run during playback; Branching cannot receive an animation route. Four prepared textures are cached. Flow, pigment, relief, colour and transforms remain live. That treatment’s moving appearance is a periodic deformation of the prepared pattern. **Evolving chemistry** instead advances the chemical and pigment state as described in the 0.11 section above. This keeps seeks and resumed exports reproducible.
 
-Velvet Currents uses analytic strand fields and Kinetic Relief uses a shaded height field. They are artistic material instruments rather than physical simulations or editable 3D meshes.
+Kinetic Relief uses a shaded height field. It is an artistic material instrument rather than physical simulations or editable 3D meshes.
 
 The shared optical helpers also improve existing instruments: **Surface → Optical sheen** adds a thin-film finish, while **Oil Slides → Caustic light** and **Optical sheen** add focused illumination and spectral material colour. These controls default to zero in older projects, preserving their appearance. Fine lines in the new instruments use filtering based on the target pixel footprint; Living Ink uses mipmapped chemical textures.
 
@@ -300,7 +297,7 @@ Fractal Worlds has three families, each with three variants, plus Palette, Duoto
 
 **Morph** periodically changes structure. **Travel** adds a periodic pan/orbit/dolly and returns to its starting position. With both at zero, intrinsic Fractal motion stops. You can still animate any continuous control through the shared Motion routes. Family, variant, quality, radial fold, symmetry and intrinsic cycle settings remain discrete. **Color drift** offsets the cyclic palette; **Color density**, **Relief**, **Glow**, **Contrast** and **Exposure** shape the finish.
 
-These are finite fractal renderers designed for controllable loops. They do not provide unlimited numerical zoom or an endless forward flight. Saved settings and the app version determine the image, with no accumulated simulation state or temporal feedback.
+These are finite fractal renderers designed for controllable loops. They do not provide unlimited numerical zoom or an endless forward flight. Saved settings and the app version determine the image, with no accumulated simulation state unless a Feedback finish is applied.
 
 Earlier version-1 Fractal projects receive only absent new control defaults. Their authored settings, routes and assets are retained, but the revised renderer changes their appearance. Keep the 0.4 app archive when a composition must reproduce its old look. Unfinished exports need the same app build that started them.
 
@@ -335,7 +332,7 @@ The default destination is `~/Documents/Form & Field Exports`. Each job has its 
 
 ## Current limits
 
-The first instruments focus on liquid/contour fields, folded forms, fractal families, graphic patterns and painted film, with curated presets including four Super 8 Paint looks. Four composition layers, PNG/JPEG imports, SDR output, and 1–60 second loops are supported in the interface. There is no projection warping, node graph, imported video, audio analysis, fluid simulation or unbounded temporal feedback in this version. Super 8 Paint reconstructs a bounded six-impression feedback trail. Still export uses 8-bit PNG; use the PNG sequence path for 16-bit output. Signing/notarization and broader hardware qualification remain release work.
+The first instruments focus on liquid/contour fields, folded forms, fractal families, graphic patterns and painted film, with curated presets including five Super 8 Paint looks. Four composition layers, PNG/JPEG imports, SDR output, and 1–60 second loops are supported in the interface. There is no projection warping, node graph, imported video, audio analysis or fluid simulation in this version. Super 8 Paint reconstructs a bounded six-impression feedback trail. Still export uses 8-bit PNG; use the PNG sequence path for 16-bit output. Signing/notarization and broader hardware qualification remain release work.
 
 The baseline machine is an Apple M5 Pro with 24 GB unified memory. Rendering complex 4K loops takes time and retains a disk cache. Performance measurements in `work/` are specific to this machine and test composition.
 
@@ -354,7 +351,7 @@ npm run dev
 
 `node scripts/verify-smart-repeat.mjs` checks geometry at repeat joins, all ninety transformed presets, procedural view equivalence, finite 3D geometry, image repeat/sampler isolation and 4K output.
 
-`node scripts/verify-quality.mjs` renders all 83 presets at multiple phases, stresses every family at slider extremes and checks randomized variants. It writes a review gallery to `work/quality-pass/gallery.html`. `node scripts/verify-randomizer-ui.mjs` checks all eleven layer types, three variation amounts, locks, routes and undo/redo through native persistence.
+`node scripts/verify-quality.mjs` renders all 67 presets at multiple phases, stresses every family at slider extremes and checks randomized variants. It writes a review gallery to `work/quality-pass/gallery.html`. `node scripts/verify-randomizer-ui.mjs` checks all ten layer types, three variation amounts, locks, routes and undo/redo through native persistence.
 
 `npm run start` builds and opens the desktop app without a development server. `npm run build` runs TypeScript validation and produces the renderer. `npm test` runs core and native export tests with actual media tools. `node scripts/verify-graphics.mjs` checks the thirty-two graphic presets, looping, controls, transparency, 4K stills and native movie export; `node scripts/verify-graphics-ui.mjs` checks their integrated UI and persistence. `node scripts/verify-super8.mjs` checks all five film modes, every paint/projector control, frame holds, continuous transport, feedback history, exact loops, alpha, 4K output and resumed native exports. Set `SUPER8_CAPTURE_MOTION=1` to also capture a short ProRes projector preview. `node scripts/verify-super8-ui.mjs [app-path]` checks packaged projector controls, older project migration, save/open and native alpha output. `node scripts/verify-oil.mjs` checks Oil rendering, looping, alpha, mixed layers and 4K output in Electron. `node scripts/verify-ui.mjs` drives the built Electron application, including native persistence and a real transparent movie export; only file dialogs are replaced for repeatability.
 

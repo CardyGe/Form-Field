@@ -7,7 +7,7 @@ const looks=PRESETS.filter(p=>p.kind==='graphic');
 const layerFor=(id:string)=>applyPreset(createLayer('graphic'),id);
 
 test('all graphic looks are complete, persisted native layers with substantial family controls',()=>{
-  assert.equal(looks.length,24);
+  assert.equal(looks.length,17);
   for(const look of looks){
     const layer=layerFor(look.id),project={...createProject(),layers:[layer]};
     assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))),project);
@@ -79,7 +79,7 @@ test('layout cache ignores colour and motion but tracks structural changes',()=>
   assert.notEqual(cache.get(p,16/9),first);
   const radial=layerFor('radial-circuit').params;
   assert.equal(cache.get(radial,1),cache.get({...radial,innerRadius:.3,ringWidth:.2},1));
-  const cols=layerFor('pillar-wave').params;
+  const cols=layerFor('lava-columns').params;
   const data=generateGraphicLayout(cols,1);assert.ok(Math.abs(data.columns.reduce((a,b)=>a+b,0)-1)<1e-12);
 });
 
@@ -94,7 +94,7 @@ test('graphic variation keeps selected algorithms, honours locks and stays valid
 });
 
 test('graphic family validation rejects mismatched looks and variation leaves inactive controls intact',()=>{
-  const layer=layerFor('pillar-wave');layer.params.variant=8;
+  const layer=layerFor('lava-columns');layer.params.variant=8;
   assert.throws(()=>validateProject({...createProject(),layers:[layer]}),/does not belong/);
   const path=layerFor('circuit-worms');path.params.turns=3;
   const varied=varyLayer(path,1,{palette:false,structure:false,motion:false,material:false});
@@ -117,7 +117,7 @@ test('extreme canvas aspect ratios retain bounded layout and glyph budgets',()=>
 });
 
 test('radial pattern size adds outer geometry while retaining one centre and the original inner shapes',()=>{
-  for(const id of ['concentric-halo','orbital-bloom','beaded-spiral','woven-vortex'])for(const aspect of [9/16,1,16/9]){
+  for(const id of ['circle-fans','beaded-spiral','web-rosette'])for(const aspect of [9/16,1,16/9]){
     const layer=layerFor(id),layout=generateGraphicLayout(layer.params,aspect);
     layer.params.turns=0;layer.params.orientation=0;layer.params.stretch=1;
     assert.equal(graphicPatternExtent(layer,.7,aspect),1);

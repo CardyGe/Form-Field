@@ -15,14 +15,13 @@ export function sameCanvasValues(a: Layer, b: Layer): boolean {
 const preferred: Partial<Record<LayerKind, string[]>> = {
   surface: ['warp', 'detail'], sculpture: ['fold', 'twist'], fractal: ['fold', 'twist'],
   oil: ['deformation', 'lensSize'], super8: ['coverage', 'erosion'], livingink: ['flow', 'warp'],
-  currents: ['curl', 'coherence'], relief: ['opening', 'depth'],
+  relief: ['opening', 'depth'],
   resonance: ['modalBlend', 'radialMix'],
 };
 
 /** Continuous, visible controls only; never rebuild a simulation during a drag. */
 export function canvasAxes(layer: Layer, locks: VariationLocks): ParameterDefinition[] {
   let keys = preferred[layer.kind] ?? [];
-  if(layer.kind==='currents'&&layer.params.flowMode===1)keys=['curl','width'];
   if(layer.kind==='livingink'&&layer.params.inkMode===2)keys=['pigment','relief'];
   if (layer.kind === 'fractal' && layer.params.style === 1) keys = ['juliaReal', 'juliaImag'];
   if (layer.kind === 'fractal' && layer.params.style === 2) keys = ['boxScale', 'boxRadius'];

@@ -108,29 +108,6 @@ void main(){
  vec3 color=coat(base,n,uLightAngle,uRoughness,.12);
  color=mix(color,uPalette[3],ridge*uEdgeInk);outputField(color,cover);
 }`,
-currents:/* glsl */`
-void main(){
- if(uFlowMode>.5){outputField(vec3(0.),0.);return;}
- vec2 p=domain();float weave=0.,height=0.,tone=0.;
- for(int i=0;i<3;i++){
-  float k=float(i),weight=i==0?1.:(1.-uCoherence)*.6;
-  vec2 q=spin(k*.48*(1.-uCoherence)+uVortex*exp(-dot(p,p)*.15)*3.)*p;
-  q+=uCurl*.45*vec2(sin(q.y*1.3+orbit().y+k),sin(q.x*1.1+orbit().x));
-  float flow=q.y+uCurl*(sin(q.x*1.1+orbit().x+k)*.48+sin(q.x*2.1-orbit().y+k)*.13);
-  flow+=uBraid*.12*sin(q.x*3.+orbit().y+k*2.1);
-  if(uFlowDetail>0.)flow+=uFlowDetail*.05*sin(q.x*5.7+orbit().x)*sin(q.y*3.1-orbit().y);
-  float t=flow*uFibres;
-  float fibres=optStripe(t,(.12+uWidth*.55)*(1.-uTaper*.8*(.5+.5*sin(q.x*1.5+orbit().x+k))));
-  float drift=q.x*.22+sin(uPhase)*uMotion*.25+hash21(vec2(floor(t),k));
-  float tail=mix(1.,.24+.76*pow(.5+.5*cos(drift*TAU),2.),1.-uTrailLength);
-  float strand=fibres*tail*weight;
-  weave+=strand;height+=strand*.012*uDepth;tone+=strand*(.15+.13*k+.08*sin(q.x+orbit().x));
- }
- float coverage=clamp(weave,0.,1.);vec3 n=fieldNormal(p,height);
- vec3 base=colour(tone/max(weave,.001)+.08*sin(p.y*.3));
- vec3 color=coat(base,n,uLightAngle,uRoughness,.35)*1.65;
- outputField(color,coverage);
-}`,
 relief:/* glsl */`
 ${timingGLSL}
 void main(){
