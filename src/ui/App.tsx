@@ -15,6 +15,7 @@ import sculptureThumb from './assets/sculpture.png';
 import fractalThumb from './assets/fractal.png';
 import oilThumb from './assets/oil.png';
 import liquidThumb from './assets/liquid.png';
+import scopeThumb from './assets/scope.png';
 import super8Thumb from './assets/super8.png';
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import { Preview } from './Preview';
@@ -27,7 +28,7 @@ const uid = () => crypto.randomUUID();
 const resolutions = ['3840x2160', '4096x2160', '3840x2400', '2160x3840', '2160x2160', '1920x1200', '1920x1080', '960x540'];
 const rates = ['24/1', '25/1', '30/1', '50/1', '60/1', '30000/1001', '60000/1001'];
 const actualDuration = (p: Project) => frameCount(p) * p.fps.den / p.fps.num;
-const kindLabels: Record<LayerKind, string> = { ...Object.fromEntries(INSTRUMENTS.map(i=>[i.kind,i.name])) as Record<LayerKind,string>, surface: 'Surface', sculpture: 'Sculpture', fractal: 'Fractal', oil: 'Oil Slides', super8: 'Super 8 Paint', graphic: 'Graphic Patterns', image: 'Image' };
+const kindLabels: Record<LayerKind, string> = { ...Object.fromEntries(INSTRUMENTS.map(i=>[i.kind,i.name])) as Record<LayerKind,string>, surface: 'Surface', sculpture: 'Sculpture', fractal: 'Fractal', oil: 'Oil Slides', liquid: 'Liquid Light', scope: 'Oscilloscope', super8: 'Super 8 Paint', graphic: 'Graphic Patterns', image: 'Image' };
 const patterns: Partial<Record<LayerKind, string[]>> = {
   surface: ['Bands', 'Contours', 'Drips', 'Fusion'],
   fractal: ['Kaleidoscope', 'Julia Bloom', 'Mandelbox'],
@@ -51,6 +52,7 @@ const super8ControlGroups: [string, string[]][] = [
   ['Projector lens', ['lensSoftness', 'halation', 'vignette', 'lightLeak', 'colorFade']],
 ];
 const super8PaletteLabels = ['Paint 1', 'Paint 2', 'Paint 3', 'Paint 4', 'Ink', 'Paper'];
+const scopePaletteLabels = ['Line', 'Halo', 'Bloom', 'Hot core', 'Second line', 'Unused'];
 const liquidPaletteLabels = ['Rim', 'Body', 'Mid', 'Hot', 'Wash', 'Ground'];
 const oilPaletteLabels = ['Paint', 'Secondary paint', 'Ink', 'Substrate', 'Shadow tint', 'Rim tint'];
 const oilFineControls = ['lensAspect', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion', 'lift', 'filaments', 'softness', 'lightAngle', 'shadow', 'grain'];
@@ -72,6 +74,7 @@ function lookCaption(preset: typeof PRESETS[number]): string {
   if (preset.kind === 'graphic') return `${GRAPHIC_FAMILIES[style]} · ${GRAPHIC_VARIANTS[style][variant] ?? 'Custom'}`;
   if (preset.kind === 'oil') return 'Paint · glass · cellular ink';
   if (preset.kind === 'liquid') return 'Oil droplets · dye · projector';
+  if (preset.kind === 'scope') return 'Glowing line · sphere · beam';
   if (preset.kind === 'fractal') return `${patterns.fractal![style]} · ${fractalVariants[style][variant]}`;
   return `${sculptureForms[Math.round(preset.params.form ?? 0)]} · Sculpture`;
 }
@@ -98,6 +101,8 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     fractal: <><path d="m12 2 9 5v10l-9 5-9-5V7Z" /><path d="m12 6 5 3v6l-5 3-5-3V9Zm0 4 2 2-2 2-2-2Z" /></>,
     super8: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 8h18M3 16h18M7 4v4m5-4v4m5-4v4M7 16v4m5-4v4m5-4v4M7 14h3v-2h3v-2h4" /></>,
     oil: <><path d="M12 2C9 7 4 10 4 15a8 8 0 0 0 16 0c0-5-5-8-8-13Z" /><path d="M8 15a4 4 0 0 0 4 4" /><circle cx="14" cy="12" r="2" /></>,
+    liquid: <><circle cx="9" cy="9" r="6" /><circle cx="17.5" cy="16.5" r="3.5" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="6" r="1.5" /></>,
+    scope: <><circle cx="12" cy="12" r="9" /><path d="M3 12c3-8 6-8 9 0s6 8 9 0" /></>,
     graphic: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><path d="M12 3v4m9 5h-4m-5 9v-4M3 12h4" /></>,
     livingink: <><circle cx="8" cy="8" r="4"/><circle cx="16" cy="15" r="5"/></>,
     relief: <><path d="m3 6 7-3v15l-7 3Zm11 0 7-3v15l-7 3Z"/></>,
@@ -156,7 +161,15 @@ function Transport({ project, phase, playing, onPlaying, onDuration, children }:
 
 function Parameter({ definition: d, value, animated, onChange, onAnimate, onStart, onEnd }: { definition: ParameterDefinition; value: number; animated: boolean; onChange: (n: number) => void; onAnimate?: () => void; onStart: () => void; onEnd: () => void }) {
   const percent = (value - d.min) / (d.max - d.min) * 100;
-  const precision = Math.min(6, Math.max(0, Math.ceil(-Math.log10(d.step))));
+  // Fine control works in tenths of a slider step, so values show one more decimal place.
+  const fineStep = d.step === 1 ? 1 : d.step / 10;
+  const precision = Math.min(7, Math.max(0, Math.ceil(-Math.log10(fineStep))));
+  // The slider itself steps in fineStep so fine values are representable; ordinary drags and keys still land on d.step.
+  const snapTo = (n: number, step: number) => clamp(Number((d.min + Math.round((n - d.min) / step) * step).toFixed(7)), d.min, d.max);
+  const snapFine = (n: number) => snapTo(n, fineStep);
+  const fine = useRef<{ x: number; value: number } | null>(null), latest = useRef(value);
+  latest.current = value;
+  const reset = () => { if (value !== d.default) onChange(d.default); };
   const formatted = String(Number(value.toFixed(precision)));
   const [draft, setDraft] = useState(formatted), editing = useRef(false), cancelled = useRef(false), dirty = useRef(false);
   useEffect(() => { if (!editing.current) setDraft(formatted); }, [formatted]);
@@ -170,7 +183,24 @@ function Parameter({ definition: d, value, animated, onChange, onAnimate, onStar
     setDraft(String(Number(next.toFixed(precision))));
     if (next !== value) onChange(next);
   };
-  return <div className={`parameter${d.step < 0.001 ? ' precise-parameter' : ''}`}><div className="parameter-label"><label title={d.description ? `${d.label}: ${d.description}` : d.label} htmlFor={`parameter-${d.key}`}>{d.label}</label><div><button className="parameter-reset" aria-label={`Reset ${d.label}`} title={`Reset ${d.label}`} disabled={value===d.default} onClick={()=>onChange(d.default)}>↺</button>{onAnimate && <button className={`mod-button ${animated ? 'active' : ''}`} onClick={onAnimate} title={`Animate ${d.label}`} aria-pressed={animated}><Icon name="wave" size={14} /></button>}<input aria-label={`${d.label} value`} type="number" min={d.min} max={d.max} step={d.step} value={draft} onFocus={() => { editing.current = true; dirty.current = false; }} onChange={e => { dirty.current = true; setDraft(e.target.value); }} onBlur={commit} onKeyDown={e => { if (e.key === 'Escape') { cancelled.current = true; e.currentTarget.blur(); } else if (e.key === 'Enter' || ((e.metaKey || e.ctrlKey) && ['s', 'o'].includes(e.key.toLowerCase()))) e.currentTarget.blur(); }} /></div></div><input id={`parameter-${d.key}`} aria-label={d.label} type="range" min={d.min} max={d.max} step={d.step} value={value} style={{ '--fill': `${percent}%` } as CSSProperties} onPointerDown={onStart} onPointerUp={onEnd} onKeyUp={onEnd} onChange={e => onChange(Number(e.target.value))} /></div>;
+  return <div className={`parameter${d.step < 0.001 ? ' precise-parameter' : ''}`}><div className="parameter-label"><label title={`${d.description ? `${d.label}: ${d.description}` : d.label}\nDouble-click to reset`} htmlFor={`parameter-${d.key}`} onDoubleClick={reset}>{d.label}</label><div><button className="parameter-reset" aria-label={`Reset ${d.label}`} title={`Reset ${d.label}`} disabled={value===d.default} onClick={()=>onChange(d.default)}>↺</button>{onAnimate && <button className={`mod-button ${animated ? 'active' : ''}`} onClick={onAnimate} title={`Animate ${d.label}`} aria-pressed={animated}><Icon name="wave" size={14} /></button>}<input aria-label={`${d.label} value`} type="number" min={d.min} max={d.max} step={d.step} value={draft} onFocus={() => { editing.current = true; dirty.current = false; }} onChange={e => { dirty.current = true; setDraft(e.target.value); }} onBlur={commit} onKeyDown={e => { if (e.key === 'Escape') { cancelled.current = true; e.currentTarget.blur(); } else if (e.key === 'Enter' || ((e.metaKey || e.ctrlKey) && ['s', 'o'].includes(e.key.toLowerCase()))) e.currentTarget.blur(); }} /></div></div><input id={`parameter-${d.key}`} aria-label={d.label} type="range" min={d.min} max={d.max} step={fineStep} value={value} style={{ '--fill': `${percent}%` } as CSSProperties} title="Double-click to reset · hold Shift for fine control"
+    onPointerDown={() => { fine.current = null; onStart(); }}
+    onPointerMove={e => {
+      // Holding Shift during a drag moves the value at a tenth of the pointer's speed, from where Shift went down.
+      if (!(e.buttons & 1) || !e.shiftKey) { fine.current = null; return; }
+      if (!fine.current) { fine.current = { x: e.clientX, value: latest.current }; return; }
+      const next = snapFine(fine.current.value + (e.clientX - fine.current.x) / e.currentTarget.getBoundingClientRect().width * (d.max - d.min) * .1);
+      if (next !== latest.current) onChange(next);
+    }}
+    onPointerUp={() => { fine.current = null; onEnd(); }} onPointerCancel={() => { fine.current = null; onEnd(); }}
+    onDoubleClick={reset}
+    onKeyDown={e => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+      e.preventDefault(); onStart();
+      const by = e.shiftKey ? fineStep : d.step;
+      onChange(snapFine(value + (['ArrowRight', 'ArrowUp'].includes(e.key) ? by : -by)));
+    }}
+    onKeyUp={onEnd} onChange={e => { if (!fine.current) onChange(snapTo(Number(e.target.value), d.step)); }} /></div>;
 }
 
 function KeyframeCurve({ mod, onChange, onStart, onEnd }: { mod: Modulation; onChange: (m: Modulation) => void; onStart: () => void; onEnd: () => void }) {
@@ -208,6 +238,7 @@ const instrumentCatalogue = [
   { kind: 'super8', name: 'Super 8 Paint', caption: 'Paint · moving film · projector', image: super8Thumb, label: 'Add Super 8 Paint' },
   { kind: 'oil', name: 'Oil Slides', caption: 'Paint · glass · cellular ink', image: oilThumb, label: 'Add oil slides' },
   { kind: 'liquid', name: 'Liquid Light', caption: 'Oil droplets · dye · projector', image: liquidThumb, label: 'Add liquid light' },
+  { kind: 'scope', name: 'Oscilloscope', caption: 'Glowing line · sphere · beam', image: scopeThumb, label: 'Add oscilloscope' },
   { kind: 'graphic', name: 'Graphic Patterns', caption: 'Waves · circles · tiles · paths', image: graphicThumb, label: 'Add graphic patterns' },
   ...INSTRUMENTS.map(info => ({ kind: info.kind, name: info.name, caption: info.description, image: projectionThumbnails[`./assets/projection/${startingLooks[info.kind]}.png`]??instrumentThumbnails[`./assets/instruments/${info.kind}.png`], label: `Add ${info.name}` })),
 ] satisfies {kind: LayerKind; name: string; caption: string; image: string; label: string}[];
@@ -256,7 +287,7 @@ export default function App() {
     : (['Shape', 'Motion', 'Material', 'Camera'] as const).map(title => ({ title, defs: definitions.filter(d => d.section === title) }));
   const selectedModKey = modKey === 'opacity' || modKey.startsWith('transform.') || definitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation) || (selected?.modulations[modKey] && allDefinitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation)) ? modKey : definitions.find(d => d.step !== 1 && !d.preparation)?.key ?? 'opacity';
   const modulation = selected?.modulations[selectedModKey];
-  const effectivePresetFilter = presetFilter === 'selected' ? selected?.kind === 'surface' || selected?.kind === 'fractal' || selected?.kind === 'graphic' ? `${selected.kind}-${Math.round(selected.params.style ?? 0)}` : selected?.kind === 'sculpture' ? `sculpture-${Math.round(selected.params.form ?? 0)}` : selected?.kind === 'oil' ? 'oil' : selected?.kind === 'super8' ? 'super8' : selected && isInstrument(selected.kind) ? selected.kind : 'all' : presetFilter;
+  const effectivePresetFilter = presetFilter === 'selected' ? selected?.kind === 'surface' || selected?.kind === 'fractal' || selected?.kind === 'graphic' ? `${selected.kind}-${Math.round(selected.params.style ?? 0)}` : selected?.kind === 'sculpture' ? `sculpture-${Math.round(selected.params.form ?? 0)}` : selected && ['oil', 'liquid', 'scope', 'super8'].includes(selected.kind) ? selected.kind : selected && isInstrument(selected.kind) ? selected.kind : 'all' : presetFilter;
   const visiblePresets = PRESETS.filter(preset => effectivePresetFilter === 'projection' && PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'flat' && FLAT_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'all' || preset.kind === effectivePresetFilter || `${preset.kind}-${preset.kind === 'sculpture' ? preset.params.form : preset.params.style}` === effectivePresetFilter);
   const searchedFinishes = FINISH_LOOKS.filter(f => `${f.name} ${f.description}`.toLowerCase().includes(libraryQuery));
   const searchedPresets = visiblePresets.filter(p => `${p.name} ${p.description} ${kindLabels[p.kind]}`.toLowerCase().includes(libraryQuery));
@@ -283,13 +314,22 @@ export default function App() {
   const endGesture = () => { gesture.current = false; setHistoryRevision(n => n + 1); };
   const undo = () => { const prev = history.current.pop(); if (prev) { future.current.push(projectRef.current); replace(prev, false); } };
   const redo = () => { const next = future.current.pop(); if (next) { history.current.push(projectRef.current); replace(next, false); } };
-  const save = async () => { try {
+  const [filePath, setFilePath] = useState('');
+  const fileName = filePath.split('/').pop() ?? '';
+  const save = async (saveAs = false) => { try {
     const snapshot = validateProject(projectRef.current);
-    if (window.studio) { const result = await window.studio.saveProject(snapshot); if (!result.canceled) notify('Project saved.'); }
+    if (window.studio) { const result = await window.studio.saveProject(snapshot, saveAs); if (!result.canceled) { setFilePath(result.path ?? ''); notify(result.path ? `Saved to ${result.path.split('/').pop()}.` : 'Project saved.'); } }
     else { download(new TextEncoder().encode(JSON.stringify(projectRef.current, null, 2)), `${projectRef.current.name}.formfield`, 'application/json'); notify('Project downloaded.'); }
   } catch (e) { reportError(String(e)); } };
+  // Recorded like any edit, so Undo brings the previous composition back.
+  const newProject = async () => { try {
+    const next = createProject();
+    replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath('');
+    await window.studio?.forgetProjectPath();
+    notify('New composition. Undo brings the previous one back.');
+  } catch (e) { reportError(String(e)); } };
   const open = async () => { try {
-    if (window.studio) { const result = await window.studio.openProject(); if (result.project) { const next = validateProject(result.project); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; } }
+    if (window.studio) { const result = await window.studio.openProject(); if (result.project) { const next = validateProject(result.project); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath(result.path ?? ''); } }
     else { const input = document.createElement('input'); input.type = 'file'; input.accept = '.formfield,.json'; input.onchange = async () => { try { const file = input.files?.[0]; if (file) { const next = validateProject(JSON.parse(await file.text())); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; } } catch (e) { reportError(String(e)); } }; input.click(); }
   } catch (e) { reportError(String(e)); } };
 
@@ -348,7 +388,8 @@ export default function App() {
         if (key === 'i' && !workspace.focusMode) { e.preventDefault(); workspace.toggleInspector(); return; }
         if (e.key === 'Escape' && workspace.focusMode && !workspace.libraryOpen && !workspace.variationOpen) { e.preventDefault(); workspace.setFocusMode(false); workspace.focusButton.current?.focus(); return; }
       }
-      if (command && e.key.toLowerCase() === 's') { e.preventDefault(); void save(); }
+      if (command && e.key.toLowerCase() === 's') { e.preventDefault(); void save(e.shiftKey); }
+      else if (command && e.key.toLowerCase() === 'n' && !exporting) { e.preventDefault(); void newProject(); }
       else if (command && e.key.toLowerCase() === 'o') { e.preventDefault(); void open(); }
       else if (command && e.key.toLowerCase() === 'z' && !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
       else if (e.code === 'Space' && !['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'SUMMARY'].includes((e.target as HTMLElement).tagName)) { e.preventDefault(); setPlaying(v => !v); }
@@ -453,8 +494,8 @@ export default function App() {
     <input ref={imageInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0]); e.target.value = ''; }} />
     <input ref={maskInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0], true); e.target.value = ''; }} />
     <header className="app-header"><div className="brand"><div className="brand-mark">f<span>f</span></div><div>Form <span>&</span> Field</div></div>
-      <div className="project-title"><EditableName label="Project name" value={project.name} maxLength={80} onCommit={name => edit(p => ({ ...p, name }))} /><span role="status" className={saved === 'Save project to keep changes' ? 'save-failed' : ''}>{saved}</span></div>
-      <div className="header-actions"><button className="icon-button" title="Undo · ⌘Z" disabled={!history.current.length} onClick={undo}><Icon name="undo" /></button><button className="icon-button" title="Redo · ⇧⌘Z" disabled={!future.current.length} onClick={redo}><Icon name="redo" /></button><span className="divider" /><button className="text-button" onClick={() => void open()}><Icon name="folder" size={16} />Open</button><button className="text-button" onClick={() => void save()}><Icon name="save" size={16} />Save</button><button className="primary-button" onClick={e => { e.currentTarget.focus(); setExportOpen(true); }}><Icon name="download" size={16} />Export</button></div>
+      <div className="project-title"><EditableName label="Project name" value={project.name} maxLength={80} onCommit={name => edit(p => ({ ...p, name }))} />{fileName && <span className="project-file" title={filePath}>{fileName}</span>}<span role="status" className={saved === 'Save project to keep changes' ? 'save-failed' : ''}>{saved}</span></div>
+      <div className="header-actions"><button className="icon-button" title="Undo · ⌘Z" disabled={!history.current.length} onClick={undo}><Icon name="undo" /></button><button className="icon-button" title="Redo · ⇧⌘Z" disabled={!future.current.length} onClick={redo}><Icon name="redo" /></button><span className="divider" /><button className="text-button" title="New composition · ⌘N" disabled={exporting} onClick={() => void newProject()}><Icon name="plus" size={16} />New</button><button className="text-button" title="Open · ⌘O" onClick={() => void open()}><Icon name="folder" size={16} />Open</button><button className="text-button" title={fileName ? `Save to ${fileName} · ⌘S\nShift-click or ⇧⌘S to save as a new file` : 'Save · ⌘S'} onClick={e => void save(e.shiftKey)}><Icon name="save" size={16} />Save</button><button className="primary-button" onClick={e => { e.currentTarget.focus(); setExportOpen(true); }}><Icon name="download" size={16} />Export</button></div>
     </header>
 
     <main className="workspace">
@@ -462,7 +503,7 @@ export default function App() {
       <div className="drawer-heading"><strong>Library</strong><button className="icon-button" aria-label="Close library" popoverTarget="library-drawer" popoverTargetAction="hide"><Icon name="close" size={16} /></button></div>
       <label className="library-search"><Icon name="search" size={15} /><input type="search" autoFocus aria-label="Search library" placeholder="Search instruments and looks…" value={librarySearch} onChange={e=>setLibrarySearch(e.target.value)} /></label>
       <div className="tab-switch library-tabs">{(['Instruments', 'Presets'] as const).map(t => <button key={t} aria-pressed={libraryTab === t} className={libraryTab === t ? 'active' : ''} onClick={() => setLibraryTab(t)}>{t}</button>)}</div>
-      <div className="library-content">{libraryTab === 'Instruments' ? <div className="instrument-list">{searchedInstruments.map(info => <button key={info.kind} aria-label={info.label} className="instrument-card" onClick={() => addLayer(info.kind)}><img className="instrument-art" src={info.image} alt="" /><div className="instrument-info"><div><strong>{info.name}</strong><small>{info.caption}</small></div><Icon name="plus" size={14} /></div></button>)}{!searchedInstruments.length && <p className="empty-note">No instruments match “{librarySearch}”.</p>}<button className="import-button" onClick={() => addLayer('image')}><Icon name="image" size={16} /><span>Import image<small>PNG / JPEG</small></span></button></div> : <><label className="stacked-label preset-filter">Filter<select aria-label="Preset library filter" value={presetFilter} onChange={e => setPresetFilter(e.target.value)}><option value="selected">Current selection</option><option value="all">All presets</option><option value="projection">Projection motion · 9 studies</option><option value="flat">Flat colour &amp; outlines · {FLAT_LOOK_IDS.length} looks</option><option value="finish">Finishes for any layer · {FINISH_LOOKS.length - 1} looks</option><optgroup label="Surfaces"><option value="surface">All surfaces</option>{patterns.surface!.map((label, index) => <option key={index} value={`surface-${index}`}>{label}</option>)}</optgroup><optgroup label="Sculptures"><option value="sculpture">All sculptures</option>{sculptureForms.map((label, index) => <option key={index} value={`sculpture-${index}`}>{label}</option>)}</optgroup><optgroup label="Fractals"><option value="fractal">All fractals</option><option value="fractal-0">Kaleidoscopes</option><option value="fractal-1">Julia blooms</option><option value="fractal-2">Mandelbox worlds</option></optgroup><optgroup label="Graphic Patterns"><option value="graphic">All graphic patterns</option>{GRAPHIC_FAMILIES.map((label, index) => <option key={index} value={`graphic-${index}`}>{label}</option>)}</optgroup><optgroup label="Light, material & space">{INSTRUMENTS.map(i=><option key={i.kind} value={i.kind}>{i.name}</option>)}</optgroup><option value="oil">Oil Slides</option><option value="super8">Super 8 Paint</option></select></label><div className="preset-list">{presetFilter === 'finish' ? searchedFinishes.map(finish => <button key={finish.id} className="preset-card finish-card" disabled={!selected || !finishSupported(selected)} onClick={() => { if (selected && finishSupported(selected)) editLayer(l => applyFinish(l, finish.id)); }}><strong>{finish.name}</strong><span>{finish.description}</span></button>) : searchedPresets.map(preset => <button key={preset.id} className="preset-card" onClick={() => {
+      <div className="library-content">{libraryTab === 'Instruments' ? <div className="instrument-list">{searchedInstruments.map(info => <button key={info.kind} aria-label={info.label} className="instrument-card" onClick={() => addLayer(info.kind)}><img className="instrument-art" src={info.image} alt="" /><div className="instrument-info"><div><strong>{info.name}</strong><small>{info.caption}</small></div><Icon name="plus" size={14} /></div></button>)}{!searchedInstruments.length && <p className="empty-note">No instruments match “{librarySearch}”.</p>}<button className="import-button" onClick={() => addLayer('image')}><Icon name="image" size={16} /><span>Import image<small>PNG / JPEG</small></span></button></div> : <><label className="stacked-label preset-filter">Filter<select aria-label="Preset library filter" value={presetFilter} onChange={e => setPresetFilter(e.target.value)}><option value="selected">Current selection</option><option value="all">All presets</option><option value="projection">Projection motion · {PROJECTION_LOOK_IDS.length} studies</option><option value="flat">Flat colour &amp; outlines · {FLAT_LOOK_IDS.length} looks</option><option value="finish">Finishes for any layer · {FINISH_LOOKS.length - 1} looks</option><optgroup label="Surfaces"><option value="surface">All surfaces</option>{patterns.surface!.map((label, index) => <option key={index} value={`surface-${index}`}>{label}</option>)}</optgroup><optgroup label="Sculptures"><option value="sculpture">All sculptures</option>{sculptureForms.map((label, index) => <option key={index} value={`sculpture-${index}`}>{label}</option>)}</optgroup><optgroup label="Fractals"><option value="fractal">All fractals</option><option value="fractal-0">Kaleidoscopes</option><option value="fractal-1">Julia blooms</option><option value="fractal-2">Mandelbox worlds</option></optgroup><optgroup label="Graphic Patterns"><option value="graphic">All graphic patterns</option>{GRAPHIC_FAMILIES.map((label, index) => <option key={index} value={`graphic-${index}`}>{label}</option>)}</optgroup><optgroup label="Light, material & space">{INSTRUMENTS.map(i=><option key={i.kind} value={i.kind}>{i.name}</option>)}</optgroup><option value="oil">Oil Slides</option><option value="liquid">Liquid Light</option><option value="scope">Oscilloscope</option><option value="super8">Super 8 Paint</option></select></label><div className="preset-list">{presetFilter === 'finish' ? searchedFinishes.map(finish => <button key={finish.id} className="preset-card finish-card" disabled={!selected || !finishSupported(selected)} onClick={() => { if (selected && finishSupported(selected)) editLayer(l => applyFinish(l, finish.id)); }}><strong>{finish.name}</strong><span>{finish.description}</span></button>) : searchedPresets.map(preset => <button key={preset.id} className="preset-card" onClick={() => {
         if(preset.params.inkMode===2&&project.duration>60){notify('Shorten the clip to 60 seconds before selecting evolving chemistry.');return;}
         // Flat looks are authored as exact palette colour; soft highlight roll-off would dull them.
         if ((preset.params.toonMix ?? 0) > 0 && project.highlights !== 'exact') { edit(p => ({ ...p, highlights: 'exact' })); notify('Exact colour turned on for flat palette colour. Change it under Finish → Output.'); }
@@ -518,7 +559,7 @@ export default function App() {
         {selected.kind === 'image' && <div className="image-settings">{selected.image ? <img src={selected.image.dataUrl} alt={selected.image.name} /> : <p>Import a PNG or JPEG to begin.</p>}<label>Image fit<select aria-label="Image fit" value={selected.image?.fit ?? 'contain'} onChange={e => editLayer(l => ({ ...l, image: l.image ? { ...l.image, fit: e.target.value as 'contain' | 'cover' } : undefined }))}><option value="contain">Contain</option><option value="cover">Cover</option></select></label><ChoiceParameter label="Mirror" name="Image mirror" options={mirrorModes} value={selected.params.mirror} onChange={mirror => editLayer(l => ({ ...l, params: { ...l.params, mirror } }))} /></div>}
         {controlGroups.map(({ title, defs: groupDefs }) => { const defs = groupDefs.filter(d => !choiceKeys.includes(d.key) && !(selected.kind === 'livingink' && d.key === 'pattern') && !(selected.kind === 'relief' && d.key === 'axis') && !(selected.kind === 'graphic' && graphicChoiceKeys.includes(d.key)) && !gradingKeys.includes(d.key) && (selected.kind !== 'oil' || oilFine || !oilFineControls.includes(d.key))).map(d => ({ ...d, advanced: d.advanced || secondaryShapeControls[selected.kind]?.includes(d.key) })); if (!defs.length) return null; return <details className="control-section inspector-section" key={`${selected.kind}-${title}`} open={title === 'Shape' || title === 'Paint geometry'}><summary>{title}<span>{defs.length}</span></summary>{defs.filter(d=>!d.advanced).map(d => <Parameter key={d.key} definition={d} value={selected.params[d.key] ?? d.default} animated={!!selected.modulations[d.key]} onChange={n => editLayer(l => ({ ...l, params: { ...l.params, [d.key]: n } }))} onAnimate={d.step === 1 || d.preparation ? undefined : () => { setModKey(d.key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />)}{defs.some(d=>d.advanced)&&<details className="advanced-controls"><summary>Advanced {title.toLowerCase()}<span>{defs.filter(d=>d.advanced).length}</span></summary>{defs.filter(d=>d.advanced).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]??d.default} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={d.step===1||d.preparation?undefined:()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}</details>}</details>; })}
         {isInstrument(selected.kind)&&<SurfaceEditor layer={selected} onChange={surface=>editLayer(l=>{const next={...l};if(surface)next.surface=surface;else delete next.surface;return next;})} onStart={beginGesture} onEnd={endGesture}/>}
-        {selected.kind !== 'image' && <section className="control-section"><h3>Palette</h3><div className="palette-editor">{selected.palette.map((color, i) => selected.kind === 'sculpture' && i !== 0 && i !== 2 ? null : <label key={i} style={{ background: color }} title={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'super8' ? super8PaletteLabels[i] : `Color ${i + 1}`}><input aria-label={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'super8' ? super8PaletteLabels[i] : `Palette color ${i + 1}`} type="color" value={color} onChange={e => editLayer(l => ({ ...l, palette: l.palette.map((c, j) => i === j ? e.target.value : c) }))} /></label>)}</div><div className="seed-row"><label>Seed<input aria-label="Layer seed" type="number" min="0" max="4294967295" value={selected.params.seed ?? project.seed} onChange={e => editLayer(l => ({ ...l, params: { ...l.params, seed: clamp(Math.round(Number(e.target.value)), 0, 4294967295) } }))} /></label><button className="icon-button" title="Next seed" onClick={() => editLayer(l => ({ ...l, params: { ...l.params, seed: ((l.params.seed ?? 1) + 1) >>> 0 } }))}><Icon name="shuffle" size={15} /></button></div></section>}
+        {selected.kind !== 'image' && <section className="control-section"><h3>Palette</h3><div className="palette-editor">{selected.palette.map((color, i) => selected.kind === 'sculpture' && i !== 0 && i !== 2 ? null : <label key={i} style={{ background: color }} title={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'scope' ? scopePaletteLabels[i] : selected.kind === 'super8' ? super8PaletteLabels[i] : `Color ${i + 1}`}><input aria-label={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'scope' ? scopePaletteLabels[i] : selected.kind === 'super8' ? super8PaletteLabels[i] : `Palette color ${i + 1}`} type="color" value={color} onChange={e => editLayer(l => ({ ...l, palette: l.palette.map((c, j) => i === j ? e.target.value : c) }))} /></label>)}</div><div className="seed-row"><label>Seed<input aria-label="Layer seed" type="number" min="0" max="4294967295" value={selected.params.seed ?? project.seed} onChange={e => editLayer(l => ({ ...l, params: { ...l.params, seed: clamp(Math.round(Number(e.target.value)), 0, 4294967295) } }))} /></label><button className="icon-button" title="Next seed" onClick={() => editLayer(l => ({ ...l, params: { ...l.params, seed: ((l.params.seed ?? 1) + 1) >>> 0 } }))}><Icon name="shuffle" size={15} /></button></div></section>}
       </> : tab === 'Motion' ? <>
         <p className="motion-help">Animate a parameter over the {isEvolving(project)?'clip':'loop'}.</p>
         <label className="stacked-label">Parameter<select aria-label="Motion parameter" value={selectedModKey} onChange={e => setModKey(e.target.value)}>{definitions.filter(d => d.step !== 1 && !d.preparation).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}{!definitions.some(d => d.key === selectedModKey) && allDefinitions.some(d => d.key === selectedModKey) && <option value={selectedModKey}>{allDefinitions.find(d => d.key === selectedModKey)!.label} · other family</option>}<option value="opacity">Layer opacity</option><optgroup label="Layer transform"><option value="transform.x">Horizontal</option><option value="transform.y">Vertical</option><option value="transform.scale">Size</option><option value="transform.rotation">Rotation</option></optgroup></select></label>

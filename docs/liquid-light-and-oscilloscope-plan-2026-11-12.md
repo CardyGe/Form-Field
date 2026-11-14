@@ -141,6 +141,10 @@ Integer frequencies and integer turns keep the curve closed and the loop exact.
 
 **Colour.** Core tint, halo tint and bloom tint are separate palette slots (the 6 s frame has a pink core with an orange halo). Hue can drift over the loop and along `s`. A small radial red/blue offset gives the fringe at the ball's edge.
 
+**Update, 14 November: stage 1 is built, with one change.** The figures are not normalised 3D Lissajous curves, which jump where all three terms pass through zero. Each figure winds round the sphere a whole number of times while swinging between the poles a whole number of times (`src/rendering/scope-curve.ts`), which is always smooth, closed and on the sphere. The 1:2 figure is the seam of a ball and gives the twin ovals. The ring is the sphere's outline, a circle facing the viewer.
+
+**Update, 14 November: stage 2 is built.** The beam pass now stores light (core, halo, colour mix) instead of colour. A five-level blur chain at fixed line heights gives the bloom, and the resolve pass tints core, halo and bloom separately, rolls the sum off to white and reads red and blue apart for the fringe. Ember Ring and Cyan Tangle are added. The reference's yellow outer edge around the orange halo at 6 s is not reproduced: the model has one halo colour and one bloom colour.
+
 ### Controls
 
 | Section | Parameters |

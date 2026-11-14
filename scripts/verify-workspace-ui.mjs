@@ -183,7 +183,7 @@ try {
  });
  await check('all source inspectors retain valid editable control rows',async()=>{
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1440,900));
-  for(const kind of ['surface','sculpture','fractal','graphic','oil','liquid','super8','livingink','relief','resonance','texturecuts','glitchtunnel']){
+  for(const kind of ['surface','sculpture','fractal','graphic','oil','liquid','scope','super8','livingink','relief','resonance','texturecuts','glitchtunnel']){
    const layer=model.createLayer(kind),p={...model.createProject(),layers:[layer]};
    await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===p.id);
    await page.getByRole('button',{name:'Shape',exact:true}).click();

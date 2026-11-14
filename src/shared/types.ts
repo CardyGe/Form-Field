@@ -1,5 +1,5 @@
 import type { InstrumentKind } from '../core/instruments';
-export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'super8' | 'graphic' | 'image' | InstrumentKind;
+export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | InstrumentKind;
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'add' | 'source';
 export type ModulationKind = 'sine' | 'pulse' | 'noise' | 'keyframes';
 export interface KeyPoint { time: number; value: number }
@@ -123,7 +123,10 @@ export interface StudioBridge {
   getStatus(): Promise<StudioStatus>;
   loadAutosave(): Promise<Project | null>;
   saveAutosave(project: Project): Promise<void>;
-  saveProject(project: Project): Promise<{ canceled: boolean; path?: string }>;
+  /** Saves to the file last opened or saved; asks for a file when there is none or saveAs is true. */
+  saveProject(project: Project, saveAs?: boolean): Promise<{ canceled: boolean; path?: string }>;
+  /** A new project has no file: the next save asks where to put it. */
+  forgetProjectPath(): Promise<void>;
   openProject(): Promise<{ canceled: boolean; project?: Project; path?: string }>;
   chooseExportDirectory(): Promise<string | null>;
   saveStill(bytes: Uint8Array, suggestedName: string): Promise<{ canceled: boolean; path?: string }>;

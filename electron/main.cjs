@@ -24,6 +24,7 @@ let closeWaiter = null;
 const approvedClosures = new WeakSet();
 let autosaveQueue = Promise.resolve();
 let autosaveBackedUp = false;
+let documentPath = null;
 const defaultExportDir = () => path.join(app.getPath('documents'), 'Form & Field Exports');
 const autosavePath = () => path.join(app.getPath('userData'), 'autosave.formfield');
 const safeName = value => String(value || 'Untitled').replace(/[\x00-\x1f/\\:*?"<>|]/g, '-').slice(0, 100);
@@ -141,13 +142,22 @@ function setupIPC() {
     autosaveQueue = operation.catch(() => {});
     return operation;
   });
-  handle('saveProject', async project => {
+  // The file this window's project was last opened from or saved to. Only a
+  // path the user picked in a native dialog is ever stored here, so the
+  // renderer can ask to save in place without being able to name a path.
+  handle('saveProject', async (project, saveAs) => {
     const saved = validateProject(project);
-    const result = await dialog.showSaveDialog(window, { title: 'Save Form & Field project', defaultPath: path.join(app.getPath('documents'), `${safeName(saved.name)}.formfield`), filters: [{ name: 'Form & Field project', extensions: ['formfield'] }] });
+    if (saveAs !== true && documentPath) {
+      await atomicWrite(documentPath, JSON.stringify(saved, null, 2));
+      return { canceled: false, path: documentPath };
+    }
+    const result = await dialog.showSaveDialog(window, { title: 'Save Form & Field project', defaultPath: documentPath || path.join(app.getPath('documents'), `${safeName(saved.name)}.formfield`), filters: [{ name: 'Form & Field project', extensions: ['formfield'] }] });
     if (result.canceled || !result.filePath) return { canceled: true };
     await atomicWrite(result.filePath, JSON.stringify(saved, null, 2));
+    documentPath = result.filePath;
     return { canceled: false, path: result.filePath };
   });
+  handle('forgetProjectPath', async () => { documentPath = null; });
   handle('openProject', async () => {
     const result = await dialog.showOpenDialog(window, { title: 'Open Form & Field project', properties: ['openFile'], filters: [{ name: 'Form & Field project', extensions: ['formfield', 'json'] }] });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
@@ -155,6 +165,7 @@ function setupIPC() {
     const stat = await fs.stat(filename);
     if (stat.size > 256 * 1024 * 1024) throw new Error('Project exceeds the local document size limit.');
     const project = validateProject(JSON.parse(await fs.readFile(filename, 'utf8')));
+    documentPath = filename;
     return { canceled: false, project, path: filename };
   });
   handle('chooseExportDirectory', async () => {

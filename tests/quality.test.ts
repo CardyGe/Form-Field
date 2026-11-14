@@ -4,9 +4,9 @@ import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions,
 const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
-test('the curated library keeps 84 distinct presets on saturated palettes with a dark or light ground', () => {
-  assert.equal(PRESETS.length,84);
-  assert.equal(new Set(PRESETS.map(p=>p.id)).size,84);
+test('the curated library keeps 88 distinct presets on saturated palettes with a dark or light ground', () => {
+  assert.equal(PRESETS.length,88);
+  assert.equal(new Set(PRESETS.map(p=>p.id)).size,88);
   for (const preset of PRESETS) {
     const layer=applyPreset(createLayer(preset.kind),preset.id);
     const project={...createProject(),layers:[layer]};
@@ -41,7 +41,7 @@ test('smart variations preserve effect identity, coverage, composition and autho
 });
 
 test('independent entropy changes unlocked material even while the source seed is locked', () => {
-  for(const kind of ['surface','sculpture','fractal','oil','liquid','super8','graphic','image'] as const) {
+  for(const kind of ['surface','sculpture','fractal','oil','liquid','scope','super8','graphic','image'] as const) {
     const layer=createLayer(kind),locks={palette:true,structure:true,motion:true,material:false};
     const a=varyLayer(layer,.65,locks,123),b=varyLayer(layer,.65,locks,456);
     assert.equal(a.params.seed,layer.params.seed);assert.equal(b.params.seed,layer.params.seed);

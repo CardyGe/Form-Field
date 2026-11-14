@@ -66,8 +66,15 @@ try {
       renderer.render(project, 0, 1920, 1080); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
       const began = performance.now();
       for (let i = 0; i < frames; i++) { renderer.render(project, i * .05, 1920, 1080); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); }
-      return { wrap: difference(start, end), seek: difference(start, again), move: Math.min(difference(start, third), difference(third, twoThirds), difference(twoThirds, start)),
-        coverage: lit / (start.length / 4), frameMs: (performance.now() - began) / frames };
+      const frameMs = (performance.now() - began) / frames;
+      // The same with time displacement on: the preview draws twelve slices a frame.
+      project.layers[0].params.slitShift = .6;
+      renderer.render(project, 0, 1920, 1080); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      const slicedBegan = performance.now();
+      for (let i = 0; i < 20; i++) { renderer.render(project, i * .02, 1920, 1080); gl.finish(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); }
+      const slicedMs = (performance.now() - slicedBegan) / 20;
+      return { slicedMs, wrap: difference(start, end), seek: difference(start, again), move: Math.min(difference(start, third), difference(third, twoThirds), difference(twoThirds, start)),
+        coverage: lit / (start.length / 4), frameMs };
     }, [id, TAU]);
     report.checks.push({ id, ...result });
     assert.equal(result.wrap, 0, `${id}: the loop does not close (difference ${result.wrap}).`);
@@ -75,6 +82,7 @@ try {
     assert.ok(result.move > 4, `${id}: phase stills are too alike (${result.move.toFixed(2)}).`);
     assert.ok(result.coverage >= .6, `${id}: covers ${(result.coverage * 100).toFixed(0)}% of the frame, under 60%.`);
     assert.ok(result.frameMs < 16.7, `${id}: ${result.frameMs.toFixed(1)} ms per 1080p frame.`);
+    assert.ok(result.slicedMs < 40, `${id}: ${result.slicedMs.toFixed(1)} ms per 1080p frame with time displacement.`);
   }
   assert.deepEqual(errors, []);
   console.log(JSON.stringify(report, null, 2));

@@ -4,6 +4,7 @@ import { TIMING_PARAMETERS, TIMING_KEYS } from './timing';
 import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW } from './palettes';
 import { supportsFeedback } from '../rendering/feedback';
 import { supportsSlitScan } from '../rendering/slitscan';
+import { SCOPE_FIGURES } from '../rendering/scope-curve';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import type { Layer, LayerKind, ParameterDefinition, Preset, Project } from '../shared/types';
 import { GRAPHIC_LOOKS, GRAPHIC_PARAMETERS, GRAPHIC_VARIANTS, graphicVisibleKeys } from './graphics';
@@ -22,6 +23,8 @@ const SUPER8_PROJECTOR_LOOK = { emulsion: .55, pullDown: .6, shutter: .16, dust:
 export const SUPER8_ROLL_KEYS = ['rollAmount', 'rollBands', 'rollOrigin', 'rollSmear'];
 export const SUPER8_PROJECTOR_KEYS = ['emulsion', 'gateMode', 'gateInset', 'gateRoundness', 'sprockets', 'pullDown', 'shutter', 'shutterBlades', 'reelLoops', 'frameLines', 'dust', 'hair', 'lightLeak', 'halation', 'vignette', 'lensSoftness', 'colorFade'];
 
+// Oscilloscope: 0 line, 1 halo, 2 bloom, 3 hot core, 4 second line, 5 unused.
+const SCOPE_PALETTE = ['#ff2a8a', '#ff1e6e', '#c81050', '#ffffff', '#ff7ad0', '#000000'];
 // Liquid Light: 0 rim, 1 body, 2 mid, 3 hot, 4 wash, 5 ground.
 const LIQUID_PALETTE = ['#7a0006', '#ff1414', '#ff7a00', '#ffe81a', '#1a1aff', '#050002'];
 const OIL_PALETTE = ['#eeff00', '#a7de12', '#060710', '#25b8ed', '#071275', '#e2a51c'];
@@ -163,6 +166,26 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     {...parameter('fringe', 'Colour fringe', 0, 1, 0.01, 0.3, 'Material'), description: 'Warm and violet edges on droplets towards the sides of the frame.'},
     parameter('vignette', 'Vignette', 0, 1, 0.01, 0.25, 'Material'),
     {...parameter('grain', 'Grain', 0, 1, 0.01, 0.15, 'Material'), advanced: true},
+    parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
+    parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
+    parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
+  ],
+  scope: [
+    {...parameter('figure', 'Figure', 0, SCOPE_FIGURES.length - 1, 1, 0, 'Shape'), description: 'The closed line drawn on the sphere.'},
+    parameter('radius', 'Size', 0.08, 0.6, 0.005, 0.32, 'Shape'),
+    {...parameter('tilt', 'Lean', -Math.PI, Math.PI, 0.01, 0.35, 'Shape'), description: 'A fixed lean of the sphere before it tumbles.'},
+    {...parameter('ring', 'Ring', 0, 1, 0.01, 0.8, 'Shape'), description: 'The outline of the sphere, drawn as a circle around the figure.'},
+    parameter('cycles', 'Cycles per loop', 1, 8, 1, 1, 'Motion'),
+    {...parameter('tumbleX', 'Tumble forward', -4, 4, 1, 1, 'Motion'), description: 'Whole turns per cycle about the horizontal axis.'},
+    {...parameter('tumbleY', 'Tumble sideways', -4, 4, 1, 1, 'Motion'), description: 'Whole turns per cycle about the vertical axis.'},
+    {...parameter('hueDrift', 'Colour travel', 0, 1, 0.01, 0, 'Motion'), description: 'How much of the second line colour travels round the line, once per cycle.'},
+    parameter('beamWidth', 'Beam width', 0.3, 6, 0.01, 1, 'Material'),
+    parameter('intensity', 'Intensity', 0.2, 6, 0.01, 2.2, 'Material'),
+    parameter('halo', 'Halo', 0, 2, 0.01, 1, 'Material'),
+    {...parameter('bloom', 'Bloom', 0, 2, 0.01, 1, 'Material'), description: 'The wide soft glow around the line, in the bloom colour.'},
+    parameter('bloomSize', 'Bloom size', 0, 1, 0.01, 0.5, 'Material'),
+    {...parameter('fringe', 'Colour fringe', 0, 1, 0.01, 0.3, 'Material'), description: 'Splits red and blue apart towards the edge of the sphere.'},
+    {...parameter('depthFade', 'Depth fade', 0, 1, 0.01, 0.6, 'Material'), description: 'Dims and thins the far side of the sphere.'},
     parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
     parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
     parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
@@ -346,6 +369,10 @@ export const PRESETS: Preset[] = [
   preset('clock-glass', 'Clock Glass', 'A glass dome presses the dish: droplets under it swell and burn yellow, then ease back.', 'liquid', ['#6a0010', '#f01228', '#ff8c0a', '#fff25a', '#1a1aff', '#030004'], { press: 0.95, pressRadius: 0.46, pressPulse: 0.75, density: 0.75, thickness: 0.7, floaters: 0, crowding: 0.55, farLayer: 0.3 }),
   preset('magenta-marble', 'Magenta Marble', 'Folded sheets of magenta and violet dye with dark veins and a few stray droplets.', 'liquid', ['#3a0028', '#ff1436', '#ff6a00', '#ffe81a', '#e010c8', '#4418d8'], { wash: 1, vein: 0.5, scale: 0.9, density: 0.04, sizeRange: 10, crowding: 0, floaters: 0.1, farLayer: 0.35, farBlur: 0.3, thickness: 0.8, warp: 0.8, drift: 0.6 }),
   preset('molten-bloom', 'Molten Bloom', 'Droplets run together into scalloped yellow blobs ringed by satellites, over red and magenta dye.', 'liquid', ['#b01000', '#ff3a00', '#ffa000', '#fff01a', '#e0109a', '#c00818'], { merge: 0.95, scale: 1.7, sizeRange: 12, density: 0.95, thickness: 1.25, crowding: 0.5, wash: 0.7, vein: 0.3, floaters: 0.08, farLayer: 0.25, dimple: 0, rim: 0.6, warp: 0.8 }),
+  preset('twin-orbit', 'Twin Orbit', 'Two glowing ovals turn inside a ring, like the seam of a ball.', 'scope', SCOPE_PALETTE, { figure: 0, ring: 0.9, tumbleX: 0, tumbleY: 1, tilt: 0.15 }),
+  preset('atom', 'Atom', 'Three clean loops tumble around a common centre.', 'scope', ['#ff3060', '#ff1030', '#d00818', '#ffffff', '#ff60a0', '#000000'], { figure: 3, ring: 0.5, tumbleX: 1, tumbleY: 2, tilt: 0.6, radius: 0.34 }),
+  preset('ember-ring', 'Ember Ring', 'A single pink loop in a ring, wrapped in a wide orange glow.', 'scope', ['#ff5a9a', '#ff7a00', '#ff5200', '#fff2e0', '#ffc400', '#000000'], { figure: 1, ring: 1, radius: 0.3, tilt: 0.5, tumbleX: 0, tumbleY: 1, beamWidth: 3.6, intensity: 3.6, halo: 1.3, bloom: 1.8, bloomSize: 0.8, fringe: 0.25, hueDrift: 0.3, depthFade: 0.35 }),
+  preset('cyan-tangle', 'Cyan Tangle', 'A dense ball of cyan line with a white-hot core and a blue glow.', 'scope', ['#2ad8ff', '#1a90ff', '#1228ff', '#ffffff', '#40ffb4', '#000000'], { figure: 7, ring: 0.7, radius: 0.34, tilt: 0.4, tumbleX: 1, tumbleY: 1, intensity: 1.5, halo: 0.9, bloom: 1.3, bloomSize: 0.45, fringe: 0.7, hueDrift: 0.35, depthFade: 0.75 }),
   preset('acid-slide', 'Acid Slide', 'Fluorescent yellow paint, cellular black ink and a glossy lens over cyan.', 'oil', OIL_PALETTE, {}),
   preset('cobalt-tide', 'Cobalt Tide', 'Electric blue paint and coral ink flowing over luminous turquoise.', 'oil', ['#234dff', '#05bdf5', '#2b0927', '#42f2b4', '#111044', '#e7b4ff'], { layout: 1, travel: 0.38, relativeRotation: 0.65, drag: 0.78, coverage: 0.64, lensSize: 0.24, deformation: 0.85, cellComplexity: 0.85, dispersion: 0.35 }),
   preset('acrylic-pour', 'Acrylic Pour', 'Yellow paint poured over cyan, opening into laced cells that swell and close.', 'oil', ['#ffe600', '#ffc400', '#0a0a12', '#00b8ff', '#00508f', '#ffffff'], { layout: 1, dome: 0, coverage: 0.55, cellSize: 1.1, ink: 0.85, thickness: 0.7, travel: 0.18, relativeRotation: 0.1, wetness: 0.9 }),
@@ -432,12 +459,12 @@ export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
     id: crypto.randomUUID(),
-    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
+    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'scope' ? 'Oscilloscope' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
     kind, visible: true, opacity: 1, blend: 'normal',
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     mask: { kind: 'none', softness: 0.15, invert: false, size: 0.8 },
     params: { ...defaultParams(kind), ...(isInstrument(kind) ? INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].params : kind === 'graphic' ? GRAPHIC_LOOKS[0].params : kind === 'super8' ? SUPER8_PROJECTOR_LOOK : {}), seed: 1729 },
-    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
+    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
   };
 }
 
@@ -700,7 +727,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
     if(!isSimplePolygon(surface.points as {x:number;y:number}[]))fail(`${path}.surface.points`,'must form a simple polygon with a useful area.');
     if(surface.source==='mask'&&(layer.mask as Record<string,unknown>)?.kind!=='image')fail(`${path}.surface.source`,'requires an imported image mask.');
   }
-  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
+  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
   text(layer.id, `${path}.id`, 100); text(layer.name, `${path}.name`);
   boolean(layer.visible, `${path}.visible`); number(layer.opacity, `${path}.opacity`, 0, 1);
   choice(layer.blend, ['normal', 'screen', 'multiply', 'add', 'source'] as const, `${path}.blend`);

@@ -17,6 +17,7 @@ import { oilFieldsFragment, oilPaintFragment, oilLensFragment } from './oil';
 import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
+import { ScopeRenderer } from './ScopeRenderer';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
 import { super8Fragment } from './super8';
@@ -121,7 +122,7 @@ export class StudioRenderer {
   private readonly quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private readonly quadGeometry = new THREE.PlaneGeometry(2, 2);
   private readonly quad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
-  private readonly source = target(true);
+  private source = target(true);
   private readonly fractalPreview = target();
   private readonly copy = material(`precision highp float;varying vec2 vUv;uniform sampler2D uImage;void main(){gl_FragColor=texture2D(uImage,vUv);}`, { uImage: { value: null } });
   private readonly graphics = new GraphicRenderer();
@@ -141,6 +142,10 @@ export class StudioRenderer {
   private graphicSource: THREE.WebGLRenderTarget | null = null;
   private readonly liquid: THREE.ShaderMaterial;
   private readonly liquidLayouts = new Map<string, THREE.DataTexture>();
+  private scope: ScopeRenderer | null = null;
+  /** Reduced-size stand-ins for `source` while the preview draws time slices. */
+  private sliceSource: THREE.WebGLRenderTarget | null = null;
+  private sliceSourceSmooth: THREE.WebGLRenderTarget | null = null;
   private readonly oilFields: THREE.ShaderMaterial;
   private readonly oilPaint: THREE.ShaderMaterial;
   private readonly oilLens: THREE.ShaderMaterial;
@@ -378,7 +383,15 @@ export class StudioRenderer {
     if (this.renderer.getContext().isContextLost()) throw new Error('The GPU context was lost. Reload the renderer to resume the saved project.');
   }
 
-  private assetKey(url: string, mask: boolean, repeat = false): string { return `${mask ? 'mask' : repeat ? 'repeat' : 'color'}:${url}`; }
+  // Looked up every frame. Building the key by joining strings would copy and
+  // hash a multi-megabyte data URL each time, so keys are remembered per URL.
+  private readonly assetKeys = new Map<string, string[]>();
+  private assetKey(url: string, mask: boolean, repeat = false): string {
+    const slot = mask ? 0 : repeat ? 1 : 2;
+    let keys = this.assetKeys.get(url);
+    if (!keys) { if (this.assetKeys.size > 16) this.assetKeys.clear(); keys = []; this.assetKeys.set(url, keys); }
+    return keys[slot] ??= `${mask ? 'mask' : repeat ? 'repeat' : 'color'}:${url}`;
+  }
 
   private loadAsset(url: string, mask: boolean, repeat = false): Asset {
     const key = this.assetKey(url, mask, repeat);
@@ -601,6 +614,9 @@ export class StudioRenderer {
       this.drawSuper8(layer, original, phase, duration);
     } else if (layer.kind === 'oil') {
       return this.drawOil(layer, original, phase);
+    } else if (layer.kind === 'scope') {
+      this.scope ??= new ScopeRenderer();
+      this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t));
     } else if (layer.kind === 'liquid') {
       const u = this.liquid.uniforms;
       u.uAspect.value = aspect; u.uPhase.value = localPhase;
@@ -801,6 +817,30 @@ export class StudioRenderer {
    * there is no history to keep and the loop closes exactly.
    */
   private slitSource(original: Layer, phase: number, total: number, duration: number): THREE.Texture {
+    // Time displacement draws the layer once per slice, twelve times a frame by
+    // default, and the cost is almost all pixels. The live preview therefore
+    // draws the slices smaller and lets the compositor scale the result up:
+    // half size for a few slices, down to a quarter for many, so all the
+    // slices together cost about as much as one and a half full frames.
+    // Exports draw every slice at full size.
+    if (this.exporting) return this.slices(original, phase, total, duration);
+    const width = this.width, height = this.height, source = this.source;
+    const scale = Math.max(.25, Math.min(.5, Math.sqrt(1.5 / sliceDelays(evaluateLayer(original, phase)).length)));
+    // Solid geometry keeps its edge smoothing; shaders smooth their own edges.
+    const solid = original.kind === 'sculpture' || original.kind === 'relief';
+    let stand = solid ? this.sliceSourceSmooth : this.sliceSource;
+    if (!stand) {
+      stand = target(true);
+      if (solid) { stand.samples = source.samples; this.sliceSourceSmooth = stand; } else this.sliceSource = stand;
+    }
+    this.width = Math.max(1, Math.round(width * scale)); this.height = Math.max(1, Math.round(height * scale));
+    if (stand.width !== this.width || stand.height !== this.height) stand.setSize(this.width, this.height);
+    this.source = stand;
+    try { return this.slices(original, phase, total, duration); }
+    finally { this.width = width; this.height = height; this.source = source; }
+  }
+
+  private slices(original: Layer, phase: number, total: number, duration: number): THREE.Texture {
     const layer = evaluateLayer(original, phase), p = layer.params;
     if (!this.slitTargets) this.slitTargets = [target(), target()];
     for (const rt of this.slitTargets) if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
@@ -1057,6 +1097,9 @@ export class StudioRenderer {
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
+    this.scope?.dispose(); this.scope = null;
+    this.sliceSource?.dispose(); this.sliceSource = null;
+    this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();
     this.liquidLayouts.clear();
     this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.filmThickness.dispose();

@@ -75,7 +75,18 @@ export function sampleModulation(mod: Modulation, phase: number, seed: number): 
 
 export function evaluateLayer(layer: Layer, phase: number): Layer {
   if (!Number.isFinite(phase)) throw new Error('Layer phase must be finite.');
-  const result = structuredClone(layer);
+  // Runs for every layer on every frame. Copy the small structures, but share
+  // the embedded image and mask strings: they can be megabytes each and are never changed here.
+  const result: Layer = {
+    ...layer,
+    transform: { ...layer.transform },
+    params: { ...layer.params },
+    palette: [...layer.palette],
+    mask: { ...layer.mask },
+    modulations: structuredClone(layer.modulations),
+  };
+  if (layer.image) result.image = { ...layer.image };
+  if (layer.surface) result.surface = structuredClone(layer.surface);
   const definitions = parameterDefinitions(layer.kind);
   const seed = layer.params.seed ?? hashSeed(layer.id);
   for (const [key, mod] of Object.entries(layer.modulations)) {

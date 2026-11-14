@@ -14,7 +14,7 @@ export function sameCanvasValues(a: Layer, b: Layer): boolean {
 
 const preferred: Partial<Record<LayerKind, string[]>> = {
   surface: ['warp', 'detail'], sculpture: ['fold', 'twist'], fractal: ['fold', 'twist'],
-  oil: ['deformation', 'lensSize'], liquid: ['scale', 'thickness'], super8: ['coverage', 'erosion'], livingink: ['flow', 'warp'],
+  oil: ['deformation', 'lensSize'], liquid: ['scale', 'thickness'], scope: ['radius', 'tilt'], super8: ['coverage', 'erosion'], livingink: ['flow', 'warp'],
   relief: ['opening', 'depth'],
   resonance: ['modalBlend', 'radialMix'],
   texturecuts: ['scale', 'cuts'],

@@ -179,7 +179,7 @@ Sculpture has **Turns per loop**, which turns the form whole times each loop on 
 
 ## Preset library
 
-The library has 67 presets. After 0.13, Velvet Currents was retired and 14 more presets were removed: four Oil slides that repeated one composition in different colours, two Living Ink mazes, seven weak or duplicated Graphic Patterns and the Deep Bloom portal. New Graphic layers now start from Lava Columns. In 0.13 the library was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
+The library has 88 presets, including the looks for Texture Cuts, Feedback Glitch, Liquid Light and Oscilloscope. After 0.13, Velvet Currents was retired and 14 more presets were removed: four Oil slides that repeated one composition in different colours, two Living Ink mazes, seven weak or duplicated Graphic Patterns and the Deep Bloom portal. New Graphic layers now start from Lava Columns. In 0.13 the library was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
 
 **Presets → Finishes for any layer** holds six finishes: Tunnel, Bloom Echo and Melt (feedback), and Terraces, Block Shuffle and Ring Delay (time displacement). A finish applies to the selected layer of any kind except Graphic Patterns and Ink *Evolving*, and replaces any finish already on it. **No finish** turns both off. Recursion Tunnel and Time Terraces remain as Surface presets that show a finish on a source.
 
@@ -222,7 +222,7 @@ Kinetic Relief uses a shaded height field. It is an artistic material instrument
 
 The shared optical helpers also improve existing instruments: **Surface → Optical sheen** adds a thin-film finish, while **Oil Slides → Caustic light** and **Optical sheen** add focused illumination and spectral material colour. These controls default to zero in older projects, preserving their appearance. Fine lines in the new instruments use filtering based on the target pixel footprint; Living Ink uses mipmapped chemical textures.
 
-`node scripts/verify-instruments.mjs` checks all forty looks, every control, transparency, loop closure, seek reproducibility and transformed portrait/square/landscape coverage. `node scripts/verify-instruments-ui.mjs` exercises their editor controls and native PNG/ProRes exports in an isolated profile. Neither changes the working composition.
+`node scripts/verify-instruments.mjs` checks every look, every control, transparency, loop closure, seek reproducibility and transformed portrait/square/landscape coverage. `node scripts/verify-instruments-ui.mjs` exercises their editor controls and native PNG/ProRes exports in an isolated profile. Neither changes the working composition.
 
 ## Graphic Patterns controls
 
@@ -261,9 +261,22 @@ All motion is evaluated from periodic phase and saved seed. Layouts are cached; 
 
 Check it with `node scripts/verify-liquid.mjs` (add `--quick` for stills only).
 
+## Oscilloscope controls
+
+**Oscilloscope** draws one closed glowing line on a tumbling sphere, like an electron beam on a vector display. The core burns to white, the halo keeps the line colour, and parts the beam crosses slowly are brighter. Looks so far: **Twin Orbit**, **Atom**, **Ember Ring** and **Cyan Tangle**.
+
+- **Figure** picks the line (Seam, Orbit, Trefoil, Atom, Coil, Weave, Knot, Tangle). **Size** and **Lean** place it; **Ring** draws the sphere's outline around it.
+- **Tumble forward** and **Tumble sideways** are whole turns per cycle, so the loop closes exactly.
+- **Beam width**, **Intensity** and **Halo** shape the line. **Depth fade** dims and thins the far side of the sphere.
+- **Bloom** is the wide soft glow and **Bloom size** moves it from tight to wide. It is measured in fixed lines of frame height, so it looks the same in the preview and in a 4K export.
+- **Colour fringe** splits red and blue apart towards the edge of the sphere. **Colour travel** sends the second line colour round the line once per cycle.
+- Palette order: line, halo, bloom, hot core, second line. The sixth swatch is unused.
+
+Check it with `node scripts/verify-scope.mjs` (add `--quick` for stills only).
+
 ## Oil Slides controls
 
-**Oil Slides** recreates sliding coloured paint, black cellular ink and a glossy refractive dome. Choose **Acid Slide**, **Cellular Lift**, **Ink Drag**, **Chromatic Slides**, **Cobalt Tide**, **Ember Glass** or **Pearl Ink** in Presets. It occupies one composition layer.
+**Oil Slides** recreates sliding coloured paint, black cellular ink and a glossy refractive dome. Choose **Acid Slide**, **Cobalt Tide**, **Acrylic Pour** or **Lace Ribbons** in Presets. It occupies one composition layer.
 
 **Pool size**, **Paint coverage**, **Cell size** and **Lens size** shape the material. **Slide travel**, **Relative rotation**, **Drag** and **Cycles per loop** control relative movement. **Thickness**, **Refraction**, **Wetness** and **Ink amount** shape its finish. **Show fine tuning** reveals Lens stretch, Organic shape, Lens depth, Cell complexity, Color separation, Lens lift, Filaments, Edge softness, Light angle, Shadow strength and Grain. At zero travel, rotation and lift the instrument stops unless Motion routes animate a parameter.
 
@@ -322,7 +335,7 @@ Sphere-based and periodic-grid forms use matching colour and shadow deformation.
 
 ## Fractal controls
 
-Fractal Worlds has three families, each with three variants, plus Palette, Duotone and Contours colouring. There are twelve curated Fractal starting looks. The inspector shows the controls used by the selected family; switching family retains your other settings. Filter **Presets** to the selected family to explore its looks.
+Fractal Worlds has three families, each with three variants, plus Palette, Duotone and Contours colouring. There are eleven curated Fractal starting looks. The inspector shows the controls used by the selected family; switching family retains your other settings. Filter **Presets** to the selected family to explore its looks.
 
 - **Kaleidoscope** offers **Lace**, **Petals** and **Weave**: recursive rings, elliptical petal bodies and intersecting ribbons. **Fold**, **Symmetry**, **Twist**, **Detail** and **Line width** shape the pattern. Thin strokes integrate their coverage at the pixel limit.
 - **Julia Bloom** offers a genuine quadratic **Classic** set, a mirrored **Radial** arrangement and a smoothly warped **Spiral**. **Julia real** and **Julia imaginary** choose the complex constant, with five decimal places for fine adjustment. Small changes can transform the whole set. **Orbit detail**, **Fold**, **Line width** and **Color density** shape its ornament and colouring. Start with small Morph values to retain intricate filaments throughout a loop.
@@ -386,11 +399,11 @@ npm ci
 npm run dev
 ```
 
-`node scripts/verify-smart-repeat.mjs` checks geometry at repeat joins, all ninety transformed presets, procedural view equivalence, finite 3D geometry, image repeat/sampler isolation and 4K output.
+`node scripts/verify-smart-repeat.mjs` checks geometry at repeat joins, every preset under transforms, procedural view equivalence, finite 3D geometry, image repeat/sampler isolation and 4K output.
 
-`node scripts/verify-quality.mjs` renders all 67 presets at multiple phases, stresses every family at slider extremes and checks randomized variants. It writes a review gallery to `work/quality-pass/gallery.html`. `node scripts/verify-randomizer-ui.mjs` checks all ten layer types, three variation amounts, locks, routes and undo/redo through native persistence.
+`node scripts/verify-quality.mjs` renders every preset at multiple phases, stresses every family at slider extremes and checks randomized variants. It writes a review gallery to `work/quality-pass/gallery.html`. `node scripts/verify-randomizer-ui.mjs` checks all ten layer types, three variation amounts, locks, routes and undo/redo through native persistence.
 
-`npm run start` builds and opens the desktop app without a development server. `npm run build` runs TypeScript validation and produces the renderer. `npm test` runs core and native export tests with actual media tools. `node scripts/verify-graphics.mjs` checks the thirty-two graphic presets, looping, controls, transparency, 4K stills and native movie export; `node scripts/verify-graphics-ui.mjs` checks their integrated UI and persistence. `node scripts/verify-super8.mjs` checks all five film modes, every paint/projector control, frame holds, continuous transport, feedback history, exact loops, alpha, 4K output and resumed native exports. Set `SUPER8_CAPTURE_MOTION=1` to also capture a short ProRes projector preview. `node scripts/verify-super8-ui.mjs [app-path]` checks packaged projector controls, older project migration, save/open and native alpha output. `node scripts/verify-oil.mjs` checks Oil rendering, looping, alpha, mixed layers and 4K output in Electron. `node scripts/verify-ui.mjs` drives the built Electron application, including native persistence and a real transparent movie export; only file dialogs are replaced for repeatability.
+`npm run start` builds and opens the desktop app without a development server. `npm run build` runs TypeScript validation and produces the renderer. `npm test` runs core and native export tests with actual media tools. `node scripts/verify-graphics.mjs` checks the graphic presets, looping, controls, transparency, 4K stills and native movie export; `node scripts/verify-graphics-ui.mjs` checks their integrated UI and persistence. `node scripts/verify-super8.mjs` checks all five film modes, every paint/projector control, frame holds, continuous transport, feedback history, exact loops, alpha, 4K output and resumed native exports. Set `SUPER8_CAPTURE_MOTION=1` to also capture a short ProRes projector preview. `node scripts/verify-super8-ui.mjs [app-path]` checks packaged projector controls, older project migration, save/open and native alpha output. `node scripts/verify-oil.mjs` checks Oil rendering, looping, alpha, mixed layers and 4K output in Electron. `node scripts/verify-ui.mjs` drives the built Electron application, including native persistence and a real transparent movie export; only file dialogs are replaced for repeatability.
 
 `npm run package` builds an Apple Silicon `.app` under `work/release`. The local alpha is not notarized. Media-tool build instructions and notices are included with the bundled tools.
 
