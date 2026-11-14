@@ -14,7 +14,7 @@ export function sameCanvasValues(a: Layer, b: Layer): boolean {
 
 const preferred: Partial<Record<LayerKind, string[]>> = {
   surface: ['warp', 'detail'], sculpture: ['fold', 'twist'], fractal: ['fold', 'twist'],
-  oil: ['deformation', 'lensSize'], super8: ['coverage', 'erosion'], livingink: ['flow', 'warp'],
+  oil: ['deformation', 'lensSize'], liquid: ['scale', 'thickness'], super8: ['coverage', 'erosion'], livingink: ['flow', 'warp'],
   relief: ['opening', 'depth'],
   resonance: ['modalBlend', 'radialMix'],
   texturecuts: ['scale', 'cuts'],
@@ -25,6 +25,8 @@ const preferred: Partial<Record<LayerKind, string[]>> = {
 export function canvasAxes(layer: Layer, locks: VariationLocks): ParameterDefinition[] {
   let keys = preferred[layer.kind] ?? [];
   if(layer.kind==='livingink'&&layer.params.inkMode===2)keys=['pigment','relief'];
+  // With the press on, dragging moves the dome.
+  if(layer.kind==='liquid'&&layer.params.press>0)keys=['pressX','pressY'];
   if (layer.kind === 'fractal' && layer.params.style === 1) keys = ['juliaReal', 'juliaImag'];
   if (layer.kind === 'fractal' && layer.params.style === 2) keys = ['boxScale', 'boxRadius'];
   if (layer.kind === 'graphic') keys = [

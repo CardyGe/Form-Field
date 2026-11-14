@@ -1,5 +1,5 @@
 import type { InstrumentKind } from '../core/instruments';
-export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'super8' | 'graphic' | 'image' | InstrumentKind;
+export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'super8' | 'graphic' | 'image' | InstrumentKind;
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'add' | 'source';
 export type ModulationKind = 'sine' | 'pulse' | 'noise' | 'keyframes';
 export interface KeyPoint { time: number; value: number }

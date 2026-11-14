@@ -36,7 +36,7 @@ test('zoom and pan obey persisted bounds, including wheel unit normalization', (
 });
 
 test('every procedural instrument exposes two useful axes and excludes locks and animated routes', () => {
-  for (const kind of ['surface','sculpture','fractal','oil','super8','graphic', ...INSTRUMENT_KINDS] as const) {
+  for (const kind of ['surface','sculpture','fractal','oil','liquid','super8','graphic', ...INSTRUMENT_KINDS] as const) {
     const layer = createLayer(kind), axes = canvasAxes(layer, locks);
     assert.equal(axes.length, 2, kind);
     assert.ok(axes.every(d => d.step !== 1 && !d.preparation));

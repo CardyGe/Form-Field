@@ -242,6 +242,25 @@ Every family also offers Pattern size/stretch/position/angle, palette position/r
 
 All motion is evaluated from periodic phase and saved seed. Layouts are cached; scrubbing, transparent exports and resumed jobs need no simulation warm-up. Pattern density and line widths retain the same proportions between preview and export. The implementation uses original geometry and shader code within the existing Three.js renderer.
 
+## Liquid Light controls
+
+**Liquid Light** is oil droplets in dye on an overhead projector: packed cells of every size whose colour follows their thickness, from the rim colour through to the hot colour. Three dishes are stacked: a soft far layer, the sharp main layer, and flat floaters on top. Looks: **Ember Cells**, **Blue Hour**, **Ring Dish**, **Clock Glass**, **Magenta Marble** and **Molten Bloom**.
+
+- **Cell size**, **Size range** and **Density** set the layout. Size range and Density rebuild the layout, so they cannot be animated.
+- **Crowding** swells droplets into each other; the smaller one bends around the larger. **Rings** dishes some droplets into a bright ring around a dark centre. **Floaters** adds flat discs of the hot colour.
+- **Drift**, **Flow**, **Breathing** and **Swell** move the cells. Each droplet breathes and swells in its own time, and the loop closes exactly.
+- **Thickness** pushes cells from red towards yellow; **Rim shade** darkens the edge of each cell and **Rim light** adds a thin bright line inside it.
+- **Far layer** and **Far blur** set the strength and focus of the dish behind. **Refraction** lets thin droplets act as lenses over it.
+- **Merge** joins the larger droplets, in patches, into scalloped blobs; small droplets stay separate along the edges. It works best at high Density, where droplets sit close enough to join.
+- **Press** is a glass dome that magnifies the droplets under it and pushes them towards the hot colour. **Press size**, **Press horizontal** and **Press vertical** place it; **Press pulse** eases it off and back once per loop.
+- **Wash** marbles the ground with bands of the ground colour, the wash colour and a blend of wash and body, with **Vein width** setting the dark line where bands meet.
+- **Soft focus**, **Colour fringe**, **Vignette** and **Grain** are the projector: slightly soft edges whose focus drifts over the loop, warm and violet rims towards the sides of the frame, a lamp that falls off in the corners, and still dust on the glass.
+- With **Press** above zero, dragging on the canvas moves the dome.
+- **Ground opacity** at 0 leaves the gaps transparent for layering (the wash goes with it).
+- Palette order: rim, body, mid, hot, wash, ground.
+
+Check it with `node scripts/verify-liquid.mjs` (add `--quick` for stills only).
+
 ## Oil Slides controls
 
 **Oil Slides** recreates sliding coloured paint, black cellular ink and a glossy refractive dome. Choose **Acid Slide**, **Cellular Lift**, **Ink Drag**, **Chromatic Slides**, **Cobalt Tide**, **Ember Glass** or **Pearl Ink** in Presets. It occupies one composition layer.

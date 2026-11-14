@@ -4,9 +4,9 @@ import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions,
 const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
-test('the curated library keeps 78 distinct presets on saturated palettes with a dark or light ground', () => {
-  assert.equal(PRESETS.length,78);
-  assert.equal(new Set(PRESETS.map(p=>p.id)).size,78);
+test('the curated library keeps 84 distinct presets on saturated palettes with a dark or light ground', () => {
+  assert.equal(PRESETS.length,84);
+  assert.equal(new Set(PRESETS.map(p=>p.id)).size,84);
   for (const preset of PRESETS) {
     const layer=applyPreset(createLayer(preset.kind),preset.id);
     const project={...createProject(),layers:[layer]};
@@ -26,7 +26,7 @@ test('smart variations preserve effect identity, coverage, composition and autho
     layer.modulations.exposure={kind:'noise',cycles:2,amount:.1,phase:.2,points:[]};
     const source=structuredClone(layer);
     for (let i=0;i<40;i++) {
-      layer=varyLayer(layer,[.35,.65,1][i%3],unlocked,i*7919);
+      layer=varyLayer(layer,[.35,.65,1][i%3],unlocked,i*8419);
       assert.deepEqual(layer.transform,source.transform);
       assert.deepEqual(layer.mask,source.mask);
       assert.deepEqual(layer.modulations,source.modulations);
@@ -41,7 +41,7 @@ test('smart variations preserve effect identity, coverage, composition and autho
 });
 
 test('independent entropy changes unlocked material even while the source seed is locked', () => {
-  for(const kind of ['surface','sculpture','fractal','oil','super8','graphic','image'] as const) {
+  for(const kind of ['surface','sculpture','fractal','oil','liquid','super8','graphic','image'] as const) {
     const layer=createLayer(kind),locks={palette:true,structure:true,motion:true,material:false};
     const a=varyLayer(layer,.65,locks,123),b=varyLayer(layer,.65,locks,456);
     assert.equal(a.params.seed,layer.params.seed);assert.equal(b.params.seed,layer.params.seed);

@@ -22,6 +22,8 @@ const SUPER8_PROJECTOR_LOOK = { emulsion: .55, pullDown: .6, shutter: .16, dust:
 export const SUPER8_ROLL_KEYS = ['rollAmount', 'rollBands', 'rollOrigin', 'rollSmear'];
 export const SUPER8_PROJECTOR_KEYS = ['emulsion', 'gateMode', 'gateInset', 'gateRoundness', 'sprockets', 'pullDown', 'shutter', 'shutterBlades', 'reelLoops', 'frameLines', 'dust', 'hair', 'lightLeak', 'halation', 'vignette', 'lensSoftness', 'colorFade'];
 
+// Liquid Light: 0 rim, 1 body, 2 mid, 3 hot, 4 wash, 5 ground.
+const LIQUID_PALETTE = ['#7a0006', '#ff1414', '#ff7a00', '#ffe81a', '#1a1aff', '#050002'];
 const OIL_PALETTE = ['#eeff00', '#a7de12', '#060710', '#25b8ed', '#071275', '#e2a51c'];
 
 const parameter = (key: string, label: string, min: number, max: number, step: number, value: number, section: ParameterDefinition['section']): ParameterDefinition =>
@@ -129,6 +131,41 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('colorMix', 'Coloring amount', 0, 1, 0.01, 1, 'Material'),
     parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
     parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
+  ],
+  liquid: [
+    parameter('scale', 'Cell size', 0.4, 3, 0.01, 1, 'Shape'),
+    {...parameter('sizeRange', 'Size range', 4, 40, 0.5, 16, 'Shape'), preparation: true, description: 'How many times larger the biggest droplets are than the smallest.'},
+    {...parameter('density', 'Density', 0, 1, 0.01, 0.6, 'Shape'), preparation: true, description: 'How tightly droplets pack. Low values leave dark gaps.'},
+    {...parameter('crowding', 'Crowding', 0, 1, 0.01, 0.4, 'Shape'), description: 'Droplets swell into each other. The smaller one gives way and bends around the larger.'},
+    {...parameter('dimple', 'Rings', 0, 1, 0.01, 0.15, 'Shape'), description: 'How many droplets are dished: a bright ring around a dark centre.'},
+    parameter('floaters', 'Floaters', 0, 1, 0.01, 0.12, 'Shape'),
+    {...parameter('merge', 'Merge', 0, 1, 0.01, 0, 'Shape'), description: 'Joins the larger droplets into blobs. Small droplets stay separate along the edges.'},
+    {...parameter('press', 'Press', 0, 1, 0.01, 0, 'Shape'), description: 'A glass dome that magnifies the droplets under it and pushes them towards the hot colour.'},
+    parameter('pressRadius', 'Press size', 0.1, 1, 0.01, 0.4, 'Shape'),
+    parameter('pressX', 'Press horizontal', -1, 1, 0.01, 0, 'Shape'),
+    parameter('pressY', 'Press vertical', -1, 1, 0.01, 0, 'Shape'),
+    parameter('cycles', 'Cycles per loop', 1, 8, 1, 1, 'Motion'),
+    parameter('drift', 'Drift', 0, 1, 0.01, 0.35, 'Motion'),
+    parameter('warp', 'Flow', 0, 1, 0.01, 0.5, 'Motion'),
+    parameter('breathing', 'Breathing', 0, 1, 0.01, 0.4, 'Motion'),
+    parameter('shimmer', 'Swell', 0, 1, 0.01, 0.4, 'Motion'),
+    {...parameter('pressPulse', 'Press pulse', 0, 1, 0.01, 0.6, 'Motion'), description: 'How far the press eases off and returns once per loop.'},
+    parameter('thickness', 'Thickness', 0, 1.5, 0.01, 0.85, 'Material'),
+    parameter('outline', 'Rim shade', 0, 1, 0.01, 0.5, 'Material'),
+    parameter('rim', 'Rim light', 0, 1, 0.01, 0.4, 'Material'),
+    {...parameter('farLayer', 'Far layer', 0, 1, 0.01, 0.5, 'Material'), description: 'A second, larger dish of droplets behind the main one.'},
+    parameter('farBlur', 'Far blur', 0, 1, 0.01, 0.6, 'Material'),
+    {...parameter('refraction', 'Refraction', 0, 1, 0.01, 0.5, 'Material'), description: 'Thin droplets act as lenses over the far layer.'},
+    {...parameter('wash', 'Wash', 0, 1, 0.01, 0, 'Material'), description: 'Marbles the ground with bands of the wash colour.'},
+    parameter('vein', 'Vein width', 0, 1, 0.01, 0.4, 'Material'),
+    parameter('backgroundOpacity', 'Ground opacity', 0, 1, 0.01, 1, 'Material'),
+    {...parameter('focus', 'Soft focus', 0, 1, 0.01, 0.15, 'Material'), description: 'Softens droplet edges like a projector lens, drifting slightly over the loop.'},
+    {...parameter('fringe', 'Colour fringe', 0, 1, 0.01, 0.3, 'Material'), description: 'Warm and violet edges on droplets towards the sides of the frame.'},
+    parameter('vignette', 'Vignette', 0, 1, 0.01, 0.25, 'Material'),
+    {...parameter('grain', 'Grain', 0, 1, 0.01, 0.15, 'Material'), advanced: true},
+    parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
+    parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
+    parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
   ],
   oil: [
     parameter('poolSize', 'Pool size', 0.5, 2, 0.01, 1, 'Shape'),
@@ -303,6 +340,12 @@ export const PRESETS: Preset[] = [
   preset('scratched-negative', 'Scratched Negative', 'Inverted stepped forms scored by shifting film scratches.', 'super8', ['#f0b458', '#cc5262', '#528f8d', '#7864a6', '#10151c', '#e2dcc4'], { mode: 2, scratches: 0.85, grain: 0.45, flicker: 0.35, weave: 0.4, filmFps: 12, feedback: 0.24, erosion: 0.38, gateMode: 2, sprockets: .85, frameLines: .85, pullDown: .9, dust: .65, hair: .6, lightLeak: .12, vignette: .5, coverage: 1, scale: 0.5, rotation: -1.2, steps: 7 }),
   preset('cut-out-collage', 'Cut-out Collage', 'Layered painted paper fragments with torn edges and offset impressions.', 'super8', SUPER8_PALETTE, { mode: 3, steps: 8, erosion: 0.35, texture: 0.8, roughness: 0.7, feedback: 0.4, feedbackRotation: -0.06, filmFps: 12, travel: 0.55, gateMode: 1, gateInset: .025, frameLines: .35, emulsion: .35, lensSoftness: .3, colorFade: .3 }),
   preset('painted-tunnel', 'Painted Tunnel', 'Scanned paint arches rush through a rolling shutter and break into stepped terraces.', 'super8', ['#f6b21c', '#1e4fd6', '#f0521c', '#ec8fb0', '#1b1726', '#f2efe8'], { mode: 4, steps: 10, coverage: 0.9, erosion: 0.12, texture: 0.8, textureScale: 1.1, roughness: 0.45, bleed: 0.15, travel: 0.6, cycles: 2, filmFps: 24, feedback: 0, rotation: 0, scratches: 0.12, grain: 0.15, flicker: 0.08, weave: 0.08, rollAmount: 0.7, rollBands: 30, rollOrigin: 1, rollSmear: 0.55, emulsion: 0.12, pullDown: 0, shutter: 0, lightLeak: 0, halation: 0.12, vignette: 0.08, lensSoftness: 0.05, colorFade: 0, dust: 0.12, hair: 0 }),
+  preset('ember-cells', 'Ember Cells', 'Red, orange and yellow oil droplets of every size drifting on black.', 'liquid', LIQUID_PALETTE, {}),
+  preset('blue-hour', 'Blue Hour', 'Small red droplets and bright yellow floaters over deep blue.', 'liquid', ['#5a0018', '#ff1230', '#ff5a1e', '#ffee1a', '#1a1aff', '#0a0a8c'], { scale: 0.6, density: 0.12, crowding: 0, dimple: 0, floaters: 0.5, thickness: 0.6, farLayer: 0.3, farBlur: 1, rim: 0.2, drift: 0.5 }),
+  preset('ring-dish', 'Ring Dish', 'Large dished droplets: glowing rings around dark centres, loosely scattered.', 'liquid', ['#5c0004', '#ff2a0a', '#ff8a00', '#fff03a', '#1a1aff', '#040001'], { scale: 1.5, sizeRange: 8, density: 0.2, crowding: 0.85, dimple: 1, floaters: 0, thickness: 1.15, farLayer: 0.35, farBlur: 1, rim: 0.8, outline: 0.7, warp: 0.7 }),
+  preset('clock-glass', 'Clock Glass', 'A glass dome presses the dish: droplets under it swell and burn yellow, then ease back.', 'liquid', ['#6a0010', '#f01228', '#ff8c0a', '#fff25a', '#1a1aff', '#030004'], { press: 0.95, pressRadius: 0.46, pressPulse: 0.75, density: 0.75, thickness: 0.7, floaters: 0, crowding: 0.55, farLayer: 0.3 }),
+  preset('magenta-marble', 'Magenta Marble', 'Folded sheets of magenta and violet dye with dark veins and a few stray droplets.', 'liquid', ['#3a0028', '#ff1436', '#ff6a00', '#ffe81a', '#e010c8', '#4418d8'], { wash: 1, vein: 0.5, scale: 0.9, density: 0.04, sizeRange: 10, crowding: 0, floaters: 0.1, farLayer: 0.35, farBlur: 0.3, thickness: 0.8, warp: 0.8, drift: 0.6 }),
+  preset('molten-bloom', 'Molten Bloom', 'Droplets run together into scalloped yellow blobs ringed by satellites, over red and magenta dye.', 'liquid', ['#b01000', '#ff3a00', '#ffa000', '#fff01a', '#e0109a', '#c00818'], { merge: 0.95, scale: 1.7, sizeRange: 12, density: 0.95, thickness: 1.25, crowding: 0.5, wash: 0.7, vein: 0.3, floaters: 0.08, farLayer: 0.25, dimple: 0, rim: 0.6, warp: 0.8 }),
   preset('acid-slide', 'Acid Slide', 'Fluorescent yellow paint, cellular black ink and a glossy lens over cyan.', 'oil', OIL_PALETTE, {}),
   preset('cobalt-tide', 'Cobalt Tide', 'Electric blue paint and coral ink flowing over luminous turquoise.', 'oil', ['#234dff', '#05bdf5', '#2b0927', '#42f2b4', '#111044', '#e7b4ff'], { layout: 1, travel: 0.38, relativeRotation: 0.65, drag: 0.78, coverage: 0.64, lensSize: 0.24, deformation: 0.85, cellComplexity: 0.85, dispersion: 0.35 }),
   preset('acrylic-pour', 'Acrylic Pour', 'Yellow paint poured over cyan, opening into laced cells that swell and close.', 'oil', ['#ffe600', '#ffc400', '#0a0a12', '#00b8ff', '#00508f', '#ffffff'], { layout: 1, dome: 0, coverage: 0.55, cellSize: 1.1, ink: 0.85, thickness: 0.7, travel: 0.18, relativeRotation: 0.1, wetness: 0.9 }),
@@ -389,12 +432,12 @@ export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
     id: crypto.randomUUID(),
-    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
+    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
     kind, visible: true, opacity: 1, blend: 'normal',
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     mask: { kind: 'none', softness: 0.15, invert: false, size: 0.8 },
     params: { ...defaultParams(kind), ...(isInstrument(kind) ? INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].params : kind === 'graphic' ? GRAPHIC_LOOKS[0].params : kind === 'super8' ? SUPER8_PROJECTOR_LOOK : {}), seed: 1729 },
-    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
+    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
   };
 }
 
@@ -657,7 +700,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
     if(!isSimplePolygon(surface.points as {x:number;y:number}[]))fail(`${path}.surface.points`,'must form a simple polygon with a useful area.');
     if(surface.source==='mask'&&(layer.mask as Record<string,unknown>)?.kind!=='image')fail(`${path}.surface.source`,'requires an imported image mask.');
   }
-  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
+  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
   text(layer.id, `${path}.id`, 100); text(layer.name, `${path}.name`);
   boolean(layer.visible, `${path}.visible`); number(layer.opacity, `${path}.opacity`, 0, 1);
   choice(layer.blend, ['normal', 'screen', 'multiply', 'add', 'source'] as const, `${path}.blend`);

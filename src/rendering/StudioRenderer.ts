@@ -16,6 +16,8 @@ import { fractalFragment } from './fractal';
 import { oilFieldsFragment, oilPaintFragment, oilLensFragment } from './oil';
 import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
+import { liquidFragment } from './liquid';
+import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
 import { super8Fragment } from './super8';
 import { super8ProjectorFragment } from './super8-projector';
@@ -35,6 +37,10 @@ const SCULPTURE_SHAPE_DEFAULTS = Object.fromEntries(parameterDefinitions('sculpt
   .map(({ key, default: value }) => [key,value]));
 const FRACTAL_DEFAULTS = Object.fromEntries(parameterDefinitions('fractal')
   .filter(({ key }) => !['cycles','saturation','hue','colorMode','colorSteps','colorMix'].includes(key)).map(({ key, default: value }) => [key, value]));
+const LIQUID_UNIFORMS = ['scale','drift','warp','breathing','shimmer','thickness','outline','backgroundOpacity','crowding','dimple','rim','floaters','farLayer','farBlur','refraction','wash','vein','merge','press','pressRadius','pressPulse','pressX','pressY','vignette','focus','fringe','grain'];
+const LIQUID_DEFAULTS = Object.fromEntries(parameterDefinitions('liquid').filter(({ key }) => LIQUID_UNIFORMS.includes(key)).map(({ key, default: value }) => [key, value]));
+/** Baked droplet layouts kept ready; switching between a few looks does not rebuild them. */
+const LIQUID_LAYOUTS = 4;
 const OIL_DEFAULTS = Object.fromEntries(parameterDefinitions('oil').map(({ key, default: value }) => [key, value]));
 const DEFAULT_PALETTE = ['#26cfee', '#adfc35', '#ec72dd', '#7535c0', '#ff805f', '#152043'];
 type Uniforms = Record<string, THREE.IUniform>;
@@ -133,6 +139,8 @@ export class StudioRenderer {
   private readonly super8Projector: THREE.ShaderMaterial;
   private super8Source: THREE.WebGLRenderTarget | null = null;
   private graphicSource: THREE.WebGLRenderTarget | null = null;
+  private readonly liquid: THREE.ShaderMaterial;
+  private readonly liquidLayouts = new Map<string, THREE.DataTexture>();
   private readonly oilFields: THREE.ShaderMaterial;
   private readonly oilPaint: THREE.ShaderMaterial;
   private readonly oilLens: THREE.ShaderMaterial;
@@ -210,6 +218,12 @@ export class StudioRenderer {
       uResolution: { value: new THREE.Vector2(1, 1) }, uAspect: { value: 1 },
       uPhase: { value: 0 }, uSeed: { value: 0 }, uStyle: { value: 0 },
       ...Object.fromEntries(Object.entries(FRACTAL_DEFAULTS).map(([key, value]) => [`u${key[0].toUpperCase()}${key.slice(1)}`, { value }])),
+    });
+    this.liquid = material(liquidFragment, {
+      ...viewUniforms(),
+      uPalette: { value: DEFAULT_PALETTE.map((hex) => new THREE.Color(hex)) },
+      uDroplets: { value: this.fallback }, uAspect: { value: 1 }, uPhase: { value: 0 }, uSeed: { value: 0 },
+      ...Object.fromEntries(Object.entries(LIQUID_DEFAULTS).map(([key, value]) => [`u${key[0].toUpperCase()}${key.slice(1)}`, { value }])),
     });
     const oilUniforms: Uniforms = {
       ...viewUniforms(),
@@ -544,10 +558,27 @@ export class StudioRenderer {
     this.draw(this.super8Projector, this.source);
   }
 
+  /** The baked droplet layout for this layer's seed, size range and density. */
+  private liquidLayout(layer: Layer): THREE.DataTexture {
+    const seed = number(layer, 'seed', 0), range = number(layer, 'sizeRange', 16), density = number(layer, 'density', .6);
+    const key = liquidPackKey(seed, range, density);
+    let texture = this.liquidLayouts.get(key);
+    if (texture) { this.liquidLayouts.delete(key); this.liquidLayouts.set(key, texture); return texture; }
+    texture = new THREE.DataTexture(packDroplets(seed, range, density).texture, LIQUID_BINS * LIQUID_SLOTS, LIQUID_BINS, THREE.RGBAFormat, THREE.FloatType);
+    texture.minFilter = texture.magFilter = THREE.NearestFilter;
+    texture.colorSpace = THREE.NoColorSpace; texture.needsUpdate = true;
+    this.liquidLayouts.set(key, texture);
+    while (this.liquidLayouts.size > LIQUID_LAYOUTS) {
+      const oldest = this.liquidLayouts.keys().next().value!;
+      this.liquidLayouts.get(oldest)!.dispose(); this.liquidLayouts.delete(oldest);
+    }
+    return texture;
+  }
+
   private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10): THREE.Texture {
     const aspect = this.width / this.height;
     const uniforms=layer.kind==='surface'?this.surface.uniforms:layer.kind==='fractal'?this.fractal.uniforms:
-      layer.kind==='oil'?this.oilFields.uniforms:layer.kind==='super8'?this.super8Projector.uniforms:
+      layer.kind==='oil'?this.oilFields.uniforms:layer.kind==='liquid'?this.liquid.uniforms:layer.kind==='super8'?this.super8Projector.uniforms:
       layer.kind==='image'?this.image.uniforms:layer.kind==='sculpture'?this.sculptureUniforms:null;
     if(uniforms)setSourceView(uniforms,sourceViewMatrix(layer.transform,aspect),layer.transform.scale);
     const cycles = Math.max(1, Math.round(number(layer, 'cycles', 1)));
@@ -570,6 +601,17 @@ export class StudioRenderer {
       this.drawSuper8(layer, original, phase, duration);
     } else if (layer.kind === 'oil') {
       return this.drawOil(layer, original, phase);
+    } else if (layer.kind === 'liquid') {
+      const u = this.liquid.uniforms;
+      u.uAspect.value = aspect; u.uPhase.value = localPhase;
+      u.uSeed.value = number(layer, 'seed', 0) % 1_000_003;
+      u.uDroplets.value = this.liquidLayout(layer);
+      for (const [key, fallback] of Object.entries(LIQUID_DEFAULTS)) {
+        u[`u${key[0].toUpperCase()}${key.slice(1)}`].value = number(layer, key, fallback);
+      }
+      const colors = u.uPalette.value as THREE.Color[];
+      for (let i = 0; i < 6; i++) colors[i].set(layer.palette[i] ?? DEFAULT_PALETTE[i]);
+      this.draw(this.liquid, this.source);
     } else if (layer.kind === 'surface') {
       const u = this.surface.uniforms;
       (u.uResolution.value as THREE.Vector2).set(this.width,this.height);
@@ -1013,8 +1055,10 @@ export class StudioRenderer {
     this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
     this.feedbackStates.clear();
     this.graphics.dispose(); this.instruments.dispose();
-    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
+    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
+    for (const texture of this.liquidLayouts.values()) texture.dispose();
+    this.liquidLayouts.clear();
     this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.filmThickness.dispose();
     this.keyLight.shadow.dispose();
     this.renderer.dispose();
