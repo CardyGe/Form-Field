@@ -145,6 +145,8 @@ Integer frequencies and integer turns keep the curve closed and the loop exact.
 
 **Update, 14 November: stage 2 is built.** The beam pass now stores light (core, halo, colour mix) instead of colour. A five-level blur chain at fixed line heights gives the bloom, and the resolve pass tints core, halo and bloom separately, rolls the sum off to white and reads red and blue apart for the fringe. Ember Ring and Cyan Tangle are added. The reference's yellow outer edge around the orange halo at 6 s is not reproduced: the model has one halo colour and one bloom colour.
 
+**Update, 14 November: stage 3 is built.** Morph with holds, wiggle with bursts, travelling dashes and afterglow are in, with the Signal Burst and Morse Sphere presets; Cyan Tangle gained a light wiggle and afterglow. Two changes from the plan. Where the two figures of a morph sit on opposite sides of the sphere, the line cuts through the inside rather than staying on the surface, because forcing it back out tore the line. Afterglow is five fainter copies of the line at earlier moments, not a feedback buffer, so every frame is still a pure function of loop phase; on a fast tumble the copies read as a ribbon of separate lines rather than a smooth smear.
+
 ### Controls
 
 | Section | Parameters |

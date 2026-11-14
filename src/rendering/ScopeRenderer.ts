@@ -2,12 +2,15 @@ import * as THREE from 'three';
 import type { Layer } from '../shared/types';
 import { sourceViewMatrix } from './source-view';
 import { fullscreenVertex } from './shaders';
-import { scopeCurve, scopePerspective } from './scope-curve';
+import { scopeDash, scopeLine, scopePerspective, type ScopeMotion, type ScopeShape } from './scope-curve';
 
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
 /** Line segments in the figure, and in the ring around it. */
 const SEGMENTS = 4096, RING = 256;
 const POINTS = SEGMENTS + 1 + RING + 1;
+/** Afterglow: fainter copies of the line where it was a moment ago. */
+const GHOSTS = 5, GHOST_SEGMENTS = 2048;
+const ALL_POINTS = POINTS + GHOSTS * (GHOST_SEGMENTS + 1);
 /** Values per point: x, y, depth, brightness, colour mix. */
 const STRIDE = 5;
 const TAU = Math.PI * 2;
@@ -41,7 +44,7 @@ function lightTarget(mipmaps = false): THREE.WebGLRenderTarget {
  *    apart for a colour fringe. Output is premultiplied.
  */
 export class ScopeRenderer {
-  private readonly points = new Float32Array(POINTS * STRIDE);
+  private readonly points = new Float32Array(ALL_POINTS * STRIDE);
   private readonly sphere = new Float32Array((SEGMENTS + 1) * 3);
   private readonly buffer = new THREE.InstancedInterleavedBuffer(this.points, STRIDE, 1).setUsage(THREE.DynamicDrawUsage);
   private readonly geometry = new THREE.InstancedBufferGeometry();
@@ -156,13 +159,17 @@ export class ScopeRenderer {
 
   draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw): void {
     const p = layer.params, aspect = width / height, radius = p.radius, points = this.points;
-    scopeCurve(p.figure, { tilt: p.tilt, tumbleX: p.tumbleX, tumbleY: p.tumbleY }, phase, SEGMENTS, this.sphere);
+    const motion: ScopeMotion = { tilt: p.tilt, tumbleX: p.tumbleX, tumbleY: p.tumbleY };
+    const shape: ScopeShape = { figure: p.figure, figureB: p.figureB ?? 0, morph: p.morph ?? 0, hold: p.hold ?? 0,
+      wiggle: p.wiggle ?? 0, wiggleFrequency: p.wiggleFrequency ?? 36, wiggleBursts: p.wiggleBursts ?? 0 };
+    const dash = p.dash ?? 0, dashCount = p.dashCount ?? 12, dashLength = p.dashLength ?? .3, dashSpeed = p.dashSpeed ?? 2, afterglow = p.afterglow ?? 0;
+    scopeLine(shape, motion, phase, SEGMENTS, this.sphere);
     let length = 0;
     for (let i = 0; i <= SEGMENTS; i++) {
       const z = this.sphere[i * 3 + 2], k = radius * scopePerspective(z), at = i * STRIDE;
       points[at] = this.sphere[i * 3] * k; points[at + 1] = this.sphere[i * 3 + 1] * k; points[at + 2] = z;
       // The last point only closes the line; the segment after it would jump to the ring.
-      points[at + 3] = i === SEGMENTS ? 0 : 1;
+      points[at + 3] = i === SEGMENTS ? 0 : scopeDash(i / SEGMENTS, phase, dash, dashCount, dashLength, dashSpeed);
       // The second colour travels once round the line per loop.
       points[at + 4] = p.hueDrift * (.5 + .5 * Math.sin(TAU * i / SEGMENTS + phase));
       if (i > 0) length += Math.hypot(points[at] - points[at - STRIDE], points[at + 1] - points[at - STRIDE + 1]);
@@ -176,6 +183,20 @@ export class ScopeRenderer {
       points[at + 3] = i === RING ? 0 : p.ring * (ringLength / RING) / Math.max(length / SEGMENTS, 1e-6);
       points[at + 4] = p.hueDrift * (.5 + .5 * Math.sin(a - phase));
     }
+    // Afterglow: the line as it was at earlier moments, each copy fainter than the last.
+    if (afterglow > 0) for (let j = 0; j < GHOSTS; j++) {
+      const then = phase - (j + 1) * afterglow * .035, first = POINTS + j * (GHOST_SEGMENTS + 1);
+      scopeLine(shape, motion, then, GHOST_SEGMENTS, this.sphere);
+      // A copy has half as many segments, each twice as long and so half as bright; make that up.
+      const gain = afterglow * .55 * Math.pow(.62, j) * SEGMENTS / GHOST_SEGMENTS;
+      for (let i = 0; i <= GHOST_SEGMENTS; i++) {
+        const z = this.sphere[i * 3 + 2], k = radius * scopePerspective(z), at = (first + i) * STRIDE, s = i / GHOST_SEGMENTS;
+        points[at] = this.sphere[i * 3] * k; points[at + 1] = this.sphere[i * 3 + 1] * k; points[at + 2] = z;
+        points[at + 3] = i === GHOST_SEGMENTS ? 0 : gain * scopeDash(s, then, dash, dashCount, dashLength, dashSpeed);
+        points[at + 4] = p.hueDrift * (.5 + .5 * Math.sin(TAU * s + then));
+      }
+    }
+    this.geometry.instanceCount = (afterglow > 0 ? ALL_POINTS : POINTS) - 1;
     this.buffer.needsUpdate = true;
 
     const u = this.beam.uniforms, view = sourceViewMatrix(layer.transform, aspect), inverse = u.uInverse.value as THREE.Matrix3;

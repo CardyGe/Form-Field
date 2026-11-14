@@ -271,10 +271,14 @@ Check it with `node scripts/verify-liquid.mjs` (add `--quick` for stills only).
 
 ## Oscilloscope controls
 
-**Oscilloscope** draws one closed glowing line on a tumbling sphere, like an electron beam on a vector display. The core burns to white, the halo keeps the line colour, and parts the beam crosses slowly are brighter. Looks so far: **Twin Orbit**, **Atom**, **Ember Ring** and **Cyan Tangle**.
+**Oscilloscope** draws one closed glowing line on a tumbling sphere, like an electron beam on a vector display. The core burns to white, the halo keeps the line colour, and parts the beam crosses slowly are brighter. Looks: **Twin Orbit**, **Atom**, **Ember Ring**, **Cyan Tangle**, **Signal Burst** and **Morse Sphere**.
 
 - **Figure** picks the line (Seam, Orbit, Trefoil, Atom, Coil, Weave, Knot, Tangle). **Size** and **Lean** place it; **Ring** draws the sphere's outline around it.
 - **Tumble forward** and **Tumble sideways** are whole turns per cycle, so the loop closes exactly.
+- **Morph** changes the line into the **Second figure** and back once per cycle; **Morph hold** is the share of the cycle spent resting on each. Where the two figures sit on opposite sides of the sphere, the line cuts through the inside on its way.
+- **Wiggle** adds a fast jagged ripple and **Wiggle rate** sets how many ripples fit along the line. **Wiggle bursts** gathers it into patches that travel, swell and fade.
+- **Dashes** breaks the line into bright dashes with dim gaps; **Dash count**, **Dash length** and **Dash travel** (whole trips round the line per cycle) shape them.
+- **Afterglow** adds five fading copies of the line where it was a moment ago. On a fast tumble they read as a ribbon.
 - **Beam width**, **Intensity** and **Halo** shape the line. **Depth fade** dims and thins the far side of the sphere.
 - **Bloom** is the wide soft glow and **Bloom size** moves it from tight to wide. It is measured in fixed lines of frame height, so it looks the same in the preview and in a 4K export.
 - **Colour fringe** splits red and blue apart towards the edge of the sphere. **Colour travel** sends the second line colour round the line once per cycle.
