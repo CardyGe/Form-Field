@@ -50,8 +50,8 @@ test('patterns and evolving ink cannot take feedback', () => {
 
 test('feedback finishes apply to any supporting layer, replace each other and save as ordinary layers', () => {
   const echoes = FINISH_LOOKS.filter(f => (f.params.echo ?? 0) > 0);
-  assert.equal(echoes.length, 3);
-  for (const kind of ['surface', 'sculpture', 'fractal', 'oil', 'super8', 'livingink', 'currents', 'relief', 'resonance', 'image'] as const) {
+  assert.equal(echoes.length, 4);
+  for (const kind of ['surface', 'sculpture', 'fractal', 'oil', 'super8', 'livingink', 'currents', 'relief', 'resonance', 'texturecuts', 'image'] as const) {
     for (const finish of echoes) {
       const source = createLayer(kind); source.modulations.echoHue = { kind: 'sine', cycles: 1, phase: 0, amount: .2, points: [] };
       const layer = applyFinish(source, finish.id);
@@ -76,7 +76,7 @@ test('variations never switch feedback on or change its blend and frame', () => 
     const layer = applyPreset(createLayer(preset.kind), preset.id);
     for (let entropy = 0; entropy < 4; entropy++) {
       const varied = varyLayer(layer, 1, unlocked, entropy);
-      for (const key of ['echo', 'echoBlend', 'echoFrame', 'echoWindow']) assert.equal(varied.params[key], layer.params[key], `${preset.id} ${key}`);
+      for (const key of ['echo', 'echoBlend', 'echoFrame', 'echoWindow', 'echoStreakAxis']) assert.equal(varied.params[key], layer.params[key], `${preset.id} ${key}`);
       if (!(layer.params.echo > 0)) for (const key of FEEDBACK_KEYS) assert.equal(varied.params[key], layer.params[key], `${preset.id} hidden ${key}`);
     }
   }

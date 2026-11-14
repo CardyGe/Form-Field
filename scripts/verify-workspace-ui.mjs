@@ -152,7 +152,7 @@ try {
   await libraryShow();await page.getByLabel('Search library',{exact:true}).fill('');
   await library.getByRole('button',{name:'Presets',exact:true}).click();
   await page.getByLabel('Preset library filter',{exact:true}).selectOption('finish');
-  assert.equal(await library.locator('.finish-card').count(),7);
+  assert.equal(await library.locator('.finish-card').count(),8);
   await snapshot('finish-library');
   await page.getByLabel('Search library',{exact:true}).fill('tunnel');
   assert.ok(await library.locator('.preset-card').count()>0);
@@ -183,7 +183,7 @@ try {
  });
  await check('all ten source inspectors retain valid editable control rows',async()=>{
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1440,900));
-  for(const kind of ['surface','sculpture','fractal','graphic','oil','super8','livingink','currents','relief','resonance']){
+  for(const kind of ['surface','sculpture','fractal','graphic','oil','super8','livingink','currents','relief','resonance','texturecuts']){
    const layer=model.createLayer(kind),p={...model.createProject(),layers:[layer]};
    await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===p.id);
    await page.getByRole('button',{name:'Shape',exact:true}).click();

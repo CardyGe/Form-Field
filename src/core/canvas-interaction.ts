@@ -17,6 +17,7 @@ const preferred: Partial<Record<LayerKind, string[]>> = {
   oil: ['deformation', 'lensSize'], super8: ['coverage', 'erosion'], livingink: ['flow', 'warp'],
   currents: ['curl', 'coherence'], relief: ['opening', 'depth'],
   resonance: ['modalBlend', 'radialMix'],
+  texturecuts: ['scale', 'cuts'],
 };
 
 /** Continuous, visible controls only; never rebuild a simulation during a drag. */

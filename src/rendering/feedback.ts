@@ -51,7 +51,10 @@ precision highp float;
 varying vec2 vUv;
 uniform sampler2D uSource, uPrevious;
 uniform float uAspect, uZoom, uRotate, uFade, uHue, uWarp, uMode, uHole, uWindow;
-uniform vec2 uDrift;
+uniform vec2 uDrift, uCentre, uTilt, uTexels;
+// Glitch extras, all neutral at 0: lens bulge, rounded and squared frames,
+// outward streaks, macroblock breakup, channel slip and colour crush.
+uniform float uLens, uRound, uSquare, uStreak, uStreakAxis, uBlock, uSlip, uCrush, uFrame, uEdge;
 const vec3 LUMA = vec3(.2126, .7152, .0722);
 // Rotation about the grey axis: turns hue, keeps luminance-ish and stays linear,
 // so it works directly on premultiplied colour.
@@ -61,30 +64,101 @@ vec3 hueRotate(vec3 c, float a) {
   return c * cs + cross(k, c) * sn + k * dot(k, c) * (1. - cs);
 }
 float luma(vec2 uv) { return dot(texture2D(uPrevious, uv).rgb, LUMA); }
+float hash(vec3 p) { p = fract(p * vec3(.1031, .1030, .0973)); p += dot(p, p.yxz + 33.33); return fract((p.x + p.y) * p.z); }
+bool outside(vec2 uv) { return any(lessThan(uv, vec2(0.))) || any(greaterThan(uv, vec2(1.))); }
+// With a lens the frame edge is stretched rather than cut, so corners fill
+// with smeared edge colour. With blocks the echo is read as hard pixels.
+vec4 fetch(vec2 uv) {
+  if (uLens != 0.) uv = clamp(uv, .5 / uTexels, 1. - .5 / uTexels);
+  else if (outside(uv)) return vec4(0.);
+  if (uBlock > 0.) uv = (floor(uv * uTexels) + .5) / uTexels;
+  return texture2D(uPrevious, uv);
+}
+// Distance outside a centred box of half-height t (height units), with
+// rounded corners. Squareness 0 follows the frame's shape; 1 is a square.
+float boxEdge(vec2 h, float t) {
+  vec2 half_ = t * vec2(mix(uAspect, 1., uSquare), 1.);
+  float r = uRound * t;
+  vec2 d = abs(h) - half_ + r;
+  return length(max(d, 0.)) + min(max(d.x, d.y), 0.) - r;
+}
 void main() {
-  // Inverse of: scale by zoom, turn by rotate, then move by drift (height units).
-  vec2 p = (vUv - .5) * vec2(uAspect, 1.) - uDrift;
+  vec2 frame = vec2(uAspect, 1.);
+  // Inverse of: perspective tilt and lens about the vanishing point, scale by
+  // zoom, turn by rotate, then move by drift (all in height units).
+  vec2 p = (vUv - .5) * frame - uDrift - uCentre;
   float c = cos(uRotate), s = sin(uRotate);
   p = mat2(c, -s, s, c) * p / max(uZoom, .001);
-  vec2 uv = p / vec2(uAspect, 1.) + .5;
+  p /= max(1. + dot(uTilt, p), .2);
+  // Lens, scaled so the frame corners stay put: everything inside bends
+  // towards the vanishing point and never reaches beyond the frame.
+  float corner = .25 * (uAspect * uAspect + 1.);
+  p *= (1. + uLens * dot(p, p)) / (1. + max(uLens, 0.) * corner);
+  vec2 rel = p;
+  vec2 uv = (p + uCentre) / frame + .5;
   if (uWarp > 0.) {
     // Slope of the echo's brightness, measured over a fixed fraction of the
     // frame so the melt looks the same at preview and export sizes.
     vec2 e = vec2(1.5 / (1080. * uAspect), 1.5 / 1080.);
     vec2 g = vec2(luma(uv + vec2(e.x, 0.)) - luma(uv - vec2(e.x, 0.)), luma(uv + vec2(0., e.y)) - luma(uv - vec2(0., e.y)));
-    uv -= uWarp * .006 * g / (length(g) + .02) / vec2(uAspect, 1.);
+    uv -= uWarp * .006 * g / (length(g) + .02) / frame;
   }
-  vec4 moved = any(lessThan(uv, vec2(0.))) || any(greaterThan(uv, vec2(1.))) ? vec4(0.) : texture2D(uPrevious, uv);
+  // Outward direction: from the vanishing point, or snapped to the nearest
+  // side of the frame so streaks run straight up, down, left and right.
+  vec2 out_ = rel / max(length(rel), 1e-4);
+  if (uStreakAxis > .5) out_ = abs(rel.x) / uAspect > abs(rel.y) ? vec2(sign(rel.x), 0.) : vec2(0., sign(rel.y));
+  if (uBlock > 0.) {
+    // Macroblock breakup: a few blocks each frame sample one point of a
+    // neighbouring block, so detail shatters into jittering squares.
+    float size = uBlock / 1080.;
+    vec2 cell = floor((uv - .5) * frame / size);
+    if (hash(vec3(cell, uFrame)) < .12) {
+      vec2 jitter = floor(vec2(hash(vec3(cell, uFrame + 17.)), hash(vec3(cell, uFrame + 41.))) * 3.) - 1.;
+      uv = ((cell + .5 + jitter) * size) / frame + .5;
+    }
+  }
+  if (uStreak > 0.) {
+    // Streaks: each thin lane across the outward direction is dragged outward
+    // by its own random amount, like a torn scanline. Stronger further out.
+    vec2 across = vec2(-out_.y, out_.x);
+    float lane = uStreakAxis > .5 ? floor(dot((vUv - .5) * frame, across) * 540.) : floor(atan(rel.y, rel.x) * 240.);
+    float pull = pow(hash(vec3(lane, floor(uFrame / 3.), 7.)), 4.);
+    uv -= out_ * pull * uStreak * .06 * length(rel) / frame;
+  }
+  vec4 moved = fetch(uv);
+  if (uSlip > 0.) {
+    vec2 o = out_ * uSlip * 4. / 1080. / frame;
+    moved.r = fetch(uv + o).r; moved.b = fetch(uv - o).b;
+  }
   moved.rgb = max(hueRotate(moved.rgb, uHue), vec3(0.));
+  if (uCrush > 0.) {
+    // Codec crunch: push colour towards the RGB and CMY corners. Only the
+    // hue moves; brightness is kept, so the fade still forgets old echoes.
+    float m = max(max(moved.r, moved.g), moved.b);
+    if (m > 1e-4) {
+      vec3 n = moved.rgb / m;
+      moved.rgb = mix(n, step(.5, n), uCrush) * m;
+    }
+  }
   vec4 echo = moved * uFade;
   vec4 source = texture2D(uSource, vUv);
   // Frame-shaped cut-outs: a hole turns the source into a border whose echoes
   // nest inward (zoom below 1); a window keeps only the centre, whose echoes
-  // stream outward (zoom above 1).
-  vec2 q = abs(vUv - .5) * 2.;
-  float edge = max(q.x, q.y), aa = 1.5 / 1080.;
-  if (uHole > 0.) source *= smoothstep(uHole - aa, uHole + aa, edge);
-  if (uWindow > 0.) source *= 1. - smoothstep(uWindow - aa, uWindow + aa, edge);
+  // stream outward (zoom above 1). Both sit at the vanishing point.
+  vec2 h = (vUv - .5) * frame - uCentre;
+  float aa = 1.5 / 1080.;
+  float line = uEdge * 4. / 1080.;
+  if (uHole > 0.) {
+    float d = boxEdge(h, uHole * .5);
+    source *= smoothstep(-aa, aa, d);
+    // A dark rule just inside the hole: one per frame, so echoes nest as steps.
+    if (uEdge > 0.) source = mix(source, vec4(0., 0., 0., 1.), smoothstep(-line - aa, -line + aa, d) * (1. - smoothstep(-aa, aa, d)));
+  }
+  if (uWindow > 0.) {
+    float d = boxEdge(h, uWindow * .5);
+    source *= 1. - smoothstep(-aa, aa, d);
+    if (uEdge > 0.) source = mix(source, vec4(0., 0., 0., 1.), smoothstep(-aa, aa, d) * (1. - smoothstep(line - aa, line + aa, d)));
+  }
   vec4 over = source + echo * (1. - source.a);
   // Mix: where the source is opaque, blend towards the echo so trails show
   // across it; where it is transparent, the echo shows through as in Behind.

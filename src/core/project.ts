@@ -259,6 +259,10 @@ export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[]
     const keys=new Set(['ageColour','inkMode','simulationQuality','loopReturn','pigmentCarry','scale','motion','backgroundOpacity','flowDirection','travel','eddyScale','surfaceHole','pattern','branching','seedCoverage','development','relief','pigment','edgeInk','edgeSoftness','lightAngle','lightHeight','fillLight','roughness','anisotropy','sheenAngle','clearcoat','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key)).map(d=>d.key==='scale'?{...d,preparation:true}:d);
   }
+  if(layer.kind==='texturecuts'){
+    const keys=new Set(['cuts','textureSet','scale','rotation','motion','cycles','phaseOffset','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
+    return definitions.filter(d=>keys.has(d.key));
+  }
   if(layer.kind==='relief'&&layer.params.reliefMode===1){
     const keys=new Set([...TIMING_KEYS,'panelMix','reliefMode','scale','columns','gap','stagger','hingeBias','opening','depth','axis','phaseSpread','organic','motion','cycles','phrase','phaseOffset','lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key));
@@ -361,6 +365,7 @@ export const FINISH_LOOKS: FinishLook[] = [
   { id: 'finish-none', name: 'No finish', description: 'Turns feedback and time displacement off.', params: {} },
   { id: 'finish-tunnel', name: 'Tunnel', description: 'The layer becomes a frame that nests inside itself and turns into the distance. Best on full-frame sources.', params: { echo: 0.95, echoZoom: 0.9, echoRotate: 1.5, echoHue: 6, echoFrame: 0.62, echoBlend: 1 } },
   { id: 'finish-bloom-echo', name: 'Bloom Echo', description: 'A centre window streams outward, leaving colour-shifted echoes.', params: { echo: 0.85, echoZoom: 1.035, echoRotate: -1, echoHue: 9, echoBlend: 2, echoWindow: 0.35 } },
+  { id: 'finish-glitch-tunnel', name: 'Glitch Tunnel', description: 'A centre window streams outward in stepped rings that streak, break into blocks and crunch into primary colour.', params: { echo: 1, echoBlend: 1, echoEdge: 0.6, echoWindow: 0.5, echoSquare: 0.7, echoRound: 0.25, echoZoom: 1.05, echoLens: 0.15, echoStreak: 0.4, echoStreakAxis: 1, echoBlock: 8, echoCrush: 0.7, echoHue: 12, echoSlip: 0.25 } },
   { id: 'finish-melt', name: 'Melt', description: 'Echoes slide downward and melt along their own slopes.', params: { echo: 0.9, echoZoom: 1, echoDriftY: -0.006, echoMelt: 0.7, echoHue: -4 } },
   { id: 'finish-terraces', name: 'Terraces', description: 'Horizontal bands, each a moment further in the past.', params: { slitShift: 1, slitSpan: 60, slitShape: 0, slitSlices: 9 } },
   { id: 'finish-block-shuffle', name: 'Block Shuffle', description: 'Blocks that each run at their own delay.', params: { slitShift: 1, slitSpan: 90, slitShape: 4, slitSlices: 8, slitBlocks: 5 } },
@@ -470,7 +475,7 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     if (TOON_KEYS.includes(key) && (key === 'toonMix' || key === 'toonCycles' || !(layer.params.toonMix > 0))) continue;
     // Feedback is likewise an explicit choice, and its blend and frame are structural.
     if (SLIT_KEYS.includes(key) && (['slitShift', 'slitShape', 'slitScroll', 'slitSlices'].includes(key) || !((layer.params.slitShift ?? 0) !== 0))) continue;
-    if (FEEDBACK_KEYS.includes(key) && (['echo', 'echoBlend', 'echoFrame', 'echoWindow'].includes(key) || !(layer.params.echo > 0))) continue;
+    if (FEEDBACK_KEYS.includes(key) && (['echo', 'echoBlend', 'echoFrame', 'echoWindow', 'echoStreakAxis'].includes(key) || !(layer.params.echo > 0))) continue;
     if (layer.modulations[key] || key==='tonePivot' || key==='warpScale'&&layer.params.warp===0 || key==='sheenAngle'&&layer.params.anisotropy===0) continue;
     const span = d.max-d.min;
     const personality = character[d.section] * .7 + (random()*2-1) * .3;

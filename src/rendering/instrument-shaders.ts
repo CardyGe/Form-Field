@@ -84,6 +84,71 @@ vec4 sites(vec2 p,float jitter){
 vec3 cells(vec2 p){vec4 s=sites(p,.6);return vec3(length(s.xy),s.z,s.w);}
 `;
 const bodies:Record<InstrumentKind,string>={
+texturecuts:/* glsl */`
+// Hard cuts between unrelated textures, like a fast edit of found footage.
+// Each cut hashes its index into one generator and its settings; the cut
+// index wraps with the loop, so the sequence repeats exactly.
+float cutRand(float k,float s){return hash21(vec2(k*1.731+s*.917,s*7.13+k*.371));}
+vec3 pick(float t){return uPalette[int(floor(fract(t)*5.))];}
+float fbm(vec2 q){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*smoothNoise(q);q=spin(.6)*q*2.03+11.7;a*=.5;}return v;}
+vec4 rock(vec2 p,vec4 r){
+ vec2 q=p*(1.8+r.x*2.5)+r.yz*40.;
+ float n=fbm(q),crack=1.-smoothstep(0.,.035,abs(fbm(q*.6+9.)-.5));
+ float speck=hash21(floor(q*36.));
+ vec3 c=mix(vec3(.16,.15,.14),vec3(.8,.78,.74),smoothstep(.2,.8,n))*(.82+.36*speck);
+ c=mix(c,c*vec3(1.12,.94,.78),r.w)*(1.-.75*crack);
+ return vec4(c,1.);
+}
+vec4 gravel(vec2 p,vec4 r){
+ vec2 q=p*(2.5+r.x*4.)+r.yz*30.;
+ vec4 s=sites(q,.9);
+ float shade=.35+.5*s.w-.35*length(s.xy)+.12*smoothNoise(q*9.);
+ vec3 c=vec3(shade)*mix(vec3(1.),vec3(1.1,.97,.85),r.w);
+ c*=smoothstep(.02,.09,s.z);
+ return vec4(max(c,0.),1.);
+}
+vec4 bits(vec2 p,vec4 r,float k){
+ vec2 g=floor(p*(10.+r.x*26.));
+ float on=step(hash21(g+k*13.17),.35+.3*r.y);
+ return vec4(pick(r.z)*on,on);
+}
+vec4 stripes(vec2 p,vec4 r,float k){
+ vec2 d=normalize(vec2(1.,r.y<.5?1.:-1.));
+ float f=4.+r.x*10.,u=dot(p,d)*f,v=dot(p,vec2(-d.y,d.x))*f*.5;
+ vec2 px=floor(p*90.)/90.;u=dot(px,d)*f;
+ float band=floor(u),on=step(fract(u),.5)*step(.22,hash21(vec2(band,floor(v*1.5)+k)));
+ return vec4(pick(r.z+mod(band,2.)*.2)*on,on);
+}
+vec4 zigzag(vec2 p,vec4 r){
+ vec2 px=floor(p*(70.+r.x*50.))/(70.+r.x*50.);
+ float f=1.5+r.y*3.5,x=px.x*f,y=px.y*f+abs(fract(x)-.5)*(1.+r.w*2.);
+ float side=mod(floor(y*2.),2.);
+ // As an overlay the second colour drops out, leaving one zig-zag.
+ return vec4(mix(pick(r.z),pick(r.z+.4),side),mix(1.-side,1.,uBackgroundOpacity));
+}
+vec4 blocks(vec2 p,vec4 r,float k){
+ float h=.04+r.x*.08;
+ float row=floor(p.y/h);
+ vec2 size=vec2(h*(2.+3.*hash21(vec2(row,k))),h);
+ vec2 id=floor(vec2(p.x+hash21(vec2(row,k+3.))*size.x,p.y)/size);
+ float t=hash21(id+k*5.3),on=step(.3,t);
+ return vec4(pick(t*1.7+r.z)*on,on);
+}
+void main(){
+ vec2 p=domain();
+ float n=max(uCuts,1.),f=fract(uPhase/TAU)*n,k=floor(f+1e-4);
+ if(k>=n||uMotion<=0.)k=0.;
+ vec4 r=vec4(cutRand(k,1.),cutRand(k,2.),cutRand(k,3.),cutRand(k,4.));
+ float pick0=cutRand(k,5.);
+ float g=uTextureSet<.5?floor(pick0*6.):uTextureSet<1.5?floor(pick0*2.):2.+floor(pick0*4.);
+ // A slow pan inside each cut; the cut hides the jump back.
+ float a=cutRand(k,6.)*TAU;
+ p+=vec2(cos(a),sin(a))*fract(f)*uMotion*.6+r.yz*7.;
+ vec4 t=g<.5?rock(p,r):g<1.5?gravel(p,r):g<2.5?bits(p,r,k):g<3.5?stripes(p,r,k):g<4.5?zigzag(p,r):blocks(p,r,k);
+ // Stone has no empty pixels; as an overlay its darkest cracks and gaps open up.
+ if(g<1.5)t.a=mix(smoothstep(.12,.4,dot(t.rgb,vec3(.2126,.7152,.0722))),1.,uBackgroundOpacity);
+ outputField(t.rgb,t.a);
+}`,
 livingink:/* glsl */`
 ${timingGLSL}
 void main(){

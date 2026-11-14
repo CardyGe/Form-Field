@@ -382,7 +382,7 @@ test('fractal defaults and all family variants roundtrip alongside existing laye
   ].sort());
   assert.equal(layer.params.quality, 2);
   assert.equal(layer.params.morph, 0.1);
-  assert.deepEqual(parameterDefinitions('fractal').filter((definition) => definition.step === 1).map((definition) => definition.key).sort(), ['colorMode', 'colorSteps', 'cycles', 'echoBlend', 'quality', 'radial', 'slitBlocks', 'slitScroll', 'slitShape', 'slitSlices', 'slitSpan', 'style', 'symmetry', 'toonBands', 'toonCycles', 'toonOutlineColor', 'variant']);
+  assert.deepEqual(parameterDefinitions('fractal').filter((definition) => definition.step === 1).map((definition) => definition.key).sort(), ['colorMode', 'colorSteps', 'cycles', 'echoBlend', 'echoBlock', 'echoStreakAxis', 'quality', 'radial', 'slitBlocks', 'slitScroll', 'slitShape', 'slitSlices', 'slitSpan', 'style', 'symmetry', 'toonBands', 'toonCycles', 'toonOutlineColor', 'variant']);
   const presets = PRESETS.filter((preset) => preset.kind === 'fractal');
   assert.equal(presets.length, 11);
   assert.equal(new Set(presets.map((preset) => preset.id)).size, 11);
@@ -681,7 +681,7 @@ test('Fractal contour controls appear only for contour coloring without deleting
 });
 
 test('the curated library covers every Surface pattern, four Sculpture forms and three Fractal colorings', () => {
-  assert.equal(PRESETS.filter(p => p.kind !== 'graphic').length, 59);
+  assert.equal(PRESETS.filter(p => p.kind !== 'graphic').length, 65);
   assert.equal(new Set(PRESETS.map(preset => preset.id)).size, PRESETS.length);
   const surfaces = PRESETS.filter(preset => preset.kind === 'surface');
   assert.equal(surfaces.length, 15);

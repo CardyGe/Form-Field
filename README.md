@@ -65,7 +65,15 @@ Any layer except Graphic Patterns and Ink *Evolving* can feed back into itself (
 - **Source window** keeps only the centre of the source. With Echo zoom above 1, the echoes stream outward around it.
 - **Echo melt** pushes each echo along its own brightness slopes, so the trails smear.
 
+- **Glitch echo:** *Vanishing point* moves where the echoes zoom to, and the frame or window with it. *Echo tilt* steps every echo sideways in perspective, like a staircase. *Echo lens* bends each echo so nested frames round off. *Frame rounding*, *Frame squareness* and *Frame edge* shape the frame or window; Frame edge draws a dark rule every frame so the echoes stack as steps. *Echo streaks* tear the outer echoes into lines, radially or straight to the nearest side. *Echo blocks* break echoes into jittering macroblocks and read them as hard pixels. *Channel slip* and *Colour crush* split and collapse colour, so older echoes turn into saturated glitch. The **Glitch Tunnel** finish applies all of this to any layer.
+
 Motion values apply per frame. Loops close exactly, because the fading means the process forgets its start. Each export first warms up for up to about 270 frames, until the oldest frame's contribution falls below half-float precision, and then renders the loop in order. At 4K this adds a few seconds per export. In the preview, playback is exact. After a seek or an edit, the preview warms up for only 60 frames and settles as it plays. Three looks live under Library → Presets → Feedback.
+
+## Texture Cuts
+
+A source that hard-cuts between unrelated textures: rock, gravel, 1-bit pixel fields, broken diagonal stripes, zig-zags and coloured blocks. *Cuts per loop* sets the pace, and the sequence repeats exactly every loop. *Texture set* keeps all six, the natural pair, or the four digital ones. Motion amount pans each texture during its cut; at 0 the first texture holds. As an overlay (Field background 0), stone opens up at its cracks and zig-zags drop their second colour.
+
+Three looks feed Texture Cuts through the glitch echo into a tunnel: **Glitch Tunnel** (square-on, streaking and crunching), **Square Descent** (a square window bent through a strong lens) and **Stair Fall** (tilted to one side, with radial streaks).
 
 ## Projection delivery
 

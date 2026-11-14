@@ -34,10 +34,11 @@ try{
     const {m,r,project,exr,check,delta,stats}=window.qa,p=project(id),layer=p.layers[0],checks=[];
     const original=await exr(p),s=stats(original,id);check(s.energy>.0001,id+' empty');if(layer.params.backgroundOpacity===1)check(s.minAlpha===1,id+' opaque field coverage');
     if(!(layer.kind==='livingink'&&layer.params.inkMode===2))check(delta(original,await exr(p,.7+Math.PI*2))<.00003,id+' loop');await exr(p,4.7);check(delta(original,await exr(p))===0,id+' seek');
-    const still=structuredClone(p);still.layers[0].params.motion=0;check(delta(await exr(still,.2),await exr(still,3.4))===0,id+' stopped motion');
+    // Echo blocks and streaks glitch every frame by design, even over a still source.
+    const still=structuredClone(p);still.layers[0].params.motion=0;if(!(layer.params.echoBlock>0||layer.params.echoStreak>0))check(delta(await exr(still,.2),await exr(still,3.4))===0,id+' stopped motion');
     layer.params.backgroundOpacity=0;const cutout=stats(await exr(p),id+' overlay');check(cutout.minAlpha<1&&cutout.maxAlpha>0,id+' overlay alpha');checks.push({base:s,overlay:cutout});
     for(const strength of [.35,.65,1]){const q=structuredClone(p);q.layers[0]=m.varyLayer(layer,strength,{palette:false,structure:false,motion:false,material:false},strength*1e6);checks.push({variation:strength,...stats(await exr(q),id+' variation')});}
-    for(const [w,h] of [[90,160],[120,120],[160,90]]){const q=structuredClone(p);q.layers[0].params.backgroundOpacity=1;q.layers[0].transform={x:.2,y:-.3,scale:.2,rotation:.8};q.layers[0].params.scale=8;const s=stats(await exr(q,.7,w,h),id+' scale');check(s.minAlpha===1,id+' transformed field boundary');checks.push({aspect:[w,h],...s});}
+    for(const [w,h] of [[90,160],[120,120],[160,90]]){const q=structuredClone(p);q.layers[0].params.backgroundOpacity=1;q.layers[0].transform={x:.2,y:-.3,scale:.2,rotation:.8};q.layers[0].params.scale=8;const s=stats(await exr(q,.7,w,h),id+' scale');if(!(q.layers[0].params.echoWindow>0||q.layers[0].params.echoFrame>0))check(s.minAlpha===1,id+' transformed field boundary');checks.push({aspect:[w,h],...s});}
     return checks;
    },look.id);report.checks.push({look:look.id,checks:result});console.log('PASS '+look.id);
   }
@@ -50,6 +51,8 @@ try{
      for(const q of [a,b]){if(d.key==='warpScale')q.layers[0].params.warp=.65;if(d.key==='sheenAngle')q.layers[0].params.anisotropy=.8;if(d.key==='tonePivot')q.layers[0].params.toneContrast=1.5;if(['flowDirection','travel','eddyScale'].includes(d.key))q.layers[0].params.organic=.8;if(d.key==='surfaceHole'){q.layers[0].params.motion=1;if(q.layers[0].kind==='currents')q.layers[0].params.flowMode=1;else q.layers[0].params.inkMode=2;}if(['simulationQuality','pigmentCarry','loopReturn','ageColour'].includes(d.key))q.layers[0].params.inkMode=2;
       // Controls that only act when their parent finish is on.
       if(d.key.startsWith('echo')&&d.key!=='echo')q.layers[0].params.echo=.8;
+      if(['echoRound','echoSquare','echoEdge'].includes(d.key))q.layers[0].params.echoWindow=.5;
+      if(d.key==='echoStreakAxis')q.layers[0].params.echoStreak=.6;
       if(d.key.startsWith('slit')&&d.key!=='slitShift')q.layers[0].params.slitShift=1;
       if(d.key==='slitBlocks')q.layers[0].params.slitShape=4;
       if(d.key==='toonOutlineColor')q.layers[0].params.toonOutline=3;

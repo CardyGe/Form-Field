@@ -276,6 +276,8 @@ export class StudioRenderer {
     this.feedback = material(feedbackFragment, {
       uSource: { value: null }, uPrevious: { value: null }, uAspect: { value: 1 }, uZoom: { value: 1 }, uRotate: { value: 0 },
       uFade: { value: 0 }, uHue: { value: 0 }, uWarp: { value: 0 }, uMode: { value: 0 }, uHole: { value: 0 }, uWindow: { value: 0 }, uDrift: { value: new THREE.Vector2() },
+      uCentre: { value: new THREE.Vector2() }, uTilt: { value: new THREE.Vector2() }, uLens: { value: 0 }, uRound: { value: 0 }, uSquare: { value: 0 },
+      uStreak: { value: 0 }, uStreakAxis: { value: 0 }, uBlock: { value: 0 }, uSlip: { value: 0 }, uCrush: { value: 0 }, uFrame: { value: 0 }, uEdge: { value: 0 }, uTexels: { value: new THREE.Vector2(1, 1) },
     });
     this.quad = new THREE.Mesh(this.quadGeometry, this.surface);
     this.quad.frustumCulled = false;
@@ -795,6 +797,14 @@ export class StudioRenderer {
     u.uMode.value = p.echoBlend ?? 0;
     u.uHole.value = p.echoFrame ?? 0;
     u.uWindow.value = p.echoWindow ?? 0;
+    (u.uCentre.value as THREE.Vector2).set(p.echoCentreX ?? 0, p.echoCentreY ?? 0);
+    (u.uTilt.value as THREE.Vector2).set(p.echoTiltX ?? 0, p.echoTiltY ?? 0);
+    u.uLens.value = p.echoLens ?? 0; u.uRound.value = p.echoRound ?? 0; u.uSquare.value = p.echoSquare ?? 0;
+    u.uStreak.value = p.echoStreak ?? 0; u.uStreakAxis.value = p.echoStreakAxis ?? 0;
+    u.uBlock.value = p.echoBlock ?? 0; u.uSlip.value = p.echoSlip ?? 0; u.uCrush.value = p.echoCrush ?? 0; u.uEdge.value = p.echoEdge ?? 0;
+    (u.uTexels.value as THREE.Vector2).set(this.width, this.height);
+    // Hashes key on the loop frame, so warm-ups replay identical glitches.
+    u.uFrame.value = frameAtPhase(phase, total);
     this.draw(this.feedback, to);
   }
 
