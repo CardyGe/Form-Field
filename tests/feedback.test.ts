@@ -51,7 +51,7 @@ test('patterns and evolving ink cannot take feedback', () => {
 test('feedback finishes apply to any supporting layer, replace each other and save as ordinary layers', () => {
   const echoes = FINISH_LOOKS.filter(f => (f.params.echo ?? 0) > 0);
   assert.equal(echoes.length, 4);
-  for (const kind of ['surface', 'sculpture', 'fractal', 'oil', 'super8', 'livingink', 'currents', 'relief', 'resonance', 'texturecuts', 'image'] as const) {
+  for (const kind of ['surface', 'sculpture', 'fractal', 'oil', 'super8', 'livingink', 'relief', 'resonance', 'texturecuts', 'image'] as const) {
     for (const finish of echoes) {
       const source = createLayer(kind); source.modulations.echoHue = { kind: 'sine', cycles: 1, phase: 0, amount: .2, points: [] };
       const layer = applyFinish(source, finish.id);

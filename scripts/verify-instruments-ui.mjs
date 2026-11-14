@@ -32,7 +32,6 @@ try{
   await page.getByRole('button',{name:'Instruments',exact:true}).click();
   await page.getByRole('button',{name:'Add '+info.name,exact:true}).click();
   const added=await saved(p=>p.layers.length===2&&p.layers[1].kind===info.kind);assert.ok(added.layers[1].name);
-  if(info.kind==='currents')await page.getByLabel('Fibre motion',{exact:true}).selectOption('0');
   if(info.kind==='relief')await page.getByLabel('Relief construction',{exact:true}).selectOption('0');
   if(info.kind==='livingink')await page.getByLabel('Pigment motion',{exact:true}).selectOption('0');
   await page.getByRole('button',{name:'Shape',exact:true}).click();

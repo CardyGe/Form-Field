@@ -72,7 +72,7 @@ test('request validation enforces HAP alpha variants, block-aligned sizes and su
 });
 
 test('native snapshots preserve version-2 surface fields and endpoint routes and reject malformed additions',()=>{
- const layer={kind:'currents',id:'field-v2',params:{seed:1729,flowMode:1},palette:['#112233','#223344','#334455','#445566','#556677','#667788'],transform:{x:0,y:0,scale:1,rotation:0},mask:{kind:'none'},modulations:{opacity:{kind:'sine',cycles:1,phase:0,amount:1,points:[],range:{min:.2,max:.9}}},surface:{source:'polygon',role:'obstacle',influence:1,points:[{x:.3,y:.3},{x:.7,y:.3},{x:.5,y:.7}]}};
+ const layer={kind:'livingink',id:'field-v2',params:{seed:1729,inkMode:1},palette:['#112233','#223344','#334455','#445566','#556677','#667788'],transform:{x:0,y:0,scale:1,rotation:0},mask:{kind:'none'},modulations:{opacity:{kind:'sine',cycles:1,phase:0,amount:1,points:[],range:{min:.2,max:.9}}},surface:{source:'polygon',role:'obstacle',influence:1,points:[{x:.3,y:.3},{x:.7,y:.3},{x:.5,y:.7}]}};
  const request={project:{...project,schemaVersion:2,layers:[layer]},format:'prores4444',width:16,height:16,fps:{num:30,den:1},frameCount:3,transparent:true,background:'#000000'};
  assert.deepEqual(validateRequest(request,root).project,request.project);
  for(const change of [p=>p.schemaVersion=1,p=>p.layers[0].surface.influence=NaN,p=>p.layers[0].surface.points[0].x=2,p=>p.layers[0].modulations.opacity.range.min=Infinity]){const q=structuredClone(request);change(q.project);assert.throws(()=>validateRequest(q,root),/version-2/);}
@@ -97,7 +97,7 @@ test('native document and export boundary accepts every supported source kind in
 });
 
 test('native export accepts every projection instrument and preserves its saved controls', () => {
-  for(const kind of ['livingink','currents','relief','resonance','texturecuts','glitchtunnel']) {
+  for(const kind of ['livingink','relief','resonance','texturecuts','glitchtunnel']) {
     const layer={kind,id:'instrument',params:{seed:1729,scale:2,branching:.3},palette:['#112233','#223344','#334455','#445566','#556677','#667788'],transform:{x:0,y:0,scale:1,rotation:0},mask:{kind:'none'}};
     const request={project:{...project,layers:[layer]},format:'prores4444',width:16,height:16,fps:{num:30,den:1},frameCount:3,transparent:true,background:'#000000'};
     const accepted=validateRequest(request,root);assert.deepEqual(accepted.project.layers[0],layer);

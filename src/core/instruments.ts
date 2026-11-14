@@ -2,14 +2,13 @@ import { ELECTRIC, HOT_SIGNAL, LIME_VIOLET, SOLAR, CANDY, CYAN_YELLOW, FLAT_FINI
 import { TIMING_PARAMETERS } from './timing';
 import type { ParameterDefinition } from '../shared/types';
 
-export const INSTRUMENT_KINDS = ['livingink','currents','relief','resonance','texturecuts','glitchtunnel'] as const;
+export const INSTRUMENT_KINDS = ['livingink','relief','resonance','texturecuts','glitchtunnel'] as const;
 export type InstrumentKind = typeof INSTRUMENT_KINDS[number];
 const p=(key:string,label:string,min:number,max:number,step:number,value:number,section:ParameterDefinition['section']='Shape'):ParameterDefinition=>({key,label,min,max,step,default:value,section});
 const lighting=()=>[p('lightAngle','Light angle',-Math.PI,Math.PI,.01,-.7,'Material'),p('roughness','Roughness',.08,1,.01,.35,'Material')];
 const common=()=>[p('scale','Pattern scale',.3,8,.01,2.4),p('rotation','Direction',-Math.PI,Math.PI,.01,0),p('motion','Motion amount',0,1,.01,.35,'Motion'),p('cycles','Cycles per loop',1,8,1,1,'Motion'),p('backgroundOpacity','Field background',0,1,.01,1,'Material'),p('saturation','Saturation',0,2,.01,1,'Material'),p('hue','Hue shift',-Math.PI,Math.PI,.01,0,'Material'),p('exposure','Exposure',.25,2,.01,1,'Material')];
 export const INSTRUMENT_PARAMETERS:Record<InstrumentKind,ParameterDefinition[]>={
  livingink:[...common(),p('pattern','Growth family',0,3,1,0),{...p('branching','Branching',0,1,.01,.5),preparation:true},p('relief','Pigment relief',0,1,.01,.7,'Material'),p('pigment','Pigment amount',.15,.85,.01,.48,'Material'),p('flow','Flow distortion',0,1,.01,.25),...lighting()],
- currents:[...common(),p('fibres','Fibre density',12,480,1,42),p('curl','Current curl',0,1,.01,.6),p('coherence','Flow coherence',0,1,.01,.75),p('trailLength','Trail length',.08,1,.01,.65,'Motion'),p('width','Fibre width',.08,.8,.01,.3,'Material'),p('depth','Depth spread',0,1,.01,.45),...lighting()],
  relief:[...common(),p('columns','Piece density',3,20,1,8),p('opening','Hinge opening',0,1,.01,.65),p('depth','Relief depth',.05,1,.01,.5),p('bevel','Piece bevel',.02,.35,.01,.12),p('waveCount','Travelling bands',1,6,1,2,'Motion'),p('axis','Hinge axis',0,2,1,0),p('shadow','Shadow strength',0,1,.01,.6,'Material'),...lighting()],
  resonance:[...common(),p('modeA','Horizontal mode',1,12,1,3),p('modeB','Vertical mode',1,12,1,5),p('modalBlend','Modal blend',0,1,.01,.35),p('bandWidth','Nodal width',.015,.3,.005,.09,'Material'),p('grains','Sand texture',0,1,.01,.65,'Material'),p('relief','Membrane relief',0,1,.01,.25,'Material'),...lighting()],
  texturecuts:[...common(),{...p('cuts','Cuts per loop',2,240,1,40,'Motion'),description:'How many hard cuts happen in one loop. Each cut shows a new texture, so more cuts flicker faster; the sequence repeats exactly every loop. Motion amount 0 holds the first texture.'},{...p('textureSet','Texture set',0,2,1,0),description:'All mixes stone and pixel textures; Natural keeps rock and gravel; Digital keeps pixel fields, stripes, zig-zags and blocks.'}],
@@ -26,15 +25,14 @@ const directed=[
 const material=[a('lightHeight','Light elevation',.2,2,.01,1,'Material'),a('fillLight','Fill light',0,1,.01,.26,'Material'),a('anisotropy','Directional sheen',0,1,.01,0,'Material'),a('sheenAngle','Sheen direction',-Math.PI,Math.PI,.01,0,'Material','Direction of the stretched highlight when Directional sheen is above zero.'),a('clearcoat','Clear coat',0,1,.01,0,'Material')];
 const specific:Record<InstrumentKind,ParameterDefinition[]>={
  livingink:[...TIMING_PARAMETERS.map(d=>({...d})),{...p('ageColour','Colour by age',0,1,.01,0,'Material'),description:'Evolving only: colours ink by how long it has been there, so new growth stands out from old. 0 keeps one colour.'},p('pigmentCarry','Pigment carry',0,1,.01,.6,'Material'),a('edgeSoftness','Pigment softness',0,1,.01,0,'Material'),a('edgeInk','Edge pigment',0,1,.01,.24,'Material'),{...a('seedCoverage','Seed coverage',.3,.85,.01,.62,'Shape','Re-prepares the chemical texture; does not change during playback.'),preparation:true},{...a('development','Development',.65,1.4,.01,1,'Shape','Duration of deterministic chemical preparation, not playback speed.'),preparation:true}],
- currents:[a('vortex','Vortex curl',-1,1,.01,0),a('braid','Braided flow',0,1,.01,0),a('taper','Fibre taper',0,1,.01,0,'Material'),a('flowDetail','Fine eddies',0,1,.01,0)],
  relief:[...TIMING_PARAMETERS.map(d=>({...d})),{...p('panelMix','Panel sizes',0,1,.01,0),description:'Mixes large, medium and small panels instead of one uniform grid. Solid relief only.'},a('gap','Joint spacing',.01,.24,.005,.08),a('stagger','Row stagger',0,1,.01,0),a('hingeBias','Hinge position',-1,1,.01,0),a('roundness','Plate rounding',0,1,.01,0),a('phaseSpread','Opening variation',0,1,.01,0,'Motion')],
  resonance:[{...p('sequence','Mode score',0,3,1,0,'Motion'),description:'Holds one figure, then snaps to the next mode, stepping through this many changes and back to the first each loop. 0 keeps one figure.'},{...p('snap','Snap speed',0,1,.01,.5,'Motion'),description:'How quickly the sand reorganises between figures in a mode score.'},{...p('fill','Plate fill',0,1,.01,0,'Material'),description:'Fills the plate between the sand lines with two palette colours instead of leaving it clear.'},a('radialMix','Circular modes',0,1,.01,0),a('harmonic','Harmonic detail',0,1,.01,0),a('grainSize','Grain density',40,260,1,130,'Material'),a('nodalSoftness','Nodal softness',0,1,.01,0,'Material')],
  texturecuts:[],
  glitchtunnel:[],
 };
 export const INSTRUMENT_UPGRADE_KEYS:Record<InstrumentKind,string[]>=Object.fromEntries(INSTRUMENT_KINDS.map(kind=>{
- const mode=kind==='currents'?[p('flowMode','Fibre motion',0,1,1,0,'Motion')]:kind==='livingink'?[p('inkMode','Pigment motion',0,2,1,0,'Motion'),{...p('simulationQuality','Chemical resolution',0,2,1,1),preparation:true},{...p('loopReturn','Loop return',0,.5,.01,.3,'Motion'),description:'Evolving chemistry: the share of the loop over which grown ink recedes back into its starting seeds, so the last frame flows into the first. At 0 the clip grows once and stops.'}]:kind==='relief'?[p('reliefMode','Relief construction',0,1,1,0)]:[];
- const obstacle=kind==='currents'||kind==='livingink'?[{...a('surfaceHole','Central obstacle',0,.8,.01,0,'Shape','A source-space circular void that redirects transported fibres and evolving pigment.'),preparation:kind==='livingink'}]:[];
+ const mode=kind==='livingink'?[p('inkMode','Pigment motion',0,2,1,0,'Motion'),{...p('simulationQuality','Chemical resolution',0,2,1,1),preparation:true},{...p('loopReturn','Loop return',0,.5,.01,.3,'Motion'),description:'Evolving chemistry: the share of the loop over which grown ink recedes back into its starting seeds, so the last frame flows into the first. At 0 the clip grows once and stops.'}]:kind==='relief'?[p('reliefMode','Relief construction',0,1,1,0)]:[];
+ const obstacle=kind==='livingink'?[{...a('surfaceHole','Central obstacle',0,.8,.01,0,'Shape','A source-space circular void that redirects evolving pigment.'),preparation:kind==='livingink'}]:[];
  const added=[...field,...directed.map(d=>({...d,preparation:kind==='livingink'&&['travel','flowDirection','eddyScale'].includes(d.key)||d.preparation})),...mode,...obstacle,...material,...specific[kind]];
  INSTRUMENT_PARAMETERS[kind].push(...added.map(d=>({...d})));
  return [kind,added.map(d=>d.key)];
@@ -49,8 +47,7 @@ const GLITCH_TUNNELS=[
 ];
 export interface InstrumentInfo {kind:InstrumentKind;name:string;description:string;palette:string[];looks:{id:string;name:string;params:Record<string,number>;palette?:string[]}[]}
 export const INSTRUMENTS:InstrumentInfo[]=[
- {kind:'livingink',name:'Living Ink',description:'Seeded cellular pigment · embossed lace',palette:pearl,looks:[{id:'ivory-coral',name:'Lime Coral',params:{}},{id:'cobalt-fingerprints',name:'Cobalt Fingerprints',palette:cool,params:{pattern:1,branching:.3,scale:3.2,flow:.4,pigment:.4}},{id:'ember-cells',name:'Ember Cells',palette:warm,params:{pattern:2,branching:.65,scale:2.2,pigment:.55,relief:.85}}]},
- {kind:'currents',name:'Velvet Currents',description:'Luminous fibres · coherent eddies',palette:cool,looks:[]},
+ {kind:'livingink',name:'Living Ink',description:'Seeded cellular pigment · embossed lace',palette:pearl,looks:[{id:'ivory-coral',name:'Lime Coral',params:{}}]},
  {kind:'relief',name:'Kinetic Relief',description:'Hinged ceramic shutters · architectural depth',palette:pearl,looks:[{id:'porcelain-shutters',name:'Neon Shutters',params:{scale:1,columns:7}},{id:'basalt-scales',name:'Basalt Scales',palette:cool,params:{scale:1.3,columns:6,axis:2,opening:.45,depth:.8,roughness:.65}}]},
  {kind:'resonance',name:'Resonant Sand',description:'Standing-wave figures · granular membranes',palette:pearl,looks:[{id:'salt-mandala',name:'Hot Mandala',palette:HOT_SIGNAL,params:{sequence:3,snap:.5,fill:1,motion:1,toonMix:0,scale:1.4,bandWidth:.12}},{id:'midnight-membrane',name:'Midnight Membrane',palette:cool,params:{modeA:2,modeB:5,grains:.3,relief:.8,bandWidth:.18,sequence:2,snap:.3,fill:1,toonMix:0,scale:1.4}}]},
  {kind:'texturecuts',name:'Texture Cuts',description:'Hard cuts between stone, gravel and pixel textures',palette:ELECTRIC,looks:[{id:'rapid-cuts',name:'Rapid Cuts',params:{cuts:40,motion:.35}},{id:'stone-cuts',name:'Stone Cuts',palette:SOLAR,params:{cuts:24,textureSet:1,motion:.5,scale:1.6}},{id:'pixel-cuts',name:'Pixel Cuts',palette:HOT_SIGNAL,params:{cuts:48,textureSet:2,motion:.25,scale:2}},...GLITCH_TUNNELS]},
@@ -65,12 +62,8 @@ for(const info of INSTRUMENTS){const look=explorations[info.kind];if(look)info.l
 
 // Authored behaviour studies within the existing instruments. References and
 // original design decisions: docs/projection-media-direction-2026-11-10.md.
-export const PROJECTION_LOOK_IDS=['silk-river','copper-confluence','ink-estuary','tidal-pigment','breathing-facade','folding-copper','quiet-monument'];
+export const PROJECTION_LOOK_IDS=['ink-estuary','tidal-pigment','breathing-facade','folding-copper','quiet-monument'];
 const studies:Partial<Record<InstrumentKind,InstrumentInfo['looks']>>={
- currents:[
-  {id:'silk-river',name:'Silk River',params:{flowMode:1,organic:.7,scale:1.4,fibres:360,taper:.7,width:.5,trailLength:.85,curl:.95,travel:.4,eddyScale:2,flowDetail:.5,surfaceHole:.32,motion:1,anisotropy:.8,backgroundOpacity:0,depth:.65}},
-  {id:'copper-confluence',name:'Copper Confluence',palette:warm,params:{flowMode:1,organic:.8,scale:1.7,fibres:420,taper:.6,echo:.82,echoZoom:1,echoBlend:1,width:.5,trailLength:.95,curl:1,travel:.2,eddyScale:2.8,flowDirection:.35,motion:1,phrase:2,backgroundOpacity:0,depth:.8}},
- ],
  livingink:[
   {id:'ink-estuary',name:'Ink Estuary · Evolving',palette:cool,params:{...FLAT_FINISH,toonBands:4,pigmentCarry:.1,ageColour:1,edgeSoftness:0,inkMode:2,scale:2.2,travel:.55,pattern:3,motion:1,relief:.18,seedCoverage:.5,development:1.2,pigment:.6,edgeInk:.6,backgroundOpacity:0}},
   {id:'tidal-pigment',name:'Tidal Pigment · Loop',palette:SOLAR,params:{inkMode:1,organic:.55,scale:1.8,pattern:1,motion:1,flow:.5,relief:.35,edgeInk:.5,flowDirection:.35,backgroundOpacity:0}},
@@ -96,8 +89,6 @@ for(const look of INSTRUMENTS.find(i=>i.kind==='relief')!.looks)Object.assign(lo
 // Loop ink travels one pattern period per loop in staggered pulses instead of breathing in place.
 const INK_TRAVEL:Record<string,Record<string,number>>={
  'ivory-coral':{inkMode:1,motion:1,flowDirection:.3,delayShape:0,delaySpread:.2,pause:.15},
- 'cobalt-fingerprints':{inkMode:1,motion:1,flowDirection:-.5,delayShape:2,delaySpread:.2,pause:.15},
- 'ember-cells':{inkMode:1,motion:1,flowDirection:1.2,delayShape:0,delaySpread:.25,pause:.2},
  'tidal-pigment':{delayShape:2,delaySpread:.2,pause:.15},
 };
 for(const look of INSTRUMENTS.find(i=>i.kind==='livingink')!.looks)look.params={...FLAT_FINISH,...look.params,...INK_TRAVEL[look.id]};

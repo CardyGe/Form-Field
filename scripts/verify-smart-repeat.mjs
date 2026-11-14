@@ -51,7 +51,7 @@ try{
    }
   }
   check(xJoins>0&&yJoins>0,'must exercise both path joins');checks.push({wireJoins:{x:xJoins,y:yJoins}});
-  const tiles=project('neon-frames');Object.assign(tiles.layers[0].params,{size:.5,tileResolution:12,tileArea:8,tileGap:0,roundness:0,fill:1,stroke:4,motion:0,sweep:0,backgroundOpacity:0});
+  const tiles=project('packed-mosaic');Object.assign(tiles.layers[0].params,{size:.5,tileResolution:12,tileArea:8,tileGap:0,roundness:0,fill:1,stroke:4,motion:0,sweep:0,backgroundOpacity:0});
   tiles.layers[0].palette=q.palette;
   const packed=m.generateGraphicLayout(tiles.layers[0].params,16/9),image=await exr(tiles,1.3,960,540);
   let interiors=0;
@@ -121,7 +121,7 @@ try{
   checks.push({imageRepeat:true,imageSingleBounds:true,samplerIsolation:true});
   return checks;
  });
- for(const id of ['circuit-worms','maze-carpet','nested-tiles','uneven-pillars','radial-circuit','orbital-bloom']) {
+ for(const id of ['circuit-worms','maze-carpet','nested-tiles','uneven-pillars','radial-circuit','circle-fans']) {
   const bytes=await page.evaluate(async id=>{const {r,project}=window.repeatQA,p=project(id);Object.assign(p.layers[0].params,{size:.3,motion:.7});return Array.from(await r.exportPNG(p,1.3,960,540));},id);
   await fs.writeFile(path.join(out,id+'.png'),Buffer.from(bytes));
  }

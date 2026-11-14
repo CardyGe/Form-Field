@@ -52,15 +52,15 @@ try{
     }
     const params=await page.evaluate(async()=>{
       const {project,exr,delta}=window.graphicsQA,results=[];
-      for(const [id,key,value] of [['pillar-wave','amplitude',.05],['orbital-bloom','orbit',.1],['neon-frames','stroke',6],['nested-tiles','contourSpacing',12],['tile-ripple','sweepWidth',.5],['beaded-spiral','angularStep',1.2],['web-rosette','glyphSize',.6],['particle-rays','twistDepth',.03],['circuit-worms','pathWidth',.8],['circuit-channels','direction',1.57],['maze-carpet','hollow',.2],['radial-circuit','ringWidth',.06]]){
-        const p=project(id),a=await exr(p,1.3);p.layers[0].params[key]=value;const difference=delta(a,await exr(p,1.3));if(difference<.00005)throw Error('Inactive control '+id+' '+key);results.push({id,key,difference});
+      for(const [id,key,value] of [['lava-columns','amplitude',.05],['circle-fans','orbit',.1],['packed-mosaic','stroke',6],['nested-tiles','contourSpacing',12],['packed-mosaic','sweepWidth',.5],['beaded-spiral','angularStep',1.2],['web-rosette','glyphSize',.6],['particle-rays','twistDepth',.03],['circuit-worms','pathWidth',.8],['circuit-channels','direction',1.57],['maze-carpet','hollow',.2],['radial-circuit','ringWidth',.06]]){
+        const p=project(id);if(key==='stroke')p.layers[0].params.fill=1;const a=await exr(p,1.3);p.layers[0].params[key]=value;const difference=delta(a,await exr(p,1.3));if(difference<.00005)throw Error('Inactive control '+id+' '+key);results.push({id,key,difference});
       }
       const rotating=project('circle-fans');rotating.layers[0].params.motion=0;
       const stillDepth=await exr(rotating,1.3);rotating.layers[0].params.motion=.000001;
       const depthLimit=delta(stillDepth,await exr(rotating,1.3));
       if(depthLimit>.0002)throw Error('motion-depth zero must not reset independent whole turns');
       results.push({independentRotation:true,depthLimit});
-      for(const id of ['pillar-wave','orbital-bloom','nested-tiles','disc-mandala','maze-carpet']){
+      for(const id of ['lava-columns','circle-fans','nested-tiles','disc-mandala','maze-carpet']){
         for(const [w,h] of [[144,256],[192,192]]){const a=await exr(project(id),1.3,w,h);if(a.some(v=>!Number.isFinite(v)))throw Error(id+' aspect');}
       }
       return results;
@@ -68,7 +68,7 @@ try{
     // Pass real graphic EXRs through the native movie export manager.
     const require=createRequire(import.meta.url),{ExportManager,resolveMediaTools}=require(path.join(root,'electron/export-manager.cjs'));
     const manager=new ExportManager({...resolveMediaTools(),jobsDirectory:path.join(out,'jobs'),defaultExportDir:path.join(out,'exports'),rendererFingerprint:'graphics-proof-v1'});
-    const project=await page.evaluate(()=>window.graphicsQA.project('tile-ripple'));
+    const project=await page.evaluate(()=>window.graphicsQA.project('packed-mosaic'));
     const job=await manager.beginExport({project,format:'prores4444',width:320,height:180,fps:{num:24,den:1},frameCount:12,transparent:true,background:'#000000'});
     for(let i=0;i<12;i++){
       const bytes=await page.evaluate(async({i,project})=>Array.from(await window.graphicsQA.r.exportEXR(project,i/12*Math.PI*2,320,180)),{i,project});

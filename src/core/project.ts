@@ -251,10 +251,6 @@ export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[]
     const keys = graphicVisibleKeys(layer.params.style, layer.params.variant, layer.params.fill, layer.params.sweep);
     return definitions.filter(d => keys.has(d.key)||FINISH_KEYS.includes(d.key));
   }
-  if(layer.kind==='currents'&&layer.params.flowMode===1){
-    const keys=new Set(['flowMode','scale','motion','cycles','backgroundOpacity','flowDirection','travel','eddyScale','phrase','surfaceHole','fibres','taper','curl','trailLength','width','depth','flowDetail','phaseOffset','anisotropy','saturation','hue','exposure',...FINISH_KEYS]);
-    return definitions.filter(d=>keys.has(d.key));
-  }
   if(layer.kind==='livingink'&&layer.params.inkMode===2){
     const keys=new Set(['ageColour','inkMode','simulationQuality','loopReturn','pigmentCarry','scale','motion','backgroundOpacity','flowDirection','travel','eddyScale','surfaceHole','pattern','branching','seedCoverage','development','relief','pigment','edgeInk','edgeSoftness','lightAngle','lightHeight','fillLight','roughness','anisotropy','sheenAngle','clearcoat','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key)).map(d=>d.key==='scale'?{...d,preparation:true}:d);
@@ -308,16 +304,11 @@ export const PRESETS: Preset[] = [
   preset('cut-out-collage', 'Cut-out Collage', 'Layered painted paper fragments with torn edges and offset impressions.', 'super8', SUPER8_PALETTE, { mode: 3, steps: 8, erosion: 0.35, texture: 0.8, roughness: 0.7, feedback: 0.4, feedbackRotation: -0.06, filmFps: 12, travel: 0.55, gateMode: 1, gateInset: .025, frameLines: .35, emulsion: .35, lensSoftness: .3, colorFade: .3 }),
   preset('painted-tunnel', 'Painted Tunnel', 'Scanned paint arches rush through a rolling shutter and break into stepped terraces.', 'super8', ['#f6b21c', '#1e4fd6', '#f0521c', '#ec8fb0', '#1b1726', '#f2efe8'], { mode: 4, steps: 10, coverage: 0.9, erosion: 0.12, texture: 0.8, textureScale: 1.1, roughness: 0.45, bleed: 0.15, travel: 0.6, cycles: 2, filmFps: 24, feedback: 0, rotation: 0, scratches: 0.12, grain: 0.15, flicker: 0.08, weave: 0.08, rollAmount: 0.7, rollBands: 30, rollOrigin: 1, rollSmear: 0.55, emulsion: 0.12, pullDown: 0, shutter: 0, lightLeak: 0, halation: 0.12, vignette: 0.08, lensSoftness: 0.05, colorFade: 0, dust: 0.12, hair: 0 }),
   preset('acid-slide', 'Acid Slide', 'Fluorescent yellow paint, cellular black ink and a glossy lens over cyan.', 'oil', OIL_PALETTE, {}),
-  preset('cellular-lift', 'Cellular Lift', 'A glassy dome lifts away from lime paint on violet to reveal its cellular footprint.', 'oil', ['#c6ff00', '#5cff5c', '#07060c', '#8a2cff', '#1a0640', '#ffd400'], { lift: 1, travel: 0.22, drag: 0.7, cellSize: 1.2, relativeRotation: 0.18, filaments: 0.25, cellComplexity: 0.2 }),
-  preset('ink-drag', 'Ink Drag', 'Fine black filaments pulled through hot pink paint over yellow by a sliding lens.', 'oil', ['#ff2e93', '#ff8a00', '#0a0610', '#ffe600', '#2a0a3c', '#00e5ff'], { travel: 0.52, drag: 0.92, filaments: 1, relativeRotation: 0.45, cellSize: 0.6, coverage: 0.68 }),
-  preset('chromatic-slides', 'Chromatic Slides', 'Hot pink and tangerine pools with dark violet ink and blue-green glass.', 'oil', ['#ff318b', '#ffab35', '#180d38', '#22dbc8', '#13266f', '#ffd18a'], { coverage: 0.5, lensAspect: 1.45, lensSize: 0.23, drag: 0.45, relativeRotation: 0.5, wetness: 0.95 }),
   preset('cobalt-tide', 'Cobalt Tide', 'Electric blue paint and coral ink flowing over luminous turquoise.', 'oil', ['#234dff', '#05bdf5', '#2b0927', '#42f2b4', '#111044', '#e7b4ff'], { layout: 1, travel: 0.38, relativeRotation: 0.65, drag: 0.78, coverage: 0.64, lensSize: 0.24, deformation: 0.85, cellComplexity: 0.85, dispersion: 0.35 }),
-  preset('ember-glass', 'Ember Glass', 'Amber and scarlet pigment, black branching ink and deep violet glass.', 'oil', ['#ff9d19', '#fa3154', '#160721', '#33255c', '#0b0820', '#ffe7ad'], { travel: 0.28, drag: 0.65, coverage: 0.62, lensAspect: 0.85, lensDepth: 0.85, thickness: 0.85, cellComplexity: 0.8, wetness: 1 }),
   preset('acrylic-pour', 'Acrylic Pour', 'Yellow paint poured over cyan, opening into laced cells that swell and close.', 'oil', ['#ffe600', '#ffc400', '#0a0a12', '#00b8ff', '#00508f', '#ffffff'], { layout: 1, dome: 0, coverage: 0.55, cellSize: 1.1, ink: 0.85, thickness: 0.7, travel: 0.18, relativeRotation: 0.1, wetness: 0.9 }),
   preset('lace-ribbons', 'Lace Ribbons', 'Hot pink ribbons run edge to edge over yellow, laced with dark threads.', 'oil', ['#ff2e93', '#ff5fc0', '#14020c', '#ffe600', '#7a4a00', '#ffffff'], { layout: 2, dome: 0, coverage: 0.5, poolSize: 1, cellSize: 0.8, filaments: 0.9, ink: 0.8, thickness: 0.6, travel: 0.22, relativeRotation: 0.05 }),
   preset('acid-tide', 'Acid Tide', 'Luminous cyan, lime and orchid flowing through broad liquid bands.', 'surface', DEFAULT_PALETTE, { style: 0, scale: 4, warp: 0.45, detail: 0.4, roundness: 0.65, relief: 0.62, softness: 0.25, contrast: 0.55, offset: 0.2, reveal: 0.1, delayShape: 0, delaySpread: 0.6, pause: 0.5 }),
   preset('solar-melt', 'Solar Melt', 'Hot amber, scarlet and magenta gathered into slow molten drips.', 'surface', SOLAR, { style: 2, scale: 3.4, warp: 0.6, detail: 0.28, roundness: 0.85, relief: 0.64, softness: 0.34, contrast: 0.57, rotation: -0.18, offset: 0.08, reveal: 0.14, delayShape: 0, delaySpread: 0.5, pause: 0.4 }),
-  preset('deep-bloom', 'Deep Bloom', 'Electric cyan, blue and violet bands cut around a deep portal.', 'surface', ELECTRIC, { style: 3, scale: 5.2, warp: 0.67, detail: 0.58, roundness: 0.3, relief: 0.7, softness: 0.2, contrast: 0.68, offset: 0.33, reveal: 0.28, delayShape: 1, delaySpread: 0.5, pause: 0.4 }),
   preset('citrine-braids', 'Citrine Braids', 'Interwoven liquid bands in luminous citrus, cyan and orchid.', 'surface', DEFAULT_PALETTE, { style: 0, variant: 1, scale: 5.4, warp: 0.28, roundness: 0.6, relief: 0.8, density: 0.8, stretch: 0.8, roughness: 0.24, delayShape: 0, delaySpread: 0.5, pause: 0.4 }),
   preset('ripple-glass', 'Ripple Glass', 'Concentric ripples in cyan, magenta and yellow.', 'surface', POP_PORTAL, { style: 1, variant: 1, scale: 4.5, warp: 0.2, roundness: 0.85, relief: 0.62, density: 0.85, roughness: 0.28, delayShape: 1, delaySpread: 0.8, pause: 0.6 }),
   preset('vortex-pool', 'Vortex Pool', 'A curling pool of contour lines in candy pink, cyan and yellow.', 'surface', CANDY, { style: 1, variant: 2, scale: 4, warp: 0.15, roundness: 0.8, relief: 0.8, density: 1.15, stretch: 0.8, roughness: 0.28, delayShape: 1, delaySpread: 0.5, pause: 0.3 }),
@@ -392,8 +383,8 @@ export function applyFinish(layer: Layer, finishId: string): Layer {
   return next;
 }
 
-/** Effect families removed in 0.12; their layers are dropped when an older project is opened. */
-export const RETIRED_KINDS: readonly string[] = ['caustic', 'magnetic', 'loom', 'reef', 'prism', 'veils'];
+/** Retired effect families; their layers are dropped when an older project is opened. */
+export const RETIRED_KINDS: readonly string[] = ['caustic', 'magnetic', 'loom', 'reef', 'prism', 'veils', 'currents'];
 export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
@@ -749,7 +740,7 @@ export function validateProject(input: unknown): Project {
   if (!Array.isArray(project.layers) || project.layers.length < 1 || project.layers.length > 4) fail('layers', 'must contain between one and four layers.');
   // Layers from retired effect families are dropped so older films still open.
   const kept = (project.layers as unknown[]).filter(layer => !RETIRED_KINDS.includes((layer as { kind?: string } | null)?.kind as string));
-  if (!kept.length) fail('layers', 'only uses effects that have been retired (Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral, Volumetric Veils).');
+  if (!kept.length) fail('layers', 'only uses effects that have been retired (Caustic Atlas, Magnetic Skin, Holographic Loom, Crystal Reef, Prism Cathedral, Volumetric Veils, Velvet Currents).');
   const layers = kept.map((layer,i)=>validateLayer(layer,i,project.schemaVersion as 1|2));
   if(layers.some(l=>l.kind==='livingink'&&l.params.inkMode===2)&&(project.duration as number)>60)fail('duration','must be at most 60 seconds for evolving pigment.');
   if (new Set(layers.map((layer) => layer.id)).size !== layers.length) fail('layers', 'contains duplicate layer IDs.');
