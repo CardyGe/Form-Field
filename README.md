@@ -1,6 +1,14 @@
 # Form & Field
 
-A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.13 alpha.
+A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.14 alpha.
+
+## What's new in 0.14
+
+- **Four new instruments:** Texture Cuts, Feedback Glitch, Liquid Light and Oscilloscope, with 21 looks between them. The library now has 88 presets.
+- **Glitch for any feedback:** Glitch echo and the corruption controls from Feedback Glitch work in any layer's Feedback finish.
+- **Files:** **New** (⌘N) starts a fresh composition and Undo brings the previous one back. **Save** (⌘S) writes to the file you last opened or saved; ⇧⌘S or Shift-click saves as a new file. The file name shows in the header.
+- **Finer control:** double-click a slider or its label to reset it. Hold Shift while dragging a slider, or with the arrow keys, to move it a tenth as far.
+- **Smoother playback with images:** imported images and image masks are no longer copied on every frame.
 
 ## What's new in 0.13
 
