@@ -23,6 +23,45 @@ export function persistence(layer: Pick<Layer, 'params'>): number {
   return MAX_PERSISTENCE * Math.max(0, Math.min(1, layer.params.echo ?? 0));
 }
 
+/** Held echoes only forget by leaving the frame, so they need outward zoom. */
+export function holds(params: Record<string, number>): boolean {
+  return (params.echoKeep ?? 0) > .5 && (params.echo ?? 0) > 0 && (params.echoZoom ?? 1) >= 1.005;
+}
+
+/** The fade applied to the echo every frame. */
+export function echoFade(params: Record<string, number>): number {
+  return holds(params) ? 1 : persistence({ params });
+}
+
+/**
+ * Frames of history that still reach the picture. A fading echo forgets
+ * below half-float precision; a held echo forgets once everything has zoomed
+ * from the centre past the frame corners (24 times further out), with a
+ * margin for glitch events that throw pixels back inward.
+ */
+export function historyFrames(params: Record<string, number>): number {
+  if (!holds(params)) return warmupFrames(persistence({ params }));
+  return Math.ceil(1.5 * Math.log(24) / Math.log(params.echoZoom));
+}
+
+/**
+ * The echo controls in effect. Feedback Glitch drives the echo from its own
+ * instrument controls; every other layer uses its Feedback finish.
+ */
+export function echoSettings(layer: Pick<Layer, 'kind' | 'params'>, phase: number): Record<string, number> {
+  const p = layer.params;
+  if (layer.kind !== 'glitchtunnel') return p;
+  const fade = p.fade ?? 0;
+  return {
+    echo: fade > 0 ? 1 - .25 * fade : 1, echoKeep: fade > 0 ? 0 : 1, echoBlend: 1,
+    echoZoom: p.tunnelZoom, echoRotate: (p.wobble ?? 0) * Math.sin(phase * Math.max(1, Math.round(p.cycles ?? 1))),
+    echoDriftX: 0, echoDriftY: 0, echoHue: p.hueShift ?? 0, echoMelt: p.melt ?? 0, echoFrame: 0, echoWindow: 0,
+    echoCentreX: p.vanishX ?? 0, echoCentreY: p.vanishY ?? 0, echoTiltX: p.tiltX ?? 0, echoTiltY: p.tiltY ?? 0, echoLens: p.lens ?? 0,
+    echoRound: 0, echoSquare: 0, echoEdge: 0, echoStreak: p.streaks ?? 0, echoStreakAxis: p.streakAxis ?? 0, echoBlock: p.blocks ?? 0,
+    echoSlip: p.split ?? 0, echoCrush: p.crush ?? 0, echoEvents: p.glitch ?? 0, echoColourDrift: p.colourDrift ?? 0, echoPunch: p.punch ?? 0, echoPixel: p.pixelSize ?? 0,
+  };
+}
+
 /** Frames of history needed for the steady state at this persistence. */
 export function warmupFrames(fade: number): number {
   if (fade <= 0) return 0;
@@ -39,11 +78,12 @@ export function frameAtPhase(phase: number, total: number): number {
 /** Feedback cannot run on tiled patterns (the source is a tile, not the frame)
  * or on Evolving ink, whose clip clock does not loop. */
 export function supportsFeedback(layer: Pick<Layer, 'kind' | 'params'>): boolean {
-  return layer.kind !== 'graphic' && !(layer.kind === 'livingink' && layer.params.inkMode === 2);
+  // Feedback Glitch is a feedback instrument: its echo is not a finish.
+  return layer.kind !== 'graphic' && layer.kind !== 'glitchtunnel' && !(layer.kind === 'livingink' && layer.params.inkMode === 2);
 }
 
 export function feedbackActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>): boolean {
-  return supportsFeedback(layer) && ((layer.params.echo ?? 0) > 0 || !!layer.modulations.echo);
+  return layer.kind === 'glitchtunnel' || supportsFeedback(layer) && ((layer.params.echo ?? 0) > 0 || !!layer.modulations.echo);
 }
 
 export const feedbackFragment = /* glsl */`
@@ -55,6 +95,9 @@ uniform vec2 uDrift, uCentre, uTilt, uTexels;
 // Glitch extras, all neutral at 0: lens bulge, rounded and squared frames,
 // outward streaks, macroblock breakup, channel slip and colour crush.
 uniform float uLens, uRound, uSquare, uStreak, uStreakAxis, uBlock, uSlip, uCrush, uFrame, uEdge;
+// Held echoes keep full brightness; glitch events, colour drift, contrast
+// push and chunky echo pixels compound over the generations.
+uniform float uKeep, uEvents, uColourDrift, uPunch, uPixel;
 const vec3 LUMA = vec3(.2126, .7152, .0722);
 // Rotation about the grey axis: turns hue, keeps luminance-ish and stays linear,
 // so it works directly on premultiplied colour.
@@ -69,9 +112,10 @@ bool outside(vec2 uv) { return any(lessThan(uv, vec2(0.))) || any(greaterThan(uv
 // With a lens the frame edge is stretched rather than cut, so corners fill
 // with smeared edge colour. With blocks the echo is read as hard pixels.
 vec4 fetch(vec2 uv) {
-  if (uLens != 0.) uv = clamp(uv, .5 / uTexels, 1. - .5 / uTexels);
+  // Held echoes stretch the frame edge into streaks instead of cutting it.
+  if (uLens != 0. || uKeep > .5) uv = clamp(uv, .5 / uTexels, 1. - .5 / uTexels);
   else if (outside(uv)) return vec4(0.);
-  if (uBlock > 0.) uv = (floor(uv * uTexels) + .5) / uTexels;
+  if (uBlock > 0. || uPixel > 0.) uv = (floor(uv * uTexels) + .5) / uTexels;
   return texture2D(uPrevious, uv);
 }
 // Distance outside a centred box of half-height t (height units), with
@@ -86,7 +130,11 @@ void main() {
   vec2 frame = vec2(uAspect, 1.);
   // Inverse of: perspective tilt and lens about the vanishing point, scale by
   // zoom, turn by rotate, then move by drift (all in height units).
-  vec2 p = (vUv - .5) * frame - uDrift - uCentre;
+  // Echo pixels: every pixel of a coarse cell reads the same echo point, so
+  // the echoes are carried as chunky low-resolution pixels.
+  vec2 at = vUv;
+  if (uPixel > 0.) { float size = uPixel / 1080.; at = (floor((vUv - .5) * frame / size) + .5) * size / frame + .5; }
+  vec2 p = (at - .5) * frame - uDrift - uCentre;
   float c = cos(uRotate), s = sin(uRotate);
   p = mat2(c, -s, s, c) * p / max(uZoom, .001);
   p /= max(1. + dot(uTilt, p), .2);
@@ -125,12 +173,31 @@ void main() {
     float pull = pow(hash(vec3(lane, floor(uFrame / 3.), 7.)), 4.);
     uv -= out_ * pull * uStreak * .06 * length(rel) / frame;
   }
+  // Glitch events: a few cells per beat slide sideways or up and down by a
+  // large amount; the same draw later posterises or swaps their channels.
+  float event = .5;
+  if (uEvents > 0.) {
+    vec2 cell = floor(at * vec2(40., 70.));
+    // A new draw every six frames: one tear per ~20% of tunnel growth.
+    float beat = floor(uFrame / 6.);
+    event = hash(vec3(cell, beat));
+    if (event > 1. - .06 * uEvents) uv.x += (hash(vec3(cell.yy, beat + 3.)) - .5) * .25;
+    if (hash(vec3(cell.x, beat, 5.)) > 1. - .03 * uEvents) uv.y += (hash(vec3(beat, cell.x, 9.)) - .5) * .2;
+  }
   vec4 moved = fetch(uv);
   if (uSlip > 0.) {
-    vec2 o = out_ * uSlip * 4. / 1080. / frame;
+    // Horizontal, like a misaligned scanline read.
+    vec2 o = vec2(uSlip * 4. / 1080., 0.) / frame;
     moved.r = fetch(uv + o).r; moved.b = fetch(uv - o).b;
   }
   moved.rgb = max(hueRotate(moved.rgb, uHue), vec3(0.));
+  if (uEvents > 0.) {
+    if (event > 1. - .025 * uEvents) moved.rgb = floor(moved.rgb / max(moved.a, 1e-4) * 3.) / 3. * moved.a;
+    if (event < .02 * uEvents) moved.rgb = moved.gbr;
+  }
+  if (uColourDrift > 0.) moved.rgb = mix(moved.rgb, moved.brg, uColourDrift);
+  // Contrast push about mid grey (premultiplied), clamped to the coverage.
+  if (uPunch > 0.) moved.rgb = clamp((moved.rgb - .5 * moved.a) * (1. + uPunch) + .5 * moved.a, 0., moved.a);
   if (uCrush > 0.) {
     // Codec crunch: push colour towards the RGB and CMY corners. Only the
     // hue moves; brightness is kept, so the fade still forgets old echoes.

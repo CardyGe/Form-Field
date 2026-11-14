@@ -100,6 +100,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     currents: <><path d="M2 5c8 0 6 14 20 14M2 10c8 0 6 9 20 9M2 15c8 0 6 4 20 4"/></>,
     relief: <><path d="m3 6 7-3v15l-7 3Zm11 0 7-3v15l-7 3Z"/></>,
     resonance: <><circle cx="12" cy="12" r="9"/><path d="M5 5c14 0 0 14 14 14M19 5C5 5 19 19 5 19"/></>,
+    glitchtunnel: <><rect x="3" y="3" width="18" height="18" rx="3"/><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10.5 10.5h3v3h-3zM3 12h4M17 12h4"/></>,
     texturecuts: <><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h6V3M15 21v-6h6M9 9l6 6M12 3v4M3 15h4"/></>,
     image: <><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8" cy="8" r="1.5" /><path d="m3 17 6-6 4 4 3-3 5 5" /></>,
     trash: <><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7" /></>,

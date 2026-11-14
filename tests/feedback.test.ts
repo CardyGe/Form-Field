@@ -76,7 +76,7 @@ test('variations never switch feedback on or change its blend and frame', () => 
     const layer = applyPreset(createLayer(preset.kind), preset.id);
     for (let entropy = 0; entropy < 4; entropy++) {
       const varied = varyLayer(layer, 1, unlocked, entropy);
-      for (const key of ['echo', 'echoBlend', 'echoFrame', 'echoWindow', 'echoStreakAxis']) assert.equal(varied.params[key], layer.params[key], `${preset.id} ${key}`);
+      for (const key of ['echo', 'echoBlend', 'echoFrame', 'echoWindow', 'echoStreakAxis', 'echoKeep']) assert.equal(varied.params[key], layer.params[key], `${preset.id} ${key}`);
       if (!(layer.params.echo > 0)) for (const key of FEEDBACK_KEYS) assert.equal(varied.params[key], layer.params[key], `${preset.id} hidden ${key}`);
     }
   }

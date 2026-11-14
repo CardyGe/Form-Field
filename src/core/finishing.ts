@@ -44,8 +44,13 @@ export const FEEDBACK_PARAMETERS:ParameterDefinition[]=[
  {key:'echoStreak',label:'Echo streaks',min:0,max:1,step:.01,default:0,section:'Material',description:'Drags each echo outward in thin torn lines, each line by its own amount, so the outer echoes smear into streaks.'},
  {key:'echoStreakAxis',label:'Streak direction',min:0,max:1,step:1,default:0,section:'Material',description:'Radial streaks fan out from the vanishing point; Box streaks run straight to the nearest side of the frame.'},
  {key:'echoBlock',label:'Echo blocks',min:0,max:32,step:1,default:0,section:'Material',description:'Breaks each echo into jittering blocks this many pixels across (at 1080 lines), like a damaged video codec, and reads echoes as hard pixels so they stay crisp. Older echoes break up more.'},
- {key:'echoSlip',label:'Channel slip',min:0,max:1,step:.01,default:0,section:'Material',description:'Shifts red and blue apart along the streak direction on every echo, so colour fringes grow outward.'},
+ {key:'echoSlip',label:'Channel slip',min:0,max:1,step:.01,default:0,section:'Material',description:'Shifts red and blue apart sideways on every echo, so colour fringes build up into horizontal bands.'},
  {key:'echoCrush',label:'Colour crush',min:0,max:1,step:.01,default:0,section:'Material',description:'Pushes every echo towards pure primaries and steps its brightness, so older echoes collapse into saturated glitch colour.'},
+ {key:'echoKeep',label:'Hold brightness',min:0,max:1,step:1,default:0,section:'Material',description:'With Echo zoom above 1, echoes keep full brightness until they leave the frame instead of fading. Loops still close: everything leaves within a few seconds.'},
+ {key:'echoEvents',label:'Glitch events',min:0,max:3,step:.05,default:0,section:'Material',description:'Every few frames some cells tear sideways or up and down, posterise or swap colour channels. The damage is carried outward by later echoes.'},
+ {key:'echoColourDrift',label:'Colour drift',min:0,max:.1,step:.001,default:0,section:'Material',description:'Rotates the colour channels of every echo a little, so rings drift through red, green and blue.'},
+ {key:'echoPunch',label:'Contrast push',min:0,max:.1,step:.001,default:0,section:'Material',description:'Raises the contrast of every echo, so older echoes burn towards pure colour.'},
+ {key:'echoPixel',label:'Echo pixel size',min:0,max:16,step:1,default:0,section:'Material',description:'Carries the echoes as chunky pixels this many pixels across (at 1080 lines). 0 keeps full resolution.'},
  {key:'echoBlend',label:'Echo blend',min:0,max:2,step:1,default:0,section:'Material',description:'Mix blends echoes across the whole source. Behind draws the source over its echoes, which show through transparent areas and frames. Brighter keeps whichever is brighter, for glowing trails.'},
 ];
 /**

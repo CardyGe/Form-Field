@@ -83,8 +83,8 @@ vec4 sites(vec2 p,float jitter){
 }
 vec3 cells(vec2 p){vec4 s=sites(p,.6);return vec3(length(s.xy),s.z,s.w);}
 `;
-const bodies:Record<InstrumentKind,string>={
-texturecuts:/* glsl */`
+// Hard-cut texture generators shared by Texture Cuts and Feedback Glitch.
+const cutTexturesGLSL=/* glsl */`
 // Hard cuts between unrelated textures, like a fast edit of found footage.
 // Each cut hashes its index into one generator and its settings; the cut
 // index wraps with the loop, so the sequence repeats exactly.
@@ -134,6 +134,52 @@ vec4 blocks(vec2 p,vec4 r,float k){
  float t=hash21(id+k*5.3),on=step(.3,t);
  return vec4(pick(t*1.7+r.z)*on,on);
 }
+`;
+const bodies:Record<InstrumentKind,string>={
+glitchtunnel:/* glsl */`
+${cutTexturesGLSL}
+// Feedback Glitch: the fresh picture stamped into a box each frame. The
+// renderer's feedback pass zooms the previous frame outward around it and
+// corrupts it, so old pictures become the glitching rings of the tunnel.
+float roundBox(vec2 p,vec2 b,float r){vec2 q=abs(p)-b+r;return length(max(q,0.))+min(max(q.x,q.y),0.)-r;}
+vec4 stamp(float m,vec2 p,vec4 r,float k){
+ vec2 q=p*2.;
+ if(m<.5){float n=smoothNoise(p*8.)*.5+smoothNoise(p*24.)*.3+smoothNoise(p*90.)*.2;return vec4(vec3(.35+n*.5),1.);}
+ if(m<1.5)return vec4(mix(uPalette[5],uPalette[1],step(.5,fract((p.x+p.y)*14.))),1.);
+ if(m<2.5)return vec4(p.y>.5?mix(uPalette[5],uPalette[0],step(p.y,fract(p.x*3.))):uPalette[5],1.);
+ if(m<3.5){float t=hash21(floor(p*60.)+floor(uPhase*60.));return vec4(vec3(t),1.);}
+ if(m<4.5)return rock(q,r);
+ if(m<5.5)return gravel(q,r);
+ vec4 t=m<6.5?bits(q,r,k):m<7.5?stripes(q,r,k):m<8.5?zigzag(q,r):blocks(q,r,k);
+ return vec4(mix(uPalette[5],t.rgb,t.a),1.);
+}
+void main(){
+ vec2 c=(sourceUV(vUv)-.5)*vec2(uAspect,1.)-vec2(uVanishX,uVanishY);
+ float half_=uBoxSize*.5,aa=1.5/uResolution.y;
+ float d=roundBox(c,vec2(half_),uBoxRound*half_);
+ // The picture switches on a loop-exact schedule; Source 0 picks at random.
+ float n=max(uSwitches,1.),f=fract(uPhase/TAU)*n,k=floor(f+1e-4);
+ if(k>=n||uMotion<=0.)k=0.;
+ vec4 r=vec4(cutRand(k,1.),cutRand(k,2.),cutRand(k,3.),cutRand(k,4.));
+ // Source 0 shuffles the four classic pictures, 1 shuffles all ten.
+ float m=uSource>1.5?uSource-2.:uSource>.5?floor(cutRand(k,9.)*10.):floor(cutRand(k,9.)*4.);
+ float a=cutRand(k,6.)*TAU;
+ vec2 p=spin(uRotation)*(c/max(uBoxSize,.01))*(uScale/2.4)+.5+vec2(cos(a),sin(a))*fract(f)*uMotion*.3;
+ vec3 picture=stamp(m,p,r,k).rgb;
+ float inside=1.-smoothstep(-aa,aa,d);
+ // A thin flickering rim of static, then an optional dark rule beyond it.
+ float rimW=uRim*.006,ruleW=uEdge*.006;
+ float rim=uRim>0.?smoothstep(-aa,aa,d)*(1.-smoothstep(rimW-aa,rimW+aa,d)):0.;
+ float rule=uEdge>0.?smoothstep(rimW-aa,rimW+aa,d)*(1.-smoothstep(rimW+ruleW-aa,rimW+ruleW+aa,d)):0.;
+ float flick=hash21(vec2(floor(uPhase*95.),floor(vUv.x*80.)));
+ vec3 rimColour=mix(vec3(flick),pick(flick*3.1),.35);
+ vec3 rgb=picture*inside+rimColour*rim;
+ float alpha=max(inside,max(rim,rule));
+ float surface=surfaceCoverage(sourceUV(vUv));
+ gl_FragColor=vec4(rgb,alpha)*surface;
+}`,
+texturecuts:/* glsl */`
+${cutTexturesGLSL}
 void main(){
  vec2 p=domain();
  float n=max(uCuts,1.),f=fract(uPhase/TAU)*n,k=floor(f+1e-4);

@@ -7,7 +7,7 @@ import { graphicRenderPlan } from './graphic-view';
 import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
-import { feedbackActive, feedbackFragment, frameAtPhase, persistence, warmupFrames } from './feedback';
+import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
 import { slitActive, slitFragment, sliceDelays } from './slitscan';
 import { parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
@@ -277,7 +277,7 @@ export class StudioRenderer {
       uSource: { value: null }, uPrevious: { value: null }, uAspect: { value: 1 }, uZoom: { value: 1 }, uRotate: { value: 0 },
       uFade: { value: 0 }, uHue: { value: 0 }, uWarp: { value: 0 }, uMode: { value: 0 }, uHole: { value: 0 }, uWindow: { value: 0 }, uDrift: { value: new THREE.Vector2() },
       uCentre: { value: new THREE.Vector2() }, uTilt: { value: new THREE.Vector2() }, uLens: { value: 0 }, uRound: { value: 0 }, uSquare: { value: 0 },
-      uStreak: { value: 0 }, uStreakAxis: { value: 0 }, uBlock: { value: 0 }, uSlip: { value: 0 }, uCrush: { value: 0 }, uFrame: { value: 0 }, uEdge: { value: 0 }, uTexels: { value: new THREE.Vector2(1, 1) },
+      uStreak: { value: 0 }, uStreakAxis: { value: 0 }, uBlock: { value: 0 }, uSlip: { value: 0 }, uCrush: { value: 0 }, uFrame: { value: 0 }, uEdge: { value: 0 }, uKeep: { value: 0 }, uEvents: { value: 0 }, uColourDrift: { value: 0 }, uPunch: { value: 0 }, uPixel: { value: 0 }, uTexels: { value: new THREE.Vector2(1, 1) },
     });
     this.quad = new THREE.Mesh(this.quadGeometry, this.surface);
     this.quad.frustumCulled = false;
@@ -785,13 +785,13 @@ export class StudioRenderer {
   private feedbackStep(original: Layer, phase: number, total: number, duration: number, from: THREE.WebGLRenderTarget, to: THREE.WebGLRenderTarget): void {
     const layer = evaluateLayer(original, this.sourcePhase(original, phase, duration));
     const source = slitActive(original) ? this.slitSource(original, phase, total, duration) : this.plainSource(original, phase, duration);
-    const p = layer.params, u = this.feedback.uniforms;
+    const p = echoSettings(layer, phase), u = this.feedback.uniforms;
     u.uSource.value = source; u.uPrevious.value = from.texture;
     u.uAspect.value = this.width / this.height;
     u.uZoom.value = p.echoZoom ?? 1;
     u.uRotate.value = (p.echoRotate ?? 0) * Math.PI / 180;
     (u.uDrift.value as THREE.Vector2).set(p.echoDriftX ?? 0, p.echoDriftY ?? 0);
-    u.uFade.value = persistence(layer);
+    u.uFade.value = echoFade(p);
     u.uHue.value = (p.echoHue ?? 0) * Math.PI / 180;
     u.uWarp.value = p.echoMelt ?? 0;
     u.uMode.value = p.echoBlend ?? 0;
@@ -802,6 +802,8 @@ export class StudioRenderer {
     u.uLens.value = p.echoLens ?? 0; u.uRound.value = p.echoRound ?? 0; u.uSquare.value = p.echoSquare ?? 0;
     u.uStreak.value = p.echoStreak ?? 0; u.uStreakAxis.value = p.echoStreakAxis ?? 0;
     u.uBlock.value = p.echoBlock ?? 0; u.uSlip.value = p.echoSlip ?? 0; u.uCrush.value = p.echoCrush ?? 0; u.uEdge.value = p.echoEdge ?? 0;
+    u.uKeep.value = p.echoKeep ?? 0; u.uEvents.value = p.echoEvents ?? 0; u.uColourDrift.value = p.echoColourDrift ?? 0;
+    u.uPunch.value = p.echoPunch ?? 0; u.uPixel.value = p.echoPixel ?? 0;
     (u.uTexels.value as THREE.Vector2).set(this.width, this.height);
     // Hashes key on the loop frame, so warm-ups replay identical glitches.
     u.uFrame.value = frameAtPhase(phase, total);
@@ -849,9 +851,8 @@ export class StudioRenderer {
       for (const rt of [state.current, state.next, ...(state.spare ?? [])]) rt.setSize(this.width, this.height);
     }
     // Animated feedback needs the longest memory it reaches during the loop.
-    let fade = 0;
-    for (let k = 0; k < 16; k++) fade = Math.max(fade, persistence(evaluateLayer(original, k * TAU / 16)));
-    const full = warmupFrames(fade);
+    let full = 0;
+    for (let k = 0; k < 16; k++) full = Math.max(full, historyFrames(echoSettings(evaluateLayer(original, k * TAU / 16), k * TAU / 16)));
     // Preview budgets count source renders, so time-sliced sources warm up and
     // settle in fewer, costlier steps at a steady frame rate.
     const cost = stepCost(original), previewWarmup = Math.min(full, Math.max(6, Math.floor(PREVIEW_WARMUP / cost)));

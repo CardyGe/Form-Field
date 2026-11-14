@@ -6,8 +6,8 @@ import { createLayer, createProject, parameterDefinitions, PRESETS, applyPreset,
 import { evaluateLayer } from '../src/core/timeline';
 
 const route={kind:'sine' as const,cycles:3,amount:.3,phase:.2,points:[]};
-test('five instruments have complete original and motion-study looks and round-trip through the document schema',()=>{
- assert.equal(new Set(INSTRUMENT_KINDS).size,5);
+test('six instruments have complete original and motion-study looks and round-trip through the document schema',()=>{
+ assert.equal(new Set(INSTRUMENT_KINDS).size,6);
  assert.deepEqual(INSTRUMENTS.map(i=>i.kind),[...INSTRUMENT_KINDS]);
  for(const info of INSTRUMENTS){
   const layer=createLayer(info.kind);assert.equal(layer.name,info.name);

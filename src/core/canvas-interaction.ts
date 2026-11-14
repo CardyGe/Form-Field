@@ -18,6 +18,7 @@ const preferred: Partial<Record<LayerKind, string[]>> = {
   currents: ['curl', 'coherence'], relief: ['opening', 'depth'],
   resonance: ['modalBlend', 'radialMix'],
   texturecuts: ['scale', 'cuts'],
+  glitchtunnel: ['tunnelZoom', 'glitch'],
 };
 
 /** Continuous, visible controls only; never rebuild a simulation during a drag. */

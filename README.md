@@ -73,7 +73,17 @@ Motion values apply per frame. Loops close exactly, because the fading means the
 
 A source that hard-cuts between unrelated textures: rock, gravel, 1-bit pixel fields, broken diagonal stripes, zig-zags and coloured blocks. *Cuts per loop* sets the pace, and the sequence repeats exactly every loop. *Texture set* keeps all six, the natural pair, or the four digital ones. Motion amount pans each texture during its cut; at 0 the first texture holds. As an overlay (Field background 0), stone opens up at its cracks and zig-zags drop their second colour.
 
-Three looks feed Texture Cuts through the glitch echo into a tunnel: **Glitch Tunnel** (square-on, streaking and crunching), **Square Descent** (a square window bent through a strong lens) and **Stair Fall** (tilted to one side, with radial streaks).
+Three looks feed Texture Cuts through the glitch echo into a tunnel: **Cut Tunnel** (square-on, streaking and crunching), **Square Descent** (a square window bent through a strong lens) and **Stair Fall** (tilted to one side, with radial streaks).
+
+## Feedback Glitch
+
+A feedback instrument: a box of fresh pictures is stamped into the middle of the frame, and every frame the previous picture is zoomed outward around it and corrupted, so old pictures become the glitching rings of a tunnel. Echoes keep full brightness until they leave the frame (raise *Fade* to let them sink), and the loop still closes exactly, because everything zooms out of the frame within a few seconds.
+
+- **Picture:** concrete, stripes, sawtooth and static by default; *1* shuffles all ten, including the Texture Cuts textures; *2–11* hold one. *Picture changes per loop* sets how often it changes. *Box size*, *Box rounding*, *Static rim* and *Dark rule* shape the box and the steps it leaves.
+- **Tunnel:** *Tunnel speed*, *Wobble*, *Tilt*, *Lens* and *Vanishing point*.
+- **Corruption:** *Glitch events* (cells tear, posterise and swap channels), *RGB split*, *Colour drift*, *Contrast push*, *Pixel size*, *Hue shift*, *Colour crush*, *Block breakup*, *Streaks* and *Melt*.
+
+Five looks: Feedback Glitch, Neon Collapse, Glitch Staircase, Static Bloom and Melted Signal. The same corruption is available to any layer in the Feedback finish: *Hold brightness*, *Glitch events*, *Colour drift*, *Contrast push* and *Echo pixel size*.
 
 ## Projection delivery
 

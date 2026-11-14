@@ -259,6 +259,13 @@ export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[]
     const keys=new Set(['ageColour','inkMode','simulationQuality','loopReturn','pigmentCarry','scale','motion','backgroundOpacity','flowDirection','travel','eddyScale','surfaceHole','pattern','branching','seedCoverage','development','relief','pigment','edgeInk','edgeSoftness','lightAngle','lightHeight','fillLight','roughness','anisotropy','sheenAngle','clearcoat','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key)).map(d=>d.key==='scale'?{...d,preparation:true}:d);
   }
+  if(layer.kind==='glitchtunnel'){
+    // Its echo is part of the instrument, so the Feedback finish is hidden,
+    // and the area outside the box is always the tunnel, never a background.
+    const own=new Set(INSTRUMENT_PARAMETERS.glitchtunnel.map(d=>d.key).filter(key=>!INSTRUMENT_UPGRADE_KEYS.glitchtunnel.includes(key)));
+    own.delete('backgroundOpacity');own.add('phaseOffset');
+    return definitions.filter(d=>(own.has(d.key)||FINISH_KEYS.includes(d.key))&&!FEEDBACK_KEYS.includes(d.key)&&(d.key!=='streakAxis'||(layer.params.streaks??0)>0));
+  }
   if(layer.kind==='texturecuts'){
     const keys=new Set(['cuts','textureSet','scale','rotation','motion','cycles','phaseOffset','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key));
@@ -475,7 +482,7 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     if (TOON_KEYS.includes(key) && (key === 'toonMix' || key === 'toonCycles' || !(layer.params.toonMix > 0))) continue;
     // Feedback is likewise an explicit choice, and its blend and frame are structural.
     if (SLIT_KEYS.includes(key) && (['slitShift', 'slitShape', 'slitScroll', 'slitSlices'].includes(key) || !((layer.params.slitShift ?? 0) !== 0))) continue;
-    if (FEEDBACK_KEYS.includes(key) && (['echo', 'echoBlend', 'echoFrame', 'echoWindow', 'echoStreakAxis'].includes(key) || !(layer.params.echo > 0))) continue;
+    if (FEEDBACK_KEYS.includes(key) && (['echo', 'echoBlend', 'echoFrame', 'echoWindow', 'echoStreakAxis', 'echoKeep'].includes(key) || !(layer.params.echo > 0))) continue;
     if (layer.modulations[key] || key==='tonePivot' || key==='warpScale'&&layer.params.warp===0 || key==='sheenAngle'&&layer.params.anisotropy===0) continue;
     const span = d.max-d.min;
     const personality = character[d.section] * .7 + (random()*2-1) * .3;
