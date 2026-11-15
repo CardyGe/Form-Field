@@ -5,6 +5,7 @@ A local visual instrument studio for Apple Silicon Macs. Create looping liquid f
 ## What's new in 0.14
 
 - **Four new instruments:** Texture Cuts, Feedback Glitch, Liquid Light and Oscilloscope, with 21 looks between them. The library now has 88 presets.
+- **Glow finish:** any layer except Graphic Patterns and Oscilloscope can bloom its bright areas (Finish → Glow), with four new finishes: Soft Glow, Dream Haze, Hot Highlights and Glowing Trails.
 - **Glitch for any feedback:** Glitch echo and the corruption controls from Feedback Glitch work in any layer's Feedback finish.
 - **Files:** **New** (⌘N) starts a fresh composition and Undo brings the previous one back. **Save** (⌘S) writes to the file you last opened or saved; ⇧⌘S or Shift-click saves as a new file. The file name shows in the header.
 - **Finer control:** double-click a slider or its label to reset it. Hold Shift while dragging a slider, or with the arrow keys, to move it a tenth as far.
@@ -52,6 +53,17 @@ Every layer has **Finish → Flat colour & outlines**. It replaces shading with 
 **Palette cycles per loop** rotates the bands through the palette in whole turns, so the loop still closes exactly. On smooth gradients the bands flow; on flat areas whole regions change colour at once, which can read as strobing.
 
 **Library → Presets → Flat colour & outlines** has five looks: Neon Strata, Acid Drip, Pop Portal, Contour Pop and Pour Lace. Applying one turns on **Finish → Output → Exact colour**, which shows palette colours at their exact values instead of rolling off bright highlights. Leave Exact colour off for lit 3D and glowing sources.
+
+## Glow
+
+Finish → Glow makes the bright parts of a layer spill soft light around themselves, like projected light blooming on a wall. It's available for every layer except Graphic Patterns and Oscilloscope, which has its own bloom.
+
+- **Glow amount** is the strength. At 0 the glow is off and costs nothing.
+- **Glow threshold** is the brightness above which light glows. At 0 the whole layer glows; raise it so only the highlights do.
+- **Glow size** goes from a tight halo to a wide haze. The width is a share of the frame, so a 4K export matches the preview.
+- **Glow colour** keeps the layer's own colour at 0, or uses palette swatch 1–6.
+
+The glow is taken after Feedback and Time displacement, so echoes and delayed slices glow too, and it never feeds back into the echo. Loops close exactly. It is added as light, so it brightens the layers underneath and keeps its soft edge in a transparent export; the layer mask cuts it. On a layer using Flat colour or Fractal contour colouring, the glow keeps the original shading colours unless Glow colour picks a swatch.
 
 ## Time displacement
 
@@ -189,7 +201,7 @@ Sculpture has **Turns per loop**, which turns the form whole times each loop on 
 
 The library has 88 presets, including the looks for Texture Cuts, Feedback Glitch, Liquid Light and Oscilloscope. After 0.13, Velvet Currents was retired and 14 more presets were removed: four Oil slides that repeated one composition in different colours, two Living Ink mazes, seven weak or duplicated Graphic Patterns and the Deep Bloom portal. New Graphic layers now start from Lava Columns. In 0.13 the library was cut from 151 to remove near-identical looks, pastel looks that do not read on a projection wall, and the 20-look signature collection (each was a recolour of another preset). Kept presets use saturated palettes on a dark ground; Kinetic Relief and Resonant Sand start in flat colour with outlines.
 
-**Presets → Finishes for any layer** holds six finishes: Tunnel, Bloom Echo and Melt (feedback), and Terraces, Block Shuffle and Ring Delay (time displacement). A finish applies to the selected layer of any kind except Graphic Patterns and Ink *Evolving*, and replaces any finish already on it. **No finish** turns both off. Recursion Tunnel and Time Terraces remain as Surface presets that show a finish on a source.
+**Presets → Finishes for any layer** holds eleven finishes: Tunnel, Bloom Echo, Glitch Tunnel and Melt (feedback), Terraces, Block Shuffle and Ring Delay (time displacement), Soft Glow, Dream Haze and Hot Highlights (glow), and Glowing Trails (feedback with glow). A finish applies to the selected layer of any kind except Graphic Patterns and Ink *Evolving*, and replaces any finish already on it; the four glow finishes are not offered on Oscilloscope. **No finish** turns all three off. Recursion Tunnel and Time Terraces remain as Surface presets that show a finish on a source.
 
 The randomizer stays near an authored recipe for the current family and variant. It changes groups of related controls together and chooses a complete authored palette rather than mixing random swatches. Julia constants, algorithm switches and coverage options are held deliberately; locked or animated controls are retained. **Undo** restores the previous variation.
 

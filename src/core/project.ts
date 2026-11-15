@@ -446,7 +446,7 @@ PRESETS.push(
 );
 
 /**
- * Finish presets set only the feedback and time-displacement controls, so they
+ * Finish presets set only the feedback, time-displacement and glow controls, so they
  * apply to the selected layer of any kind that supports them. Applying one
  * resets the other finish controls, so finishes replace each other.
  */
@@ -460,15 +460,23 @@ export const FINISH_LOOKS: FinishLook[] = [
   { id: 'finish-terraces', name: 'Terraces', description: 'Horizontal bands, each a moment further in the past.', params: { slitShift: 1, slitSpan: 60, slitShape: 0, slitSlices: 9 } },
   { id: 'finish-block-shuffle', name: 'Block Shuffle', description: 'Blocks that each run at their own delay.', params: { slitShift: 1, slitSpan: 90, slitShape: 4, slitSlices: 8, slitBlocks: 5 } },
   { id: 'finish-ring-delay', name: 'Ring Delay', description: 'Rings lag outward in smooth waves while the delay sweeps once per loop.', params: { slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 16, slitSmooth: 1, slitScroll: 1 } },
+  { id: 'finish-soft-glow', name: 'Soft Glow', description: 'Bright areas spill a gentle halo.', params: { glowMix: 0.8, glowThreshold: 0.6, glowSize: 0.4 } },
+  { id: 'finish-dream-haze', name: 'Dream Haze', description: 'The whole layer swims in a wide, soft haze.', params: { glowMix: 1.2, glowThreshold: 0.15, glowSize: 0.9 } },
+  { id: 'finish-hot-highlights', name: 'Hot Highlights', description: 'Only the hottest points flare, tight and strong.', params: { glowMix: 1.5, glowThreshold: 0.8, glowSize: 0.2 } },
+  { id: 'finish-glowing-trails', name: 'Glowing Trails', description: "Bloom Echo's outward trails, each one glowing.", params: { echo: 0.85, echoZoom: 1.035, echoRotate: -1, echoHue: 9, echoBlend: 2, echoWindow: 0.35, glowMix: 0.9, glowThreshold: 0.5, glowSize: 0.6 } },
 ];
-const FINISH_LOOK_KEYS = [...FEEDBACK_KEYS, ...SLIT_KEYS];
-export function finishSupported(layer: Pick<Layer, 'kind' | 'params'>): boolean {
-  return supportsFeedback(layer) && supportsSlitScan(layer);
+const FINISH_LOOK_KEYS = [...FEEDBACK_KEYS, ...SLIT_KEYS, ...GLOW_KEYS];
+/** Whether the layer takes finishes at all or, with an id, that finish: glow
+ * looks need a layer that can glow. */
+export function finishSupported(layer: Pick<Layer, 'kind' | 'params'>, finishId?: string): boolean {
+  if (!supportsFeedback(layer) || !supportsSlitScan(layer)) return false;
+  const look = FINISH_LOOKS.find(item => item.id === finishId);
+  return !look || supportsGlow(layer) || !GLOW_KEYS.some(key => key in look.params);
 }
 export function applyFinish(layer: Layer, finishId: string): Layer {
   const look = FINISH_LOOKS.find(item => item.id === finishId);
   if (!look) throw new Error(`Unknown finish: ${finishId}`);
-  if (!finishSupported(layer)) throw new Error(`${look.name} cannot be applied to this layer.`);
+  if (!finishSupported(layer, finishId)) throw new Error(`${look.name} cannot be applied to this layer.`);
   const next = structuredClone(layer), defaults = parameterDefinitions(layer.kind);
   for (const key of FINISH_LOOK_KEYS) { next.params[key] = defaults.find(d => d.key === key)!.default; delete next.modulations[key]; }
   Object.assign(next.params, look.params);

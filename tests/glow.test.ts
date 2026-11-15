@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLayer, createProject, validateProject, visibleParameterDefinitions } from '../src/core/project';
+import { applyFinish, createLayer, createProject, finishSupported, validateProject, visibleParameterDefinitions } from '../src/core/project';
 import { GLOW_KEYS } from '../src/core/finishing';
 import { bloomLevelSize, bloomWeights, glowActive, supportsGlow } from '../src/rendering/bloom';
 
@@ -52,4 +52,22 @@ test('blur levels keep their share of the frame on small renders', () => {
   assert.deepEqual([tiny.width, tiny.height], [36, 20]);
   assert.ok(Math.abs(tiny.reach - 20 / 540) < 1e-9);
   assert.deepEqual(bloomLevelSize(4, 2, 1), { width: 4, height: 2, reach: 2 / 34 });
+});
+
+test('glow looks apply, replace other finishes and clear', () => {
+  const layer = createLayer('liquid');
+  const glowing = applyFinish(layer, 'finish-soft-glow');
+  assert.deepEqual([glowing.params.glowMix, glowing.params.glowThreshold, glowing.params.glowSize], [.8, .6, .4]);
+  const tunnel = applyFinish(glowing, 'finish-tunnel');
+  assert.equal(tunnel.params.glowMix, 0);
+  const trails = applyFinish(tunnel, 'finish-glowing-trails');
+  assert.deepEqual([trails.params.echo, trails.params.echoBlend, trails.params.glowMix], [.85, 2, .9]);
+  assert.equal(applyFinish(trails, 'finish-none').params.glowMix, 0);
+});
+
+test('glow looks are refused where glow is not supported, other looks are not', () => {
+  const scope = createLayer('scope');
+  assert.equal(finishSupported(scope, 'finish-soft-glow'), false);
+  assert.equal(finishSupported(scope, 'finish-terraces'), true);
+  assert.throws(() => applyFinish(scope, 'finish-dream-haze'));
 });
