@@ -66,6 +66,18 @@ export const SLIT_PARAMETERS:ParameterDefinition[]=[
  {key:'slitBlocks',label:'Block count',min:2,max:40,step:1,default:8,section:'Shape',description:'Blocks per frame height for the Blocks map.'},
  {key:'slitScroll',label:'Map scroll',min:-4,max:4,step:1,default:0,section:'Motion',description:'Times the delay map sweeps across the frame per loop.'},
 ];
+/**
+ * Glow: the bright parts of the layer spill soft light around themselves. The
+ * blur runs at fixed heights in lines, so exports match the preview. Stateless
+ * and exactly looping; it never enters the Feedback history. Off by default
+ * (Glow amount 0).
+ */
+export const GLOW_PARAMETERS:ParameterDefinition[]=[
+ {key:'glowMix',label:'Glow amount',min:0,max:2,step:.01,default:0,section:'Material',description:'Soft light spilling from the bright parts of the layer. 0 is off.'},
+ {key:'glowThreshold',label:'Glow threshold',min:0,max:1,step:.01,default:.5,section:'Material',description:'Brightness above which light glows. 0 makes the whole layer glow.'},
+ {key:'glowSize',label:'Glow size',min:0,max:1,step:.01,default:.5,section:'Material',description:'Tight halo at 0, wide haze at 1. The width is a share of the frame, so exports match the preview.'},
+ {key:'glowTint',label:'Glow colour',min:0,max:6,step:1,default:0,section:'Material',description:'0 keeps the layer\'s own colour; 1–6 use the matching palette swatch.'},
+];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[
  {key:'toneContrast',label:'Tonal contrast',min:.5,max:2,step:.01,default:1,section:'Material',description:'Luminance contrast around the pivot, preserving colour ratios.'},
  {key:'tonePivot',label:'Contrast pivot',min:.05,max:.75,step:.01,default:.18,section:'Material',description:'Anchor for Tonal contrast. Neutral contrast leaves the pivot inactive.'},
@@ -76,8 +88,10 @@ export const FINISH_PARAMETERS:ParameterDefinition[]=[
  ...TOON_PARAMETERS,
  ...FEEDBACK_PARAMETERS,
  ...SLIT_PARAMETERS,
+ ...GLOW_PARAMETERS,
 ];
 export const FINISH_KEYS=FINISH_PARAMETERS.map(p=>p.key);
 export const TOON_KEYS=TOON_PARAMETERS.map(p=>p.key);
 export const FEEDBACK_KEYS=FEEDBACK_PARAMETERS.map(p=>p.key);
 export const SLIT_KEYS=SLIT_PARAMETERS.map(p=>p.key);
+export const GLOW_KEYS=GLOW_PARAMETERS.map(p=>p.key);

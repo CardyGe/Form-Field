@@ -382,7 +382,7 @@ test('fractal defaults and all family variants roundtrip alongside existing laye
   ].sort());
   assert.equal(layer.params.quality, 2);
   assert.equal(layer.params.morph, 0.1);
-  assert.deepEqual(parameterDefinitions('fractal').filter((definition) => definition.step === 1).map((definition) => definition.key).sort(), ['colorMode', 'colorSteps', 'cycles', 'echoBlend', 'echoBlock', 'echoKeep', 'echoPixel', 'echoStreakAxis', 'quality', 'radial', 'slitBlocks', 'slitScroll', 'slitShape', 'slitSlices', 'slitSpan', 'style', 'symmetry', 'toonBands', 'toonCycles', 'toonOutlineColor', 'variant']);
+  assert.deepEqual(parameterDefinitions('fractal').filter((definition) => definition.step === 1).map((definition) => definition.key).sort(), ['colorMode', 'colorSteps', 'cycles', 'echoBlend', 'echoBlock', 'echoKeep', 'echoPixel', 'echoStreakAxis', 'glowTint', 'quality', 'radial', 'slitBlocks', 'slitScroll', 'slitShape', 'slitSlices', 'slitSpan', 'style', 'symmetry', 'toonBands', 'toonCycles', 'toonOutlineColor', 'variant']);
   const presets = PRESETS.filter((preset) => preset.kind === 'fractal');
   assert.equal(presets.length, 11);
   assert.equal(new Set(presets.map((preset) => preset.id)).size, 11);
