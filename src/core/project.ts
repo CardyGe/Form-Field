@@ -843,7 +843,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
 
 export function validateProject(input: unknown): Project {
   const project = object(input, 'root');
-  keys(project, ['schemaVersion', 'id', 'name', 'seed', 'duration', 'fps', 'width', 'height', 'background', 'transparent', 'highlights', 'layers'], 'root');
+  keys(project, ['schemaVersion', 'id', 'name', 'seed', 'duration', 'fps', 'width', 'height', 'background', 'transparent', 'highlights', 'tileEdges', 'layers'], 'root');
   if (project.schemaVersion !== 1&&project.schemaVersion!==2) fail('schemaVersion', 'must be 1 or 2; this file version is not supported.');
   text(project.id, 'id', 100); text(project.name, 'name'); number(project.seed, 'seed', 0, 0xffffffff, true);
   number(project.duration, 'duration', 0.1, 600);
@@ -855,6 +855,7 @@ export function validateProject(input: unknown): Project {
   number(project.width, 'width', 64, 8192, true); number(project.height, 'height', 64, 8192, true);
   hex(project.background, 'background'); boolean(project.transparent, 'transparent');
   if (own(project, 'highlights')) choice(project.highlights, ['soft', 'exact'] as const, 'highlights');
+  if (own(project, 'tileEdges')) boolean(project.tileEdges, 'tileEdges');
   if (!Array.isArray(project.layers) || project.layers.length < 1 || project.layers.length > 4) fail('layers', 'must contain between one and four layers.');
   // Layers from retired effect families are dropped so older films still open.
   const kept = (project.layers as unknown[]).filter(layer => !RETIRED_KINDS.includes((layer as { kind?: string } | null)?.kind as string));

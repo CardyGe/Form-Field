@@ -46,6 +46,8 @@ export interface Project {
   transparent: boolean;
   /** Final highlight handling. Absent means 'soft' (neutral roll-off), the original behaviour. */
   highlights?: 'soft' | 'exact';
+  /** Tile edges across the frame. Absent means off. */
+  tileEdges?: boolean;
   layers: Layer[];
 }
 export interface ParameterDefinition {

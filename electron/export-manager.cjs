@@ -52,6 +52,7 @@ function validateProject(project) {
     throw new Error('This is not a supported Form & Field project.');
   }
   if (project.highlights !== undefined && !['soft', 'exact'].includes(project.highlights)) throw new Error('Invalid highlight handling.');
+  if (project.tileEdges !== undefined && typeof project.tileEdges !== 'boolean') throw new Error('Invalid tile edges setting.');
   if (JSON.stringify(project).length > 256 * 1024 * 1024) throw new Error('Project exceeds the 256 MB local document limit.');
   for (const layer of project.layers) {
     if (!layer || !['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', 'livingink', 'relief', 'resonance', 'texturecuts', 'glitchtunnel'].includes(layer.kind) || typeof layer.id !== 'string' ||
