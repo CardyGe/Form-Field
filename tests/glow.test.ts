@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLayer, createProject, validateProject, visibleParameterDefinitions } from '../src/core/project';
 import { GLOW_KEYS } from '../src/core/finishing';
-import { bloomWeights, glowActive, supportsGlow } from '../src/rendering/bloom';
+import { bloomLevelSize, bloomWeights, glowActive, supportsGlow } from '../src/rendering/bloom';
 
 test('glow is off by default and older projects migrate without it', () => {
   const project = createProject();
@@ -43,4 +43,13 @@ test('glow size moves the weights from tight levels to wide ones', () => {
   close(bloomWeights(1, 1), [.225, .39375, .5625, .73125, .9]);
   close(bloomWeights(1, .5), [.5625, .45, .39375, .39375, .45]);
   close(bloomWeights(2, 0), [1.8, 1.0125, .45, .1125, 0]);
+});
+
+test('blur levels keep their share of the frame on small renders', () => {
+  assert.deepEqual(bloomLevelSize(0, 1920, 1080), { width: 960, height: 540, reach: 1 });
+  assert.deepEqual(bloomLevelSize(4, 1920, 1080), { width: 60, height: 34, reach: 1 });
+  const tiny = bloomLevelSize(0, 36, 20);
+  assert.deepEqual([tiny.width, tiny.height], [36, 20]);
+  assert.ok(Math.abs(tiny.reach - 20 / 540) < 1e-9);
+  assert.deepEqual(bloomLevelSize(4, 2, 1), { width: 4, height: 2, reach: 2 / 34 });
 });

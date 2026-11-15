@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Layer } from '../shared/types';
 import { sourceViewMatrix } from './source-view';
 import { fullscreenVertex } from './shaders';
+import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, lightTarget } from './bloom';
 import { SCOPE_WAVE, scopeDash, scopeLine, scopePerspective, scopeWave, type ScopeMotion, type ScopeShape } from './scope-curve';
 
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
@@ -14,20 +15,8 @@ const ALL_POINTS = POINTS + GHOSTS * (GHOST_SEGMENTS + 1);
 /** Values per point: x, y, depth, brightness, colour mix. */
 const STRIDE = 5;
 const TAU = Math.PI * 2;
-/**
- * Bloom is blurred at fixed heights in lines, not at fractions of the render
- * size, so the glow is the same share of the frame in the preview and in a 4K
- * export. Each level is half the one before and so blurs twice as wide.
- */
-const BLOOM_HEIGHTS = [540, 270, 135, 68, 34];
 const DEFAULT_PALETTE = ['#ff2a8a', '#ff2060', '#ff8a00', '#ffffff', '#20e0ff', '#000000'];
 
-function lightTarget(mipmaps = false): THREE.WebGLRenderTarget {
-  const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false,
-    minFilter: mipmaps ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: mipmaps });
-  target.texture.colorSpace = THREE.NoColorSpace;
-  return target;
-}
 
 /**
  * The Oscilloscope instrument: an electron beam drawing one closed line.
@@ -53,7 +42,7 @@ export class ScopeRenderer {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.Camera();
   private readonly light = lightTarget(true);
-  private readonly levels = BLOOM_HEIGHTS.map(() => [lightTarget(), lightTarget()] as const);
+  private readonly bloom = new BloomPyramid();
   private readonly beam = new THREE.ShaderMaterial({
     vertexShader: /* glsl */`
       attribute vec4 aStart, aEnd; attribute float aMix;
@@ -98,22 +87,6 @@ export class ScopeRenderer {
     },
     blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
     depthTest: false, depthWrite: false, side: THREE.DoubleSide, toneMapped: false, transparent: true,
-  });
-  // One direction of a Gaussian blur; run across, then down.
-  private readonly blur = new THREE.ShaderMaterial({
-    vertexShader: fullscreenVertex,
-    fragmentShader: /* glsl */`
-      precision highp float; varying vec2 vUv; uniform sampler2D uSource; uniform vec2 uStep;
-      void main() {
-        vec3 sum=texture2D(uSource,vUv).rgb*.2042;
-        sum+=(texture2D(uSource,vUv+uStep).rgb+texture2D(uSource,vUv-uStep).rgb)*.1802;
-        sum+=(texture2D(uSource,vUv+uStep*2.).rgb+texture2D(uSource,vUv-uStep*2.).rgb)*.1238;
-        sum+=(texture2D(uSource,vUv+uStep*3.).rgb+texture2D(uSource,vUv-uStep*3.).rgb)*.0663;
-        sum+=(texture2D(uSource,vUv+uStep*4.).rgb+texture2D(uSource,vUv-uStep*4.).rgb)*.0276;
-        gl_FragColor=vec4(sum,1.);
-      }`,
-    uniforms: { uSource: { value: null }, uStep: { value: new THREE.Vector2() } },
-    depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
   private readonly resolve = new THREE.ShaderMaterial({
     vertexShader: fullscreenVertex,
@@ -217,30 +190,14 @@ export class ScopeRenderer {
     renderer.setRenderTarget(this.light);
     renderer.render(this.scene, this.camera);
 
-    // Bloom: each level blurs the one before it at half the size.
-    const blur = this.blur.uniforms;
-    let source: THREE.Texture = this.light.texture;
-    this.levels.forEach(([across, down], i) => {
-      const h = Math.max(2, Math.min(BLOOM_HEIGHTS[i], height)), w = Math.max(2, Math.round(h * aspect));
-      if (across.width !== w || across.height !== h) { across.setSize(w, h); down.setSize(w, h); }
-      // A small render has fewer lines than the level calls for. Its taps move
-      // closer together by the same share, so the blur covers the same part of the frame.
-      const reach = h / BLOOM_HEIGHTS[i];
-      blur.uSource.value = source; (blur.uStep.value as THREE.Vector2).set(reach / w, 0); draw(this.blur, across);
-      blur.uSource.value = across.texture; (blur.uStep.value as THREE.Vector2).set(0, reach / h); draw(this.blur, down);
-      source = down.texture;
-    });
+    const levels = this.bloom.render(this.light.texture, width, height, draw);
 
     const r = this.resolve.uniforms, color = (key: string, index: number) => (r[key].value as THREE.Color).set(layer.palette[index] ?? DEFAULT_PALETTE[index]);
     color('uLine', 0); color('uHaloTint', 1); color('uBloomTint', 2); color('uHot', 3); color('uSecond', 4);
     r.uLight.value = this.light.texture;
-    this.levels.forEach(([, down], i) => { r[`uBloom${i}`].value = down.texture; });
+    levels.forEach((level, i) => { r[`uBloom${i}`].value = level; });
     // Bloom size moves the glow from the tight levels to the wide ones.
-    const weights = r.uWeights.value as number[], size = p.bloomSize;
-    for (let i = 0; i < weights.length; i++) {
-      const t = i / (weights.length - 1);
-      weights[i] = p.bloom * .9 * ((1 - size) * (1 - t) * (1 - t) + size * (.25 + .75 * t));
-    }
+    r.uWeights.value = bloomWeights(p.bloom, p.bloomSize);
     // Where the sphere's centre lands on screen, for the fringe.
     const centre = new THREE.Vector3(.5, .5, 1).applyMatrix3(inverse);
     (r.uCentre.value as THREE.Vector2).set(centre.x, centre.y);
@@ -249,7 +206,6 @@ export class ScopeRenderer {
   }
 
   dispose(): void {
-    this.geometry.dispose(); this.beam.dispose(); this.blur.dispose(); this.resolve.dispose(); this.light.dispose();
-    for (const [across, down] of this.levels) { across.dispose(); down.dispose(); }
+    this.geometry.dispose(); this.beam.dispose(); this.bloom.dispose(); this.resolve.dispose(); this.light.dispose();
   }
 }
