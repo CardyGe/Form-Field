@@ -18,6 +18,7 @@ import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
+import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget } from './bloom';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
 import { super8Fragment } from './super8';
@@ -160,6 +161,9 @@ export class StudioRenderer {
   private readonly slit: THREE.ShaderMaterial;
   /** Slit-scan accumulation, consumed before the next layer is drawn. */
   private slitTargets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null = null;
+  private readonly glowBright: THREE.ShaderMaterial;
+  /** Glow finish: one bright-pass target and blur pyramid, shared by all layers. */
+  private glow: { bright: THREE.WebGLRenderTarget; pyramid: BloomPyramid } | null = null;
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
@@ -276,12 +280,15 @@ export class StudioRenderer {
       uSourceInView: {value:0},uSourceViewInverse:{value:new THREE.Matrix3()},
       uPatternRing: { value: new THREE.Vector4() }, uPatternBackground: { value: new THREE.Color() },
       uMaskInvert: { value: 0 }, uGlow: { value: 0 },
+      ...Object.fromEntries(BLOOM_HEIGHTS.map((_, i) => [`uGlowLevel${i}`, { value: this.fallback }])),
+      uGlowWeights: { value: [0, 0, 0, 0, 0] }, uGlowColour: { value: new THREE.Color() }, uGlowOn: { value: 0 },
       ...Object.fromEntries(FINISH_PARAMETERS.map(d=>['u'+d.key[0].toUpperCase()+d.key.slice(1),{value:d.default}])),
       uSaturation: {value:1}, uHue: {value:0}, uExposure:{value:1},
       uColorMode:{value:0},uColorSteps:{value:6},uColorMix:{value:1},uColorOffset:{value:0},
       uGradePalette:{value:DEFAULT_PALETTE.map(hex=>new THREE.Color(hex))},
       uLoopPhase:{value:0},
     });
+    this.glowBright = material(glowBrightFragment, { uSource: { value: this.fallback }, uThreshold: { value: .5 } });
     this.finish = material(finishFragment, {
       uImage: { value: this.accumA.texture }, uBackground: { value: new THREE.Color(0) },
       uOpaque: { value: 0 }, uExactHighlights: { value: 0 }, toneMappingExposure: { value: 1 },
@@ -774,6 +781,7 @@ export class StudioRenderer {
       u.uMaskSize.value = layer.mask.size; u.uMaskSoftness.value = layer.mask.softness;
       u.uMaskInvert.value = Number(layer.mask.invert);
       u.uGlow.value = number(layer, 'glow', layer.kind === 'sculpture' ? .12 : 0);
+      this.bindGlow(original, layer, sourceTexture, width, height);
       for(const d of FINISH_PARAMETERS)u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=number(layer,d.key,d.default);
       u.uSaturation.value=number(layer,'saturation',1);u.uHue.value=number(layer,'hue',0);
       // Original Fractal exposure stays in its original source pass; new colour
@@ -799,6 +807,28 @@ export class StudioRenderer {
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
     this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
     this.draw(this.finish, this.linearOutput);
+  }
+
+  /**
+   * Glow finish: blurs the bright light of the layer's finished source for the
+   * composite pass. It reads the source after Feedback and Time displacement
+   * and writes only to its own targets, so it never enters the echo history.
+   */
+  private bindGlow(original: Layer, layer: Layer, source: THREE.Texture, width: number, height: number): void {
+    const u = this.composite.uniforms, amount = number(layer, 'glowMix', 0);
+    const on = glowActive(original) && amount > 0;
+    u.uGlowOn.value = Number(on);
+    if (!on) { BLOOM_HEIGHTS.forEach((_, i) => { u[`uGlowLevel${i}`].value = this.fallback; }); return; }
+    this.glow ??= { bright: lightTarget(true), pyramid: new BloomPyramid() };
+    const { bright, pyramid } = this.glow, w = Math.ceil(width / 2), h = Math.ceil(height / 2);
+    if (bright.width !== w || bright.height !== h) bright.setSize(w, h);
+    this.glowBright.uniforms.uSource.value = source;
+    this.glowBright.uniforms.uThreshold.value = number(layer, 'glowThreshold', .5);
+    this.draw(this.glowBright, bright);
+    pyramid.render(bright.texture, width, height, (m, t) => this.draw(m, t)).forEach((level, i) => { u[`uGlowLevel${i}`].value = level; });
+    u.uGlowWeights.value = bloomWeights(amount, number(layer, 'glowSize', .5));
+    const tint = Math.round(number(layer, 'glowTint', 0));
+    if (tint >= 1) (u.uGlowColour.value as THREE.Color).set(layer.palette[tint - 1] ?? DEFAULT_PALETTE[tint - 1]);
   }
 
   private sourcePhase(original: Layer, wrapped: number, duration: number): number {
@@ -1094,6 +1124,7 @@ export class StudioRenderer {
     for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
     this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
     this.feedbackStates.clear();
+    this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow = null; this.glowBright.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();

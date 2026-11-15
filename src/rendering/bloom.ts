@@ -45,6 +45,16 @@ export function lightTarget(mipmaps = false): THREE.WebGLRenderTarget {
   return target;
 }
 
+/** Keeps the light above the threshold, with a soft knee. The source is
+ * premultiplied and is never divided by its alpha. Threshold 0 keeps everything. */
+export const glowBrightFragment = /* glsl */`
+precision highp float; varying vec2 vUv; uniform sampler2D uSource; uniform float uThreshold;
+void main() {
+  vec4 s=texture2D(uSource,vUv);
+  float l=max(s.r,max(s.g,s.b));
+  gl_FragColor=vec4(max(s.rgb,vec3(0.))*smoothstep(uThreshold*.8,uThreshold*1.2+1e-4,l),1.);
+}`;
+
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
 
 /** Five blurred copies of a light texture, each blurring the one before it at half the size. */

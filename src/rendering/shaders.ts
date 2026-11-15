@@ -47,6 +47,10 @@ uniform float uToneContrast,uTonePivot,uToneGamma,uShadowLift,uHighlightRoll,uVi
 uniform float uColorMode,uColorSteps,uColorMix,uColorOffset;
 uniform vec3 uGradePalette[6];
 uniform float uToonMix,uToonBands,uToonOffset,uToonCycles,uToonSoftness,uToonOutline,uToonOutlineColor,uLoopPhase;
+uniform sampler2D uGlowLevel0,uGlowLevel1,uGlowLevel2,uGlowLevel3,uGlowLevel4;
+uniform float uGlowWeights[5];
+uniform vec3 uGlowColour;
+uniform float uGlowOn,uGlowTint;
 const vec3 GRADE_LUMA=vec3(.2126,.7152,.0722);
 float stepIntegral(float x){float n=floor(x);return n*(n-1.)*.5+n*fract(x);}
 float strokeIntegral(float x,float width){return floor(x)*width*2.+min(fract(x),width)+max(fract(x)-(1.-width),0.);}
@@ -224,6 +228,18 @@ void main() {
   // Mode is uniform for the layer, so all pixels evaluate the contour footprint.
   if(uColorMode>.5)top=recolor(top);
   if(uToonMix>0.)top=toon(top,uv);
+  if(uGlowOn>.5) {
+    // Glow finish: blurred bright light of this layer, added as light. The
+    // levels are in the same view space as the source. It follows flat colour
+    // so it is never posterised, and precedes the grade so it is graded too.
+    vec2 g=(uSourceViewInverse*vec3(uv,1.)).xy;
+    vec3 glow=uGlowWeights[0]*texture2D(uGlowLevel0,g).rgb+uGlowWeights[1]*texture2D(uGlowLevel1,g).rgb
+      +uGlowWeights[2]*texture2D(uGlowLevel2,g).rgb+uGlowWeights[3]*texture2D(uGlowLevel3,g).rgb
+      +uGlowWeights[4]*texture2D(uGlowLevel4,g).rgb;
+    if(uGlowTint>.5)glow=uGlowColour*dot(glow,GRADE_LUMA);
+    top.rgb+=glow;
+    top.a+=(1.-top.a)*clamp(max(glow.r,max(glow.g,glow.b)),0.,1.);
+  }
   if(top.a>.00001 && (abs(uSaturation-1.)>.000001 || abs(uHue)>.000001 || abs(uExposure-1.)>.000001)) {
     top.rgb=grade(top.rgb/top.a)*top.a;
   }
