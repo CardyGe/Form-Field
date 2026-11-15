@@ -117,16 +117,19 @@ float ribbonCoverage(float coordinate, float width) {
 #ifdef TILE
 // Bands that repeat exactly across the frame: each sine has a whole number of
 // cycles per period and each palette coordinate a whole number of cycles.
+// A primary rate keeps at least one cycle per period (its sign kept), so a
+// large pattern never rounds down to a flat colour; matches the Drips floor.
+float tRate1(float k, float L) { return (k<0.?-1.:1.)*max(abs(tRate(k,L)),1./L); }
 float bandCoordinateTile(vec2 p, float warp) {
   float wave=sin(p.x*tWave(1.35,uTile.x)+.65*sin(gPhase));
   float tension=mix(tanh(wave*2.8)/tanh(2.8),wave,uRoundness);
-  float spatial=(p.y+warp+.3*uWarp*tension)*tRate(.47*uDensity,uTile.y);
+  float spatial=(p.y+warp+.3*uWarp*tension)*tRate1(.47*uDensity,uTile.y);
   return spatial+uOffset-gPhase/TAU;
 }
 vec3 bandPaintTile(vec2 p, float warp) {
   if(uVariant<.5) return paint(bandCoordinateTile(p,warp),true);
   if(uVariant<1.5) {
-    float carrier=(p.y+warp*.45)*tRate(.54*uDensity,uTile.y);
+    float carrier=(p.y+warp*.45)*tRate1(.54*uDensity,uTile.y);
     float angle=p.x*tWave(1.05+.2*uDensity,uTile.x)+.36*sin(gPhase);
     float wave=sin(angle)*(.32+.32*uRoundness);
     float a=carrier-wave, b=carrier+wave+.5;
@@ -134,7 +137,7 @@ vec3 bandPaintTile(vec2 p, float warp) {
     float first=ribbonCoverage(a-gPhase/TAU,width);
     float second=ribbonCoverage(b-gPhase/TAU,width);
     // a*.37 would carry a fractional rate, so colour has its own whole rates.
-    float hue=tRate(.54*uDensity*.37,uTile.y)*(p.y+warp*.45)+tRate(.035,uTile.x)*p.x;
+    float hue=tRate1(.54*uDensity*.37,uTile.y)*(p.y+warp*.45)+tRate(.035,uTile.x)*p.x;
     vec3 colorA=paint(hue-.37*wave+uOffset-gPhase/TAU,true);
     vec3 colorB=paint(hue+.37*wave+.5*.37+uOffset+.47-gPhase/TAU,true);
     float over=smoothstep(-.18,.18,cos(angle));
@@ -145,7 +148,7 @@ vec3 bandPaintTile(vec2 p, float warp) {
   }
   float wave=.65*sin(p.x*tWave(.85,uTile.x)+.55*sin(gPhase));
   float pleat=.3*sin(p.x*tWave(2.2,uTile.x)+p.y*tWave(.65,uTile.y)+.4*cos(gPhase));
-  float coordinate=(p.y+wave+pleat+warp*.42)*tRate(.64*uDensity,uTile.y);
+  float coordinate=(p.y+wave+pleat+warp*.42)*tRate1(.64*uDensity,uTile.y);
   return paint(coordinate+uOffset-gPhase/TAU,true);
 }
 #endif
