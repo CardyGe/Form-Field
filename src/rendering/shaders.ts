@@ -51,6 +51,10 @@ uniform sampler2D uGlowLevel0,uGlowLevel1,uGlowLevel2,uGlowLevel3,uGlowLevel4;
 uniform float uGlowWeights[5];
 uniform vec3 uGlowColour;
 uniform float uGlowOn,uGlowTint;
+uniform float uPrintOn,uPrintCells,uPrintOffset;
+uniform float uPrintAngles[4];
+uniform float uPrintMix,uPrintType,uPrintDot,uPrintMatrix,uPrintFloor,uPrintCeiling,uPrintGain,uPrintSoft,uPrintInvert;
+uniform float uPrintColour,uPrintInk,uPrintPaper,uPrintArea,uPrintEdgeWidth,uPrintEdgeSense,uPrintEdgeFeather;
 const vec3 GRADE_LUMA=vec3(.2126,.7152,.0722);
 float stepIntegral(float x){float n=floor(x);return n*(n-1.)*.5+n*fract(x);}
 float strokeIntegral(float x,float width){return floor(x)*width*2.+min(fract(x),width)+max(fract(x)-(1.-width),0.);}
@@ -209,11 +213,259 @@ vec4 sampleSource(vec2 uv) {
   if(any(lessThan(uv,vec2(0.))) || any(greaterThan(uv,vec2(1.)))) return vec4(0.);
   return texture2D(uSource,uv);
 }
-void main() {
-  vec2 p=(vUv-.5-uTranslation)*vec2(uAspect,1.);
+/** Frame coordinate to the layer's own coordinate. */
+vec2 layerUv(vec2 frameUv) {
+  vec2 p=(frameUv-.5-uTranslation)*vec2(uAspect,1.);
   float c=cos(uRotation), s=sin(uRotation);
   p=mat2(c,s,-s,c)*p/max(uScale,.001);
-  vec2 uv=p/vec2(uAspect,1.)+.5;
+  return p/vec2(uAspect,1.)+.5;
+}
+// ---- Print screen finish ---------------------------------------------------
+// Halftone dots, line screens and ordered dither, drawn analytically. The grid
+// is built from the frame coordinate, in cells of a 1080-line frame, so it is
+// fixed to the frame and identical at every render size. Every mark edge is a
+// signed reach in cells, filtered to exactly one output pixel. The mark
+// maths mirrors src/rendering/print-screen.ts.
+const float PRINT_PI=3.141592653589793;
+mat2 printRotation(float a){float c=cos(a),s=sin(a);return mat2(c,s,-s,c);}
+vec2 printTravel(){return vec2(uPrintOffset,uPrintType>.5&&uPrintType<1.5?uPrintOffset:0.);}
+vec2 printToScreen(vec2 frameUv,float a){
+  return printRotation(a)*((frameUv-.5)*vec2(uAspect,1.)*uPrintCells)+printTravel();
+}
+vec2 printToFrame(vec2 s,float a){
+  return printRotation(-a)*(s-printTravel())/(uPrintCells*vec2(uAspect,1.))+.5;
+}
+vec4 printSource(vec2 frameUv){return sampleSource(layerUv(frameUv));}
+/** Tone of a pixel for one screen, 0–1, scaled by coverage so marks shrink at
+ * the layer's silhouette. Channel -1 is the brightest channel; 0–2 are red, green, blue
+ * (RGB light) or cyan, magenta, yellow (CMYK ink); 3 is black. */
+float printTone(vec4 pixel,int channel){
+  vec3 straight=max(pixel.rgb/max(pixel.a,.000001),vec3(0.));
+  vec3 v=min(1.35*straight/(.35+straight),vec3(1.));
+  float t;
+  // The whole-colour screen follows the brightest channel, not luminance: a
+  // mark brightened by 1/coverage then never passes full value, so saturated
+  // colours keep their hue and their light instead of clipping.
+  if(channel<0)t=max(v.r,max(v.g,v.b));
+  else if(uPrintColour<2.5)t=channel==0?v.r:channel==1?v.g:v.b;
+  else{
+    float k=1.-max(v.r,max(v.g,v.b));
+    if(channel==3)t=k;
+    else{float x=channel==0?v.r:channel==1?v.g:v.b;t=k>.9999?0.:(1.-x-k)/(1.-k);}
+  }
+  return t*pixel.a;
+}
+/** Tone to the share of a cell its mark covers (printCoverage). */
+float printCurve(float tone,int channel){
+  float x=uPrintCeiling<=uPrintFloor?step(uPrintFloor+.000001,tone):clamp((tone-uPrintFloor)/max(uPrintCeiling-uPrintFloor,.001),0.,1.);
+  if(uPrintGain!=0.)x=pow(x,exp2(-1.5*uPrintGain));
+  return channel<0&&uPrintInvert>.5?1.-x:x;
+}
+float printClassicLevel(float c){
+  const float levels[17]=float[17](1.,.8131,.6446,.4938,.3599,.2426,.1421,.0592,0.,-.0592,-.1421,-.2426,-.3599,-.4938,-.6446,-.8131,-1.);
+  float t=clamp(c,0.,1.)*16.;int i=int(min(floor(t),15.));
+  return mix(levels[i],levels[i+1],t-float(i));
+}
+/** Signed reach in cells from p (relative to a cell centre) to that cell's
+ * mark, sized so the mark covers the share c of a cell (printMarkSize). */
+float printDotDistance(vec2 p,float c){
+  if(c<=0.)return 4.;
+  if(uPrintDot>2.5){vec2 q=abs(p)-sqrt(c)*.5;return max(q.x,q.y);}
+  if(uPrintDot>1.5){
+    float h=c<=.5?sqrt(c*.5):1.-sqrt((1.-c)*.5);
+    return (abs(p.x)+abs(p.y)-h)*.7071067811865476;
+  }
+  float touch=PRINT_PI*.25;
+  float r=c<=touch?sqrt(c/PRINT_PI):.5+(.7171067811865476-.5)*(c-touch)/(1.-touch);
+  return length(p)-r;
+}
+float printBayer(vec2 cell){
+  int bits=int(uPrintMatrix+.5)+1;
+  float n=exp2(float(bits));
+  ivec2 q=ivec2(mod(cell,n));
+  int index=0;
+  for(int b=0;b<3;b++){
+    if(b>=bits)break;
+    int bx=q.x&1,by=q.y&1;
+    index=index*4+((bx^by)*2+by);
+    q/=2;
+  }
+  return (float(index)+.5)/(n*n);
+}
+/**
+ * Coverage of one screen at this pixel. Returns the frame position, source
+ * pixel and target coverage of the cell that governs the pixel, so the caller
+ * can colour whole marks from one place.
+ */
+float printMark(float angle,int channel,out vec2 centreUv,out vec4 centrePixel,out float target){
+  vec2 s=printToScreen(vUv,angle);
+  // One output pixel, in cells. Known exactly, so no derivative is needed.
+  float pixel=uPrintCells*uTexel.y;
+  float width=max(pixel,uPrintSoft*.5);
+  float coverage;
+  if(uPrintType>1.5){
+    // Ordered dither: each cell is on or off; cell edges are box-filtered.
+    vec2 q=s-.5,base=floor(q);
+    vec2 weight=clamp(.5+(s-(base+1.))/pixel,0.,1.);
+    coverage=0.;
+    float best=-1.;
+    for(int j=0;j<2;j++)for(int i=0;i<2;i++){
+      vec2 cell=base+vec2(float(i),float(j));
+      float share=(i==0?1.-weight.x:weight.x)*(j==0?1.-weight.y:weight.y);
+      vec2 uv=printToFrame(cell+.5,angle);
+      vec4 texel=printSource(uv);
+      float c=printCurve(printTone(texel,channel),channel);
+      coverage+=share*step(printBayer(cell),c-.000001);
+      if(share>best){best=share;centreUv=uv;centrePixel=texel;target=c;}
+    }
+    return mix(coverage,target,smoothstep(.35,.6,pixel));
+  }
+  if(uPrintType>.5){
+    // Line screen: lines run along the screen's x axis. Width follows the tone
+    // read on the line's own centre, so both edges of a line agree.
+    float row=floor(s.y),reach=8.;
+    for(int j=-1;j<=1;j++){
+      float centre=row+float(j)+.5;
+      vec2 uv=printToFrame(vec2(s.x,centre),angle);
+      vec4 texel=printSource(uv);
+      float c=printCurve(printTone(texel,channel),channel);
+      float d=c<=0.?4.+abs(float(j)):abs(s.y-centre)-c*.5;
+      if(d<reach){reach=d;centreUv=uv;centrePixel=texel;target=c;}
+    }
+    coverage=clamp(.5-reach/width,0.,1.)*clamp(target/pixel,0.,1.);
+    return mix(coverage,target,smoothstep(.35,.6,pixel));
+  }
+  // Dots. The own cell reads five taps so a dot does not flicker when fine
+  // detail passes under its centre.
+  vec2 cell=floor(s)+.5,p=s-cell;
+  vec2 ownUv=printToFrame(cell,angle);
+  vec4 own=printSource(ownUv);
+  float tone=printTone(own,channel);
+  for(int i=0;i<4;i++){
+    vec2 o=i==0?vec2(.25,0.):i==1?vec2(-.25,0.):i==2?vec2(0.,.25):vec2(0.,-.25);
+    tone+=printTone(printSource(printToFrame(cell+o,angle)),channel);
+  }
+  float c=printCurve(tone*.2,channel);
+  centreUv=ownUv;centrePixel=own;target=c;
+  float reach;
+  if(uPrintDot>.5&&uPrintDot<1.5){
+    // Classic: the dot grows from the cell centre until it meets its
+    // neighbours at half tone, then the gaps shrink as holes on the corners.
+    // Each half is governed by the tone at its own centre, so nothing seams.
+    float field=(cos(2.*PRINT_PI*p.x)+cos(2.*PRINT_PI*p.y))*.5;
+    float slope=max(PRINT_PI*length(vec2(sin(2.*PRINT_PI*p.x),sin(2.*PRINT_PI*p.y))),.001);
+    float level;
+    if(abs(p.x)+abs(p.y)<.5)level=printClassicLevel(min(c,.5));
+    else{
+      vec2 corner=cell+sign(p+.000001)*.5;
+      float hole=printCurve(printTone(printSource(printToFrame(corner,angle)),channel),channel);
+      level=printClassicLevel(max(hole,.5));
+    }
+    reach=c<=0.&&level>=.9999?4.:(level-field)/slope;
+  }else{
+    // Union with the four cells that share an edge, so dots that outgrow
+    // their cell join their neighbours with no seam.
+    reach=printDotDistance(p,c);
+    for(int i=0;i<4;i++){
+      vec2 o=i==0?vec2(1.,0.):i==1?vec2(-1.,0.):i==2?vec2(0.,1.):vec2(0.,-1.);
+      vec2 uv=printToFrame(cell+o,angle);
+      vec4 texel=printSource(uv);
+      float neighbour=printCurve(printTone(texel,channel),channel);
+      float d=printDotDistance(p-o,neighbour);
+      if(d<reach){reach=d;centreUv=uv;centrePixel=texel;target=neighbour;}
+    }
+  }
+  // A mark smaller than one output pixel keeps its share of light, not a speck.
+  coverage=clamp(.5-reach/width,0.,1.)*clamp(target/(pixel*pixel),0.,1.);
+  // A screen finer than about two output pixels becomes its plain tone.
+  return mix(coverage,target,smoothstep(.35,.6,pixel));
+}
+/** Edge strength of the layer's tone around a frame position, 0–1. The
+ * silhouette counts, because tone carries the layer's coverage. */
+float printEdge(vec2 frameUv){
+  float centre=printTone(printSource(frameUv),-1),difference=0.;
+  vec2 reach=vec2(uPrintEdgeWidth/1080.)/vec2(uAspect,1.);
+  for(int i=0;i<12;i++){
+    float a=float(i)*.5235987755982988;
+    difference=max(difference,abs(printTone(printSource(frameUv+vec2(cos(a),sin(a))*reach),-1)-centre));
+    a+=.2617993877991494;
+    difference=max(difference,abs(printTone(printSource(frameUv+vec2(cos(a),sin(a))*reach*.5),-1)-centre));
+  }
+  float threshold=mix(.5,.02,uPrintEdgeSense);
+  float feather=max(uPrintEdgeFeather*threshold,.004);
+  return smoothstep(threshold-feather,threshold+feather,difference);
+}
+/** The layer's finished colour (Fractal recolouring and Flat colour) for a
+ * source pixel read at a frame position. */
+vec4 printFinished(vec4 pixel,vec2 frameUv){
+  if(uColorMode>.5)pixel=recolor(pixel);
+  if(uToonMix>0.)pixel=toon(pixel,layerUv(frameUv));
+  return pixel;
+}
+vec4 printScreen(vec4 plain){
+  bool paper=uPrintPaper>.5;
+  vec3 paperColour=paper?uGradePalette[int(uPrintPaper-.5)]:vec3(1.);
+  vec2 centreUv;vec4 centrePixel;float target;
+  vec2 maskUv;
+  vec4 screened;
+  if(uPrintColour<1.5){
+    float coverage=printMark(uPrintAngles[2],-1,centreUv,centrePixel,target);
+    maskUv=centreUv;
+    // Lines take the colour under each pixel; dots and dither cells are one colour each.
+    bool lines=uPrintType>.5&&uPrintType<1.5;
+    vec4 finished=lines?plain:printFinished(centrePixel,centreUv);
+    vec3 ink;
+    if(uPrintColour>.5)ink=uGradePalette[int(uPrintInk-.5)];
+    // The mark is brightened so the cell's average matches the plain layer.
+    else ink=finished.rgb/max(finished.a,.000001)*min(1./max(target,.0001),8.);
+    if(paper)screened=vec4(mix(paperColour,ink,coverage)*plain.a,plain.a);
+    else{
+      // A mark that straddles the silhouette stays whole; its size already
+      // shrank with the coverage at its centre.
+      float a=min(max(plain.a,centrePixel.a),1.);
+      screened=vec4(ink*a*coverage,a*coverage);
+    }
+  }else if(uPrintColour<2.5){
+    // RGB light: three screens, each a primary, added.
+    vec3 light=vec3(0.);float most=0.;
+    for(int channel=0;channel<3;channel++){
+      float coverage=printMark(uPrintAngles[channel],channel,centreUv,centrePixel,target);
+      if(channel==0)maskUv=centreUv;
+      vec3 straight=centrePixel.rgb/max(centrePixel.a,.000001);
+      float strength=(channel==0?straight.r:channel==1?straight.g:straight.b)*min(1./max(target,.0001),8.)*centrePixel.a;
+      float amount=coverage*max(strength,0.);
+      if(channel==0)light.r=amount;else if(channel==1)light.g=amount;else light.b=amount;
+      most=max(most,coverage);
+    }
+    float a=plain.a;
+    if(paper)screened=vec4((paperColour*(1.-most)+light)*a,a);
+    else screened=vec4(light*a,a*most);
+  }else{
+    // CMYK ink: four screens overprinted on paper. Each ink removes its
+    // complement; black is the part all three share.
+    vec3 colour=paperColour;float clear=1.;
+    for(int channel=0;channel<4;channel++){
+      float coverage=printMark(uPrintAngles[channel],channel,centreUv,centrePixel,target);
+      if(channel==0)maskUv=centreUv;
+      vec3 absorbs=channel==0?vec3(1.,0.,0.):channel==1?vec3(0.,1.,0.):channel==2?vec3(0.,0.,1.):vec3(1.);
+      colour*=1.-coverage*absorbs;
+      clear*=1.-coverage;
+    }
+    float a=plain.a;
+    if(paper)screened=vec4(colour*a,a);
+    else screened=vec4(colour*a*(1.-clear),a*(1.-clear));
+  }
+  float mask=1.;
+  if(uPrintArea>.5){
+    // Dots and dither cells are judged at their centre, so whole marks fade
+    // in and out of the area; lines are judged at each pixel.
+    float edge=printEdge(uPrintType>.5&&uPrintType<1.5?vUv:maskUv);
+    mask=uPrintArea<1.5?edge:1.-edge;
+  }
+  return mix(plain,screened,clamp(uPrintMix,0.,1.)*mask);
+}
+void main() {
+  vec2 uv=layerUv(vUv);
   vec4 top=sampleSource(uv);
   if(uGlow>.0001) {
     // Radius is defined in composition units, so a 4K export has the same
@@ -228,6 +480,7 @@ void main() {
   // Mode is uniform for the layer, so all pixels evaluate the contour footprint.
   if(uColorMode>.5)top=recolor(top);
   if(uToonMix>0.)top=toon(top,uv);
+  if(uPrintOn>.5)top=printScreen(top);
   // Glow finish: the blurred bright light of this layer. It is kept apart from
   // the layer's coverage and added as light at the end, so it can only brighten
   // what is underneath. The levels are in the same view space as the source.

@@ -18,6 +18,7 @@ import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
+import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget } from './bloom';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -282,6 +283,7 @@ export class StudioRenderer {
       uMaskInvert: { value: 0 }, uGlow: { value: 0 },
       ...Object.fromEntries(BLOOM_HEIGHTS.map((_, i) => [`uGlowLevel${i}`, { value: this.fallback }])),
       uGlowWeights: { value: [0, 0, 0, 0, 0] }, uGlowColour: { value: new THREE.Color() }, uGlowOn: { value: 0 },
+      uPrintOn: { value: 0 }, uPrintCells: { value: 135 }, uPrintOffset: { value: 0 }, uPrintAngles: { value: [0, 0, 0, 0] },
       ...Object.fromEntries(FINISH_PARAMETERS.map(d=>['u'+d.key[0].toUpperCase()+d.key.slice(1),{value:d.default}])),
       uSaturation: {value:1}, uHue: {value:0}, uExposure:{value:1},
       uColorMode:{value:0},uColorSteps:{value:6},uColorMix:{value:1},uColorOffset:{value:0},
@@ -782,6 +784,7 @@ export class StudioRenderer {
       u.uMaskInvert.value = Number(layer.mask.invert);
       u.uGlow.value = number(layer, 'glow', layer.kind === 'sculpture' ? .12 : 0);
       this.bindGlow(original, layer, sourceTexture, width, height);
+      this.bindPrint(original, layer, wrapped);
       for(const d of FINISH_PARAMETERS)u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=number(layer,d.key,d.default);
       u.uSaturation.value=number(layer,'saturation',1);u.uHue.value=number(layer,'hue',0);
       // Original Fractal exposure stays in its original source pass; new colour
@@ -829,6 +832,19 @@ export class StudioRenderer {
     u.uGlowWeights.value = bloomWeights(amount, number(layer, 'glowSize', .5));
     const tint = Math.round(number(layer, 'glowTint', 0));
     if (tint >= 1) (u.uGlowColour.value as THREE.Color).set(layer.palette[tint - 1] ?? DEFAULT_PALETTE[tint - 1]);
+  }
+
+  /**
+   * Print screen finish: the screen is drawn inside the composite pass, so it
+   * needs no targets of its own and never enters the echo history. Its
+   * geometry is in frame units, the same at every render size.
+   */
+  private bindPrint(original: Layer, layer: Layer, loopPhase: number): void {
+    const u = this.composite.uniforms, on = printActive(original) && number(layer, 'printMix', 0) > 0;
+    u.uPrintOn.value = Number(on);
+    if (!on) return;
+    const screen = printUniforms(layer, loopPhase);
+    u.uPrintCells.value = screen.cells; u.uPrintAngles.value = screen.angles; u.uPrintOffset.value = screen.scroll;
   }
 
   private sourcePhase(original: Layer, wrapped: number, duration: number): number {
