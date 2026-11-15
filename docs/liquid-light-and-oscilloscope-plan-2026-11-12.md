@@ -196,6 +196,12 @@ Figures are chosen from a curated list of good-looking ratio sets, not raw `a, b
 | `scripts/` | `verify-liquid.mjs`, `verify-scope.mjs` modelled on `verify-oil.mjs`; add both to `verify-workspace-ui.mjs` and `verify-quality.mjs`. |
 | `README.md` | Family list and preset counts. |
 
+**Update, 15 November: a pass for natural, fluid motion.** The neat two-sine wiggle is replaced by a signal of six partials at unrelated pitches with loud and quiet stretches that wander round the line, so it reads as sound rather than a zigzag (the control is now called Signal). Sway adds a slow, wide undulation and Float makes the tumble speed up, slow and rock; both are on by default. Afterglow is eight closer copies and reads as a smear. The Seam figure swings less, which removes its squared corners.
+
+**Ready for sound.** All of the line's liveliness now comes from one buffer, the wave (`scopeWave` in `src/rendering/scope-curve.ts`): how far each point of the line is pushed sideways. `scopeLine` takes that buffer as an argument, so an audio waveform can later be mixed into it or put in its place with no other change. The natural mappings are: waveform to the wave, overall level to Signal or Intensity, bass to Size or Sway, and onsets to Signal bursts or Bloom. None of that is built.
+
+**Update, 15 November: the line is rebuilt as an oscilloscope trace.** The curve-on-a-sphere model read as a ball made of lines. The line is now steered by three oscillators (across, up, depth) at whole-number frequency ratios, as in X-Y mode, and moves because their phases slip against each other (Phase drift), so the figure folds, opens and collapses. Tumble is off by default. The signal is added to the three axes a little apart in time, as a stereo sound would be, so for audio the left and right channels map directly to across and up. Morphing no longer needs the cut through the sphere. Morse Sphere is renamed Morse Weave (the preset id is unchanged).
+
 ## 6. The combined look
 
 A starter project, "Liquid Scope", with three layers:
@@ -205,6 +211,8 @@ A starter project, "Liquid Scope", with three layers:
 3. Liquid, main cells and floaters only (wash off, transparent ground), normal blend, with its press dome centred on the scope sphere at the same radius.
 
 That reproduces the line sitting between the dishes and the brighter cells inside the ball. Layer 3 hides the line but does not bend it. If that reads as flat, the follow-up is to let a liquid layer refract the layers beneath it, which is a compositor change and is not in this plan.
+
+**Update, 14 November: dropped.** The combined starter is not being built. Liquid Light and Oscilloscope are two separate instruments, to be used on their own or layered by hand; recreating the recording was never the aim.
 
 ## 7. Order and verification
 

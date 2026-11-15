@@ -1,22 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SCOPE_FIGURES, SCOPE_PLAIN, scopeCurve, scopeDash, scopeFigurePoint, scopeLine, scopeMorphWeight, scopePerspective, scopeRotation } from '../src/rendering/scope-curve';
+import { SCOPE_FIGURES, SCOPE_PLAIN, scopeWave, scopeCurve, scopeDash, scopeFigurePoint, scopeLine, scopeMorphWeight, scopePerspective, scopeRotation } from '../src/rendering/scope-curve';
 import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions, validateProject } from '../src/core/project';
 
 const TAU = Math.PI * 2;
 const motion = { tilt: .4, tumbleX: 1, tumbleY: 2 };
 
-test('every scope figure is a closed line on the unit sphere', () => {
+test('every scope figure is a closed line inside the unit cube with its own ratio', () => {
   for (const figure of SCOPE_FIGURES) {
-    const start = scopeFigurePoint(figure, 0), end = scopeFigurePoint(figure, 1);
-    for (let k = 0; k < 3; k++) assert.ok(Math.abs(start[k] - end[k]) < 1e-9, `${figure.name} does not close`);
-    for (let i = 0; i < 200; i++) {
-      const p = scopeFigurePoint(figure, i / 200);
-      assert.ok(Math.abs(Math.hypot(p[0], p[1], p[2]) - 1) < 1e-9, `${figure.name} leaves the sphere`);
+    for (const slip of [0, 1.3]) {
+      const start = scopeFigurePoint(figure, 0, undefined, slip, .5), end = scopeFigurePoint(figure, 1, undefined, slip, .5);
+      for (let k = 0; k < 3; k++) assert.ok(Math.abs(start[k] - end[k]) < 1e-9, `${figure.name} does not close`);
+      for (let i = 0; i < 200; i++) for (const v of scopeFigurePoint(figure, i / 200, undefined, slip, .5)) assert.ok(Math.abs(v) <= 1 + 1e-9, `${figure.name} leaves the cube`);
     }
-    assert.ok(Number.isInteger(figure.turns) && Number.isInteger(figure.waves) && figure.swing < Math.PI / 2);
+    assert.ok(Number.isInteger(figure.x) && Number.isInteger(figure.y) && Number.isInteger(figure.z));
   }
-  assert.equal(new Set(SCOPE_FIGURES.map(f => `${f.turns}:${f.waves}`)).size, SCOPE_FIGURES.length);
+  assert.equal(new Set(SCOPE_FIGURES.map(f => `${f.x}:${f.y}:${f.z}`)).size, SCOPE_FIGURES.length);
 });
 
 test('the scope curve has no jumps and its ends meet exactly', () => {
@@ -26,8 +25,20 @@ test('the scope curve has no jumps and its ends meet exactly', () => {
     for (let k = 0; k < 3; k++) assert.equal(points[k], points[count * 3 + k]);
     let longest = 0;
     for (let i = 0; i < count; i++) longest = Math.max(longest, Math.hypot(points[i * 3 + 3] - points[i * 3], points[i * 3 + 4] - points[i * 3 + 1], points[i * 3 + 5] - points[i * 3 + 2]));
-    assert.ok(longest < .08, `${SCOPE_FIGURES[figure].name}: a step of ${longest}`);
+    assert.ok(longest < .05, `${SCOPE_FIGURES[figure].name}: a step of ${longest}`);
   }
+});
+
+test('phase drift changes the figure itself and closes over the loop', () => {
+  const still = { tilt: 0, tumbleX: 0, tumbleY: 0 }, shape = { figure: 1, ...SCOPE_PLAIN, drift: 1 };
+  const start = scopeLine(shape, still, 0, 512), later = scopeLine(shape, still, 1.2, 512), end = scopeLine(shape, still, TAU, 512);
+  for (let i = 0; i < start.length; i += 5) assert.ok(Math.abs(start[i] - end[i]) < 1e-5);
+  // Not a turn of a fixed object: the up-and-down part is untouched while across changes.
+  let across = 0, up = 0;
+  for (let i = 0; i < 512; i++) { across = Math.max(across, Math.abs(start[i * 3] - later[i * 3])); up = Math.max(up, Math.abs(start[i * 3 + 1] - later[i * 3 + 1])); }
+  assert.ok(across > .3 && up < 1e-6, `${across} ${up}`);
+  // With no drift and no tumble the figure holds still.
+  assert.deepEqual(scopeLine({ ...shape, drift: 0 }, still, 0, 64), scopeLine({ ...shape, drift: 0 }, still, 2, 64));
 });
 
 test('the tumble returns to its start after one loop and moves in between', () => {
@@ -75,13 +86,13 @@ test('the morph rests on each figure and returns to the first', () => {
   assert.ok(Math.abs(scopeMorphWeight(TAU * .2, .3) - scopeMorphWeight(TAU * .8, .3)) < 1e-9);
 });
 
-test('a morphing, wiggling line stays closed, within the sphere and loops exactly', () => {
-  const shape = { figure: 0, figureB: 3, morph: 1, hold: .4, wiggle: .7, wiggleFrequency: 47.4, wiggleBursts: .6 };
+test('a morphing, wiggling line stays closed, bounded and loops exactly', () => {
+  const shape = { figure: 0, figureB: 3, morph: 1, hold: .4, drift: 2, overtones: .5, sway: .6, wiggle: .7, wiggleFrequency: 47.4, wiggleBursts: .6 };
   const count = 4096;
   for (const phase of [0, 1.3, Math.PI, 4.9]) {
     const points = scopeLine(shape, motion, phase, count);
     for (let k = 0; k < 3; k++) assert.equal(points[k], points[count * 3 + k]);
-    for (let i = 0; i <= count; i += 37) { const r = Math.hypot(points[i * 3], points[i * 3 + 1], points[i * 3 + 2]); assert.ok(r < 1 + 1e-5 && r > .2, `radius ${r}`); }
+    for (let i = 0; i <= count; i += 37) { const r = Math.hypot(points[i * 3], points[i * 3 + 1], points[i * 3 + 2]); assert.ok(r < 1.7, `radius ${r}`); }
   }
   const start = scopeLine(shape, motion, 0, count), end = scopeLine(shape, motion, TAU, count);
   for (let i = 0; i < start.length; i += 11) assert.ok(Math.abs(start[i] - end[i]) < 1e-5, `point ${i}`);
@@ -118,4 +129,32 @@ test('dashes travel and the pattern closes over the line and the loop', () => {
   assert.ok(bright > 150 && bright < 400, `${bright} bright`);
   assert.ok(dim > 600, `${dim} dim`);
   assert.notEqual(at(.01, 0), at(.01, 1));
+});
+
+test('the wave closes over the loop, is uneven, and can be supplied from outside', () => {
+  const shape = { figure: 1, ...SCOPE_PLAIN, sway: .5, wiggle: .6 };
+  const start = scopeWave(shape, 0), end = scopeWave(shape, TAU), later = scopeWave(shape, 1.7);
+  for (let i = 0; i < start.length; i += 7) assert.ok(Math.abs(start[i] - end[i]) < 1e-5);
+  assert.ok(start.some((v, i) => Math.abs(v - later[i]) > .02));
+  // Not a neat zigzag: the peaks are of many different heights.
+  const peaks = new Set<number>();
+  for (let i = 1; i < start.length - 1; i++) if (start[i] > start[i - 1] && start[i] > start[i + 1]) peaks.add(Math.round(start[i] * 100));
+  assert.ok(peaks.size > 8, `${peaks.size} peak heights`);
+  assert.ok(scopeWave({ figure: 1, ...SCOPE_PLAIN }, 1).every(v => v === 0));
+  // A wave from elsewhere (sound, later) moves the line with no signal of its own.
+  const still = { tilt: 0, tumbleX: 0, tumbleY: 0 }, plain = { figure: 1, ...SCOPE_PLAIN };
+  const sound = Float32Array.from({ length: 512 }, (_, i) => .08 * Math.sin(TAU * 24 * i / 512));
+  const driven = scopeLine(plain, still, 0, 2048, undefined, sound), quiet = scopeLine(plain, still, 0, 2048);
+  assert.ok(lengthOf(driven) > lengthOf(quiet) * 1.2);
+  for (let k = 0; k < 3; k++) assert.equal(driven[k], driven[2048 * 3 + k]);
+});
+
+test('float changes the pace of the tumble but still closes the loop', () => {
+  const steady = { tilt: .3, tumbleX: 1, tumbleY: 1 }, floating = { ...steady, float: 1 };
+  const start = scopeRotation(floating, 0), end = scopeRotation(floating, TAU);
+  for (let i = 0; i < 9; i++) assert.ok(Math.abs(start[i] - end[i]) < 1e-9);
+  assert.ok(scopeRotation(floating, 1.9).some((v, i) => Math.abs(v - scopeRotation(steady, 1.9)[i]) > .1));
+  // It still rocks when the tumble is off.
+  const rest = { tilt: 0, tumbleX: 0, tumbleY: 0, float: 1 };
+  assert.ok(scopeRotation(rest, 1).some((v, i) => Math.abs(v - scopeRotation(rest, 2.5)[i]) > .1));
 });

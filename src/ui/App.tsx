@@ -74,7 +74,7 @@ function lookCaption(preset: typeof PRESETS[number]): string {
   if (preset.kind === 'graphic') return `${GRAPHIC_FAMILIES[style]} · ${GRAPHIC_VARIANTS[style][variant] ?? 'Custom'}`;
   if (preset.kind === 'oil') return 'Paint · glass · cellular ink';
   if (preset.kind === 'liquid') return 'Oil droplets · dye · projector';
-  if (preset.kind === 'scope') return 'Glowing line · sphere · beam';
+  if (preset.kind === 'scope') return 'Glowing line · signal · beam';
   if (preset.kind === 'fractal') return `${patterns.fractal![style]} · ${fractalVariants[style][variant]}`;
   return `${sculptureForms[Math.round(preset.params.form ?? 0)]} · Sculpture`;
 }
@@ -238,7 +238,7 @@ const instrumentCatalogue = [
   { kind: 'super8', name: 'Super 8 Paint', caption: 'Paint · moving film · projector', image: super8Thumb, label: 'Add Super 8 Paint' },
   { kind: 'oil', name: 'Oil Slides', caption: 'Paint · glass · cellular ink', image: oilThumb, label: 'Add oil slides' },
   { kind: 'liquid', name: 'Liquid Light', caption: 'Oil droplets · dye · projector', image: liquidThumb, label: 'Add liquid light' },
-  { kind: 'scope', name: 'Oscilloscope', caption: 'Glowing line · sphere · beam', image: scopeThumb, label: 'Add oscilloscope' },
+  { kind: 'scope', name: 'Oscilloscope', caption: 'Glowing line · signal · beam', image: scopeThumb, label: 'Add oscilloscope' },
   { kind: 'graphic', name: 'Graphic Patterns', caption: 'Waves · circles · tiles · paths', image: graphicThumb, label: 'Add graphic patterns' },
   ...INSTRUMENTS.map(info => ({ kind: info.kind, name: info.name, caption: info.description, image: projectionThumbnails[`./assets/projection/${startingLooks[info.kind]}.png`]??instrumentThumbnails[`./assets/instruments/${info.kind}.png`], label: `Add ${info.name}` })),
 ] satisfies {kind: LayerKind; name: string; caption: string; image: string; label: string}[];

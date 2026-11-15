@@ -271,17 +271,20 @@ Check it with `node scripts/verify-liquid.mjs` (add `--quick` for stills only).
 
 ## Oscilloscope controls
 
-**Oscilloscope** draws one closed glowing line on a tumbling sphere, like an electron beam on a vector display. The core burns to white, the halo keeps the line colour, and parts the beam crosses slowly are brighter. Looks: **Twin Orbit**, **Atom**, **Ember Ring**, **Cyan Tangle**, **Signal Burst** and **Morse Sphere**.
+**Oscilloscope** draws one glowing line the way an oscilloscope does in X-Y mode: the beam is steered by three oscillators, one each for across, up and depth. The figure is not an object that turns. It moves because the oscillators slip against each other, so it folds, opens and collapses. The core burns to white, the halo keeps the line colour, and parts the beam crosses slowly are brighter. Looks: **Twin Orbit**, **Atom**, **Ember Ring**, **Cyan Tangle**, **Signal Burst** and **Morse Weave**.
 
-- **Figure** picks the line (Seam, Orbit, Trefoil, Atom, Coil, Weave, Knot, Tangle). **Size** and **Lean** place it; **Ring** draws the sphere's outline around it.
-- **Tumble forward** and **Tumble sideways** are whole turns per cycle, so the loop closes exactly.
-- **Morph** changes the line into the **Second figure** and back once per cycle; **Morph hold** is the share of the cycle spent resting on each. Where the two figures sit on opposite sides of the sphere, the line cuts through the inside on its way.
-- **Wiggle** adds a fast jagged ripple and **Wiggle rate** sets how many ripples fit along the line. **Wiggle bursts** gathers it into patches that travel, swell and fade.
+- **Figure** picks the frequency ratio of the oscillators (Ellipse 1:1, Eight 1:2, Pretzel 3:2, Trefoil 1:3, Knot 3:4, Weave 5:3, Star 5:4, Tangle 7:5). Simple ratios are calm; larger ones are dense. **Overtones** bends the oscillators away from a pure sine for lopsided, less regular figures.
+- **Phase drift** is the main motion: whole turns the oscillators slip against each other per cycle. At 0 the figure holds still.
+- **Size** and **Lean** place the figure; **Ring** draws a circle around it, like the rim of the tube.
+- **Tumble forward** and **Tumble sideways** turn the whole figure in whole turns per cycle. Both are 0 by default, for a flat screen. **Float** rocks it gently so it is never seen dead flat.
+- **Morph** blends the figure into the **Second figure** and back once per cycle; **Morph hold** is the share of the cycle spent resting on each.
+- **Sway** is a slow, wide undulation of the whole line.
+- **Signal** adds a fast, uneven ripple on top of the oscillators, like sound, fed to the three axes a little apart in time. **Signal pitch** sets roughly how many ripples fit along the line. **Signal bursts** gathers it into patches that travel, swell and fade.
 - **Dashes** breaks the line into bright dashes with dim gaps; **Dash count**, **Dash length** and **Dash travel** (whole trips round the line per cycle) shape them.
-- **Afterglow** adds five fading copies of the line where it was a moment ago. On a fast tumble they read as a ribbon.
-- **Beam width**, **Intensity** and **Halo** shape the line. **Depth fade** dims and thins the far side of the sphere.
+- **Afterglow** leaves a fading smear where the line was a moment ago.
+- **Beam width**, **Intensity** and **Halo** shape the line. **Depth fade** dims and thins the parts of the line that are further away.
 - **Bloom** is the wide soft glow and **Bloom size** moves it from tight to wide. It is measured in fixed lines of frame height, so it looks the same in the preview and in a 4K export.
-- **Colour fringe** splits red and blue apart towards the edge of the sphere. **Colour travel** sends the second line colour round the line once per cycle.
+- **Colour fringe** splits red and blue apart towards the edge of the ring. **Colour travel** sends the second line colour round the line once per cycle.
 - Palette order: line, halo, bloom, hot core, second line. The sixth swatch is unused.
 
 Check it with `node scripts/verify-scope.mjs` (add `--quick` for stills only).
