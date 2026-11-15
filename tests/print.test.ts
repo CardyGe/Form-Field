@@ -13,12 +13,12 @@ test('print screen is off by default and older projects migrate without it', () 
   }
   const migrated = validateProject(JSON.parse(JSON.stringify(project)));
   assert.deepEqual(PRINT_KEYS.map(k => migrated.layers[0].params[k]),
-    [0, 0, 8, 45, 0, 2, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 12, .5, .25]);
+    [0, 0, 8, 45, 0, 2, 0, 0, 1, .8, 0, 0, 0, 0, 1, 0, 0, 12, .5, .25]);
 });
 
 test('print keys are finish keys in the spec order', () => {
   assert.deepEqual(PRINT_KEYS, ['printMix','printType','printSize','printAngle','printDot','printMatrix','printScroll',
-    'printFloor','printCeiling','printGain','printSoft','printInvert','printColour','printInk','printPaper',
+    'printFloor','printCeiling','printMax','printGain','printSoft','printInvert','printColour','printInk','printPaper',
     'printArea','printEdgeWidth','printEdgeSense','printEdgeFeather']);
   assert.equal(PRINT_KEYS.every(k => FINISH_KEYS.includes(k)), true);
 });
@@ -56,6 +56,14 @@ test('tone maps to coverage through floor, ceiling, gain and invert', () => {
   // Floor above ceiling: a hard threshold at the floor, never NaN.
   assert.equal(printCoverage(.5, .6, .4, 0, 0), 0);
   assert.equal(printCoverage(.7, .6, .4, 0, 0), 1);
+});
+
+test('the largest mark leaves the background showing in full-bright areas', () => {
+  assert.equal(printCoverage(1, 0, 1, 0, 0, .8), .8);
+  assert.equal(printCoverage(0, 0, 1, 0, 1, .8), .8);
+  assert.equal(printCoverage(.5, 0, 1, 0, 0, .8), .4);
+  assert.equal(printCoverage(1, 0, 1, 0, 0, 1), 1);
+  assert.equal(printCoverage(0, 0, 1, 0, 0, .8), 0);
 });
 
 test('layer-colour brightness scale is finite and capped', () => {

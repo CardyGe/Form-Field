@@ -53,7 +53,7 @@ uniform vec3 uGlowColour;
 uniform float uGlowOn,uGlowTint;
 uniform float uPrintOn,uPrintCells,uPrintOffset;
 uniform float uPrintAngles[4];
-uniform float uPrintMix,uPrintType,uPrintDot,uPrintMatrix,uPrintFloor,uPrintCeiling,uPrintGain,uPrintSoft,uPrintInvert;
+uniform float uPrintMix,uPrintType,uPrintDot,uPrintMatrix,uPrintFloor,uPrintCeiling,uPrintMax,uPrintGain,uPrintSoft,uPrintInvert;
 uniform float uPrintColour,uPrintInk,uPrintPaper,uPrintArea,uPrintEdgeWidth,uPrintEdgeSense,uPrintEdgeFeather;
 const vec3 GRADE_LUMA=vec3(.2126,.7152,.0722);
 float stepIntegral(float x){float n=floor(x);return n*(n-1.)*.5+n*fract(x);}
@@ -249,17 +249,20 @@ float printTone(vec4 pixel,int channel){
   if(channel<0)t=max(v.r,max(v.g,v.b));
   else if(uPrintColour<2.5)t=channel==0?v.r:channel==1?v.g:v.b;
   else{
-    float k=1.-max(v.r,max(v.g,v.b));
+    // Inks are separated from the linear colour: their overprinted marks
+    // average in linear light, so the layer keeps its brightness.
+    vec3 l=min(straight,vec3(1.));
+    float k=1.-max(l.r,max(l.g,l.b));
     if(channel==3)t=k;
-    else{float x=channel==0?v.r:channel==1?v.g:v.b;t=k>.9999?0.:(1.-x-k)/(1.-k);}
+    else{float x=channel==0?l.r:channel==1?l.g:l.b;t=k>.9999?0.:(1.-x-k)/(1.-k);}
   }
   return t*pixel.a;
 }
-/** Tone to the share of a cell its mark covers (printCoverage). */
+/** Tone to the share of a cell its mark covers, at most Largest mark (printCoverage). */
 float printCurve(float tone,int channel){
   float x=uPrintCeiling<=uPrintFloor?step(uPrintFloor+.000001,tone):clamp((tone-uPrintFloor)/max(uPrintCeiling-uPrintFloor,.001),0.,1.);
   if(uPrintGain!=0.)x=pow(x,exp2(-1.5*uPrintGain));
-  return channel<0&&uPrintInvert>.5?1.-x:x;
+  return (channel<0&&uPrintInvert>.5?1.-x:x)*uPrintMax;
 }
 float printClassicLevel(float c){
   const float levels[17]=float[17](1.,.8131,.6446,.4938,.3599,.2426,.1421,.0592,0.,-.0592,-.1421,-.2426,-.3599,-.4938,-.6446,-.8131,-1.);
@@ -416,8 +419,13 @@ vec4 printScreen(vec4 plain){
     vec4 finished=lines?plain:printFinished(centrePixel,centreUv);
     vec3 ink;
     if(uPrintColour>.5)ink=uGradePalette[int(uPrintInk-.5)];
-    // The mark is brightened so the cell's average matches the plain layer.
-    else ink=finished.rgb/max(finished.a,.000001)*min(1./max(target,.0001),8.);
+    else{
+      // The mark is brightened towards the cell's average, but never past
+      // full value, so a colour keeps its hue instead of clipping.
+      vec3 straight=finished.rgb/max(finished.a,.000001);
+      float peak=max(straight.r,max(straight.g,straight.b));
+      ink=straight*min(min(1./max(target,.0001),8.),max(1./max(peak,.0001),1.));
+    }
     if(paper)screened=vec4(mix(paperColour,ink,coverage)*plain.a,plain.a);
     else{
       // A mark that straddles the silhouette stays whole; its size already
@@ -432,7 +440,8 @@ vec4 printScreen(vec4 plain){
       float coverage=printMark(uPrintAngles[channel],channel,centreUv,centrePixel,target);
       if(channel==0)maskUv=centreUv;
       vec3 straight=centrePixel.rgb/max(centrePixel.a,.000001);
-      float strength=(channel==0?straight.r:channel==1?straight.g:straight.b)*min(1./max(target,.0001),8.)*centrePixel.a;
+      float value=channel==0?straight.r:channel==1?straight.g:straight.b;
+      float strength=value*min(min(1./max(target,.0001),8.),max(1./max(value,.0001),1.))*centrePixel.a;
       float amount=coverage*max(strength,0.);
       if(channel==0)light.r=amount;else if(channel==1)light.g=amount;else light.b=amount;
       most=max(most,coverage);

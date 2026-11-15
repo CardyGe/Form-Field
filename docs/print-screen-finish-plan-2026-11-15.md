@@ -59,6 +59,7 @@ Added to `FINISH_PARAMETERS` in `src/core/finishing.ts` as `PRINT_PARAMETERS`, w
 | --- | --- | --- | --- | --- |
 | `printFloor` | Tone floor | 0–1 | 0 | Tones below this print nothing. |
 | `printCeiling` | Tone ceiling | 0–1 | 1 | Tones above this print solid. |
+| `printMax` | Largest mark | 0.1–1 | 0.8 | The most of a cell any mark covers, so full-bright areas still show marks. 1 lets them print solid. (Added during the build, 15 Nov: without it, bright saturated layers printed solid and showed no screen.) |
 | `printGain` | Dot gain | −1–1 | 0 | Bends the tone curve: positive fattens the marks, negative thins them. |
 | `printSoft` | Mark softness | 0–1 | 0 | 0 is a crisp one-pixel filtered edge; 1 softens each mark across half a cell. |
 | `printInvert` | Invert | 0–1, step 1 | 0 | Off: bright tone makes big marks (light on dark). On: dark tone makes big marks (ink on paper). |

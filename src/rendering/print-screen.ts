@@ -31,11 +31,11 @@ export function printUniforms(layer: Pick<Layer, 'params'>, loopPhase: number): 
   };
 }
 
-/** Tone (0–1) to the share of a cell its mark should cover. */
-export function printCoverage(tone: number, floor: number, ceiling: number, gain: number, invert: number): number {
+/** Tone (0–1) to the share of a cell its mark should cover, at most `max`. */
+export function printCoverage(tone: number, floor: number, ceiling: number, gain: number, invert: number, max = 1): number {
   let x = ceiling <= floor ? (tone > floor ? 1 : 0) : Math.min(Math.max((tone - floor) / Math.max(ceiling - floor, 1e-3), 0), 1);
   if (gain !== 0) x = Math.pow(x, Math.pow(2, -1.5 * gain));
-  return invert > .5 ? 1 - x : x;
+  return (invert > .5 ? 1 - x : x) * max;
 }
 
 /** Brightness scale for a mark in the layer's own colour, so the cell's

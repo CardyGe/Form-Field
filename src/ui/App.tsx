@@ -77,7 +77,7 @@ const PRINT_CHOICES: Record<string, string[]> = {
 };
 const PRINT_GROUPS: [string, string[]][] = [
   ['Screen', ['printMix', 'printType', 'printSize', 'printAngle', 'printDot', 'printMatrix', 'printScroll']],
-  ['Tone', ['printFloor', 'printCeiling', 'printGain', 'printSoft', 'printInvert']],
+  ['Tone', ['printFloor', 'printCeiling', 'printMax', 'printGain', 'printSoft', 'printInvert']],
   ['Colour', ['printColour', 'printInk', 'printPaper']],
   ['Where it prints', ['printArea', 'printEdgeWidth', 'printEdgeSense', 'printEdgeFeather']],
 ];
