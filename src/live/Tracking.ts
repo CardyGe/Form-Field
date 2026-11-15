@@ -6,10 +6,12 @@ import * as THREE from 'three';
 import type { Passes, Pair } from './passes';
 import type { FrameSource, TrackingFeed } from './look';
 import type { LiveSettings } from './settings';
-import { cameraFragment, flowFragment, smoothFragment } from './tracking-shaders';
+import { cameraFragment, flowFragment, lumaFragment, smoothFragment } from './tracking-shaders';
 
 export const CAMERA_SIZE = [1280, 720] as const;
 export const FLOW_SIZE = [320, 180] as const;
+/** The averaged brightness the tracker compares, frame to frame. */
+const LUMA_SIZE = [160, 90] as const;
 /** Without a new camera frame for this long, movement is dropped: a camera that went away must not keep painting. */
 const STALE_MS = 500;
 
@@ -19,6 +21,8 @@ export class Tracking implements TrackingFeed {
   private sourceTexture: THREE.Texture | null = null;
   private readonly frames: Pair;
   private readonly flows: Pair;
+  private readonly lumas: Pair;
+  private readonly average: THREE.ShaderMaterial;
   private readonly raw: THREE.WebGLRenderTarget;
   private readonly copy: THREE.ShaderMaterial;
   private readonly measure: THREE.ShaderMaterial;
@@ -33,6 +37,8 @@ export class Tracking implements TrackingFeed {
   constructor(private readonly passes: Passes) {
     this.frames = passes.pair(...CAMERA_SIZE);
     this.flows = passes.pair(...FLOW_SIZE);
+    this.lumas = passes.pair(...LUMA_SIZE);
+    this.average = passes.material(lumaFragment, { uImage: { value: null } });
     this.raw = passes.target(...FLOW_SIZE);
     this.copy = passes.material(cameraFragment, { uImage: { value: null }, uMirror: { value: 1 }, uCrop: { value: new THREE.Vector2(1, 1) } });
     this.measure = passes.material(flowFragment, { uNow: { value: null }, uBefore: { value: null }, uNoise: { value: 0 }, uSensitivity: { value: 1 }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
@@ -77,14 +83,17 @@ export class Tracking implements TrackingFeed {
     this.sourceTexture!.needsUpdate = true;
     this.passes.draw(this.copy, this.frames.write);
     this.frames.swap();
+    this.average.uniforms.uImage.value = this.frames.read.texture;
+    this.passes.draw(this.average, this.lumas.write);
+    this.lumas.swap();
     if (!this.primed) {
       // The first frame has nothing to compare with: hold it as its own "before".
-      this.passes.draw(this.copy, this.frames.write);
+      this.passes.draw(this.average, this.lumas.write);
       this.primed = true;
       return;
     }
     const u = this.measure.uniforms, box = settings.box;
-    u.uNow.value = this.frames.read.texture; u.uBefore.value = this.frames.write.texture;
+    u.uNow.value = this.lumas.read.texture; u.uBefore.value = this.lumas.write.texture;
     u.uNoise.value = settings.noiseFloor; u.uSensitivity.value = settings.sensitivity;
     (u.uBox.value as THREE.Vector4).set(box.left, box.right, box.bottom, box.top);
     this.passes.draw(this.measure, this.raw);
@@ -96,7 +105,7 @@ export class Tracking implements TrackingFeed {
 
   dispose(): void {
     this.sourceTexture?.dispose();
-    for (const item of [this.frames, this.flows, this.raw, this.copy, this.measure, this.smooth, this.zero]) item.dispose();
+    for (const item of [this.frames, this.flows, this.lumas, this.average, this.raw, this.copy, this.measure, this.smooth, this.zero]) item.dispose();
   }
 
   private stillFlow(): void {

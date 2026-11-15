@@ -10,17 +10,31 @@ void main() {
 }`;
 
 /**
+ * Brightness of the camera, averaged over 8 × 8 camera pixels, for the tracker to work on.
+ * A small sharp patch cannot tell which way an edge is moving, only that it moved; a wider,
+ * softer view sees corners and curves, and follows faster movement.
+ */
+export const lumaFragment = /* glsl */`
+uniform sampler2D uImage;
+const vec2 PX = vec2(1. / 1280., 1. / 720.);
+void main() {
+  float sum = 0.;
+  for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++)
+    sum += dot(texture2D(uImage, vUv + (vec2(float(x), float(y)) - 1.5) * 2. * PX).rgb, vec3(.299, .587, .114));
+  gl_FragColor = vec4(sum / 16., 0., 0., 1.);
+}`;
+
+/**
  * Movement between two camera frames, by local least squares on brightness
- * gradients (Lucas–Kanade) over a 5 × 5 window. rg: movement in uv per camera
- * frame. b: how much changed, 0..1. Everything is multiplied by the soft
- * interaction box, so outside the box is exactly zero.
+ * gradients (Lucas–Kanade) over a 5 × 5 window of the averaged brightness.
+ * rg: movement in uv per camera frame. b: how much changed, 0..1. Everything
+ * is multiplied by the soft interaction box, so outside the box is exactly zero.
  */
 export const flowFragment = /* glsl */`
 uniform sampler2D uNow, uBefore; uniform float uNoise, uSensitivity; uniform vec4 uBox;
-const vec2 PX = vec2(1. / 640., 1. / 360.);
-float lum(vec3 c) { return dot(c, vec3(.299, .587, .114)); }
-float now(vec2 p) { return lum(texture2D(uNow, p).rgb); }
-float before(vec2 p) { return lum(texture2D(uBefore, p).rgb); }
+const vec2 PX = vec2(1. / 160., 1. / 90.);
+float now(vec2 p) { return texture2D(uNow, p).r; }
+float before(vec2 p) { return texture2D(uBefore, p).r; }
 float box(vec2 p) {
   return smoothstep(uBox.x, uBox.x + ${BOX_EDGE}, p.x) * (1. - smoothstep(uBox.y - ${BOX_EDGE}, uBox.y, p.x))
     * smoothstep(uBox.z, uBox.z + ${BOX_EDGE}, p.y) * (1. - smoothstep(uBox.w - ${BOX_EDGE}, uBox.w, p.y));
@@ -28,16 +42,16 @@ float box(vec2 p) {
 void main() {
   float a = 0., b = 0., c = 0., d = 0., e = 0., motion = 0.;
   for (int y = -2; y <= 2; y++) for (int x = -2; x <= 2; x++) {
-    vec2 p = vUv + vec2(float(x), float(y)) * PX * 2.;
+    vec2 p = vUv + vec2(float(x), float(y)) * PX;
     float gx = (now(p + vec2(PX.x, 0.)) - now(p - vec2(PX.x, 0.))) * .5;
     float gy = (now(p + vec2(0., PX.y)) - now(p - vec2(0., PX.y))) * .5;
     float gt = now(p) - before(p);
     gt = sign(gt) * max(0., abs(gt) - uNoise);
     a += gx * gx; b += gx * gy; c += gy * gy; d += gx * gt; e += gy * gt; motion += abs(gt);
   }
-  float det = (a + .002) * (c + .002) - b * b;
-  vec2 flow = vec2(-(c + .002) * d + b * e, b * d - (a + .002) * e) / max(det, 1e-6) * PX;
-  flow = clamp(flow, vec2(-.025), vec2(.025));
+  float det = (a + .0005) * (c + .0005) - b * b;
+  vec2 flow = vec2(-(c + .0005) * d + b * e, b * d - (a + .0005) * e) / max(det, 1e-7) * PX;
+  flow = clamp(flow, vec2(-.04), vec2(.04));
   gl_FragColor = vec4(flow, clamp(motion * .4 * uSensitivity, 0., 1.), 1.) * box(vUv);
 }`;
 

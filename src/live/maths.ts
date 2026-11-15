@@ -20,5 +20,5 @@ export function boxWeight(x: number, y: number, box: Box): number {
 }
 /** Chance that a resting particle is born this step at a place with this much movement. */
 export function birthChance(motion: number, response: number, step: number): number {
-  return Math.min(1, Math.max(0, motion * response * step * 40));
+  return Math.min(1, Math.max(0, motion * response * step * 5));
 }

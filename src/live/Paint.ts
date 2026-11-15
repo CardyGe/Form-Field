@@ -3,18 +3,23 @@ import type { Passes, Pair } from './passes';
 import type { Look, TrackingFeed } from './look';
 import type { LiveSettings } from './settings';
 import { fadeFactor } from './maths';
-import { canvasFragment, fillFragment, particleFragment, restFragment, streakFragment, streakVertex } from './paint-shaders';
+import { canvasFragment, fillFragment, particleFragment, restFragment, streakFragment, streakVertex, windFragment, zeroFragment } from './paint-shaders';
 
 /** Particles are a SIDE × SIDE texture. */
 export const PAINT_SIDE = 256;
-/** How far wet paint is carried by movement, as a share of the movement per 1/30 s. */
-const DRIFT = .25;
+/** The wind field's size. It only needs to be smooth. */
+const WIND = [320, 180] as const;
+/** How quickly the wind dies down once movement stops, per second. */
+const CALM = .6;
 /** The last faint trace of paint is removed at this much per fade time. */
 const SINK = .02;
 
 export class Paint implements Look {
   private readonly state: Pair;
   private readonly canvas: Pair;
+  private readonly wind: Pair;
+  private readonly blow: THREE.ShaderMaterial;
+  private readonly zero: THREE.ShaderMaterial;
   private readonly simulate: THREE.ShaderMaterial;
   private readonly rest: THREE.ShaderMaterial;
   private readonly settle: THREE.ShaderMaterial;
@@ -32,12 +37,16 @@ export class Paint implements Look {
   constructor(private readonly passes: Passes, private width: number, private height: number, side = PAINT_SIDE) {
     this.state = passes.pair(side, side, { float: true, nearest: true, count: 2 });
     this.canvas = passes.pair(width, height);
+    this.wind = passes.pair(...WIND);
+    this.blow = passes.material(windFragment, { uWind: { value: null }, uFlow: { value: null }, uStep: { value: 0 }, uPush: { value: 1 }, uCalm: { value: CALM }, uTexel: { value: new THREE.Vector2(1 / WIND[0], 1 / WIND[1]) } });
+    this.zero = passes.material(zeroFragment, {});
     this.simulate = passes.material(particleFragment, {
-      uA: { value: null }, uB: { value: null }, uFlow: { value: null }, uStep: { value: 0 }, uTime: { value: 0 }, uSeed: { value: 0 },
+      uA: { value: null }, uB: { value: null }, uFlow: { value: null }, uWind: { value: null }, uStep: { value: 0 }, uTime: { value: 0 }, uSeed: { value: 0 },
       uResponse: { value: 1 }, uStroke: { value: .5 }, uSpread: { value: .35 }, uColourChange: { value: .3 },
     });
     this.rest = passes.material(restFragment, {});
-    this.settle = passes.material(canvasFragment, { uCanvas: { value: null }, uFlow: { value: null }, uKeep: { value: 1 }, uDrift: { value: 0 }, uSink: { value: 0 }, uGround: { value: this.ground } });
+    this.settle = passes.material(canvasFragment, { uCanvas: { value: null }, uFlow: { value: null }, uWind: { value: null }, uKeep: { value: 1 }, uSink: { value: 0 }, uStep: { value: 0 },
+      uTime: { value: 0 }, uResponse: { value: 1 }, uColourChange: { value: .3 }, uGround: { value: this.ground }, uPalette: { value: this.palette }, uTexel: { value: new THREE.Vector2(1.5 / width, 1.5 / height) } });
     this.fill = passes.material(fillFragment, { uGround: { value: this.ground } });
     this.streaks = new THREE.ShaderMaterial({
       vertexShader: streakVertex, fragmentShader: `precision highp float;\n${streakFragment}`,
@@ -66,16 +75,22 @@ export class Paint implements Look {
     if (this.cleared) { this.wipe(); this.cleared = false; }
     if (seconds <= 0) return;
 
+    const blow = this.blow.uniforms;
+    blow.uWind.value = this.wind.read.texture; blow.uFlow.value = feed.flow; blow.uStep.value = seconds; blow.uPush.value = .3 + 1.2 * p.strokeLength;
+    this.passes.draw(this.blow, this.wind.write);
+    this.wind.swap();
+
     const sim = this.simulate.uniforms;
-    sim.uA.value = this.state.read.textures[0]; sim.uB.value = this.state.read.textures[1]; sim.uFlow.value = feed.flow;
+    sim.uA.value = this.state.read.textures[0]; sim.uB.value = this.state.read.textures[1]; sim.uFlow.value = feed.flow; sim.uWind.value = this.wind.read.texture;
     sim.uStep.value = seconds; sim.uTime.value = time; sim.uSeed.value = (this.frame++ * .61803398875) % 1;
     sim.uResponse.value = p.response; sim.uStroke.value = p.strokeLength; sim.uSpread.value = p.spread; sim.uColourChange.value = p.colourChange;
     this.passes.draw(this.simulate, this.state.write);
     this.state.swap();
 
     const settle = this.settle.uniforms;
-    settle.uCanvas.value = this.canvas.read.texture; settle.uFlow.value = feed.flow;
-    settle.uKeep.value = fadeFactor(seconds, p.fadeSeconds); settle.uDrift.value = DRIFT * seconds * 30;
+    settle.uCanvas.value = this.canvas.read.texture; settle.uFlow.value = feed.flow; settle.uWind.value = this.wind.read.texture;
+    settle.uKeep.value = fadeFactor(seconds, p.fadeSeconds); settle.uStep.value = seconds; settle.uTime.value = time;
+    settle.uResponse.value = p.response; settle.uColourChange.value = p.colourChange;
     settle.uSink.value = SINK * seconds / p.fadeSeconds;
     this.passes.draw(this.settle, this.canvas.write);
 
@@ -93,17 +108,19 @@ export class Paint implements Look {
     this.width = width; this.height = height;
     this.canvas.setSize(width, height);
     (this.streaks.uniforms.uSize.value as THREE.Vector2).set(width, height);
+    (this.settle.uniforms.uTexel.value as THREE.Vector2).set(1.5 / width, 1.5 / height);
     this.clear();
   }
 
   /** Wipes the paint and rests every particle. The ground colour is applied on the next step. */
   clear(): void {
     this.passes.draw(this.rest, this.state.read); this.passes.draw(this.rest, this.state.write);
+    this.passes.draw(this.zero, this.wind.read); this.passes.draw(this.zero, this.wind.write);
     this.cleared = true;
   }
 
   dispose(): void {
-    for (const item of [this.state, this.canvas, this.simulate, this.rest, this.settle, this.fill, this.streaks, this.geometry]) item.dispose();
+    for (const item of [this.state, this.canvas, this.wind, this.blow, this.zero, this.simulate, this.rest, this.settle, this.fill, this.streaks, this.geometry]) item.dispose();
   }
 
   private wipe(): void {
