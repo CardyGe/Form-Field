@@ -88,7 +88,8 @@ export class BloomPyramid {
   });
 
   /** Blurs the source and returns the five levels, tightest first. With wrap
-   * the levels repeat at the frame edges, for a source that tiles. */
+   * the levels repeat at the frame edges, for a source that tiles.
+   * Toggling the wrap reallocates the level targets (see setWrap). */
   render(source: THREE.Texture, width: number, height: number, draw: Draw, wrap = false): THREE.Texture[] {
     const blur = this.blur.uniforms;
     return this.levels.map(([across, down], i) => {

@@ -594,13 +594,14 @@ void main() {
  * Mitchell–Netravali kernel (B = C = 1/3, support of two delivery pixels) keeps
  * hard graphic edges crisp while suppressing shimmer and moiré. Filtering runs
  * on associated colour so transparent pixels never bleed their RGB into edges.
+ * With uWrap (Tile edges) taps past the frame edge read the opposite edge.
  */
 export const downsampleFragment = /* glsl */`
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D uImage;
 uniform vec2 uSourceSize;
-uniform float uFactor;
+uniform float uFactor, uWrap;
 float mitchell(float x) {
   x=abs(x);
   if(x<1.) return (7.*x*x*x-12.*x*x+16./3.)/6.;
@@ -623,7 +624,7 @@ void main() {
       float dx=(x+.5-center.x)/uFactor;
       if(abs(dx)>=2.) continue;
       float w=mitchell(dx)*wy;
-      vec2 uv=(clamp(vec2(x,y),vec2(0.),uSourceSize-1.)+.5)/uSourceSize;
+      vec2 uv=((uWrap>.5?mod(vec2(x,y),uSourceSize):clamp(vec2(x,y),vec2(0.),uSourceSize-1.))+.5)/uSourceSize;
       vec4 texel=texture2D(uImage,uv);
       sum+=vec4(texel.rgb*texel.a,texel.a)*w;
       total+=w;

@@ -312,7 +312,7 @@ export class StudioRenderer {
       uOpaque: { value: 0 }, uExactHighlights: { value: 0 }, toneMappingExposure: { value: 1 },
     });
     this.display = material(displayFragment, { uImage: { value: this.linearOutput.texture } });
-    this.downsample = material(downsampleFragment, { uImage: { value: this.linearOutput.texture }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uFactor: { value: 1 } });
+    this.downsample = material(downsampleFragment, { uImage: { value: this.linearOutput.texture }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uFactor: { value: 1 }, uWrap: { value: 0 } });
     this.slit = material(slitFragment, {
       uAccum: { value: null }, uSource: { value: null }, uIndex: { value: 0 }, uCount: { value: 2 }, uSmooth: { value: 0 },
       uShape: { value: 0 }, uBlocks: { value: 8 }, uScroll: { value: 0 }, uAspect: { value: 1 }, uReverse: { value: 0 }, uSeed: { value: 0 },
@@ -1117,6 +1117,7 @@ export class StudioRenderer {
     u.uImage.value = this.linearOutput.texture;
     (u.uSourceSize.value as THREE.Vector2).set(sourceWidth, sourceHeight);
     u.uFactor.value = supersample;
+    u.uWrap.value = Number(this.tiling);
     this.draw(this.downsample, this.resolved);
     return this.resolved;
   }
