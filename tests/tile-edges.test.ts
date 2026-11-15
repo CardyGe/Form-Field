@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLayer, createProject, validateProject } from '../src/core/project';
-import { tileBlockers, tilePeriod, tileRate, tileWave, TAU } from '../src/core/tile-edges';
+import { reconcileTile, tileBlockers, tilePeriod, tileRate, tileWave, TAU } from '../src/core/tile-edges';
 
 test('tileEdges is optional and round-trips', () => {
   const p = createProject();
@@ -46,4 +46,13 @@ test('blockers name the layer and the reason', () => {
   const g = createLayer('glitchtunnel'); g.name = 'Tunnel'; p.layers = [g];
   assert.deepEqual(tileBlockers(p), ["Tunnel: this instrument can't tile yet."]);
   g.visible = false; assert.deepEqual(tileBlockers(p), []);
+});
+
+test('reconcileTile turns tiling off and names the blocker', () => {
+  const p = createProject(); const l = createLayer('surface'); l.name = 'Seat'; p.layers = [l]; p.tileEdges = true;
+  assert.deepEqual(reconcileTile(p), { project: p, message: null });
+  l.params.echo = 1;
+  const r = reconcileTile(p);
+  assert.equal(r.project.tileEdges, false);
+  assert.equal(r.message, "Tile edges turned off. Seat: Feedback can't tile.");
 });

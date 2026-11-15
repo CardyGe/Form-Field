@@ -27,6 +27,14 @@ export function tileBlockers(project: Project): string[] {
   return project.layers.filter(l => l.visible).map(layerTileBlocker).filter((b): b is string => b !== null);
 }
 
+/** Turns tiling off, with a message naming the first blocker, when the project can no longer tile. */
+export function reconcileTile(project: Project): { project: Project; message: string | null } {
+  if (!project.tileEdges) return { project, message: null };
+  const blockers = tileBlockers(project);
+  if (!blockers.length) return { project, message: null };
+  return { project: { ...project, tileEdges: false }, message: `Tile edges turned off. ${blockers[0]}` };
+}
+
 /** Nearest multiple of a quarter turn. */
 export function snapQuarterTurn(angle: number): number {
   return Math.round(angle / (Math.PI / 2)) * (Math.PI / 2);
