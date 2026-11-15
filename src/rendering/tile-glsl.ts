@@ -1,8 +1,12 @@
-/** Periodic building blocks for Tile edges. tWave, tRate and tCells mirror
- * tileWave, tileRate and tileCells in src/core/tile-edges.ts line for line;
- * a period L <= 0 means that axis does not tile. Needs TAU, hash, gPhase,
- * uSeed and uDetail from the including shader. */
+/** Periodic building blocks for Tile edges, compiled only under TILE so the
+ * default program is unchanged. tWave, tRate and tCells mirror tileWave,
+ * tileRate and tileCells in src/core/tile-edges.ts line for line; a period
+ * L <= 0 means that axis does not tile. Needs TAU, hash, gPhase, uSeed and
+ * uDetail from the including shader. */
 export const tileGLSL = /* glsl */`
+#ifdef TILE
+// The frame's size in pattern space (p in surface.ts main).
+uniform vec2 uTile;
 float tWave(float k, float L) {
   if(L<=0.) return k;
   float n=max(1.,floor(abs(k)*L/TAU+.5));
@@ -36,4 +40,5 @@ float fieldT(vec2 x, vec2 P) {
   return (.58*octaveT(x,P,1.,orbit*.47,z)+.29*octaveT(x,P,2.03,orbit*.58,z+9.)
     +fine*octaveT(x,P,4.07,orbit*.36,z+17.))/(.87+fine);
 }
+#endif
 `;
