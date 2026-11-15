@@ -56,7 +56,7 @@ try {
         return { data: context.getImageData(0, 0, canvas.width, canvas.height).data, width: canvas.width, height: canvas.height };
       },
       async png() {
-        const { canvas } = window.live.current, copy = new OffscreenCanvas(canvas.width, canvas.height); copy.getContext('2d').drawImage(canvas, 0, 0);
+        const { canvas, renderer } = window.live.current, copy = new OffscreenCanvas(canvas.width, canvas.height); renderer.frame(0); copy.getContext('2d').drawImage(canvas, 0, 0);
         const bytes = new Uint8Array(await (await copy.convertToBlob({ type: 'image/png' })).arrayBuffer()); let s = '';
         for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s);
       },
@@ -127,6 +127,43 @@ try {
     const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); return window.live.painted(0, 40); });
     assert.ok(r.fraction > .02, `only ${r.fraction} lit`);
     await save('tracking', await page.evaluate(() => window.live.png()));
+  });
+  // --- Paint ---
+  // Rows are fractions from the top. The discs sweep along rows .3 and .7; the outer strips are never crossed.
+  await check('paint: movement lays paint where it happens', async () => {
+    const r = await page.evaluate(() => { window.live.make(); window.live.run(180); return { all: window.live.painted(0), upper: window.live.painted(0, 8, .15, .45), lower: window.live.painted(0, 8, .55, .85), top: window.live.painted(0, 8, 0, .05), bottom: window.live.painted(0, 8, .95, 1) }; });
+    assert.ok(r.all.fraction > .03, `only ${r.all.fraction} painted`);
+    assert.ok(r.upper.fraction > .05 && r.lower.fraction > .05, `bands ${r.upper.fraction}, ${r.lower.fraction}`);
+    assert.ok(r.top.fraction < .01 && r.bottom.fraction < .01, `strips ${r.top.fraction}, ${r.bottom.fraction}`);
+    await save('paint', await page.evaluate(() => window.live.png()));
+  });
+  await check('paint: several colours are laid down', async () => {
+    const hues = await page.evaluate(() => { window.live.make(s => { s.paint.colourChange = 1; }); window.live.run(360); const { data } = window.live.pixels(), seen = new Set();
+      for (let i = 0; i < data.length; i += 4) { const r = data[i], g = data[i + 1], b = data[i + 2], max = Math.max(r, g, b), min = Math.min(r, g, b); if (max < 120 || max - min < 60) continue;
+        const h = max === r ? ((g - b) / (max - min) + 6) % 6 : max === g ? (b - r) / (max - min) + 2 : (r - g) / (max - min) + 4; seen.add(Math.floor(h * 2)); }
+      return seen.size; });
+    assert.ok(hues >= 3, `${hues} hue families`);
+  });
+  await check('paint: still input fades back to the ground', async () => {
+    const r = await page.evaluate(() => { window.live.make(s => { s.paint.fadeSeconds = 2; }); window.live.run(120); const before = window.live.painted(0).fraction; window.live.current.source.moving = false; window.live.run(300); return { before, after: window.live.painted(0, 0) }; });
+    assert.ok(r.before > .02, `nothing painted first (${r.before})`); assert.ok(r.after.max <= 5, `left ${r.after.max}/255`);
+  });
+  await check('paint: clear returns exactly the ground', async () => {
+    const r = await page.evaluate(() => { window.live.make(); window.live.run(120); const { renderer, source } = window.live.current; source.moving = false; window.live.run(40); renderer.clear(); renderer.frame(0); return window.live.painted(0, 0); });
+    assert.equal(r.max, 0);
+  });
+  await check('paint: white ground', async () => {
+    const r = await page.evaluate(() => { window.live.make(s => { s.paint.ground = 1; }); window.live.run(120); return { corner: window.live.painted(255, 0, 0, .04), all: window.live.painted(255) }; });
+    assert.equal(r.corner.max, 0); assert.ok(r.all.fraction > .02, `only ${r.all.fraction} painted`);
+  });
+  await check('paint: a long stall does not fling or wipe the picture', async () => {
+    const r = await page.evaluate(() => { window.live.make(); window.live.run(120); const before = window.live.painted(0); window.live.current.renderer.frame(5); window.live.current.renderer.frame(NaN);
+      return { before, after: window.live.painted(0), top: window.live.painted(0, 8, 0, .05) }; });
+    assert.ok(Math.abs(r.after.fraction - r.before.fraction) < .02, `${r.before.fraction} -> ${r.after.fraction}`); assert.ok(r.top.fraction < .01);
+  });
+  await check('paint: the camera image never reaches the artwork', async () => {
+    const r = await page.evaluate(() => { window.live.make(s => { s.paint.response = 0; }); window.live.run(120); return window.live.painted(0, 0); });
+    assert.equal(r.max, 0);
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));

@@ -11,6 +11,8 @@ import { capStep } from './maths';
 import { defaultLiveSettings, type LiveSettings } from './settings';
 import type { FrameSource } from './look';
 import { Tracking, FLOW_SIZE } from './Tracking';
+import { Paint } from './Paint';
+import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
 
 const finalFragment = /* glsl */`
@@ -32,6 +34,7 @@ export class LiveRenderer {
   private readonly final: THREE.ShaderMaterial;
   private readonly trackingView: THREE.ShaderMaterial;
   private readonly tracking: Tracking;
+  private look: Look | null = null;
   private readonly black: THREE.DataTexture;
   private scratch: THREE.WebGLRenderTarget;
   private width = 0;
@@ -80,7 +83,9 @@ export class LiveRenderer {
     this.time += step;
     this.resize();
     this.tracking.update(this.source, this.settings);
-    let image: THREE.Texture = this.black, encode = 1;
+    this.look ??= new Paint(this.passes, this.width, this.height);
+    this.look.step(step, this.time, this.tracking, this.settings);
+    let image: THREE.Texture = this.look.output, encode = 1;
     if (this.view === 'tracking') {
       const u = this.trackingView.uniforms, box = this.settings.box;
       u.uCamera.value = this.tracking.camera; u.uFlow.value = this.tracking.flow;
@@ -95,7 +100,8 @@ export class LiveRenderer {
     this.counted.frames++;
   }
 
-  clear(): void { /* Nothing holds history yet. */ }
+  /** Wipes the artwork back to its ground. */
+  clear(): void { this.look?.clear(); }
 
   /** Frame rate and the longest gap between frames since the last call. */
   stats(): { fps: number; worstMs: number; frames: number } {
@@ -116,6 +122,7 @@ export class LiveRenderer {
     if (this.disposed) return;
     this.stop(); this.disposed = true;
     for (const item of [this.final, this.trackingView, this.tracking, this.black, this.scratch]) item.dispose();
+    this.look?.dispose();
     this.passes.dispose(); this.renderer.dispose();
   }
 
@@ -125,5 +132,6 @@ export class LiveRenderer {
     this.width = width; this.height = height;
     this.renderer.setSize(width, height, false);
     this.scratch.setSize(width, height);
+    this.look?.resize(width, height);
   }
 }
