@@ -7,6 +7,7 @@ export const tileGLSL = /* glsl */`
 #ifdef TILE
 // The frame's size in pattern space (p in surface.ts main).
 uniform vec2 uTile;
+// Under TILE both uTile axes are always positive; the L <= 0 cases are for parity with tile-edges.ts.
 float tWave(float k, float L) {
   if(L<=0.) return k;
   float n=max(1.,floor(abs(k)*L/TAU+.5));

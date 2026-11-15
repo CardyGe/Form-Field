@@ -19,7 +19,8 @@ import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { printActive, printUniforms } from './print-screen';
-import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget } from './bloom';
+import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
+import { snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
 import { super8Fragment } from './super8';
@@ -95,6 +96,23 @@ function material(fragmentShader: string, uniforms: Uniforms): THREE.ShaderMater
   });
 }
 
+/** Chromatic Field with the periodic TILE branch; see surface.ts. */
+function tiledSurfaceMaterial(): THREE.ShaderMaterial {
+  const result = material(surfaceFragment, { ...surfaceUniforms(), uTile: { value: new THREE.Vector2() } });
+  result.defines = { TILE: '' };
+  return result;
+}
+
+function surfaceUniforms(): Uniforms {
+  return {
+    ...viewUniforms(),
+    uPalette: { value: DEFAULT_PALETTE.map((hex) => new THREE.Color(hex)) },
+    uAspect: { value: 1 }, uPhase: { value: 0 }, uSeed: { value: 0 },
+    uResolution:{value:new THREE.Vector2(1,1)},
+    ...Object.fromEntries(Object.entries(SURFACE_DEFAULTS).map(([key,value])=>[`u${key[0].toUpperCase()}${key.slice(1)}`,{value}])),
+  };
+}
+
 function target(depth = false, bytes = false): THREE.WebGLRenderTarget {
   const result = new THREE.WebGLRenderTarget(1, 1, {
     type: bytes ? THREE.UnsignedByteType : THREE.HalfFloatType,
@@ -136,6 +154,10 @@ export class StudioRenderer {
   /** Delivery-size result of a supersampled export; sized independently of the working targets. */
   private readonly resolved = target();
   private readonly surface: THREE.ShaderMaterial;
+  /** Chromatic Field compiled with TILE, built on the first tiled frame. */
+  private tiledSurface: THREE.ShaderMaterial | null = null;
+  /** Tile edges for this frame: the project asks for it and every visible layer can tile. */
+  private tiling = false;
   private readonly fractal: THREE.ShaderMaterial;
   private readonly image: THREE.ShaderMaterial;
   private readonly super8: THREE.ShaderMaterial;
@@ -215,13 +237,7 @@ export class StudioRenderer {
     this.fallback = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
     this.fallback.needsUpdate = true;
 
-    this.surface = material(surfaceFragment, {
-      ...viewUniforms(),
-      uPalette: { value: DEFAULT_PALETTE.map((hex) => new THREE.Color(hex)) },
-      uAspect: { value: 1 }, uPhase: { value: 0 }, uSeed: { value: 0 },
-      uResolution:{value:new THREE.Vector2(1,1)},
-      ...Object.fromEntries(Object.entries(SURFACE_DEFAULTS).map(([key,value])=>[`u${key[0].toUpperCase()}${key.slice(1)}`,{value}])),
-    });
+    this.surface = material(surfaceFragment, surfaceUniforms());
     this.fractal = material(fractalFragment, {
       ...viewUniforms(),
       uPalette: { value: DEFAULT_PALETTE.map((hex) => new THREE.Color(hex)) },
@@ -599,10 +615,13 @@ export class StudioRenderer {
 
   private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10): THREE.Texture {
     const aspect = this.width / this.height;
-    const uniforms=layer.kind==='surface'?this.surface.uniforms:layer.kind==='fractal'?this.fractal.uniforms:
+    const surface = this.tiling ? this.tiledSurface ??= tiledSurfaceMaterial() : this.surface;
+    const uniforms=layer.kind==='surface'?surface.uniforms:layer.kind==='fractal'?this.fractal.uniforms:
       layer.kind==='oil'?this.oilFields.uniforms:layer.kind==='liquid'?this.liquid.uniforms:layer.kind==='super8'?this.super8Projector.uniforms:
       layer.kind==='image'?this.image.uniforms:layer.kind==='sculpture'?this.sculptureUniforms:null;
-    if(uniforms)setSourceView(uniforms,sourceViewMatrix(layer.transform,aspect),layer.transform.scale);
+    // Tile edges snap the view to quarter turns so the frame stays a whole period.
+    const transform = this.tiling ? { ...layer.transform, rotation: snapQuarterTurn(layer.transform.rotation) } : layer.transform;
+    if(uniforms)setSourceView(uniforms,sourceViewMatrix(transform,aspect),layer.transform.scale);
     const cycles = Math.max(1, Math.round(number(layer, 'cycles', 1)));
     const localPhase = phase * cycles;
     if (isInstrument(layer.kind)) {
@@ -638,7 +657,7 @@ export class StudioRenderer {
       for (let i = 0; i < 6; i++) colors[i].set(layer.palette[i] ?? DEFAULT_PALETTE[i]);
       this.draw(this.liquid, this.source);
     } else if (layer.kind === 'surface') {
-      const u = this.surface.uniforms;
+      const u = surface.uniforms;
       (u.uResolution.value as THREE.Vector2).set(this.width,this.height);
       u.uAspect.value = aspect; u.uPhase.value = localPhase;
       u.uSeed.value = number(layer, 'seed', 0) % 1_000_003;
@@ -647,7 +666,12 @@ export class StudioRenderer {
       }
       const colors = u.uPalette.value as THREE.Color[];
       for (let i = 0; i < 6; i++) colors[i].set(layer.palette[i] ?? DEFAULT_PALETTE[i]);
-      this.draw(this.surface, this.source);
+      if (this.tiling) {
+        const period = tilePeriod(layer, aspect);
+        (u.uTile.value as THREE.Vector2).set(period.x, period.y);
+        u.uRotation.value = snapQuarterTurn(number(layer, 'rotation', 0));
+      }
+      this.draw(surface, this.source);
     } else if (layer.kind === 'fractal') {
       const u = this.fractal.uniforms;
       u.uAspect.value = aspect; u.uPhase.value = localPhase;
@@ -740,6 +764,9 @@ export class StudioRenderer {
     if (!Number.isFinite(phase)) throw new Error('Frame phase must be finite.');
     if (project.layers.length > 4) throw new Error('This version supports at most four composition layers.');
     this.resize(width, height);
+    this.tiling = project.tileEdges === true && tileBlockers(project).length === 0;
+    // Tiled sources wrap, so Glow and outlines read across the frame edges.
+    setWrap(this.source, this.tiling);
     this.renderer.info.reset();
     this.renderer.setClearColor(0, 0);
     this.renderer.setRenderTarget(this.accumA); this.renderer.clear();
@@ -825,10 +852,11 @@ export class StudioRenderer {
     this.glow ??= { bright: lightTarget(true), pyramid: new BloomPyramid() };
     const { bright, pyramid } = this.glow, w = Math.ceil(width / 2), h = Math.ceil(height / 2);
     if (bright.width !== w || bright.height !== h) bright.setSize(w, h);
+    setWrap(bright, this.tiling);
     this.glowBright.uniforms.uSource.value = source;
     this.glowBright.uniforms.uThreshold.value = number(layer, 'glowThreshold', .5);
     this.draw(this.glowBright, bright);
-    pyramid.render(bright.texture, width, height, (m, t) => this.draw(m, t)).forEach((level, i) => { u[`uGlowLevel${i}`].value = level; });
+    pyramid.render(bright.texture, width, height, (m, t) => this.draw(m, t), this.tiling).forEach((level, i) => { u[`uGlowLevel${i}`].value = level; });
     u.uGlowWeights.value = bloomWeights(amount, number(layer, 'glowSize', .5));
     const tint = Math.round(number(layer, 'glowTint', 0));
     if (tint >= 1) (u.uGlowColour.value as THREE.Color).set(layer.palette[tint - 1] ?? DEFAULT_PALETTE[tint - 1]);
@@ -1141,6 +1169,7 @@ export class StudioRenderer {
     this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
     this.feedbackStates.clear();
     this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow = null; this.glowBright.dispose();
+    this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();

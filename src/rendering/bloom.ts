@@ -55,6 +55,16 @@ void main() {
   gl_FragColor=vec4(max(s.rgb,vec3(0.))*smoothstep(uThreshold*.8,uThreshold*1.2+1e-4,l),1.);
 }`;
 
+/** Wraps a target at the frame edges (Tile edges) or clamps it. A render
+ * target's sampler state is set when its texture is created, so a change
+ * recreates the texture on its next use; an unchanged wrap costs nothing. */
+export function setWrap(target: THREE.WebGLRenderTarget, wrap: boolean): void {
+  const mode = wrap ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+  if (target.texture.wrapS === mode && target.texture.wrapT === mode) return;
+  target.texture.wrapS = target.texture.wrapT = mode;
+  target.dispose();
+}
+
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
 
 /** Five blurred copies of a light texture, each blurring the one before it at half the size. */
@@ -77,10 +87,12 @@ export class BloomPyramid {
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
 
-  /** Blurs the source and returns the five levels, tightest first. */
-  render(source: THREE.Texture, width: number, height: number, draw: Draw): THREE.Texture[] {
+  /** Blurs the source and returns the five levels, tightest first. With wrap
+   * the levels repeat at the frame edges, for a source that tiles. */
+  render(source: THREE.Texture, width: number, height: number, draw: Draw, wrap = false): THREE.Texture[] {
     const blur = this.blur.uniforms;
     return this.levels.map(([across, down], i) => {
+      setWrap(across, wrap); setWrap(down, wrap);
       const { width: w, height: h, reach } = bloomLevelSize(i, width, height);
       if (across.width !== w || across.height !== h) { across.setSize(w, h); down.setSize(w, h); }
       blur.uSource.value = source; (blur.uStep.value as THREE.Vector2).set(reach / w, 0); draw(this.blur, across);

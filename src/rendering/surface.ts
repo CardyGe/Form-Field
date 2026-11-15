@@ -265,7 +265,7 @@ vec3 dripPaint(vec2 p) {
   if(uVariant>.5 && uVariant<1.5) {
     // Beads are separated closed droplets rather than a clipped liquid column.
 #ifdef TILE
-    y=(fract(q.y*tRate(2.15*uDensity*.7,uTile.y)+seed*.65+.3*sin(columnPhase+seed*TAU))-.5)*1.12;
+    y=(fract(q.y*max(tRate(2.15*uDensity*.7,uTile.y),1./uTile.y)+seed*.65+.3*sin(columnPhase+seed*TAU))-.5)*1.12;
     width*=.82+.15*sin(q.y*tWave(.7,uTile.y)+seed*6.);
 #else
     y=(fract(q.y*density*.7+seed*.65+.3*sin(columnPhase+seed*TAU))-.5)*1.12;
