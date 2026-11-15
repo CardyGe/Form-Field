@@ -78,6 +78,34 @@ export const GLOW_PARAMETERS:ParameterDefinition[]=[
  {key:'glowSize',label:'Glow size',min:0,max:1,step:.01,default:.5,section:'Material',description:'Tight halo at 0, wide haze at 1. The width is a share of the frame, so exports match the preview.'},
  {key:'glowTint',label:'Glow colour',min:0,max:6,step:1,default:0,section:'Material',description:'0 keeps the layer\'s own colour; 1–6 use the matching palette swatch.'},
 ];
+/**
+ * Print screen: the layer's tone is redrawn as halftone dots, a line screen or
+ * an ordered dither. Sizes are in pixels of a 1080-line frame and the screen
+ * is fixed to the frame, so 4K and supersampled renders match the preview.
+ * Stateless and exactly looping; it never enters the Feedback history. Off by
+ * default (Print screen 0).
+ */
+export const PRINT_PARAMETERS:ParameterDefinition[]=[
+ {key:'printMix',label:'Print screen',min:0,max:1,step:.01,default:0,section:'Material',description:'Blends from the plain layer to the screened layer. 0 is off.'},
+ {key:'printType',label:'Screen type',min:0,max:2,step:1,default:0,section:'Material',description:'Dots, lines or ordered dither.'},
+ {key:'printSize',label:'Screen size',min:1,max:64,step:.25,default:8,section:'Material',description:'Dot pitch, line pitch or the size of one dither cell, in pixels at 1080 lines.'},
+ {key:'printAngle',label:'Screen angle',min:-90,max:90,step:.5,default:45,section:'Material',description:'Turns the whole screen about the frame centre, in degrees.'},
+ {key:'printDot',label:'Dot shape',min:0,max:3,step:1,default:0,section:'Material',description:'Round, Classic (round dots that join into a checkerboard at mid tone, then round holes), Diamond or Square.'},
+ {key:'printMatrix',label:'Dither matrix',min:0,max:2,step:1,default:2,section:'Material',description:'2×2, 4×4 or 8×8 Bayer pattern.'},
+ {key:'printScroll',label:'Screen travel per loop',min:-8,max:8,step:1,default:0,section:'Motion',description:'The screen slides this many whole cells along its angle per loop; the loop closes exactly.'},
+ {key:'printFloor',label:'Tone floor',min:0,max:1,step:.01,default:0,section:'Material',description:'Tones below this print nothing.'},
+ {key:'printCeiling',label:'Tone ceiling',min:0,max:1,step:.01,default:1,section:'Material',description:'Tones above this print solid.'},
+ {key:'printGain',label:'Dot gain',min:-1,max:1,step:.01,default:0,section:'Material',description:'Bends the tone curve: positive fattens the marks, negative thins them.'},
+ {key:'printSoft',label:'Mark softness',min:0,max:1,step:.01,default:0,section:'Material',description:'0 is a crisp filtered edge; 1 softens each mark across half a cell.'},
+ {key:'printInvert',label:'Invert',min:0,max:1,step:1,default:0,section:'Material',description:'Off: bright tone makes big marks, like light on dark. On: dark tone makes big marks, like ink on paper.'},
+ {key:'printColour',label:'Screen colour',min:0,max:3,step:1,default:0,section:'Material',description:'Layer colour, one palette ink, three added RGB light screens, or four overprinted CMYK ink screens.'},
+ {key:'printInk',label:'Ink',min:1,max:6,step:1,default:1,section:'Material',description:'Palette swatch used by Palette ink.'},
+ {key:'printPaper',label:'Paper',min:0,max:6,step:1,default:0,section:'Material',description:'0 leaves the gaps transparent; 1–6 fill them with that palette swatch, inside the layer\'s own coverage.'},
+ {key:'printArea',label:'Print area',min:0,max:2,step:1,default:0,section:'Material',description:'Everywhere, edges only, or away from edges. Outside the area the layer shows as normal.'},
+ {key:'printEdgeWidth',label:'Edge width',min:1,max:64,step:.5,default:12,section:'Material',description:'How far the edge band reaches from an edge, in pixels at 1080 lines.'},
+ {key:'printEdgeSense',label:'Edge sensitivity',min:0,max:1,step:.01,default:.5,section:'Material',description:'How small a tone step counts as an edge. Higher finds fainter edges.'},
+ {key:'printEdgeFeather',label:'Edge feather',min:0,max:1,step:.01,default:.25,section:'Material',description:'Softness of the boundary between screened and plain.'},
+];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[
  {key:'toneContrast',label:'Tonal contrast',min:.5,max:2,step:.01,default:1,section:'Material',description:'Luminance contrast around the pivot, preserving colour ratios.'},
  {key:'tonePivot',label:'Contrast pivot',min:.05,max:.75,step:.01,default:.18,section:'Material',description:'Anchor for Tonal contrast. Neutral contrast leaves the pivot inactive.'},
@@ -89,9 +117,11 @@ export const FINISH_PARAMETERS:ParameterDefinition[]=[
  ...FEEDBACK_PARAMETERS,
  ...SLIT_PARAMETERS,
  ...GLOW_PARAMETERS,
+ ...PRINT_PARAMETERS,
 ];
 export const FINISH_KEYS=FINISH_PARAMETERS.map(p=>p.key);
 export const TOON_KEYS=TOON_PARAMETERS.map(p=>p.key);
 export const FEEDBACK_KEYS=FEEDBACK_PARAMETERS.map(p=>p.key);
 export const SLIT_KEYS=SLIT_PARAMETERS.map(p=>p.key);
 export const GLOW_KEYS=GLOW_PARAMETERS.map(p=>p.key);
+export const PRINT_KEYS=PRINT_PARAMETERS.map(p=>p.key);

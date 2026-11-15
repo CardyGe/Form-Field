@@ -1,10 +1,11 @@
-import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS} from './finishing';
+import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS, PRINT_KEYS} from './finishing';
 import { isSimplePolygon } from './surface-layout';
 import { TIMING_PARAMETERS, TIMING_KEYS } from './timing';
 import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW } from './palettes';
 import { supportsFeedback } from '../rendering/feedback';
 import { supportsSlitScan } from '../rendering/slitscan';
 import { supportsGlow } from '../rendering/bloom';
+import { supportsPrint } from '../rendering/print-screen';
 import { SCOPE_FIGURES } from '../rendering/scope-curve';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import type { Layer, LayerKind, ParameterDefinition, Preset, Project } from '../shared/types';
@@ -323,7 +324,8 @@ const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
 // continue to use the complete instrument definition.
 export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const visible = familyParameterDefinitions(layer);
-  return supportsGlow(layer) ? visible : visible.filter(d => !GLOW_KEYS.includes(d.key));
+  const glow = supportsGlow(layer), print = supportsPrint(layer);
+  return glow && print ? visible : visible.filter(d => (glow || !GLOW_KEYS.includes(d.key)) && (print || !PRINT_KEYS.includes(d.key)));
 }
 function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const definitions = parameterDefinitions(layer.kind);
