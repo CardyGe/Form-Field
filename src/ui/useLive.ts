@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stage } from '../live/Stage';
-import { defaultLiveSettings, validateLiveSettings, type LiveSettings } from '../live/settings';
+import { chooseDisplay, defaultLiveSettings, validateLiveSettings, type LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 
 export interface Display { id: number; label: string; primary: boolean }
@@ -41,11 +41,18 @@ export function useLive(onError: (message: string) => void) {
       ]);
       if (cancelled) return;
       const next = validateLiveSettings(saved);
-      if (!found.some(d => d.id === next.display)) next.display = (found.find(d => !d.primary) ?? found[0])?.id ?? null;
+      next.display = chooseDisplay(found, next.display);
       setAccess(granted); setDisplays(found); setSettings(next);
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // A projector can be plugged in or pulled out at any time; a display that has gone is replaced in the settings.
+  const refreshDisplays = async () => {
+    const found = await bridge?.displays().catch(() => []) ?? [];
+    setDisplays(found);
+    setSettings(value => value && value.display !== chooseDisplay(found, value.display) ? { ...value, display: chooseDisplay(found, value.display) } : value);
+  };
 
   // The artwork window opening and closing, and its preview.
   useEffect(() => {
@@ -59,6 +66,8 @@ export function useLive(onError: (message: string) => void) {
         bridge.send({ type: 'blackout', on: now.blackout });
       }
     });
+    const offState = bridge.onState(setSourceState);
+    const offDisplays = bridge.onDisplaysChanged(() => void refreshDisplays());
     let url: string | null = null;
     const offPreview = bridge.onPreview((jpeg, rate) => {
       const next = URL.createObjectURL(new Blob([jpeg], { type: 'image/jpeg' }));
@@ -66,7 +75,7 @@ export function useLive(onError: (message: string) => void) {
       if (url) URL.revokeObjectURL(url);
       url = next;
     });
-    return () => { offOutput(); offPreview(); if (url) URL.revokeObjectURL(url); void bridge.closeOutput().catch(() => {}); };
+    return () => { offOutput(); offState(); offDisplays(); offPreview(); if (url) URL.revokeObjectURL(url); void bridge.closeOutput().catch(() => {}); };
   }, []);
   useEffect(() => { if (!outputOpen) setPreview(null); }, [outputOpen]);
 
@@ -107,10 +116,10 @@ export function useLive(onError: (message: string) => void) {
   const openOutput = async () => {
     if (!settings || settings.display === null) return;
     try { await bridge?.openOutput(settings.display); }
-    catch (error) { onError((error as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); setDisplays(await bridge?.displays().catch(() => []) ?? []); }
+    catch (error) { onError((error as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); await refreshDisplays(); }
   };
   const closeOutput = () => { void bridge?.closeOutput(); };
-  const retry = () => { if (settings) stage.current?.retry(settings, file); };
+  const retry = () => { if (settings) stage.current?.retry(settings, file); if (outputOpen) bridge?.send({ type: 'retry' }); };
   const chooseFile = (chosen: File) => { setFile(chosen); update(s => ({ ...s, source: { kind: 'file', deviceId: s.source.deviceId } })); };
 
   return { settings: settings ?? defaultLiveSettings(), ready, access, update, sourceState, cameras, displays, outputOpen, blackout, setBlackout, clear,

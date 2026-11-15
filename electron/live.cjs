@@ -28,7 +28,8 @@ const path = require('node:path');
 
 const MESSAGE_LIMIT = 16 * 1024;
 const PREVIEW_LIMIT = 512 * 1024;
-const MESSAGE_TYPES = new Set(['settings', 'blackout', 'clear']);
+const MESSAGE_TYPES = new Set(['settings', 'blackout', 'clear', 'retry']);
+const SOURCE_STATES = new Set(['idle', 'starting', 'running', 'refused', 'none', 'lost', 'error']);
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const small = value => { try { return JSON.stringify(value).length < MESSAGE_LIMIT; } catch { return false; } };
 
@@ -52,6 +53,11 @@ function acceptMessage(message) {
   return plain(message) && MESSAGE_TYPES.has(message.type) && small(message);
 }
 
+/** What the artwork window may tell the studio about its camera. */
+function acceptState(state) {
+  return plain(state) && SOURCE_STATES.has(state.status) && small(state);
+}
+
 function acceptPreview(bytes) {
   const size = bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes) ? bytes.byteLength : 0;
   return size > 0 && size <= PREVIEW_LIMIT;
@@ -65,7 +71,7 @@ function pickDisplay(displays, id) {
  * Registers Live in the main process. `studio()` returns the studio window (or undefined);
  * `open(window)` loads the app page into the artwork window with the hash #live-output.
  */
-function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, settingsFile, preload, studio, open }) {
+function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSaveBlocker, settingsFile, preload, studio, open }) {
   let output = null;
   const alive = window => !!window && !window.isDestroyed();
   const fromStudio = event => alive(studio()) && event.sender === studio().webContents && event.senderFrame === studio().webContents.mainFrame;
@@ -104,7 +110,12 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, settings
     window.webContents.on('before-input-event', (event, input) => { if (input.type === 'keyDown' && input.key === 'Escape') { event.preventDefault(); window.close(); } });
     window.webContents.on('render-process-gone', () => { if (!window.isDestroyed()) window.close(); });
     window.once('ready-to-show', () => { if (window.isDestroyed()) return; window.show(); if (windowed) return; if (process.platform === 'darwin') window.setSimpleFullScreen(true); else window.setFullScreen(true); });
-    window.on('closed', () => { if (output === window) { output = null; tellStudio('studio:live:output', false); } });
+    // A projector gets no keyboard or mouse input, so without this macOS would dim or sleep it mid-show.
+    const awake = powerSaveBlocker?.start('prevent-display-sleep');
+    window.on('closed', () => {
+      if (awake !== undefined && powerSaveBlocker.isStarted(awake)) powerSaveBlocker.stop(awake);
+      if (output === window) { output = null; tellStudio('studio:live:output', false); }
+    });
     open(window);
   });
   handle('closeOutput', () => closeOutput());
@@ -114,10 +125,13 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, settings
   // Escape pressed in the artwork page. The window also listens for the key itself, in case the page is not responding.
   ipcMain.on('studio:live:close', event => { if (fromOutput(event)) closeOutput(); });
   ipcMain.on('studio:live:send', (event, message) => { if (fromStudio(event) && alive(output) && acceptMessage(message)) output.webContents.send('studio:live:message', message); });
+  ipcMain.on('studio:live:state', (event, state) => { if (fromOutput(event) && acceptState(state)) tellStudio('studio:live:state', state); });
   ipcMain.on('studio:live:preview', (event, bytes, fps) => { if (fromOutput(event) && acceptPreview(bytes)) tellStudio('studio:live:preview', bytes, Number.isFinite(fps) ? fps : 0); });
   screen.on('display-removed', (_event, display) => { if (alive(output) && output.displayId === display.id) closeOutput(); });
+  // The studio keeps its list of displays current, so a projector can be plugged in or pulled out at any time.
+  for (const change of ['display-added', 'display-removed', 'display-metrics-changed']) screen.on(change, () => tellStudio('studio:live:displays'));
 
   return { closeOutput, isOutput: contents => alive(output) && contents === output.webContents };
 }
 
-module.exports = { allowPermission, allowPermissionCheck, ensureCameraAccess, loadSettings, saveSettings, acceptMessage, acceptPreview, pickDisplay, setupLive };
+module.exports = { allowPermission, allowPermissionCheck, ensureCameraAccess, loadSettings, saveSettings, acceptMessage, acceptState, acceptPreview, pickDisplay, setupLive };

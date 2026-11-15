@@ -71,3 +71,62 @@ test('a display is picked by id, or not at all', () => {
   assert.equal(live.pickDisplay(displays, 3), null);
   assert.equal(live.pickDisplay(displays, null), null);
 });
+
+const { EventEmitter } = require('node:events');
+
+test('a retry message passes to the artwork window', () => assert.equal(live.acceptMessage({ type: 'retry' }), true));
+test('camera states from the artwork window are small plain objects with a known status', () => {
+  assert.equal(live.acceptState({ status: 'running', label: 'FaceTime HD', width: 1280, height: 720 }), true);
+  assert.equal(live.acceptState({ status: 'lost' }), true);
+  for (const bad of [null, 'lost', { status: 'hacked' }, { status: 'error', message: 'x'.repeat(20000) }]) assert.equal(live.acceptState(bad), false);
+});
+
+// A stand-in main process: enough of Electron to open the artwork window and unplug its display.
+function harness() {
+  const handlers = new Map(), listeners = new Map(), screen = new EventEmitter(), sent = [], blocker = { started: [], stopped: [] };
+  const displays = [{ id: 1, label: 'Built-in', size: { width: 1512, height: 982 }, bounds: { x: 0, y: 0, width: 1512, height: 982 } }, { id: 7, label: 'Projector', size: { width: 1920, height: 1080 }, bounds: { x: 1512, y: 0, width: 1920, height: 1080 } }];
+  screen.getAllDisplays = () => displays; screen.getPrimaryDisplay = () => displays[0];
+  const contents = () => Object.assign(new EventEmitter(), { mainFrame: {}, send: (...args) => sent.push(args), setWindowOpenHandler() {} });
+  const studio = { isDestroyed: () => false, webContents: contents() };
+  const windows = [];
+  class BrowserWindow extends EventEmitter {
+    constructor(options) { super(); this.options = options; this.webContents = contents(); this.destroyed = false; windows.push(this); }
+    isDestroyed() { return this.destroyed; } show() {} setSimpleFullScreen() {} setFullScreen() {}
+    close() { if (this.destroyed) return; this.destroyed = true; this.emit('closed'); }
+  }
+  const control = live.setupLive({
+    BrowserWindow, screen, systemPreferences: {}, settingsFile: '/nonexistent/live-settings.json', preload: '/preload.cjs', studio: () => studio, open() {},
+    ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => listeners.set(name, fn) },
+    powerSaveBlocker: { start: kind => { blocker.started.push(kind); return 42; }, stop: id => blocker.stopped.push(id), isStarted: () => true },
+  });
+  const fromStudio = { sender: studio.webContents, senderFrame: studio.webContents.mainFrame };
+  const fromOutput = () => ({ sender: windows.at(-1).webContents, senderFrame: windows.at(-1).webContents.mainFrame });
+  return { handlers, listeners, screen, sent, blocker, windows, control, fromStudio, fromOutput, displays };
+}
+test('the display stays awake while the artwork window is open', async () => {
+  const h = harness();
+  await h.handlers.get('studio:live:openOutput')(h.fromStudio, 7);
+  assert.deepEqual(h.blocker.started, ['prevent-display-sleep']);
+  h.windows[0].close();
+  assert.deepEqual(h.blocker.stopped, [42]);
+});
+test('unplugging the projector closes the artwork window and tells the studio', async () => {
+  const h = harness();
+  await h.handlers.get('studio:live:openOutput')(h.fromStudio, 7);
+  h.screen.emit('display-removed', {}, h.displays[1]);
+  assert.equal(h.windows[0].destroyed, true);
+  assert.ok(h.sent.some(([channel, open]) => channel === 'studio:live:output' && open === false));
+  assert.ok(h.sent.some(([channel]) => channel === 'studio:live:displays'), 'the studio was not told the displays changed');
+});
+test('the artwork window reports its camera state to the studio, and nobody else can', async () => {
+  const h = harness();
+  await h.handlers.get('studio:live:openOutput')(h.fromStudio, 7);
+  h.listeners.get('studio:live:state')(h.fromStudio, { status: 'lost' });
+  assert.equal(h.sent.some(([channel]) => channel === 'studio:live:state'), false);
+  h.listeners.get('studio:live:state')(h.fromOutput(), { status: 'lost' });
+  assert.deepEqual(h.sent.find(([channel]) => channel === 'studio:live:state'), ['studio:live:state', { status: 'lost' }]);
+});
+test('a window that is not the studio cannot open the output', async () => {
+  const h = harness();
+  await assert.rejects(h.handlers.get('studio:live:openOutput')({ sender: {}, senderFrame: {} }, 7), /cannot control Live/);
+});

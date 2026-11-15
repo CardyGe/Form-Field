@@ -54,6 +54,9 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
     onOutputChanged: callback => subscribe('studio:live:output', callback),
     ready: () => ipcRenderer.send('studio:live:ready'),
     requestClose: () => ipcRenderer.send('studio:live:close'),
+    sendState: state => ipcRenderer.send('studio:live:state', state),
+    onState: callback => subscribe('studio:live:state', callback),
+    onDisplaysChanged: callback => subscribe('studio:live:displays', callback),
     sendPreview: (jpeg, fps) => ipcRenderer.send('studio:live:preview', jpeg, fps),
     onPreview: callback => {
       if (typeof callback !== 'function') throw new TypeError('Expected a callback.');

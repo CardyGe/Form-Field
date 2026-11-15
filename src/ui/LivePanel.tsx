@@ -26,13 +26,13 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
     return { ...v, box };
   });
   const sourceValue = s.source.kind === 'test' ? TEST : s.source.kind === 'file' ? FILE : s.source.deviceId ?? '';
-  const status = live.outputOpen ? 'Showing on the output'
-    : s.source.kind === 'camera' && refused ? CAMERA_OFF
+  const sourceStatus = s.source.kind === 'camera' && refused ? CAMERA_OFF
     : state.status === 'running' ? `${s.source.kind === 'camera' ? 'Camera running' : 'Playing'} · ${state.label}`
     : state.status === 'starting' ? 'Starting…'
     : state.status === 'none' ? 'No camera was found. Connect one, or use a video file or the test pattern.'
     : state.status === 'lost' ? 'Camera disconnected. Reconnect it or choose another source.'
     : state.status === 'error' ? state.message : '';
+  const status = live.outputOpen ? ['Showing on the output', sourceStatus].filter(Boolean).join(' · ') : sourceStatus;
   const paletteName = PALETTES.find(([, colours]) => colours.join() === s.palette.join())?.[0] ?? '';
 
   return <section className="live-shell" role="region" aria-label="Live">
@@ -61,7 +61,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         <input ref={fileInput} hidden type="file" accept="video/*" onChange={e => { const chosen = e.target.files?.[0]; if (chosen) live.chooseFile(chosen); e.target.value = ''; }} />
         <button className="secondary-button live-wide" disabled={live.outputOpen} onClick={() => fileInput.current?.click()}>Use a video file</button>
         <p className={`live-status ${refused || ['none', 'lost', 'error'].includes(state.status) ? 'warn' : ''}`} role="status">{status}</p>
-        {(state.status === 'lost' || state.status === 'none') && !live.outputOpen && <button className="secondary-button live-wide" onClick={live.retry}>Try the camera again</button>}
+        {(state.status === 'lost' || state.status === 'none') && <button className="secondary-button live-wide" onClick={live.retry}>Try the camera again</button>}
         <label className="live-check"><input aria-label="Mirror" type="checkbox" checked={s.mirror} onChange={e => set({ mirror: e.target.checked })} />Mirror<small>On when the camera faces the people</small></label>
         <Slider label="Sensitivity" value={s.sensitivity} min={SENSITIVITY.min} max={SENSITIVITY.max} step={.05} onChange={sensitivity => set({ sensitivity })} />
         <Slider label="Camera noise floor" value={s.noiseFloor} min={NOISE_FLOOR.min} max={NOISE_FLOOR.max} step={.005} onChange={noiseFloor => set({ noiseFloor })} />

@@ -145,6 +145,13 @@ try {
     const r = await page.evaluate(() => { window.live.make(); window.live.run(30); const { source } = window.live.current; source.advance = () => {}; Object.defineProperty(source, 'element', { value: null }); window.live.run(2); return window.live.flow(); });
     assert.equal(r.max, 0);
   });
+  await check('tracking: the first frame after a gap is not compared with the frame before it', async () => {
+    const r = await page.evaluate(async () => { window.live.make(); window.live.run(30); const { source, renderer } = window.live.current;
+      await new Promise(resolve => setTimeout(resolve, 700)); // no frames for longer than the tracker's patience
+      source.advance(3); renderer.frame(1 / 60); const afterGap = window.live.flow();
+      window.live.run(10); return { afterGap, resumed: window.live.flow() }; });
+    assert.equal(r.afterGap.max, 0); assert.ok(r.resumed.max > .3, `tracking did not resume (${r.resumed.max})`);
+  });
   await check('tracking view shows the camera', async () => {
     const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); return window.live.painted(0, 40); });
     assert.ok(r.fraction > .02, `only ${r.fraction} lit`);

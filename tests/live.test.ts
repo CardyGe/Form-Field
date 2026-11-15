@@ -27,3 +27,14 @@ test('camera errors become plain states', () => {
   assert.deepEqual(stateFromError('OverconstrainedError'), { status: 'none' });
   assert.equal(stateFromError('Boom').status, 'error');
 });
+
+import { chooseDisplay } from '../src/live/settings';
+test('a display that has gone is replaced, preferring one that is not this screen', () => {
+  const both = [{ id: 1, primary: true }, { id: 7, primary: false }];
+  assert.equal(chooseDisplay(both, 1), 1);
+  assert.equal(chooseDisplay(both, 7), 7);
+  assert.equal(chooseDisplay(both, 99), 7);
+  assert.equal(chooseDisplay(both, null), 7);
+  assert.equal(chooseDisplay([both[0]], 7), 1);
+  assert.equal(chooseDisplay([], 7), null);
+});

@@ -86,6 +86,7 @@ try {
     assert.equal(await output.locator('button, input, select, video').count(), 0);
     await until(() => lit(page, page.getByAltText('Output preview', { exact: true })), v => v > .003, 'operator preview stayed dark');
     assert.equal(await page.getByLabel('Show tracking', { exact: true }).isDisabled(), true);
+    await page.getByText(/^Showing on the output · Camera running/).waitFor(); // the artwork window reports its camera
     await page.getByRole('button', { name: 'Blackout', exact: true }).click();
     await until(() => lit(output, output.locator('canvas'), 2), v => v === 0, 'blackout did not reach the output');
     await page.getByRole('button', { name: 'Blackout', exact: true }).click();

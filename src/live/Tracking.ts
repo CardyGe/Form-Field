@@ -66,6 +66,9 @@ export class Tracking implements TrackingFeed {
       if (this.moving && now - this.lastFrameAt > STALE_MS) this.stillFlow();
       return;
     }
+    // After a gap (sleep, a stalled camera, a dragged window) the last frame is too old to compare with:
+    // the difference would read as movement everywhere. Start again from this frame.
+    if (this.primed && now - this.lastFrameAt > STALE_MS) { this.stillFlow(); this.primed = false; }
     this.frameId = source.frameId; this.lastFrameAt = now;
     const width = element instanceof HTMLVideoElement ? element.videoWidth : element.width, height = element instanceof HTMLVideoElement ? element.videoHeight : element.height;
     const aspect = width / height, wide = 16 / 9;

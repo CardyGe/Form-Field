@@ -1,5 +1,6 @@
 import type { InstrumentKind } from '../core/instruments';
 import type { LiveSettings } from '../live/settings';
+import type { SourceState } from '../live/source';
 export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | InstrumentKind;
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'add' | 'source';
 export type ModulationKind = 'sine' | 'pulse' | 'noise' | 'keyframes';
@@ -151,7 +152,7 @@ export interface StudioBridge {
   live: LiveBridge;
 }
 /** Sent from the studio window to the artwork window. */
-export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' };
+export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' } | { type: 'retry' };
 export interface LiveBridge {
   /** The saved settings as stored, or null. Pass the result through validateLiveSettings. */
   loadSettings(): Promise<unknown>;
@@ -168,6 +169,11 @@ export interface LiveBridge {
   ready(): void;
   /** Called by the artwork window to close itself (Escape). */
   requestClose(): void;
+  /** The artwork window reports its camera, so the operator sees a lost camera during a show. */
+  sendState(state: SourceState): void;
+  onState(callback: (state: SourceState) => void): () => void;
+  /** A display was connected, removed or changed. */
+  onDisplaysChanged(callback: () => void): () => void;
   /** A small picture of the artwork and its frame rate, for the operator. */
   sendPreview(jpeg: ArrayBuffer, fps: number): void;
   onPreview(callback: (jpeg: ArrayBuffer, fps: number) => void): () => void;

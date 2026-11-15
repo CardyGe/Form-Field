@@ -67,3 +67,9 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     palette: [...palette],
   };
 }
+
+/** The display to use for the output: the chosen one if it is still connected, else one that is not this screen, else any. */
+export function chooseDisplay(displays: { id: number; primary: boolean }[], current: number | null): number | null {
+  if (displays.some(d => d.id === current)) return current;
+  return (displays.find(d => !d.primary) ?? displays[0])?.id ?? null;
+}

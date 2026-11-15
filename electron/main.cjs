@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu, screen, systemPreferences } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, screen, systemPreferences, powerSaveBlocker } = require('electron');
 const { version: applicationVersion } = require('../package.json');
 const fs = require('node:fs/promises');
 const { mkdirSync } = require('node:fs');
@@ -229,7 +229,7 @@ app.whenReady().then(async () => {
   manager = new ExportManager({ ...tools, rendererFingerprint: await rendererFingerprint(), jobsDirectory: path.join(app.getPath('userData'), 'export-jobs'), defaultExportDir: defaultExportDir(), onProgress: progress => { if (window && !window.isDestroyed()) window.webContents.send('studio:export', progress); } });
   await manager.initializing;
   setupIPC();
-  liveControl = live.setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, settingsFile: path.join(app.getPath('userData'), 'live-settings.json'),
+  liveControl = live.setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSaveBlocker, settingsFile: path.join(app.getPath('userData'), 'live-settings.json'),
     preload: path.join(__dirname, 'preload.cjs'), studio: () => window,
     open: target => { const devURL = process.env.STUDIO_DEV_URL; if (devURL) target.loadURL(`${devURL.replace(/\/$/, '')}/#live-output`); else target.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { hash: 'live-output' }); } });
   Menu.setApplicationMenu(Menu.buildFromTemplate([

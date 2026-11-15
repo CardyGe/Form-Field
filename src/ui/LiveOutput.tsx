@@ -14,10 +14,13 @@ export default function LiveOutput() {
     if (!canvas.current || !bridge) return;
     let stage: Stage;
     try { stage = new Stage(canvas.current); } catch (error) { setFailure((error as Error).message); return; }
+    let latest = validateLiveSettings(null);
+    stage.onState = state => bridge.sendState(state);
     const off = bridge.onMessage(message => {
-      if (message.type === 'settings') stage.apply(validateLiveSettings(message.settings));
+      if (message.type === 'settings') stage.apply(latest = validateLiveSettings(message.settings));
       else if (message.type === 'blackout') stage.renderer.blackout = message.on === true;
       else if (message.type === 'clear') stage.renderer.clear();
+      else if (message.type === 'retry') stage.retry(latest);
     });
     // A small picture for the operator, taken straight after a frame is drawn, ten times a second.
     const small = new OffscreenCanvas(...PREVIEW), context = small.getContext('2d')!;
