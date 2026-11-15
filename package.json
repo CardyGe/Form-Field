@@ -46,6 +46,7 @@
       "electron/preload.cjs",
       "electron/export-manager.cjs",
       "electron/seam-check.cjs",
+      "electron/live.cjs",
       "package.json"
     ],
     "mac": {
@@ -53,7 +54,10 @@
       "identity": null,
       "target": "dir",
       "icon": "build/icon.icns",
-      "minimumSystemVersion": "14.0"
+      "minimumSystemVersion": "14.0",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Form & Field uses the camera to turn movement into live visuals. Video is never saved or sent anywhere."
+      }
     },
     "extraResources": [
       {

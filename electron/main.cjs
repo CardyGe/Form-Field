@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const { mkdirSync } = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const live = require('./live.cjs');
 const { ExportManager, atomicWrite, asBuffer, validateProject, resolveMediaTools } = require('./export-manager.cjs');
 
 app.setName('Form & Field');
@@ -204,9 +205,11 @@ function createWindow() {
   const devURL = process.env.STUDIO_DEV_URL;
   if (devURL && (!/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(devURL))) throw new Error('STUDIO_DEV_URL must be a local development server.');
   const session = window.webContents.session;
-  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  session.setPermissionCheckHandler(() => false);
-  const csp = ["default-src 'self'", `script-src 'self'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "font-src 'self' data:", `connect-src 'self'${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');
+  // Everything is refused except camera video for this app's own windows (Live mode).
+  const ours = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents;
+  session.setPermissionRequestHandler((contents, permission, callback, details) => callback(live.allowPermission(permission, details, ours(contents))));
+  session.setPermissionCheckHandler((contents, permission, _origin, details) => live.allowPermissionCheck(permission, details, ours(contents)));
+  const csp = ["default-src 'self'", `script-src 'self'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "media-src 'self' blob:", "font-src 'self' data:", `connect-src 'self'${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');
   session.webRequest.onHeadersReceived((details, callback) => callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [csp] } }));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-attach-webview', event => event.preventDefault());
