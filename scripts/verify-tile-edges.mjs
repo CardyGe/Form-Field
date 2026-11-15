@@ -3,14 +3,16 @@
 // Every pilot look is rendered with tile edges on and must meet itself cleanly left/right and top/bottom.
 // With --baseline, the same looks with tile edges absent are also compared pixel for pixel against that checkout.
 // Writes PNGs and a 2×2 montage of each tiled render to work/tile-edges/ for review by eye.
-import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// The export check's own thresholds, so the in-page port cannot drift from it.
+const { FLOOR, JUMP_LIMIT } = createRequire(import.meta.url)('../electron/seam-check.cjs');
 const baseline = process.argv.find(a => a.startsWith('--baseline='))?.slice(11);
 const out = path.join(root, 'work/tile-edges');
 await fs.mkdir(out, { recursive: true });
@@ -50,7 +52,7 @@ const save = async (name, base64) => {
   report.captures.push(path.relative(root, file));
 };
 try {
-  await page.evaluate(async hasBaseline => {
+  await page.evaluate(async ([hasBaseline, FLOOR, JUMP_LIMIT]) => {
     const m = await import('./renderer.js');
     const old = hasBaseline ? await import('./baseline.js') : null;
     const renderer = new m.StudioRenderer(document.querySelector('#a'));
@@ -68,8 +70,8 @@ try {
       return context.getImageData(0, 0, bitmap.width, bitmap.height).data;
     };
     const base64 = async blob => { const bytes = new Uint8Array(await blob.arrayBuffer()); let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
-    // Port of measureEdges in electron/seam-check.cjs, on 8-bit pixels / 255.
-    const FLOOR = 1 / 255, JUMP_LIMIT = 1.5, SIDE = 6;
+    // Port of measureEdges in electron/seam-check.cjs, on 8-bit pixels / 255; FLOOR and JUMP_LIMIT come from that module.
+    const SIDE = 6;
     const ratio = (seam, typical, floor) => seam <= floor ? Math.min(1, seam / Math.max(typical, 1e-9)) : seam / Math.max(typical, floor / 4);
     const line = (px, w, h, a, b, rows) => {
       let sum = 0; const count = rows ? w : h;
@@ -117,7 +119,7 @@ try {
         return difference(now, then);
       },
     };
-  }, !!baseline);
+  }, [!!baseline, FLOOR, JUMP_LIMIT]);
 
   for (const [look, params] of Object.entries(LOOKS)) for (const [w, h, ss] of SIZES) {
     const size = `${w}x${h}${ss > 1 ? `-ss${ss}` : ''}`;
@@ -139,13 +141,22 @@ try {
   for (const [name, e] of Object.entries(report.tiled)) console.log(`${e.status === 'clean' ? 'clean' : 'SEAM '}  ${name}: ${ratios(e)}; spread ${e.spread.toFixed(1)}; tiled vs untiled mean ${e.moved.mean.toFixed(2)}`);
   for (const [name, e] of Object.entries(report.untiledGuard)) console.log(`guard  ${name} untiled: ${e.status}, ${ratios(e)}`);
   for (const [name, d] of Object.entries(report.againstBaseline)) console.log(`${d.max === 0 ? 'same ' : 'DIFF '}  ${name} against baseline: mean ${d.mean.toFixed(4)}, max ${d.max}`);
-  for (const [name, e] of Object.entries(report.tiled)) assert.equal(e.status, 'clean', `${name}: visible tile seam, ${ratios(e)}.`);
-  for (const [name, e] of Object.entries(report.tiled)) assert.ok(e.spread > 4, `${name}: the tiled render is a flat colour (spread ${e.spread.toFixed(2)} of 255), so its clean edges prove nothing.`);
-  for (const [name, e] of Object.entries(report.untiledGuard)) assert.equal(e.status, 'seam', `${name}: the edge check does not see the seam of an untiled render.`);
-  for (const [name, d] of Object.entries(report.againstBaseline)) assert.equal(d.max, 0, `${name}: tile edges absent changed the picture against the baseline.`);
-  assert.deepEqual(errors, []);
-  console.log(`${Object.keys(report.tiled).length} tiled renders clean; ${report.captures.length} PNGs in ${path.relative(root, out)}.`);
+  // Every verdict is printed before failing, so a tiled failure never hides the baseline result.
+  const failures = [];
+  const check = (ok, message) => { if (!ok) failures.push(message); };
+  for (const [name, e] of Object.entries(report.tiled)) check(e.status === 'clean', `${name}: visible tile seam, ${ratios(e)}.`);
+  for (const [name, e] of Object.entries(report.tiled)) check(e.spread > 4, `${name}: the tiled render is a flat colour (spread ${e.spread.toFixed(2)} of 255), so its clean edges prove nothing.`);
+  for (const [name, e] of Object.entries(report.untiledGuard)) check(e.status === 'seam', `${name}: the edge check does not see the seam of an untiled render.`);
+  const changed = Object.entries(report.againstBaseline).filter(([, d]) => d.max !== 0);
+  for (const [name] of changed) check(false, `${name}: tile edges absent changed the picture against the baseline.`);
+  for (const error of errors) check(false, `Page error: ${error}`);
+  const compared = Object.keys(report.againstBaseline).length;
+  console.log(baseline ? `Baseline: ${compared - changed.length} of ${compared} untiled renders byte-identical.` : 'Baseline: not compared (no --baseline).');
+  const tiledClean = Object.values(report.tiled).filter(e => e.status === 'clean' && e.spread > 4).length;
+  console.log(`Tiled: ${tiledClean} of ${Object.keys(report.tiled).length} renders clean with real content; ${report.captures.length} PNGs in ${path.relative(root, out)}.`);
+  if (failures.length) throw new Error(`${failures.length} check(s) failed:\n${failures.join('\n')}`);
 } finally {
-  await fs.writeFile(path.join(out, 'report.json'), JSON.stringify(report, null, 2));
-  await app.close();
+  // Clean-up failures are reported but never replace the error that got us here.
+  await fs.writeFile(path.join(out, 'report.json'), JSON.stringify(report, null, 2)).catch(e => console.error(`Could not write report.json: ${e}`));
+  await app.close().catch(e => console.error(`Could not close Electron: ${e}`));
 }
