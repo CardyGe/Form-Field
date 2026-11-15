@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, screen, systemPreferences } = require('electron');
 const { version: applicationVersion } = require('../package.json');
 const fs = require('node:fs/promises');
 const { mkdirSync } = require('node:fs');
@@ -18,6 +18,7 @@ if (explicitUserData) {
 }
 let window;
 let manager;
+let liveControl;
 let quitting = false;
 let quitRequested = false;
 let closingPromise = null;
@@ -206,7 +207,7 @@ function createWindow() {
   if (devURL && (!/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(devURL))) throw new Error('STUDIO_DEV_URL must be a local development server.');
   const session = window.webContents.session;
   // Everything is refused except camera video for this app's own windows (Live mode).
-  const ours = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents;
+  const ours = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents || !!liveControl?.isOutput(contents);
   session.setPermissionRequestHandler((contents, permission, callback, details) => callback(live.allowPermission(permission, details, ours(contents))));
   session.setPermissionCheckHandler((contents, permission, _origin, details) => live.allowPermissionCheck(permission, details, ours(contents)));
   const csp = ["default-src 'self'", `script-src 'self'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "media-src 'self' blob:", "font-src 'self' data:", `connect-src 'self'${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');
@@ -218,7 +219,7 @@ function createWindow() {
   window.webContents.on('did-fail-load', (_event, code, description) => { if (code !== -3) console.error(`Studio could not load: ${description}`); });
   window.once('ready-to-show', () => window?.show());
   window.on('close', event => { if (!quitting && !approvedClosures.has(window)) { event.preventDefault(); void requestClose(); } });
-  window.on('closed', () => { window = undefined; manager.interruptAll().catch(error => console.error(error)); });
+  window.on('closed', () => { window = undefined; liveControl?.closeOutput(); manager.interruptAll().catch(error => console.error(error)); });
   if (devURL) window.loadURL(devURL);
   else window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
@@ -228,6 +229,9 @@ app.whenReady().then(async () => {
   manager = new ExportManager({ ...tools, rendererFingerprint: await rendererFingerprint(), jobsDirectory: path.join(app.getPath('userData'), 'export-jobs'), defaultExportDir: defaultExportDir(), onProgress: progress => { if (window && !window.isDestroyed()) window.webContents.send('studio:export', progress); } });
   await manager.initializing;
   setupIPC();
+  liveControl = live.setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, settingsFile: path.join(app.getPath('userData'), 'live-settings.json'),
+    preload: path.join(__dirname, 'preload.cjs'), studio: () => window,
+    open: target => { const devURL = process.env.STUDIO_DEV_URL; if (devURL) target.loadURL(`${devURL.replace(/\/$/, '')}/#live-output`); else target.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { hash: 'live-output' }); } });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: 'Form & Field', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },

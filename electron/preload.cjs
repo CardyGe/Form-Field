@@ -3,6 +3,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 const invoke = (method, ...args) => ipcRenderer.invoke(`studio:${method}`, ...args);
 const closeHandlers = new Set();
+const subscribe = (channel, callback) => {
+  if (typeof callback !== 'function') throw new TypeError('Expected a callback.');
+  const listener = (_event, value) => callback(value);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+};
 
 ipcRenderer.on('studio:before-close', async (_event, token) => {
   if (typeof token !== 'string') return;
@@ -36,6 +42,20 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
     closeHandlers.add(callback);
     return () => closeHandlers.delete(callback);
   },
+  live: Object.freeze({
+    loadSettings: () => invoke('live:loadSettings'),
+    saveSettings: settings => invoke('live:saveSettings', settings),
+    cameraAccess: () => invoke('live:cameraAccess'),
+    displays: () => invoke('live:displays'),
+    openOutput: displayId => invoke('live:openOutput', displayId),
+    closeOutput: () => invoke('live:closeOutput'),
+    send: message => ipcRenderer.send('studio:live:send', message),
+    onMessage: callback => subscribe('studio:live:message', callback),
+    onOutputChanged: callback => subscribe('studio:live:output', callback),
+    ready: () => ipcRenderer.send('studio:live:ready'),
+    sendPreview: jpeg => ipcRenderer.send('studio:live:preview', jpeg),
+    onPreview: callback => subscribe('studio:live:preview', callback),
+  }),
   onExportProgress: callback => {
     if (typeof callback !== 'function') throw new TypeError('Expected a progress callback.');
     const listener = (_event, progress) => callback(progress);

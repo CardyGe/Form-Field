@@ -1,4 +1,5 @@
 import type { InstrumentKind } from '../core/instruments';
+import type { LiveSettings } from '../live/settings';
 export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | InstrumentKind;
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'add' | 'source';
 export type ModulationKind = 'sine' | 'pulse' | 'noise' | 'keyframes';
@@ -147,4 +148,24 @@ export interface StudioBridge {
   revealPath(path: string): Promise<void>;
   onBeforeClose(callback: () => Promise<void>): () => void;
   onExportProgress(callback: (progress: ExportProgress) => void): () => void;
+  live: LiveBridge;
+}
+/** Sent from the studio window to the artwork window. */
+export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' };
+export interface LiveBridge {
+  /** The saved settings as stored, or null. Pass the result through validateLiveSettings. */
+  loadSettings(): Promise<unknown>;
+  saveSettings(settings: LiveSettings): Promise<void>;
+  cameraAccess(): Promise<'granted' | 'refused'>;
+  displays(): Promise<{ id: number; label: string; primary: boolean }[]>;
+  openOutput(displayId: number): Promise<void>;
+  closeOutput(): Promise<void>;
+  send(message: LiveMessage): void;
+  onMessage(callback: (message: LiveMessage) => void): () => void;
+  /** True once the artwork window is ready to receive settings; false when it closes. */
+  onOutputChanged(callback: (open: boolean) => void): () => void;
+  /** Called by the artwork window when it can receive messages. */
+  ready(): void;
+  sendPreview(jpeg: ArrayBuffer): void;
+  onPreview(callback: (jpeg: ArrayBuffer) => void): () => void;
 }
