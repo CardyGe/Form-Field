@@ -56,3 +56,11 @@ test('reconcileTile turns tiling off and names the blocker', () => {
   assert.equal(r.project.tileEdges, false);
   assert.equal(r.message, "Tile edges turned off. Seat: Feedback can't tile.");
 });
+
+test('reconcileTile leaves a project alone when tiling is off or unset', () => {
+  const p = createProject(); const l = createLayer('surface'); l.params.echo = 1; p.layers = [l];
+  assert.deepEqual(reconcileTile(p), { project: p, message: null });
+  p.tileEdges = false;
+  assert.equal(reconcileTile(p).project, p);
+  assert.equal(reconcileTile(p).message, null);
+});

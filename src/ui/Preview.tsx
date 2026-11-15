@@ -53,6 +53,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, onError, 
             overlay.style.width = canvas.current!.style.width; overlay.style.height = canvas.current!.style.height;
             if (overlay.width !== size.width || overlay.height !== size.height) { overlay.width = size.width; overlay.height = size.height; }
             const g = overlay.getContext('2d')!, w = size.width / 2, h = size.height / 2;
+            g.clearRect(0, 0, size.width, size.height);
             for (let i = 0; i < 4; i++) g.drawImage(canvas.current!, (i % 2) * w, Math.floor(i / 2) * h, w, h);
           }
           invalidate.current = false; lastPhase = phase.current; }
@@ -77,7 +78,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, onError, 
       {feedback.mode === 'shape' && axes.length > 0 && <><div className="canvas-reticle" aria-hidden="true" style={{ left: feedback.x, top: feedback.y }} /><div className="canvas-readout" aria-hidden="true">{axes.map((d, i) => <span key={d.key}><b>{i === 0 ? '↔' : '↕'}</b>{d.label}<strong>{Number(layer!.params[d.key].toFixed(3))}</strong></span>)}</div></>}
     </div>
     <div className={`canvas-interaction-bar ${control ? 'navigation-active' : ''}`}>
-      <p id={helpId}>{!layer?.visible ? 'Select a visible layer to interact' : <><span>Click to vary{axes.length > 0 ? ' · Drag to shape' : ''}</span><span><kbd>Ctrl</kbd> drag to pan · scroll to zoom</span><span className="sr-only">Hold Shift for fine control. With the canvas focused, Enter varies, arrow keys shape, Ctrl and arrow keys pan, and Ctrl plus or minus zooms. Edits apply to the selected layer and save with the project.</span></>}</p>
+      <p id={helpId}>{tiled ? 'Tiled view: turn it off to edit on the canvas.' : !layer?.visible ? 'Select a visible layer to interact' : <><span>Click to vary{axes.length > 0 ? ' · Drag to shape' : ''}</span><span><kbd>Ctrl</kbd> drag to pan · scroll to zoom</span><span className="sr-only">Hold Shift for fine control. With the canvas focused, Enter varies, arrow keys shape, Ctrl and arrow keys pan, and Ctrl plus or minus zooms. Edits apply to the selected layer and save with the project.</span></>}</p>
       <button className="canvas-reset" aria-label="Reset layer framing" title="Reset this layer’s pan and zoom" disabled={!enabled || !!layer?.modulations['transform.x'] || !!layer?.modulations['transform.y'] || !!layer?.modulations['transform.scale'] || layer?.transform.x === 0 && layer?.transform.y === 0 && layer?.transform.scale === 1} onClick={() => { if (layer) onChange({ ...layer, transform: { ...layer.transform, x: 0, y: 0, scale: 1 } }, true); }}><span>{Math.round((layer?.transform.scale ?? 1) * 100)}%</span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M3 11a9 9 0 1 1 3 8M3 4v7h7" /></svg></button>
     </div>
   </>;
