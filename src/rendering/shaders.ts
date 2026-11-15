@@ -228,17 +228,18 @@ void main() {
   // Mode is uniform for the layer, so all pixels evaluate the contour footprint.
   if(uColorMode>.5)top=recolor(top);
   if(uToonMix>0.)top=toon(top,uv);
+  // Glow finish: the blurred bright light of this layer. It is kept apart from
+  // the layer's coverage and added as light at the end, so it can only brighten
+  // what is underneath. The levels are in the same view space as the source.
+  vec3 glow=vec3(0.);
   if(uGlowOn>.5) {
-    // Glow finish: blurred bright light of this layer, added as light. The
-    // levels are in the same view space as the source. It follows flat colour
-    // so it is never posterised, and precedes the grade so it is graded too.
     vec2 g=(uSourceViewInverse*vec3(uv,1.)).xy;
-    vec3 glow=uGlowWeights[0]*texture2D(uGlowLevel0,g).rgb+uGlowWeights[1]*texture2D(uGlowLevel1,g).rgb
+    glow=uGlowWeights[0]*texture2D(uGlowLevel0,g).rgb+uGlowWeights[1]*texture2D(uGlowLevel1,g).rgb
       +uGlowWeights[2]*texture2D(uGlowLevel2,g).rgb+uGlowWeights[3]*texture2D(uGlowLevel3,g).rgb
       +uGlowWeights[4]*texture2D(uGlowLevel4,g).rgb;
-    if(uGlowTint>.5)glow=uGlowColour*dot(glow,GRADE_LUMA);
-    top.rgb+=glow;
-    top.a+=(1.-top.a)*clamp(max(glow.r,max(glow.g,glow.b)),0.,1.);
+    if(uGlowTint>.5)glow=uGlowColour*max(glow.r,max(glow.g,glow.b));
+    // Saturation, Hue and Exposure act on the glow as they do on the layer.
+    if(abs(uSaturation-1.)>.000001 || abs(uHue)>.000001 || abs(uExposure-1.)>.000001)glow=grade(glow);
   }
   if(top.a>.00001 && (abs(uSaturation-1.)>.000001 || abs(uHue)>.000001 || abs(uExposure-1.)>.000001)) {
     top.rgb=grade(top.rgb/top.a)*top.a;
@@ -262,6 +263,7 @@ void main() {
   if(uMaskKind>.5 && uMaskInvert>.5) mask=1.-mask;
   // Coverage/opacity always scale associated RGB and alpha together.
   top*=clamp(mask*uOpacity,0.,1.);
+  glow*=clamp(mask*uOpacity,0.,1.);
   vec4 below=texture2D(uBelow,vUv);
   vec3 a=below.a>.00001?below.rgb/below.a:vec3(0.);
   vec3 b=top.a>.00001?top.rgb/top.a:vec3(0.);
@@ -277,6 +279,9 @@ void main() {
   }
   vec3 rgb=below.rgb*(1.-top.a)+top.rgb*(1.-below.a)+blended*(top.a*below.a);
   float alpha=top.a+below.a*(1.-top.a);
+  // Where nothing is underneath, the glow carries its own alpha for transparent export.
+  rgb+=glow;
+  alpha+=(1.-alpha)*clamp(max(glow.r,max(glow.g,glow.b)),0.,1.);
   gl_FragColor=vec4(rgb,alpha);
 }
 `;

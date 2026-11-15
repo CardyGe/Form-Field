@@ -574,12 +574,16 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     // Feedback is likewise an explicit choice, and its blend and frame are structural.
     if (SLIT_KEYS.includes(key) && (['slitShift', 'slitShape', 'slitScroll', 'slitSlices'].includes(key) || !((layer.params.slitShift ?? 0) !== 0))) continue;
     if (FEEDBACK_KEYS.includes(key) && (['echo', 'echoBlend', 'echoFrame', 'echoWindow', 'echoStreakAxis', 'echoKeep'].includes(key) || !(layer.params.echo > 0))) continue;
+    // Glow too: never switch it on or off or change its colour, and keep its
+    // threshold and size near where the artist set them, not near the recipe's.
+    const glow = GLOW_KEYS.includes(key);
+    if (glow && (key === 'glowMix' || key === 'glowTint' || !((layer.params.glowMix ?? 0) > 0))) continue;
     if (layer.modulations[key] || key==='tonePivot' || key==='warpScale'&&layer.params.warp===0 || key==='sheenAngle'&&layer.params.anisotropy===0) continue;
     const span = d.max-d.min;
     const personality = character[d.section] * .7 + (random()*2-1) * .3;
     const factor = key === 'angularStep' ? .003 : d.section === 'Camera' ? .035 :
       ['spacing','boxScale','boxRadius'].includes(key) ? .035 : .12;
-    let target = (anchor?.params[key] ?? d.default) + personality * span * factor;
+    let target = (glow ? original : anchor?.params[key] ?? d.default) + personality * span * factor;
     // Practical film cadences, chosen once for the whole effect.
     if (key === 'filmFps') target = [12,18,24][Math.floor(random()*3)];
     result.params[key] = clampParameter(original + (target-original)*strength, d);

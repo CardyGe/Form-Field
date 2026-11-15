@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyFinish, createLayer, createProject, finishSupported, validateProject, visibleParameterDefinitions } from '../src/core/project';
+import { PRESETS, applyFinish, applyPreset, createLayer, createProject, finishSupported, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { GLOW_KEYS } from '../src/core/finishing';
 import { bloomLevelSize, bloomWeights, glowActive, supportsGlow } from '../src/rendering/bloom';
 
@@ -70,4 +70,23 @@ test('glow looks are refused where glow is not supported, other looks are not', 
   assert.equal(finishSupported(scope, 'finish-soft-glow'), false);
   assert.equal(finishSupported(scope, 'finish-terraces'), true);
   assert.throws(() => applyFinish(scope, 'finish-dream-haze'));
+});
+
+test('variations never switch glow on, and keep an authored glow near where it was set', () => {
+  const unlocked = { palette: false, structure: false, motion: false, material: false };
+  for (const preset of PRESETS) {
+    const layer = applyPreset(createLayer(preset.kind), preset.id);
+    for (let i = 0; i < 6; i++) {
+      const varied = varyLayer(layer, 1, unlocked, 2000 + i);
+      for (const key of GLOW_KEYS) assert.equal(varied.params[key], layer.params[key], `${preset.id} ${key}`);
+    }
+  }
+  const glowing = applyFinish(createLayer('liquid'), 'finish-hot-highlights');
+  for (let i = 0; i < 40; i++) {
+    const varied = varyLayer(glowing, 1, unlocked, 3000 + i);
+    assert.equal(varied.params.glowMix, 1.5);
+    assert.equal(varied.params.glowTint, 0);
+    assert.ok(Math.abs(varied.params.glowThreshold - .8) <= .1201, `threshold ${varied.params.glowThreshold}`);
+    assert.ok(Math.abs(varied.params.glowSize - .2) <= .1201, `size ${varied.params.glowSize}`);
+  }
 });

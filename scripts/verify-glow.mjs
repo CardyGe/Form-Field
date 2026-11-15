@@ -93,6 +93,15 @@ try {
       if (lit[i + 3] > 8 && lit[i + 3] < 247) partialOn++;
       if (clear[i + 3] === 0 && lit[i + 3] > 8) { gained++; if (Math.max(lit[i], lit[i + 1], lit[i + 2]) < 40) darkFringe++; }
     }
+    // Glow is light: over a lower layer it may only add, whatever the grade.
+    const over = (params, exposure) => { const top = q.layer('sculpture', 'pearl-organism', { ...params, exposure }); top.transform.scale = .5;
+      const p = q.project([q.layer('liquid', 'blue-hour'), top]); p.highlights = 'exact'; return p; };
+    const darkened = async exposure => { const without = await px(over({}, exposure)), withGlow = await px(over({ ...G.haze, glowMix: 2 }, exposure)); let n = 0;
+      for (let i = 0; i < without.length; i += 4) if (withGlow[i] < without[i] - 6 || withGlow[i + 1] < without[i + 1] - 6 || withGlow[i + 2] < without[i + 2] - 6) n++;
+      return n / (without.length / 4); };
+    const darkens = { plain: await darkened(1), dimmed: await darkened(.25) };
+    // A glow colour must not make the glow of a saturated source vanish.
+    const tinted = q.mean(await px(liquid({ ...G.haze, glowTint: 4 }))) - q.mean(off);
     // Unsupported kinds ignore saved glow values.
     const scope = params => q.project([q.layer('scope', 'ember-ring', params)]);
     const gl = q.renderer.renderer.getContext(), pixel = new Uint8Array(4), frames = 40;
@@ -104,7 +113,7 @@ try {
       wrap: q.difference(start, end), seek: q.difference(start, again), move: q.difference(start, elsewhere),
       supersample: q.difference(one, two), supersampleWithoutGlow: sampling, gains,
       tunnelWrap: q.difference(t0, t1), tunnelGain: q.mean(t0) - q.mean(await px(tunnelOff, 0)),
-      alpha: { partialOff, partialOn, gained, darkFringe },
+      alpha: { partialOff, partialOn, gained, darkFringe }, darkens, tint: { tinted, untinted: q.mean(haze) - q.mean(off) },
       scopeIgnoresGlow: q.difference(await px(scope({})), await px(scope({ glowMix: 2, glowThreshold: 0 }))),
       frameMs: { plain: plainMs, glow: glowMs },
     };
@@ -122,6 +131,8 @@ try {
   assert.ok(c.tunnelGain > 0 && c.tunnelGain < 60, `Glow builds up through feedback: ${c.tunnelGain}`);
   assert.ok(c.alpha.gained > 2000 && c.alpha.partialOn > c.alpha.partialOff * 2, `Glow carries no alpha: ${JSON.stringify(c.alpha)}`);
   assert.ok(c.alpha.darkFringe < c.alpha.gained * .02, `Dark fringe in the glow: ${JSON.stringify(c.alpha)}`);
+  assert.ok(c.darkens.plain < .001 && c.darkens.dimmed < .001, `Glow darkens the layer below: ${JSON.stringify(c.darkens)}`);
+  assert.ok(c.tint.tinted > c.tint.untinted * .5, `A glow colour dims the glow: ${JSON.stringify(c.tint)}`);
   assert.equal(c.scopeIgnoresGlow, 0, 'The Oscilloscope responds to glow values.');
   assert.ok(c.frameMs.glow < 16.7, `${c.frameMs.glow.toFixed(1)} ms per glowing 1080p frame.`);
 
