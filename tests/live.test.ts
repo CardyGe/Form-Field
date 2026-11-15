@@ -19,3 +19,11 @@ test('a stall is capped', () => { assert.equal(capStep(5), MAX_STEP); assert.equ
 test('fade leaves 5% after the fade time', () => assert.ok(Math.abs(fadeFactor(30, 30) - Math.exp(-3)) < 1e-12));
 test('box weight', () => { const b = { left: .25, right: .75, bottom: 0, top: 1 }; assert.equal(boxWeight(.5, .5, b), 1); assert.equal(boxWeight(.1, .5, b), 0); });
 test('still input births nothing', () => { assert.equal(birthChance(0, 3, MAX_STEP), 0); assert.equal(birthChance(1, 3, MAX_STEP), 1); });
+
+import { stateFromError } from '../src/live/source';
+test('camera errors become plain states', () => {
+  assert.deepEqual(stateFromError('NotAllowedError'), { status: 'refused' });
+  assert.deepEqual(stateFromError('NotFoundError'), { status: 'none' });
+  assert.deepEqual(stateFromError('OverconstrainedError'), { status: 'none' });
+  assert.equal(stateFromError('Boom').status, 'error');
+});
