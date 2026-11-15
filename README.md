@@ -117,6 +117,31 @@ A feedback instrument: a box of fresh pictures is stamped into the middle of the
 
 Five looks: Feedback Glitch, Neon Collapse, Glitch Staircase, Static Bloom and Melted Signal. The same corruption is available to any layer in the Feedback finish: *Hold brightness*, *Glitch events*, *Colour drift*, *Contrast push* and *Echo pixel size*.
 
+## Live
+
+Live turns a camera into projected artwork as it happens. It is a separate screen: switch between **Studio** and **Live** in the header. Nothing in Live is exported or recorded, and camera video never leaves the computer.
+
+**Setting up**
+
+1. Put the camera at the wall you are projecting on, facing out at the people. Keep the projected picture out of the camera's view, or the artwork reacts to itself.
+2. Open **Live**. The first time, macOS asks for camera access. If it was refused, allow Form & Field in System Settings › Privacy & Security › Camera and reopen the app.
+3. Choose the camera under **Source**. **Test pattern** gives moving shapes to try a look without a camera, and **Use a video file** plays a clip in the preview.
+4. Tick **Show tracking** to see the camera with the movement it has found drawn over it. Use the four **Area** sliders to leave out screens, curtains and bystanders. Raise **Camera noise floor** if a still room lights up; raise **Sensitivity** if gestures barely register. This view only ever appears on your screen.
+5. Choose the projector under **Display** and press **Open output**. The artwork fills that display. **Esc** closes it.
+
+**Blackout** makes the output black at once while everything keeps running. **Clear** wipes the artwork.
+
+**Paint** is the first look. Moving lays down opaque, bristly strokes of colour; standing still lets them fade. Movement response sets how readily paint appears, Stroke length and Spread shape each throw, Bristle goes from broad strokes to fine hairs, Fade time is how long paint lasts, and Colour change is how quickly the colour moves through the palette.
+
+**Limits to know**
+
+- People are not picked out from the room: anything that moves paints. The Area sliders and camera placement are the remedy.
+- A webcam needs light on the people. A dark room gives noisy tracking.
+- Mirror is on by default, which is right for a camera facing the people.
+- While the output is open the camera belongs to it, so Show tracking is unavailable until you close the output.
+- Video files play in the preview only. Use a camera or the test pattern to drive the output.
+- Measured performance is in `docs/live-performance-2026-11.md`. It has not yet been measured with a real camera and projector.
+
 ## Projection delivery
 
 **Export → Delivery format** offers mastering formats (ProRes 4444, ProRes 422 HQ, 16-bit PNG sequence) and projection playback formats: **HAP Q** (best quality), **HAP** (smallest) and **HAP Alpha** (transparent). HAP is decoded on the GPU by MadMapper, Resolume, Millumin and TouchDesigner, so 4K loops scrub and play smoothly. HAP needs dimensions that are multiples of 4; 4K frames are written in 8 chunks for parallel decoding. Projector sizes include DCI 4K, 4K WUXGA and WUXGA.

@@ -73,6 +73,28 @@ try {
     };
   });
 
+  if (performanceRun) {
+    // Real display frames, Paint at defaults, 1920 × 1080, the synthetic source. Not a substitute for a real camera and projector.
+    const measure = (seconds, relay) => page.evaluate(async ([seconds, relay]) => {
+      const { source, renderer, canvas } = window.live.make(s => { s.quality = 1080; });
+      let last = performance.now(), sent = 0, busy = false, running = true; const gaps = [];
+      const small = new OffscreenCanvas(480, 270), context = small.getContext('2d');
+      renderer.start();
+      const tick = now => { if (!running) return; gaps.push(now - last); source.advance((now - last) / 1000); last = now;
+        if (relay && !busy && now - sent >= 100) { sent = now; busy = true; context.drawImage(canvas, 0, 0, 480, 270); small.convertToBlob({ type: 'image/jpeg', quality: .7 }).then(b => b.arrayBuffer()).finally(() => { busy = false; }); }
+        requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+      await new Promise(r => setTimeout(r, 2000)); gaps.length = 0; renderer.stats();
+      await new Promise(r => setTimeout(r, seconds * 1000)); running = false;
+      const stats = renderer.stats(); renderer.stop(); renderer.frame(0); const painted = window.live.painted(0).fraction; gaps.sort((a, b) => a - b);
+      return { seconds, relay, fps: stats.fps, worstMs: stats.worstMs, medianMs: gaps[gaps.length >> 1], p99Ms: gaps[Math.floor(gaps.length * .99)], over25ms: gaps.filter(g => g > 25).length, frames: stats.frames, painted };
+    }, [seconds, relay]);
+    const runs = [await measure(120, false), await measure(60, true)];
+    await fs.writeFile(path.join(out, 'performance.json'), JSON.stringify(runs, null, 2));
+    console.log(JSON.stringify(runs, null, 2));
+    await app.close();
+    process.exit(0);
+  }
   await check('bare pipeline: the picture is not uniform', async () => {
     const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); const p = window.live.painted(0); return { p, frames: window.live.current.renderer.stats().frames }; });
     assert.ok(r.p.fraction > .01, `only ${r.p.fraction} of pixels lit`); assert.ok(r.frames >= 30, `${r.frames} frames`);
