@@ -18,7 +18,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, onError, 
   const host = useRef<HTMLDivElement>(null), tileCanvas = useRef<HTMLCanvasElement>(null), canvas = useRef<HTMLCanvasElement>(null);
   const helpId = useId();
   const { control, feedback, axes } = useCanvasInteraction({ canvas, layer, locks, blocked, onChange, onVary, onNotice });
-  const enabled = !blocked && layer?.visible;
+  const enabled = !blocked && !tiled && layer?.visible;
   const current = useRef({ project, playing,onEnded,tiled }), invalidate = useRef(true);
   const prepared = useRef<Project | null>(null);
   current.current = { project, playing,onEnded,tiled };

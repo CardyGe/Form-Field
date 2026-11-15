@@ -20,7 +20,7 @@ import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
-import { snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
+import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
 import { super8Fragment } from './super8';
@@ -34,8 +34,6 @@ import {
 } from './shaders';
 
 const TAU = Math.PI * 2;
-const SURFACE_DEFAULTS = Object.fromEntries(parameterDefinitions('surface')
-  .filter(({ key }) => !['cycles','exposure','saturation','hue'].includes(key)).map(({ key, default: value }) => [key, value]));
 const SCULPTURE_SHAPE_DEFAULTS = Object.fromEntries(parameterDefinitions('sculpture')
   .filter(({ key }) => ['form','lobes','thickness','stretch','curl','foldFrequency','asymmetry','ridgeScale'].includes(key))
   .map(({ key, default: value }) => [key,value]));

@@ -43,6 +43,13 @@ test('blockers name the layer and the reason', () => {
   l.params.variant = 1; l.mask.kind = 'circle'; assert.deepEqual(tileBlockers(p), ['Couch has a mask.']);
   l.mask.kind = 'none'; l.params.delaySpread = .2; assert.deepEqual(tileBlockers(p), ["Couch: Delay spread and Pause can't tile."]);
   l.params.delaySpread = 0; l.params.echo = 1; assert.deepEqual(tileBlockers(p), ["Couch: Feedback can't tile."]);
+  l.params.echo = 0;
+  const msg = "Couch: animated Scale, Direction, Stretch, Density, layer size or layer rotation can't tile.";
+  for (const key of ['scale', 'rotation', 'stretch', 'density', 'transform.scale', 'transform.rotation']) {
+    l.modulations = { [key]: { kind: 'sine', cycles: 1, phase: 0, amount: .5, points: [] } }; assert.deepEqual(tileBlockers(p), [msg], key);
+  }
+  l.modulations = { 'transform.x': { kind: 'sine', cycles: 1, phase: 0, amount: .5, points: [] } }; assert.deepEqual(tileBlockers(p), []);
+  l.modulations = {}; l.params.echo = 1;
   const g = createLayer('glitchtunnel'); g.name = 'Tunnel'; p.layers = [g];
   assert.deepEqual(tileBlockers(p), ["Tunnel: this instrument can't tile yet."]);
   g.visible = false; assert.deepEqual(tileBlockers(p), []);

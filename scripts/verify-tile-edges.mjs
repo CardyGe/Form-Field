@@ -34,6 +34,7 @@ const LOOKS = {
   'drips-strands': { style: 2, variant: 2 },
   'flow-scale-0.5': { style: 0, variant: 0, scale: .5 },
   'flow-direction-90': { style: 0, variant: 0, rotation: Math.PI / 2 },
+  'flow-layer-scale-rotation': { style: 0, variant: 0, transform: { scale: 1.6, rotation: Math.PI / 2 - .2 } },
   'flow-glow-outlines': { style: 0, variant: 0, glowMix: .8, toonMix: 1, toonOutline: 2 },
 };
 const SIZES = [[960, 540, 1], [1080, 1080, 1], [1080, 1920, 2]];
@@ -59,7 +60,7 @@ try {
     const before = old ? new old.StudioRenderer(document.querySelector('#b')) : null;
     const project = (mod, params, tileEdges) => {
       const p = mod.createProject(), l = mod.createLayer('surface');
-      Object.assign(l.params, params); l.id = 'tile-proof'; p.layers = [l]; p.background = '#000000';
+      const { transform, ...rest } = params; Object.assign(l.params, rest); if (transform) Object.assign(l.transform, transform); l.id = 'tile-proof'; p.layers = [l]; p.background = '#000000';
       if (tileEdges !== undefined) p.tileEdges = tileEdges;
       return p;
     };

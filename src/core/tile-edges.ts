@@ -2,9 +2,14 @@ import type { Layer, Project } from '../shared/types';
 import { feedbackActive } from '../rendering/feedback';
 import { printActive } from '../rendering/print-screen';
 import { slitActive } from '../rendering/slitscan';
+import { parameterDefinitions } from './project';
 import { sourceViewMatrix } from '../rendering/source-view';
 
 export const TAU = Math.PI * 2;
+
+/** Surface parameter defaults, shared with the renderer so tiling reads the same fallbacks. */
+export const SURFACE_DEFAULTS: Record<string, number> = Object.fromEntries(parameterDefinitions('surface')
+  .filter(({ key }) => !['cycles','exposure','saturation','hue'].includes(key)).map(({ key, default: value }) => [key, value]));
 
 /** The first reason this layer cannot tile, or null. */
 export function layerTileBlocker(layer: Layer): string | null {
@@ -16,7 +21,8 @@ export function layerTileBlocker(layer: Layer): string | null {
   if (layer.mask.kind !== 'none') return `${n} has a mask.`;
   if (layer.surface) return `${n} has a surface shape.`;
   if ((p.delaySpread ?? 0) > 0 || (p.pause ?? 0) > 0) return `${n}: Delay spread and Pause can't tile.`;
-  if (layer.modulations.scale || layer.modulations.rotation || layer.modulations.stretch) return `${n}: animated Scale, Direction or Stretch can't tile.`;
+  const m = layer.modulations;
+  if (m.scale || m.rotation || m.stretch || m.density || m['transform.scale'] || m['transform.rotation']) return `${n}: animated Scale, Direction, Stretch, Density, layer size or layer rotation can't tile.`;
   if (feedbackActive(layer)) return `${n}: Feedback can't tile.`;
   if (slitActive(layer)) return `${n}: Time displacement can't tile.`;
   if (printActive(layer)) return `${n}: Print screen can't tile.`;
@@ -44,7 +50,7 @@ export function snapQuarterTurn(angle: number): number {
 export function tilePeriod(layer: Layer, aspect: number): { x: number; y: number } {
   const m = sourceViewMatrix({ ...layer.transform, rotation: snapQuarterTurn(layer.transform.rotation) }, aspect).elements;
   const th = snapQuarterTurn(layer.params.rotation ?? 0), c = Math.cos(th), s = Math.sin(th);
-  const scale = Math.max(layer.params.scale ?? 1, .1), stretch = Math.sqrt(Math.max(layer.params.stretch ?? 1, .25));
+  const scale = Math.max(layer.params.scale ?? SURFACE_DEFAULTS.scale, .1), stretch = Math.sqrt(Math.max(layer.params.stretch ?? SURFACE_DEFAULTS.stretch, .25));
   const axis = (u: number, v: number) => {
     const wx = u * aspect, wy = v;
     return { x: Math.abs((c * wx + s * wy) * scale * stretch), y: Math.abs((-s * wx + c * wy) * scale / stretch) };

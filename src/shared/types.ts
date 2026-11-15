@@ -117,6 +117,7 @@ export interface ExportProgress {
   outputPath?: string;
   error?: string;
   seam?: SeamCheck;
+  edges?: EdgeCheck;
 }
 export interface StudioStatus {
   version: string;
