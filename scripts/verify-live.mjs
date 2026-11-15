@@ -85,6 +85,49 @@ try {
     const r = await page.evaluate(() => { const { canvas } = window.live.make(s => { s.quality = 1080; }); window.live.run(1); return [canvas.width, canvas.height]; });
     assert.deepEqual(r, [1920, 1080]);
   });
+  // --- Movement tracking ---
+  // Mean of the flow field over rows [bottom, top) and columns [left, right), as uv fractions from the bottom-left.
+  await page.evaluate(() => {
+    window.live.flow = (bottom = 0, top = 1, left = 0, right = 1) => {
+      const { data, width, height } = window.live.current.renderer.readFlow(); let r = 0, b = 0, max = 0, n = 0;
+      for (let y = Math.floor(bottom * height); y < Math.floor(top * height); y++) for (let x = Math.floor(left * width); x < Math.floor(right * width); x++) {
+        const i = (y * width + x) * 4; r += data[i]; b += data[i + 2]; if (data[i + 2] > max) max = data[i + 2]; n++;
+      }
+      return { r: r / n, strength: b / n, max };
+    };
+  });
+  await check('tracking: movement is found where the discs move', async () => {
+    const r = await page.evaluate(() => { window.live.make(); window.live.run(30); return { upper: window.live.flow(.6, .8), lower: window.live.flow(.2, .4), edge: window.live.flow(.94, 1) }; });
+    assert.ok(r.upper.max > .5 && r.lower.max > .5, `peak strength ${r.upper.max}, ${r.lower.max}`);
+    assert.ok(r.upper.strength > .03 && r.lower.strength > .03, `mean strength ${r.upper.strength}, ${r.lower.strength}`);
+    assert.ok(r.edge.max < .01, `strength ${r.edge.max} where nothing moves`);
+  });
+  await check('tracking: still input settles to nothing', async () => {
+    const r = await page.evaluate(() => { window.live.make(); window.live.run(30); window.live.current.source.moving = false; window.live.run(60); return window.live.flow(); });
+    assert.ok(r.strength < .005 && r.max < .02, `strength ${r.strength}, peak ${r.max}`);
+  });
+  await check('tracking: outside the box is exactly zero', async () => {
+    const r = await page.evaluate(() => { window.live.make(s => { s.box.right = .5; }); window.live.run(30); return { out: window.live.flow(0, 1, .5, 1), inside: window.live.flow(0, 1, 0, .5) }; });
+    assert.equal(r.out.max, 0); assert.ok(r.inside.max > .3, `inside peak ${r.inside.max}`);
+  });
+  await check('tracking: direction follows the movement and flips with mirror', async () => {
+    const r = await page.evaluate(() => {
+      const run = mirror => { window.live.make(s => { s.mirror = mirror; }); window.live.run(30); return { upper: window.live.flow(.6, .8).r, lower: window.live.flow(.2, .4).r, discs: window.live.current.source.discs() }; };
+      return { plain: run(false), mirrored: run(true) };
+    });
+    assert.ok(r.plain.discs[0].vx > .2 && r.plain.discs[1].vx < -.2, 'test source is not moving as expected');
+    assert.ok(r.plain.upper > 0 && r.plain.lower < 0, `plain ${r.plain.upper}, ${r.plain.lower}`);
+    assert.ok(r.mirrored.upper < 0 && r.mirrored.lower > 0, `mirrored ${r.mirrored.upper}, ${r.mirrored.lower}`);
+  });
+  await check('tracking: a camera that goes away leaves no movement behind', async () => {
+    const r = await page.evaluate(() => { window.live.make(); window.live.run(30); const { source } = window.live.current; source.advance = () => {}; Object.defineProperty(source, 'element', { value: null }); window.live.run(2); return window.live.flow(); });
+    assert.equal(r.max, 0);
+  });
+  await check('tracking view shows the camera', async () => {
+    const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); return window.live.painted(0, 40); });
+    assert.ok(r.fraction > .02, `only ${r.fraction} lit`);
+    await save('tracking', await page.evaluate(() => window.live.png()));
+  });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));
 } finally {

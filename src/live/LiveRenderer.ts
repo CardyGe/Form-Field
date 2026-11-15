@@ -10,6 +10,8 @@ import { Passes } from './passes';
 import { capStep } from './maths';
 import { defaultLiveSettings, type LiveSettings } from './settings';
 import type { FrameSource } from './look';
+import { Tracking, FLOW_SIZE } from './Tracking';
+import { trackingViewFragment } from './tracking-shaders';
 
 const finalFragment = /* glsl */`
 uniform sampler2D uImage; uniform float uBlackout, uEncode;
@@ -18,9 +20,6 @@ void main() {
   vec3 c = texture2D(uImage, vUv).rgb;
   gl_FragColor = vec4(mix(c, encode(c), uEncode) * (1. - uBlackout), 1.);
 }`;
-const cameraFragment = /* glsl */`
-uniform sampler2D uImage; uniform float uMirror;
-void main() { gl_FragColor = vec4(texture2D(uImage, vec2(mix(vUv.x, 1. - vUv.x, uMirror), vUv.y)).rgb, 1.); }`;
 
 export class LiveRenderer {
   settings: LiveSettings = defaultLiveSettings();
@@ -31,11 +30,10 @@ export class LiveRenderer {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly passes: Passes;
   private readonly final: THREE.ShaderMaterial;
-  private readonly cameraView: THREE.ShaderMaterial;
-  private readonly sourceTexture = new THREE.Texture();
+  private readonly trackingView: THREE.ShaderMaterial;
+  private readonly tracking: Tracking;
   private readonly black: THREE.DataTexture;
   private scratch: THREE.WebGLRenderTarget;
-  private sourceFrame = -1;
   private width = 0;
   private height = 0;
   private time = 0;
@@ -52,12 +50,10 @@ export class LiveRenderer {
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.autoClear = false;
     try { this.passes = new Passes(this.renderer); } catch (error) { this.renderer.dispose(); throw error; }
-    this.sourceTexture.colorSpace = THREE.NoColorSpace;
-    this.sourceTexture.minFilter = this.sourceTexture.magFilter = THREE.LinearFilter;
-    this.sourceTexture.generateMipmaps = false;
     this.black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); this.black.needsUpdate = true;
     this.final = this.passes.material(finalFragment, { uImage: { value: this.black }, uBlackout: { value: 0 }, uEncode: { value: 1 } });
-    this.cameraView = this.passes.material(cameraFragment, { uImage: { value: this.black }, uMirror: { value: 1 } });
+    this.tracking = new Tracking(this.passes);
+    this.trackingView = this.passes.material(trackingViewFragment, { uCamera: { value: null }, uFlow: { value: null }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
     this.scratch = this.passes.target(1, 1);
     this.counted.since = performance.now();
   }
@@ -83,12 +79,13 @@ export class LiveRenderer {
     const step = capStep(seconds);
     this.time += step;
     this.resize();
-    this.readSource();
+    this.tracking.update(this.source, this.settings);
     let image: THREE.Texture = this.black, encode = 1;
     if (this.view === 'tracking') {
-      this.cameraView.uniforms.uImage.value = this.source.element ? this.sourceTexture : this.black;
-      this.cameraView.uniforms.uMirror.value = this.settings.mirror ? 1 : 0;
-      this.passes.draw(this.cameraView, this.scratch);
+      const u = this.trackingView.uniforms, box = this.settings.box;
+      u.uCamera.value = this.tracking.camera; u.uFlow.value = this.tracking.flow;
+      (u.uBox.value as THREE.Vector4).set(box.left, box.right, box.bottom, box.top);
+      this.passes.draw(this.trackingView, this.scratch);
       image = this.scratch.texture; encode = 0;
     }
     this.final.uniforms.uImage.value = image;
@@ -108,10 +105,17 @@ export class LiveRenderer {
     return result;
   }
 
+  /** The movement field as floats, row 0 at the bottom. For the scripted checks. */
+  readFlow(): { data: Float32Array; width: number; height: number } {
+    const [width, height] = FLOW_SIZE, half = new Uint16Array(width * height * 4);
+    this.renderer.readRenderTargetPixels(this.tracking.flowTarget, 0, 0, width, height, half);
+    return { data: Float32Array.from(half, THREE.DataUtils.fromHalfFloat), width, height };
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.stop(); this.disposed = true;
-    for (const item of [this.final, this.cameraView, this.sourceTexture, this.black, this.scratch]) item.dispose();
+    for (const item of [this.final, this.trackingView, this.tracking, this.black, this.scratch]) item.dispose();
     this.passes.dispose(); this.renderer.dispose();
   }
 
@@ -121,14 +125,5 @@ export class LiveRenderer {
     this.width = width; this.height = height;
     this.renderer.setSize(width, height, false);
     this.scratch.setSize(width, height);
-  }
-
-  private readSource(): void {
-    const element = this.source.element;
-    if (!element || this.source.frameId === this.sourceFrame) return;
-    if (element instanceof HTMLVideoElement && element.readyState < 2) return;
-    this.sourceFrame = this.source.frameId;
-    this.sourceTexture.image = element;
-    this.sourceTexture.needsUpdate = true;
   }
 }
