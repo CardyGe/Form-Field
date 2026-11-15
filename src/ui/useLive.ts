@@ -1,0 +1,114 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Stage } from '../live/Stage';
+import { defaultLiveSettings, validateLiveSettings, type LiveSettings } from '../live/settings';
+import type { SourceState } from '../live/source';
+
+export interface Display { id: number; label: string; primary: boolean }
+
+/**
+ * Everything the Live screen does. While the artwork window is closed the
+ * picture is drawn here, on `canvas`. While it is open the artwork window
+ * draws it and owns the camera; this side only sends settings and shows the
+ * small preview that comes back.
+ */
+export function useLive(onError: (message: string) => void) {
+  const bridge = window.studio?.live;
+  const [settings, setSettings] = useState<LiveSettings | null>(null);
+  const [access, setAccess] = useState<'granted' | 'refused' | null>(null);
+  const [sourceState, setSourceState] = useState<SourceState>({ status: 'idle' });
+  const [cameras, setCameras] = useState<{ deviceId: string; label: string }[]>([]);
+  const [displays, setDisplays] = useState<Display[]>([]);
+  const [outputOpen, setOutputOpen] = useState(false);
+  const [blackout, setBlackoutState] = useState(false);
+  const [view, setView] = useState<'art' | 'tracking'>('art');
+  const [file, setFile] = useState<File | null>(null);
+  const [fps, setFps] = useState(0);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
+  const stage = useRef<Stage | null>(null);
+  const latest = useRef({ settings, blackout, file });
+  latest.current = { settings, blackout, file };
+
+  // Saved settings, camera access and the list of displays, once.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const [saved, granted, found] = await Promise.all([
+        bridge?.loadSettings().catch(() => null) ?? null,
+        bridge?.cameraAccess().catch(() => 'refused' as const) ?? 'granted' as const,
+        bridge?.displays().catch(() => []) ?? [],
+      ]);
+      if (cancelled) return;
+      const next = validateLiveSettings(saved);
+      if (!found.some(d => d.id === next.display)) next.display = (found.find(d => !d.primary) ?? found[0])?.id ?? null;
+      setAccess(granted); setDisplays(found); setSettings(next);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // The artwork window opening and closing, and its preview.
+  useEffect(() => {
+    if (!bridge) return;
+    const offOutput = bridge.onOutputChanged(open => {
+      setOutputOpen(open);
+      if (open) {
+        setView('art');
+        const now = latest.current;
+        if (now.settings) bridge.send({ type: 'settings', settings: now.settings });
+        bridge.send({ type: 'blackout', on: now.blackout });
+      }
+    });
+    let url: string | null = null;
+    const offPreview = bridge.onPreview((jpeg, rate) => {
+      const next = URL.createObjectURL(new Blob([jpeg], { type: 'image/jpeg' }));
+      setPreview(next); setFps(rate);
+      if (url) URL.revokeObjectURL(url);
+      url = next;
+    });
+    return () => { offOutput(); offPreview(); if (url) URL.revokeObjectURL(url); void bridge.closeOutput().catch(() => {}); };
+  }, []);
+  useEffect(() => { if (!outputOpen) setPreview(null); }, [outputOpen]);
+
+  // The local renderer: only while the artwork window is closed.
+  const ready = !!settings && access !== null;
+  useEffect(() => {
+    if (!canvas || !ready || outputOpen) return;
+    let made: Stage;
+    try { made = new Stage(canvas); } catch (error) { onError((error as Error).message); return; }
+    stage.current = made;
+    made.onState = state => {
+      setSourceState(state);
+      if (state.status === 'running') void made.listCameras().then(setCameras).catch(() => {});
+    };
+    const now = latest.current;
+    made.renderer.blackout = now.blackout;
+    if (now.settings) made.apply(now.settings, now.file);
+    const timer = setInterval(() => setFps(made.renderer.stats().fps), 1000);
+    return () => { clearInterval(timer); stage.current = null; made.dispose(); setSourceState({ status: 'idle' }); };
+  }, [canvas, ready, outputOpen]);
+
+  // Every change goes to whichever side is drawing, and is saved shortly after.
+  useEffect(() => {
+    if (!settings) return;
+    stage.current?.apply(settings, file);
+    if (outputOpen) bridge?.send({ type: 'settings', settings });
+    const timer = setTimeout(() => { void bridge?.saveSettings(settings).catch(() => {}); }, 500);
+    return () => clearTimeout(timer);
+  }, [settings, file]);
+  useEffect(() => { if (stage.current) stage.current.renderer.view = view; }, [view, outputOpen, canvas, ready]);
+
+  const update = useCallback((change: (value: LiveSettings) => LiveSettings) => setSettings(value => value && validateLiveSettings(change(value))), []);
+  const setBlackout = (on: boolean) => { setBlackoutState(on); if (stage.current) stage.current.renderer.blackout = on; if (outputOpen) bridge?.send({ type: 'blackout', on }); };
+  const clear = () => { stage.current?.renderer.clear(); if (outputOpen) bridge?.send({ type: 'clear' }); };
+  const openOutput = async () => {
+    if (!settings || settings.display === null) return;
+    try { await bridge?.openOutput(settings.display); }
+    catch (error) { onError((error as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); setDisplays(await bridge?.displays().catch(() => []) ?? []); }
+  };
+  const closeOutput = () => { void bridge?.closeOutput(); };
+  const retry = () => { if (settings) stage.current?.retry(settings, file); };
+  const chooseFile = (chosen: File) => { setFile(chosen); update(s => ({ ...s, source: { kind: 'file', deviceId: s.source.deviceId } })); };
+
+  return { settings: settings ?? defaultLiveSettings(), ready, access, update, sourceState, cameras, displays, outputOpen, blackout, setBlackout, clear,
+    openOutput, closeOutput, view, setView, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge };
+}

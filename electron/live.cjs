@@ -89,8 +89,10 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, settings
     const display = pickDisplay(screen.getAllDisplays(), displayId);
     if (!display) throw new Error('That display is no longer connected.');
     closeOutput();
+    // The scripted checks open the artwork as an ordinary window so they do not take over the screen.
+    const windowed = process.env.STUDIO_LIVE_TEST_WINDOW === '1';
     const window = new BrowserWindow({
-      ...display.bounds, frame: false, show: false, backgroundColor: '#000000', title: 'Form & Field Live', resizable: false, movable: false,
+      ...(windowed ? { width: 960, height: 540 } : display.bounds), frame: false, show: false, backgroundColor: '#000000', title: 'Form & Field Live', resizable: false, movable: false,
       minimizable: false, fullscreenable: true, skipTaskbar: true, autoHideMenuBar: true,
       webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: false, spellcheck: false },
     });
@@ -101,7 +103,7 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, settings
     window.webContents.on('will-navigate', event => event.preventDefault());
     window.webContents.on('before-input-event', (event, input) => { if (input.type === 'keyDown' && input.key === 'Escape') { event.preventDefault(); window.close(); } });
     window.webContents.on('render-process-gone', () => { if (!window.isDestroyed()) window.close(); });
-    window.once('ready-to-show', () => { if (window.isDestroyed()) return; window.show(); if (process.platform === 'darwin') window.setSimpleFullScreen(true); else window.setFullScreen(true); });
+    window.once('ready-to-show', () => { if (window.isDestroyed()) return; window.show(); if (windowed) return; if (process.platform === 'darwin') window.setSimpleFullScreen(true); else window.setFullScreen(true); });
     window.on('closed', () => { if (output === window) { output = null; tellStudio('studio:live:output', false); } });
     open(window);
   });
@@ -110,7 +112,7 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, settings
   // The artwork page says when it is ready; only then is the studio told the output is open.
   ipcMain.on('studio:live:ready', event => { if (fromOutput(event)) tellStudio('studio:live:output', true); });
   ipcMain.on('studio:live:send', (event, message) => { if (fromStudio(event) && alive(output) && acceptMessage(message)) output.webContents.send('studio:live:message', message); });
-  ipcMain.on('studio:live:preview', (event, bytes) => { if (fromOutput(event) && acceptPreview(bytes)) tellStudio('studio:live:preview', bytes); });
+  ipcMain.on('studio:live:preview', (event, bytes, fps) => { if (fromOutput(event) && acceptPreview(bytes)) tellStudio('studio:live:preview', bytes, Number.isFinite(fps) ? fps : 0); });
   screen.on('display-removed', (_event, display) => { if (alive(output) && output.displayId === display.id) closeOutput(); });
 
   return { closeOutput, isOutput: contents => alive(output) && contents === output.webContents };

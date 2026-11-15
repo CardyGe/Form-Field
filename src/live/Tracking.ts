@@ -15,7 +15,8 @@ const STALE_MS = 500;
 
 export class Tracking implements TrackingFeed {
   fresh = false;
-  private readonly sourceTexture = new THREE.Texture();
+  /** One texture per source element: three sizes a texture once, and a camera and a file differ. */
+  private sourceTexture: THREE.Texture | null = null;
   private readonly frames: Pair;
   private readonly flows: Pair;
   private readonly raw: THREE.WebGLRenderTarget;
@@ -30,13 +31,10 @@ export class Tracking implements TrackingFeed {
   private lastFrameAt = 0;
 
   constructor(private readonly passes: Passes) {
-    this.sourceTexture.colorSpace = THREE.NoColorSpace;
-    this.sourceTexture.minFilter = this.sourceTexture.magFilter = THREE.LinearFilter;
-    this.sourceTexture.generateMipmaps = false;
     this.frames = passes.pair(...CAMERA_SIZE);
     this.flows = passes.pair(...FLOW_SIZE);
     this.raw = passes.target(...FLOW_SIZE);
-    this.copy = passes.material(cameraFragment, { uImage: { value: this.sourceTexture }, uMirror: { value: 1 }, uCrop: { value: new THREE.Vector2(1, 1) } });
+    this.copy = passes.material(cameraFragment, { uImage: { value: null }, uMirror: { value: 1 }, uCrop: { value: new THREE.Vector2(1, 1) } });
     this.measure = passes.material(flowFragment, { uNow: { value: null }, uBefore: { value: null }, uNoise: { value: 0 }, uSensitivity: { value: 1 }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
     this.smooth = passes.material(smoothFragment, { uOld: { value: null }, uNew: { value: this.raw.texture } });
     this.zero = passes.material('void main(){gl_FragColor=vec4(0.);}', {});
@@ -56,7 +54,13 @@ export class Tracking implements TrackingFeed {
       if (this.primed || this.moving) this.reset();
       this.element = ready ? element : null;
       this.frameId = -1;
+      this.sourceTexture?.dispose();
+      this.sourceTexture = null;
       if (!ready) return;
+      // A video needs VideoTexture: a plain texture would be sized from the element's (empty) width attribute.
+      const texture = element instanceof HTMLVideoElement ? new THREE.VideoTexture(element) : new THREE.CanvasTexture(element);
+      texture.colorSpace = THREE.NoColorSpace; texture.minFilter = texture.magFilter = THREE.LinearFilter; texture.generateMipmaps = false;
+      this.sourceTexture = texture; this.copy.uniforms.uImage.value = texture;
     }
     if (source.frameId === this.frameId) {
       if (this.moving && now - this.lastFrameAt > STALE_MS) this.stillFlow();
@@ -67,7 +71,7 @@ export class Tracking implements TrackingFeed {
     const aspect = width / height, wide = 16 / 9;
     (this.copy.uniforms.uCrop.value as THREE.Vector2).set(Math.min(1, wide / aspect), Math.min(1, aspect / wide));
     this.copy.uniforms.uMirror.value = settings.mirror ? 1 : 0;
-    this.sourceTexture.image = element; this.sourceTexture.needsUpdate = true;
+    this.sourceTexture!.needsUpdate = true;
     this.passes.draw(this.copy, this.frames.write);
     this.frames.swap();
     if (!this.primed) {
@@ -88,7 +92,8 @@ export class Tracking implements TrackingFeed {
   }
 
   dispose(): void {
-    for (const item of [this.sourceTexture, this.frames, this.flows, this.raw, this.copy, this.measure, this.smooth, this.zero]) item.dispose();
+    this.sourceTexture?.dispose();
+    for (const item of [this.frames, this.flows, this.raw, this.copy, this.measure, this.smooth, this.zero]) item.dispose();
   }
 
   private stillFlow(): void {

@@ -23,6 +23,7 @@ import { StudioRenderer } from '../rendering/StudioRenderer';
 import { Preview } from './Preview';
 import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
+import LivePanel from './LivePanel';
 import { sameCanvasValues } from '../core/canvas-interaction';
 
 const TAU = Math.PI * 2;
@@ -314,6 +315,8 @@ export default function App() {
     editLayer(() => next, id);
   };
   const [playing, setPlaying] = useState(true), phase = useRef(0), rendererRef = useRef<StudioRenderer | null>(null);
+  /** Live is a separate screen over the studio; the studio pauses underneath it. */
+  const [mode, setMode] = useState<'studio' | 'live'>('studio');
   const [checker, setChecker] = useState(true), [message, setMessage] = useState(''), [error, setError] = useState(''), [saved, setSaved] = useState('Ready');
   const [ready, setReady] = useState(false), [status, setStatus] = useState<StudioStatus | null>(null), [locks, setLocks] = useState({ palette: true, structure: false, motion: true, material: false });
   const [modKey, setModKey] = useState('warp'), [exportOpen, setExportOpen] = useState(false), [jobs, setJobs] = useState<ExportJob[]>([]);
@@ -417,7 +420,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (exportOpen) return;
+      if (exportOpen || mode === 'live') return;
       const command = e.metaKey || e.ctrlKey;
       if (e.key === 'Escape' && workspace.library.current?.matches(':popover-open')) {
         e.preventDefault(); workspace.library.current.hidePopover(); workspace.libraryButton.current?.focus(); return;
@@ -537,10 +540,12 @@ export default function App() {
     } catch (e) { reportError(String(e)); }
   };
 
+  const modeSwitch = <><div className="brand"><div className="brand-mark">f<span>f</span></div><div>Form <span>&</span> Field</div></div>
+    <div className="mode-switch" role="group" aria-label="Section"><button aria-pressed={mode === 'studio'} onClick={() => setMode('studio')}>Studio</button><button aria-pressed={mode === 'live'} disabled={exporting} title={exporting ? 'Live is available when the export has finished' : 'Live camera to projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); setMode('live'); }}>Live</button></div></>;
   return <div className={`studio-shell ${workspace.layersExpanded ? 'layers-expanded' : 'layers-collapsed'} ${workspace.inspectorOpen ? '' : 'inspector-hidden'} ${workspace.focusMode ? 'focus-preview' : ''}`}>
     <input ref={imageInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0]); e.target.value = ''; }} />
     <input ref={maskInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0], true); e.target.value = ''; }} />
-    <header className="app-header"><div className="brand"><div className="brand-mark">f<span>f</span></div><div>Form <span>&</span> Field</div></div>
+    <header className="app-header">{modeSwitch}
       <div className="project-title"><EditableName label="Project name" value={project.name} maxLength={80} onCommit={name => edit(p => ({ ...p, name }))} />{fileName && <span className="project-file" title={filePath}>{fileName}</span>}<span role="status" className={saved === 'Save project to keep changes' ? 'save-failed' : ''}>{saved}</span></div>
       <div className="header-actions"><button className="icon-button" title="Undo · ⌘Z" disabled={!history.current.length} onClick={undo}><Icon name="undo" /></button><button className="icon-button" title="Redo · ⇧⌘Z" disabled={!future.current.length} onClick={redo}><Icon name="redo" /></button><span className="divider" /><button className="text-button" title="New composition · ⌘N" disabled={exporting} onClick={() => void newProject()}><Icon name="plus" size={16} />New</button><button className="text-button" title="Open · ⌘O" onClick={() => void open()}><Icon name="folder" size={16} />Open</button><button className="text-button" title={fileName ? `Save to ${fileName} · ⌘S\nShift-click or ⇧⌘S to save as a new file` : 'Save · ⌘S'} onClick={e => void save(e.shiftKey)}><Icon name="save" size={16} />Save</button><button className="primary-button" onClick={e => { e.currentTarget.focus(); setExportOpen(true); }}><Icon name="download" size={16} />Export</button></div>
     </header>
@@ -570,7 +575,7 @@ export default function App() {
       <div className="workspace-tools"><button ref={workspace.libraryButton} className={`workspace-tool ${workspace.libraryOpen ? 'active' : ''}`} aria-label="Open library" aria-expanded={workspace.libraryOpen} aria-controls="library-drawer" popoverTarget="library-drawer" title="Library · B"><Icon name="library" size={16}/><span>Library</span></button><button ref={workspace.layersButton} className={`workspace-tool ${workspace.layersExpanded ? 'active' : ''}`} aria-label="Toggle layer list" aria-expanded={workspace.layersExpanded} aria-controls="layer-panel" onClick={workspace.toggleLayers} disabled={workspace.focusMode} title="Layers · L"><Icon name="layers" size={16}/></button><span className="viewer-meta">{project.width} × {project.height}<span> · {Number((project.fps.num / project.fps.den).toFixed(2))} fps</span></span></div>
       <div className="viewer-options"><span className="live-badge"><i />{exporting ? 'Exporting' : playing ? 'Playing' : 'Paused'}</span><button className={checker ? 'selected-tool' : ''} title="Toggle transparency checker" aria-pressed={checker} onClick={() => setChecker(v => !v)}><Icon name="grid" size={15} /></button><button ref={workspace.inspectorButton} className={`workspace-tool ${workspace.inspectorOpen && !workspace.focusMode ? 'active' : ''}`} aria-label="Toggle inspector" aria-expanded={workspace.inspectorOpen && !workspace.focusMode} aria-controls="inspector-panel" onClick={workspace.toggleInspector} disabled={workspace.focusMode} title="Inspector · I"><Icon name="inspector" size={16}/></button><button ref={workspace.focusButton} className="workspace-tool focus-toggle" aria-label={workspace.focusMode ? 'Exit focus mode' : 'Focus preview'} aria-pressed={workspace.focusMode} onClick={workspace.toggleFocus} title={workspace.focusMode ? 'Exit focus · F or Esc' : 'Focus preview · F'}><Icon name="focus" size={16}/><span>{workspace.focusMode ? 'Exit focus' : 'Focus'}</span></button></div>
     </div>
-      <div className="preview-stage"><Preview tiled={tiledView && !!project.tileEdges} project={project} playing={playing && !exporting} phase={phase} rendererRef={rendererRef} onError={reportError} onEnded={()=>setPlaying(false)} checker={checker} layer={selected} locks={locks} blocked={exporting || exportOpen || !ready} onChange={(layer, record) => {
+      <div className="preview-stage"><Preview tiled={tiledView && !!project.tileEdges} project={project} playing={playing && !exporting && mode === 'studio'} phase={phase} rendererRef={rendererRef} onError={reportError} onEnded={()=>setPlaying(false)} checker={checker} layer={selected} locks={locks} blocked={exporting || exportOpen || !ready} onChange={(layer, record) => {
         const current = projectRef.current;
         const before = current.layers.find(l => l.id === layer.id);
         if (before && !sameCanvasValues(before, layer)) replace({ ...current, layers: current.layers.map(l => l.id === layer.id ? layer : l) }, record);
@@ -630,6 +635,7 @@ export default function App() {
       </>}</div>
     </> : <div className="empty-inspector"><Icon name="layers" size={32} /><h2>No layers</h2><p>Add an instrument or image to begin.</p><button className="secondary-button" onClick={() => addLayer('surface')}>Add surface</button></div>}</aside>
     </main>
+    {mode === 'live' && <LivePanel header={modeSwitch} onError={reportError} />}
 
     <footer className="app-footer"><span className="workspace-shortcuts"><kbd>F</kbd> focus <kbd>B</kbd> library <kbd>L</kbd> layers <kbd>I</kbd> inspector</span><span className="footer-status"><span className={status && (!status.ffmpeg || !status.ffprobe) ? 'engine-unavailable' : ''}>{status?.ffmpeg && status.ffprobe ? 'Export engine ready' : status ? 'Export engine unavailable' : 'Movies and sequences require the desktop app'}</span><span className="build-label" title={`Commit ${__FORM_FIELD_BUILD__.commit}${__FORM_FIELD_BUILD__.modified ? ' with uncommitted changes' : ''} · built ${new Date(__FORM_FIELD_BUILD__.date).toLocaleString()}`}>v{__FORM_FIELD_BUILD__.version} · build {__FORM_FIELD_BUILD__.build}{__FORM_FIELD_BUILD__.modified ? '+' : ''}</span></span></footer>
     {!exportOpen && <Notices message={message} error={error} onDismiss={() => setError('')} />}

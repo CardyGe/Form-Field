@@ -53,8 +53,13 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
     onMessage: callback => subscribe('studio:live:message', callback),
     onOutputChanged: callback => subscribe('studio:live:output', callback),
     ready: () => ipcRenderer.send('studio:live:ready'),
-    sendPreview: jpeg => ipcRenderer.send('studio:live:preview', jpeg),
-    onPreview: callback => subscribe('studio:live:preview', callback),
+    sendPreview: (jpeg, fps) => ipcRenderer.send('studio:live:preview', jpeg, fps),
+    onPreview: callback => {
+      if (typeof callback !== 'function') throw new TypeError('Expected a callback.');
+      const listener = (_event, jpeg, fps) => callback(jpeg, fps);
+      ipcRenderer.on('studio:live:preview', listener);
+      return () => ipcRenderer.removeListener('studio:live:preview', listener);
+    },
   }),
   onExportProgress: callback => {
     if (typeof callback !== 'function') throw new TypeError('Expected a progress callback.');
