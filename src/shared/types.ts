@@ -96,11 +96,16 @@ export interface ExportJob {
   error?: string;
   createdAt: string;
   seam?: SeamCheck;
+  /** Only for projects with tile edges on. */
+  edges?: EdgeCheck;
 }
 export interface SeamMeasure { seam: number; typical: number; ratio: number; visible: boolean }
 export type SeamCheck = { summary: string } & (
   | { status: 'clean' | 'seam'; jump: SeamMeasure; hitch: SeamMeasure }
   | { status: 'skipped' }
+  | { status: 'error'; message: string });
+export type EdgeCheck = { summary: string } & (
+  | { status: 'clean' | 'seam'; horizontal: SeamMeasure; vertical: SeamMeasure }
   | { status: 'error'; message: string });
 export interface ExportProgress {
   jobId: string;

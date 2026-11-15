@@ -513,7 +513,7 @@ export default function App() {
         setProgress({ jobId: job.id, status: 'encoding', rendered: job.totalFrames, total: job.totalFrames, message: 'Encoding high-precision frames…' });
         const result = await bridge.finishExport(job.id);
         setProgress({ jobId: job.id, status: result.status, rendered: job.totalFrames, total: job.totalFrames, outputPath: result.outputPath, seam: result.seam, message: 'Export verified and ready.' });
-        notify(result.seam?.status === 'seam' ? 'Export complete, but the loop has a visible seam.' : 'Export complete.');
+        notify((result.seam?.status === 'seam' ? 'Export complete, but the loop has a visible seam.' : 'Export complete.') + (result.edges?.status === 'seam' ? ' The tile edges show a seam.' : ''));
       }
     } catch (e) {
       if (!cancel.current) {

@@ -5,7 +5,7 @@ const { existsSync } = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { checkSeam, describeSeam } = require('./seam-check.cjs');
+const { checkSeam, describeSeam, checkEdges, describeEdges } = require('./seam-check.cjs');
 
 const EXR_MAGIC = 20000630;
 const CONTRACT = 'finished-sdr-linear-srgb-straight-v1';
@@ -483,6 +483,18 @@ class ExportManager {
     return { ...result, summary: describeSeam(result) };
   }
 
+  // Advisory, like the loop seam: only for projects that tile.
+  async checkEdges(record) {
+    let result;
+    try {
+      result = await checkEdges({ run: args => this.run(this.ffmpegPath, args, record), directory: record.job.directory, request: record.job.request, frameName, toLinear: srgbToLinear });
+    } catch (error) {
+      if (record.stopped) throw error;
+      result = { status: 'error', message: error.message.split('\n')[0] };
+    }
+    return { ...result, summary: describeEdges(result) };
+  }
+
   async finishExport(id) {
     const record = await this.record(id);
     if (record.job.status === 'complete') return clone(record.job);
@@ -507,6 +519,10 @@ class ExportManager {
       if (record.stopped) throw new Error('Export stopped.');
       record.job.seam = await this.checkSeam(record);
       if (record.stopped) throw new Error('Export stopped.');
+      if (record.job.request.project?.tileEdges === true) {
+        record.job.edges = await this.checkEdges(record);
+        if (record.stopped) throw new Error('Export stopped.');
+      }
       let output = path.join(record.job.directory, png ? 'png' : 'media.mov');
       if (png) { try { await fs.access(output); output = path.join(record.job.directory, `png-${crypto.randomUUID().slice(0, 8)}`); } catch {} }
       await fs.rename(temporary, output);

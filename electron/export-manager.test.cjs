@@ -28,12 +28,12 @@ before(async () => {
 
 after(async () => { if (root) await fs.rm(root, { recursive: true, force: true }); });
 
-async function createContext(label, format = 'png', transparent = true, frameCount = 3) {
+async function createContext(label, format = 'png', transparent = true, frameCount = 3, projectOverrides = {}) {
   const base = await fs.mkdtemp(path.join(root, label));
   const options = { ...tools, jobsDirectory: path.join(base, 'queue'), defaultExportDir: path.join(base, 'output') };
   const events = [];
   const manager = new ExportManager({ ...options, onProgress: event => events.push(event) });
-  const request = { project, format, width: 16, height: 16, fps: { num: 30000, den: 1001 }, frameCount, transparent, background: '#336699' };
+  const request = { project: { ...project, ...projectOverrides }, format, width: 16, height: 16, fps: { num: 30000, den: 1001 }, frameCount, transparent, background: '#336699' };
   const job = await manager.beginExport(request);
   return { manager, options, events, job, request };
 }
@@ -318,5 +318,27 @@ test('every export reports whether its loop closes, without failing a loop that 
   assert.equal(popping.seam.status, 'seam');
   assert.match(popping.seam.summary, /Visible loop seam/);
   const leftovers = (await fs.readdir(clean.directory)).filter(name => name.startsWith('seam-'));
+  assert.deepEqual(leftovers, [], 'Analysis frames are removed.');
+  assert.equal(clean.edges, undefined, 'Tile edges are only checked when the project tiles.');
+});
+
+test('a tiled export reports whether its edges meet, without failing a seam', async () => {
+  async function exportTile(label, value) {
+    const context = await createContext(label, 'png', true, 4, { tileEdges: true });
+    for (let index = 0; index < 4; index++) {
+      const filename = path.join(root, `${label}-${index}.exr`);
+      ffmpeg(['-y', '-f', 'lavfi', '-i', `nullsrc=s=16x16,format=gbrapf32le,geq=r='${value}':g='${value}':b='${value}':a=1`, '-frames:v', '1', '-c:v', 'exr', '-format', 'half', filename]);
+      await context.manager.writeFrame(context.job.id, index, await fs.readFile(filename));
+    }
+    return context.manager.finishExport(context.job.id);
+  }
+  const clean = await exportTile('edges-clean', '0.5+0.4*sin(X/16*2*PI)');
+  assert.equal(clean.edges.status, 'clean', clean.edges.summary);
+  assert.match(clean.edges.summary, /^Tile edges clean/);
+  const ramp = await exportTile('edges-ramp', 'X/16');
+  assert.equal(ramp.status, 'complete', 'An edge seam is advisory and still delivers the media.');
+  assert.equal(ramp.edges.status, 'seam');
+  assert.match(ramp.edges.summary, /^Visible tile seam: left\/right/);
+  const leftovers = (await fs.readdir(ramp.directory)).filter(name => name.startsWith('edges-'));
   assert.deepEqual(leftovers, [], 'Analysis frames are removed.');
 });

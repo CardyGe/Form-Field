@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { measureSeam, describeSeam, seamFrames } = require('./seam-check.cjs');
+const { measureSeam, describeSeam, seamFrames, measureEdges, describeEdges } = require('./seam-check.cjs');
 
 const WIDTH = 512;
 const N = 60;
@@ -62,4 +62,25 @@ test('held film frames are not mistaken for a seam', () => {
   const filmFrames = N * 12 / 30;
   const held = i => (2 * Math.PI * Math.floor((i / N) * filmFrames)) / filmFrames;
   assert.equal(measureSeam(around(held)).status, 'clean');
+});
+
+test('a wrapping image passes the edge check', () => {
+  const w = 64, h = 32, f = new Float32Array(w * h * 3);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++) f[(y * w + x) * 3 + c] = .5 + .4 * Math.sin(2 * Math.PI * x / w) * Math.cos(2 * Math.PI * y / h);
+  assert.equal(measureEdges(f, w, h).status, 'clean');
+});
+test('a ramp fails left/right only', () => {
+  const w = 64, h = 32, f = new Float32Array(w * h * 3);
+  for (let i = 0; i < w * h; i++) f.fill((i % w) / w, i * 3, i * 3 + 3);
+  const r = measureEdges(f, w, h);
+  assert.equal(r.status, 'seam'); assert.equal(r.horizontal.visible, true); assert.equal(r.vertical.visible, false);
+  assert.match(describeEdges(r), /^Visible tile seam: left\/right/);
+});
+test('a flat image is clean', () => { assert.equal(measureEdges(new Float32Array(16 * 16 * 3).fill(.3), 16, 16).status, 'clean'); });
+test('edge results are described plainly', () => {
+  const m = (ratio, visible) => ({ seam: 0, typical: 0, ratio, visible });
+  assert.equal(describeEdges({ status: 'clean', horizontal: m(.94, false), vertical: m(1, false) }), 'Tile edges clean (left/right 0.9×, top/bottom 1.0× of a normal pixel step).');
+  assert.equal(describeEdges({ status: 'seam', horizontal: m(3.21, true), vertical: m(1, false) }), 'Visible tile seam: left/right 3.2× a normal pixel step.');
+  assert.equal(describeEdges({ status: 'seam', horizontal: m(3.21, true), vertical: m(2, true) }), 'Visible tile seam: left/right 3.2× and top/bottom 2.0× a normal pixel step.');
+  assert.match(describeEdges({ status: 'error', message: 'decode failed' }), /decode failed/);
 });
