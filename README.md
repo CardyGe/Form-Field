@@ -1,6 +1,13 @@
 # Form & Field
 
-A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.14 alpha.
+A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.15 alpha.
+
+## What's new in 0.15
+
+- **Live:** a new screen that turns a camera into projected artwork as it happens. Switch between **Studio** and **Live** in the header. See [Live](#live).
+- **Paint:** the first live look. Movement in front of the camera lays down opaque, bristly strokes of colour that slowly fade.
+- **Projector output:** Live shows the artwork full screen on a chosen display while the controls stay on your screen, with Blackout and Clear.
+- **Camera access:** the app now asks for the camera the first time Live is opened. Video is used on this computer only and is never saved or sent anywhere.
 
 ## What's new in 0.14
 
