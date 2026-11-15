@@ -50,7 +50,8 @@ const preview = page => page.getByLabel('Live preview', { exact: true });
 
 let { app, page } = await launch();
 try {
-  const project = await page.evaluate(() => window.studio.loadAutosave());
+  // The studio autosaves shortly after starting; wait for that so there is a project to compare with.
+  const project = await until(() => page.evaluate(() => window.studio.loadAutosave()), v => !!v?.layers?.length, 'the studio never autosaved');
   await check('Live opens, finds the camera and paints from its movement', async () => {
     await page.getByRole('button', { name: 'Live', exact: true }).click();
     await live(page).waitFor();
@@ -88,7 +89,7 @@ try {
     await page.getByRole('button', { name: 'Blackout', exact: true }).click();
     await until(() => lit(output, output.locator('canvas'), 2), v => v === 0, 'blackout did not reach the output');
     await page.getByRole('button', { name: 'Blackout', exact: true }).click();
-    await output.keyboard.press('Escape');
+    await output.keyboard.press('Escape').catch(() => {}); // the window closes on key down, before the key comes back up
     await page.getByRole('button', { name: 'Open output', exact: true }).waitFor();
     await until(() => lit(page, preview(page)), v => v > .003, 'operator renderer did not restart');
     assert.equal(app.windows().length, 1);
@@ -97,13 +98,13 @@ try {
     await page.getByLabel('Fade time', { exact: true }).fill('12');
     await page.getByLabel('Mirror', { exact: true }).uncheck();
     await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.paint?.fadeSeconds === 12 && v.mirror === false, 'settings were not saved');
-    await page.getByRole('button', { name: 'Studio', exact: true }).click();
+    await live(page).getByRole('button', { name: 'Studio', exact: true }).click();
     await live(page).waitFor({ state: 'hidden' });
     assert.deepEqual(await page.evaluate(() => window.studio.loadAutosave()), project);
     await app.close();
     ({ app, page } = await launch());
     await page.getByRole('button', { name: 'Live', exact: true }).click();
-    assert.equal(await page.getByLabel('Fade time', { exact: true }).inputValue(), '12');
+    await until(() => page.getByLabel('Fade time', { exact: true }).inputValue(), v => v === '12', 'saved fade time was not restored');
     assert.equal(await page.getByLabel('Mirror', { exact: true }).isChecked(), false);
   });
   await check('A damaged settings file starts Live with defaults', async () => {
@@ -111,8 +112,8 @@ try {
     await fs.writeFile(path.join(profile, 'live-settings.json'), '{oops');
     ({ app, page } = await launch());
     await page.getByRole('button', { name: 'Live', exact: true }).click();
-    assert.equal(await page.getByLabel('Fade time', { exact: true }).inputValue(), '30');
     await page.getByText(/^Camera running/).waitFor();
+    assert.equal(await page.getByLabel('Fade time', { exact: true }).inputValue(), '30');
   });
   await check('No page errors with the camera allowed', async () => assert.deepEqual(errors, []));
   await check('Refused camera access explains where to allow it and offers other sources', async () => {
@@ -123,7 +124,7 @@ try {
     await page.getByRole('button', { name: 'Use a video file', exact: true }).waitFor();
     await page.getByLabel('Source', { exact: true }).selectOption({ label: 'Test pattern' });
     await until(() => lit(page, preview(page)), v => v > .01, 'test pattern did not paint');
-    await page.getByRole('button', { name: 'Studio', exact: true }).click();
+    await live(page).getByRole('button', { name: 'Studio', exact: true }).click();
     await page.getByLabel('Composition preview', { exact: true }).waitFor();
   });
 } finally {

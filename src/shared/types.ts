@@ -166,6 +166,8 @@ export interface LiveBridge {
   onOutputChanged(callback: (open: boolean) => void): () => void;
   /** Called by the artwork window when it can receive messages. */
   ready(): void;
+  /** Called by the artwork window to close itself (Escape). */
+  requestClose(): void;
   /** A small picture of the artwork and its frame rate, for the operator. */
   sendPreview(jpeg: ArrayBuffer, fps: number): void;
   onPreview(callback: (jpeg: ArrayBuffer, fps: number) => void): () => void;

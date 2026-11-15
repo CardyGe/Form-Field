@@ -26,6 +26,7 @@ export function useLive(onError: (message: string) => void) {
   const [preview, setPreview] = useState<string | null>(null);
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const stage = useRef<Stage | null>(null);
+  const unsaved = useRef<LiveSettings | null>(null);
   const latest = useRef({ settings, blackout, file });
   latest.current = { settings, blackout, file };
 
@@ -92,9 +93,12 @@ export function useLive(onError: (message: string) => void) {
     if (!settings) return;
     stage.current?.apply(settings, file);
     if (outputOpen) bridge?.send({ type: 'settings', settings });
-    const timer = setTimeout(() => { void bridge?.saveSettings(settings).catch(() => {}); }, 500);
+    unsaved.current = settings;
+    const timer = setTimeout(() => { unsaved.current = null; void bridge?.saveSettings(settings).catch(() => {}); }, 500);
     return () => clearTimeout(timer);
   }, [settings, file]);
+  // Leaving Live within that half second must not lose the last change.
+  useEffect(() => () => { if (unsaved.current) void bridge?.saveSettings(unsaved.current).catch(() => {}); }, []);
   useEffect(() => { if (stage.current) stage.current.renderer.view = view; }, [view, outputOpen, canvas, ready]);
 
   const update = useCallback((change: (value: LiveSettings) => LiveSettings) => setSettings(value => value && validateLiveSettings(change(value))), []);

@@ -31,8 +31,10 @@ export default function LiveOutput() {
       void small.convertToBlob({ type: 'image/jpeg', quality: .7 }).then(blob => blob.arrayBuffer()).then(bytes => bridge.sendPreview(bytes, fps)).catch(() => {}).finally(() => { busy = false; });
     };
     raf = requestAnimationFrame(tick);
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };
+    window.addEventListener('keydown', key);
     bridge.ready();
-    return () => { cancelAnimationFrame(raf); off(); stage.dispose(); };
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', key); off(); stage.dispose(); };
   }, []);
   return <div className="live-output">{failure ? <p>{failure}</p> : <canvas ref={canvas} />}</div>;
 }

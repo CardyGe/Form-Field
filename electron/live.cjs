@@ -111,6 +111,8 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, settings
 
   // The artwork page says when it is ready; only then is the studio told the output is open.
   ipcMain.on('studio:live:ready', event => { if (fromOutput(event)) tellStudio('studio:live:output', true); });
+  // Escape pressed in the artwork page. The window also listens for the key itself, in case the page is not responding.
+  ipcMain.on('studio:live:close', event => { if (fromOutput(event)) closeOutput(); });
   ipcMain.on('studio:live:send', (event, message) => { if (fromStudio(event) && alive(output) && acceptMessage(message)) output.webContents.send('studio:live:message', message); });
   ipcMain.on('studio:live:preview', (event, bytes, fps) => { if (fromOutput(event) && acceptPreview(bytes)) tellStudio('studio:live:preview', bytes, Number.isFinite(fps) ? fps : 0); });
   screen.on('display-removed', (_event, display) => { if (alive(output) && output.displayId === display.id) closeOutput(); });
