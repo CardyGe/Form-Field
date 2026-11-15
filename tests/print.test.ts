@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLayer, createProject, validateProject, visibleParameterDefinitions } from '../src/core/project';
+import { PRESETS, applyFinish, applyPreset, createLayer, createProject, finishSupported, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { PRINT_KEYS, FINISH_KEYS } from '../src/core/finishing';
 import { bayerThreshold, classicLevel, printActive, printCoverage, printInkScale, printMarkSize, printUniforms, supportsPrint } from '../src/rendering/print-screen';
 
@@ -99,5 +99,41 @@ test('bayer matrices are complete and balanced', () => {
     assert.equal(seen.size, n * n);
     assert.ok(Math.min(...seen) > 0 && Math.max(...seen) < 1);
     assert.equal(bayerThreshold(matrix, n, n), bayerThreshold(matrix, 0, 0)); // tiles
+  }
+});
+
+test('print looks apply, replace other finishes and clear', () => {
+  const layer = createLayer('surface');
+  const halftone = applyFinish(layer, 'finish-halftone');
+  assert.deepEqual([halftone.params.printMix, halftone.params.printType, halftone.params.printSize, halftone.params.printAngle], [1, 0, 8, 45]);
+  const comic = applyFinish(applyFinish(layer, 'finish-soft-glow'), 'finish-comic-process');
+  assert.deepEqual([comic.params.glowMix, comic.params.printColour, comic.params.printSize], [0, 3, 7]);
+  const edges = applyFinish(layer, 'finish-halftone-edges');
+  assert.deepEqual([edges.params.printArea, edges.params.printEdgeWidth], [1, 16]);
+  const dither = applyFinish(layer, 'finish-bitmap-dither');
+  assert.deepEqual([dither.params.printType, dither.params.printSize, dither.params.printMatrix, dither.params.printAngle], [2, 3, 2, 0]);
+  assert.deepEqual([applyFinish(layer, 'finish-fine-halftone').params.printDot, applyFinish(layer, 'finish-engraving').params.printType, applyFinish(layer, 'finish-rgb-raster').params.printColour], [1, 1, 2]);
+  assert.equal(applyFinish(halftone, 'finish-none').params.printMix, 0);
+  assert.equal(applyFinish(halftone, 'finish-tunnel').params.printMix, 0);
+});
+
+test('print looks are unavailable on graphic patterns', () => {
+  const graphic = createLayer('graphic');
+  assert.equal(finishSupported(graphic, 'finish-halftone'), false);
+});
+
+test('vary never switches the screen or its stepped choices, and keeps it near where it was set', () => {
+  const unlocked = { palette: false, structure: false, motion: false, material: false };
+  const stepped = ['printMix','printType','printDot','printMatrix','printScroll','printInvert','printColour','printInk','printPaper','printArea'];
+  for (const preset of PRESETS) {
+    const layer = applyPreset(createLayer(preset.kind), preset.id);
+    const varied = varyLayer(layer, 1, unlocked, 4000);
+    for (const key of PRINT_KEYS) assert.equal(varied.params[key], layer.params[key], `${preset.id} ${key}`);
+  }
+  const on = applyFinish(createLayer('liquid'), 'finish-halftone');
+  for (let i = 0; i < 30; i++) {
+    const varied = varyLayer(on, 1, unlocked, 5000 + i);
+    for (const key of stepped) assert.equal(varied.params[key], on.params[key], key);
+    assert.ok(Math.abs(varied.params.printSize - 8) <= 63 * .1201, `size ${varied.params.printSize}`);
   }
 });

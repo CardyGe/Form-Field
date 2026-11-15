@@ -454,7 +454,7 @@ PRESETS.push(
  */
 export interface FinishLook { id: string; name: string; description: string; params: Record<string, number> }
 export const FINISH_LOOKS: FinishLook[] = [
-  { id: 'finish-none', name: 'No finish', description: 'Turns feedback and time displacement off.', params: {} },
+  { id: 'finish-none', name: 'No finish', description: 'Turns feedback, time displacement, glow and print screen off.', params: {} },
   { id: 'finish-tunnel', name: 'Tunnel', description: 'The layer becomes a frame that nests inside itself and turns into the distance. Best on full-frame sources.', params: { echo: 0.95, echoZoom: 0.9, echoRotate: 1.5, echoHue: 6, echoFrame: 0.62, echoBlend: 1 } },
   { id: 'finish-bloom-echo', name: 'Bloom Echo', description: 'A centre window streams outward, leaving colour-shifted echoes.', params: { echo: 0.85, echoZoom: 1.035, echoRotate: -1, echoHue: 9, echoBlend: 2, echoWindow: 0.35 } },
   { id: 'finish-glitch-tunnel', name: 'Glitch Tunnel', description: 'A centre window streams outward in stepped rings that streak, break into blocks and crunch into primary colour.', params: { echo: 1, echoBlend: 1, echoEdge: 0.6, echoWindow: 0.5, echoSquare: 0.7, echoRound: 0.25, echoZoom: 1.05, echoLens: 0.15, echoStreak: 0.4, echoStreakAxis: 1, echoBlock: 8, echoCrush: 0.7, echoHue: 12, echoSlip: 0.25 } },
@@ -466,14 +466,22 @@ export const FINISH_LOOKS: FinishLook[] = [
   { id: 'finish-dream-haze', name: 'Dream Haze', description: 'The whole layer swims in a wide, soft haze.', params: { glowMix: 1.2, glowThreshold: 0.15, glowSize: 0.9 } },
   { id: 'finish-hot-highlights', name: 'Hot Highlights', description: 'Only the hottest points flare, tight and strong.', params: { glowMix: 1.5, glowThreshold: 0.8, glowSize: 0.2 } },
   { id: 'finish-glowing-trails', name: 'Glowing Trails', description: "Bloom Echo's outward trails, each one glowing.", params: { echo: 0.85, echoZoom: 1.035, echoRotate: -1, echoHue: 9, echoBlend: 2, echoWindow: 0.35, glowMix: 0.9, glowThreshold: 0.5, glowSize: 0.6 } },
+  { id: 'finish-halftone', name: 'Halftone', description: 'Round dots in the layer\'s own colour, the screen at 45°.', params: { printMix: 1, printType: 0, printSize: 8, printAngle: 45 } },
+  { id: 'finish-fine-halftone', name: 'Fine Halftone', description: 'Small classic dots that join into a checkerboard in the midtones.', params: { printMix: 1, printDot: 1, printSize: 4, printAngle: 45 } },
+  { id: 'finish-engraving', name: 'Engraving', description: 'Parallel lines that swell in the light and thin in the dark.', params: { printMix: 1, printType: 1, printSize: 6, printAngle: 30 } },
+  { id: 'finish-comic-process', name: 'Comic Process', description: 'Four ink screens overprinted at their classic angles.', params: { printMix: 1, printSize: 7, printColour: 3 } },
+  { id: 'finish-rgb-raster', name: 'RGB Raster', description: 'Red, green and blue dot screens that add up to the layer\'s colour.', params: { printMix: 1, printSize: 9, printColour: 2 } },
+  { id: 'finish-bitmap-dither', name: 'Bitmap Dither', description: 'Hard square cells in an 8×8 ordered dither.', params: { printMix: 1, printType: 2, printSize: 3, printMatrix: 2, printAngle: 0 } },
+  { id: 'finish-halftone-edges', name: 'Halftone Edges', description: 'Dots only along the layer\'s edges; the rest stays smooth.', params: { printMix: 1, printSize: 8, printAngle: 45, printArea: 1, printEdgeWidth: 16 } },
 ];
-const FINISH_LOOK_KEYS = [...FEEDBACK_KEYS, ...SLIT_KEYS, ...GLOW_KEYS];
+const FINISH_LOOK_KEYS = [...FEEDBACK_KEYS, ...SLIT_KEYS, ...GLOW_KEYS, ...PRINT_KEYS];
 /** Whether the layer takes finishes at all or, with an id, that finish: glow
- * looks need a layer that can glow. */
+ * and print looks need a layer that supports them. */
 export function finishSupported(layer: Pick<Layer, 'kind' | 'params'>, finishId?: string): boolean {
   if (!supportsFeedback(layer) || !supportsSlitScan(layer)) return false;
   const look = FINISH_LOOKS.find(item => item.id === finishId);
-  return !look || supportsGlow(layer) || !GLOW_KEYS.some(key => key in look.params);
+  if (!look) return true;
+  return (supportsGlow(layer) || !GLOW_KEYS.some(key => key in look.params)) && (supportsPrint(layer) || !PRINT_KEYS.some(key => key in look.params));
 }
 export function applyFinish(layer: Layer, finishId: string): Layer {
   const look = FINISH_LOOKS.find(item => item.id === finishId);
@@ -580,12 +588,16 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     // threshold and size near where the artist set them, not near the recipe's.
     const glow = GLOW_KEYS.includes(key);
     if (glow && (key === 'glowMix' || key === 'glowTint' || !((layer.params.glowMix ?? 0) > 0))) continue;
+    // Print screen likewise: never switch it, never change a stepped choice or
+    // its travel, and keep its continuous controls near the artist's values.
+    const print = PRINT_KEYS.includes(key);
+    if (print && (key === 'printMix' || d.step === 1 || !((layer.params.printMix ?? 0) > 0))) continue;
     if (layer.modulations[key] || key==='tonePivot' || key==='warpScale'&&layer.params.warp===0 || key==='sheenAngle'&&layer.params.anisotropy===0) continue;
     const span = d.max-d.min;
     const personality = character[d.section] * .7 + (random()*2-1) * .3;
     const factor = key === 'angularStep' ? .003 : d.section === 'Camera' ? .035 :
       ['spacing','boxScale','boxRadius'].includes(key) ? .035 : .12;
-    let target = (glow ? original : anchor?.params[key] ?? d.default) + personality * span * factor;
+    let target = (glow || print ? original : anchor?.params[key] ?? d.default) + personality * span * factor;
     // Practical film cadences, chosen once for the whole effect.
     if (key === 'filmFps') target = [12,18,24][Math.floor(random()*3)];
     result.params[key] = clampParameter(original + (target-original)*strength, d);

@@ -5,6 +5,7 @@ A local visual instrument studio for Apple Silicon Macs. Create looping liquid f
 ## What's new in 0.14
 
 - **Four new instruments:** Texture Cuts, Feedback Glitch, Liquid Light and Oscilloscope, with 21 looks between them. The library now has 88 presets.
+- **Print screen finish:** any layer except Graphic Patterns can be redrawn as halftone dots, a line screen or an ordered dither (Finish → Print screen), limited by tone or to its edges, with seven new finishes.
 - **Glow finish:** any layer except Graphic Patterns and Oscilloscope can bloom its bright areas (Finish → Glow), with four new finishes: Soft Glow, Dream Haze, Hot Highlights and Glowing Trails.
 - **Glitch for any feedback:** Glitch echo and the corruption controls from Feedback Glitch work in any layer's Feedback finish.
 - **Files:** **New** (⌘N) starts a fresh composition and Undo brings the previous one back. **Save** (⌘S) writes to the file you last opened or saved; ⇧⌘S or Shift-click saves as a new file. The file name shows in the header.
@@ -64,6 +65,17 @@ Finish → Glow makes the bright parts of a layer spill soft light around themse
 - **Glow colour** keeps the layer's own colour at 0, or uses palette swatch 1–6.
 
 The glow is taken after Feedback and Time displacement, so echoes and delayed slices glow too, and it never feeds back into the echo. Loops close exactly. It is added as light, so it brightens the layers underneath and keeps its soft edge in a transparent export; the layer mask cuts it. On a layer using Flat colour or Fractal contour colouring, the glow keeps the original shading colours unless Glow colour picks a swatch.
+
+## Print screen
+
+Finish → Print screen redraws a layer's tone as a printed screen. Every size is in pixels of a 1080-line frame, like the outline width, so a 4K or supersampled export has the same pattern as the preview. The screen is fixed to the frame: the layer moves under it. It is available for every layer except Graphic Patterns.
+
+- **Screen:** *Screen type* picks Dots, Lines or Dither. *Screen size* is the dot or line pitch, or the size of one dither cell. *Screen angle* turns the screen. *Dot shape* is Round, Classic (dots that join into a checkerboard at mid tone, then become round holes), Diamond or Square. *Dither matrix* is 2×2, 4×4 or 8×8. *Screen travel per loop* slides the screen whole cells, so the loop still closes.
+- **Tone:** below *Tone floor* nothing prints; above *Tone ceiling* the screen is solid. *Dot gain* fattens or thins every mark. *Mark softness* blurs mark edges. *Invert* makes dark areas the big marks, like ink on paper.
+- **Colour:** *Layer colour* keeps the layer's colour, brightening each mark so the layer keeps its overall brightness. *Palette ink* uses one swatch. *RGB light* adds three primary screens; *CMYK ink* overprints four ink screens at their classic angles. *Paper* fills the gaps with a palette swatch instead of leaving them transparent.
+- **Where it prints:** *Print area* is Everywhere, Edges only or Away from edges, so the screen can follow a layer's outline and inner creases while the rest stays smooth. *Edge width*, *Edge sensitivity* and *Edge feather* set how wide the band is, how faint an edge counts and how soft its boundary is.
+
+Every mark edge is worked out exactly and filtered to one output pixel; a screen finer than about two pixels turns into its plain tone instead of shimmering. The screen runs after Flat colour and before grading. Glow is added afterwards from the unscreened layer, so it stays soft over the dots, and the screen never enters the Feedback echo. Finishes: Halftone, Fine Halftone, Engraving, Comic Process, RGB Raster, Bitmap Dither and Halftone Edges.
 
 ## Time displacement
 

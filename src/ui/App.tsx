@@ -1,7 +1,8 @@
-import {FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS} from '../core/finishing';
+import {FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS, PRINT_KEYS} from '../core/finishing';
 import { SLIT_SHAPES, supportsSlitScan } from '../rendering/slitscan';
 import { supportsFeedback } from '../rendering/feedback';
 import { supportsGlow } from '../rendering/bloom';
+import { supportsPrint } from '../rendering/print-screen';
 import { INSTRUMENTS, isInstrument, PROJECTION_LOOK_IDS } from '../core/instruments';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from 'react';
 import type { ExportFormat, Supersample, ExportJob, ExportProgress, Layer, LayerKind, Modulation, ParameterDefinition, Project, StudioStatus } from '../shared/types';
@@ -65,6 +66,48 @@ const secondaryShapeControls: Partial<Record<LayerKind, string[]>> = {
 
 function ChoiceParameter({ label, name, options, value, onChange }: { label: string; name: string; options: string[]; value: number; onChange: (n: number) => void }) {
   return <label className="stacked-label">{label}<select aria-label={name} value={Math.round(value)} onChange={e => onChange(Number(e.target.value))}>{options.map((option, index) => <option key={index} value={index}>{option}</option>)}</select></label>;
+}
+
+const PRINT_CHOICES: Record<string, string[]> = {
+  printType: ['Dots', 'Lines', 'Dither'],
+  printDot: ['Round', 'Classic', 'Diamond', 'Square'],
+  printMatrix: ['2×2', '4×4', '8×8'],
+  printColour: ['Layer colour', 'Palette ink', 'RGB light', 'CMYK ink'],
+  printArea: ['Everywhere', 'Edges only', 'Away from edges'],
+};
+const PRINT_GROUPS: [string, string[]][] = [
+  ['Screen', ['printMix', 'printType', 'printSize', 'printAngle', 'printDot', 'printMatrix', 'printScroll']],
+  ['Tone', ['printFloor', 'printCeiling', 'printGain', 'printSoft', 'printInvert']],
+  ['Colour', ['printColour', 'printInk', 'printPaper']],
+  ['Where it prints', ['printArea', 'printEdgeWidth', 'printEdgeSense', 'printEdgeFeather']],
+];
+/** Whether a print control applies, given the layer's other print choices. */
+function printControlShown(layer: Layer, key: string): boolean {
+  const p = layer.params, type = Math.round(p.printType ?? 0), colour = Math.round(p.printColour ?? 0);
+  if (key === 'printMix') return true;
+  if (!((p.printMix ?? 0) > 0 || !!layer.modulations.printMix)) return false;
+  if (key === 'printDot') return type === 0;
+  if (key === 'printMatrix') return type === 2;
+  if (key === 'printInk') return colour === 1;
+  if (key === 'printInvert') return colour < 2;
+  if (key.startsWith('printEdge')) return Math.round(p.printArea ?? 0) > 0;
+  return true;
+}
+function PrintScreenSection({ layer, definitions, edit, animate, onStart, onEnd }: { layer: Layer; definitions: ParameterDefinition[]; edit: (change: (layer: Layer) => Layer) => void; animate: (key: string) => void; onStart: () => void; onEnd: () => void }) {
+  const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
+  const on = (layer.params.printMix ?? 0) > 0 || !!layer.modulations.printMix;
+  return <section className="control-section"><h3>Print screen</h3><p className="muted-text">Halftone dots, line screens and ordered dither, sized in pixels of a 1080-line frame. Loops close exactly.</p>
+    {PRINT_GROUPS.map(([group, keys]) => {
+      const shown = keys.filter(key => printControlShown(layer, key));
+      if (!shown.length) return null;
+      return <div key={group}>{on && <h4 className="control-subheading">{group}</h4>}{shown.map(key => {
+        const d = definitions.find(item => item.key === key);
+        if (!d) return null;
+        if (PRINT_CHOICES[key]) return <ChoiceParameter key={key} label={d.label} name={d.label} options={PRINT_CHOICES[key]} value={layer.params[key] ?? d.default} onChange={n => set(key, n)} />;
+        return <Parameter key={key} definition={d} value={layer.params[key] ?? d.default} animated={!!layer.modulations[key]} onChange={n => set(key, n)} onAnimate={d.step === 1 ? undefined : () => animate(key)} onStart={onStart} onEnd={onEnd} />;
+      })}</div>;
+    })}
+  </section>;
 }
 
 function lookCaption(preset: typeof PRESETS[number]): string {
@@ -571,8 +614,9 @@ export default function App() {
       </> : <>
         <section className="control-section"><h3>Layer mix</h3><Parameter definition={{ key: 'opacity', label: 'Opacity', min: 0, max: 1, step: .01, default: 1, section: 'Material' }} value={selected.opacity} animated={!!selected.modulations.opacity} onChange={n => editLayer(l => ({ ...l, opacity: n }))} onAnimate={() => { setModKey('opacity'); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} /><label className="stacked-label">Blending<select value={selected.blend} onChange={e => editLayer(l => ({ ...l, blend: e.target.value as Layer['blend'] }))}><option value="normal">Normal</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="add">Light add</option><option value="source">Colour from below</option></select></label></section>
         <section className="control-section"><h3>Color finish</h3>{definitions.filter(d => ['saturation','hue','exposure'].includes(d.key)).map(d => <Parameter key={d.key} definition={d} value={selected.params[d.key] ?? d.default} animated={!!selected.modulations[d.key]} onChange={n => editLayer(l => ({ ...l, params: { ...l.params, [d.key]: n } }))} onAnimate={() => { setModKey(d.key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />)}</section>
-        <section className="control-section"><h3>Tonal finishing</h3><p className="muted-text">Shape luminance and colour while preserving transparency.</p>{definitions.filter(d=>FINISH_KEYS.includes(d.key)&&!TOON_KEYS.includes(d.key)&&!FEEDBACK_KEYS.includes(d.key)&&!SLIT_KEYS.includes(d.key)&&!GLOW_KEYS.includes(d.key)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}</section>
+        <section className="control-section"><h3>Tonal finishing</h3><p className="muted-text">Shape luminance and colour while preserving transparency.</p>{definitions.filter(d=>FINISH_KEYS.includes(d.key)&&!TOON_KEYS.includes(d.key)&&!FEEDBACK_KEYS.includes(d.key)&&!SLIT_KEYS.includes(d.key)&&!GLOW_KEYS.includes(d.key)&&!PRINT_KEYS.includes(d.key)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}</section>
         {supportsGlow(selected) && <section className="control-section"><h3>Glow</h3><p className="muted-text">Bright areas spill soft light. Loops close exactly; adds a few blur passes per glowing layer.</p>{definitions.filter(d=>GLOW_KEYS.includes(d.key)&&(d.key==='glowMix'||(selected.params.glowMix??0)>0||!!selected.modulations.glowMix)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={d.step===1?undefined:()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}</section>}
+        {supportsPrint(selected) && <PrintScreenSection layer={selected} definitions={definitions} edit={editLayer} animate={key=>{setModKey(key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>}
         <section className="control-section"><h3>Flat colour &amp; outlines</h3><p className="muted-text">Hard palette bands and contour lines. For the cleanest edges, lower the source's Relief and Softness.</p>{definitions.filter(d=>TOON_KEYS.includes(d.key)&&(d.key==='toonMix'||(selected.params.toonMix??0)>0)&&(d.key!=='toonOutlineColor'||(selected.params.toonOutline??0)>0)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={d.step===1?undefined:()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}</section>
         {supportsSlitScan(selected) && <section className="control-section"><h3>Time displacement</h3><p className="muted-text">Parts of the frame show the source as it was some frames ago. Loops close exactly; each slice renders the source once more.</p>{definitions.filter(d=>SLIT_KEYS.includes(d.key)&&d.key!=='slitShape'&&(d.key==='slitShift'||(selected.params.slitShift??0)!==0||!!selected.modulations.slitShift)&&(d.key!=='slitBlocks'||selected.params.slitShape===4)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={d.step===1?undefined:()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}{((selected.params.slitShift??0)!==0||!!selected.modulations.slitShift)&&<ChoiceParameter label="Delay map" name="Delay map" options={SLIT_SHAPES} value={selected.params.slitShape??0} onChange={slitShape=>editLayer(l=>({...l,params:{...l.params,slitShape}}))}/>}</section>}
         {supportsFeedback(selected) && <section className="control-section"><h3>Feedback</h3><p className="muted-text">Each frame keeps a faded, moved echo of the last. Loops close exactly; exports warm up before the first frame.</p>{definitions.filter(d=>FEEDBACK_KEYS.includes(d.key)&&d.key!=='echoBlend'&&d.key!=='echoStreakAxis'&&(!['echoRound','echoSquare','echoEdge'].includes(d.key)||(selected.params.echoFrame??0)>0||(selected.params.echoWindow??0)>0)&&(d.key==='echo'||(selected.params.echo??0)>0||!!selected.modulations.echo)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}{((selected.params.echo??0)>0||!!selected.modulations.echo)&&<ChoiceParameter label="Echo blend" name="Echo blend" options={['Mix','Behind source','Brighter']} value={selected.params.echoBlend??0} onChange={echoBlend=>editLayer(l=>({...l,params:{...l.params,echoBlend}}))}/>}{((selected.params.echo??0)>0||!!selected.modulations.echo)&&(selected.params.echoStreak??0)>0&&<ChoiceParameter label="Streak direction" name="Streak direction" options={['Radial','Box']} value={selected.params.echoStreakAxis??0} onChange={echoStreakAxis=>editLayer(l=>({...l,params:{...l.params,echoStreakAxis}}))}/>}</section>}
