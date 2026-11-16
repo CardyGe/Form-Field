@@ -11,6 +11,8 @@ Measured 15 November 2026 with `node scripts/verify-live.mjs --performance`.
 | Frames later than 25 ms | 0 | 0 |
 | Share of the picture covered in paint at the end | 64% | 64% |
 
+**Re-measured 16 November 2026 after Paint was reworked to flow like wet paint** (wind field, colour wash, wet blending, rounded brush marks, averaged tracking): 60.0 fps in both runs, longest gap 17.8 ms, 99th percentile 17.7 ms, no frames later than 25 ms, 82% of the picture covered at the end. The rework added no measurable cost on this machine.
+
 **Machine:** Apple M5 Pro (Mac17,9), macOS 26.6.2, built-in display, 60 Hz.
 
 **What was run:** the Live renderer at 1920 × 1080 with Paint at its default settings and 65,536 particles, driven by the synthetic test source (two moving discs at 30 frames per second), in a visible Electron window.

@@ -24,6 +24,11 @@ app.whenReady().then(()=>{const w=new BrowserWindow({show:${performanceRun},widt
 const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
 const app = await electron.launch({ args: [path.join(out, 'main.cjs')], env });
 const page = await app.firstWindow();
+const started = Date.now();
+app.process().stderr?.on('data', d => { const t = String(d); if (/gpu|crash|lost|fatal|error/i.test(t)) console.error(`[${((Date.now() - started) / 1000).toFixed(1)}s] ${t.trim().slice(0, 300)}`); });
+page.on('crash', () => console.error(`[${((Date.now() - started) / 1000).toFixed(1)}s] page crashed`));
+page.on('console', m => { if (performanceRun) console.error(`[${((Date.now() - started) / 1000).toFixed(1)}s] console ${m.type()}: ${m.text().slice(0, 200)}`); });
+page.on('close', () => console.error(`[${((Date.now() - started) / 1000).toFixed(1)}s] page closed`));
 const errors = [];
 page.on('pageerror', e => errors.push(String(e)));
 page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -89,7 +94,8 @@ try {
       const stats = renderer.stats(); renderer.stop(); renderer.frame(0); const painted = window.live.painted(0).fraction; gaps.sort((a, b) => a - b);
       return { seconds, relay, fps: stats.fps, worstMs: stats.worstMs, medianMs: gaps[gaps.length >> 1], p99Ms: gaps[Math.floor(gaps.length * .99)], over25ms: gaps.filter(g => g > 25).length, frames: stats.frames, painted };
     }, [seconds, relay]);
-    const runs = [await measure(120, false), await measure(60, true)];
+    const length = Number(process.env.LIVE_PERF_SECONDS) || 120;
+    const runs = [await measure(length, false), await measure(Math.ceil(length / 2), true)];
     await fs.writeFile(path.join(out, 'performance.json'), JSON.stringify(runs, null, 2));
     console.log(JSON.stringify(runs, null, 2));
     await app.close();
