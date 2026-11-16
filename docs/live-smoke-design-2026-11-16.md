@@ -230,3 +230,33 @@ Live settings gain:
   4. 1280 × 720 output.
 - Ignore still objects can drop a person who stands extremely still for longer than its time.
 - The app grows by about 20 MB: the library's WebAssembly files plus the model.
+
+## Change after the first try-out (16 November 2026)
+
+Greg tried Smoke on his camera: "the smoke effect is really cool but i dont want to see the person … the effect should turn the person/s into smoke". He also found that the three Start from points "dont really chage much". He approved the change below.
+
+**People are made of smoke, not shown.** This replaces the parts of the design above that draw the person:
+- **No person layer.** The camera picture is never drawn on the artwork, recoloured or otherwise. It is used only to find people and their movement.
+- **The figure is smoke.** Smoke is poured across each person's whole body, up to a level set by **Density**, so their shape reads as a churning smoky figure.
+  - Inside the body the smoke keeps a gentle swirl.
+  - Moving tears smoke off and pushes it.
+  - Standing still, the figure stays. **Smoulder** sets how much it sheds: at 0 the figure holds its shape; at 1 smoke streams freely off it and rises.
+  - When a person leaves, their figure drifts apart and fades.
+- **Colour comes from the palette alone.** It is the smoke palette's five bright colours, drifting over space and time with Colour change. The camera's light and shade are not used.
+- **Burn away is removed.** It is replaced by **Density** (0–1, default 0.6): from a faint figure you can half see through, to a thick, solid-looking one. Saved settings that still contain `burnAway` simply ignore it.
+- **Start from sets all the smoke controls, so the three are clearly different:**
+
+| Start from | Density | Smoulder | Rise | Swirl | Smoke life | Movement response |
+|---|---|---|---|---|---|---|
+| Wispy | 0.25 | 0.9 | 0.8 | 0.7 | 4 s | 1.5 |
+| Smouldering (default) | 0.6 | 0.5 | 0.4 | 0.5 | 6 s | 1 |
+| Solid | 1 | 0.1 | 0.15 | 0.3 | 10 s | 0.7 |
+
+  The values are a first pick, to be judged on the camera. *(My call.)*
+- **Checks:**
+  - The Smoke materials never receive the camera picture.
+  - With Smoulder at 0, a still figure sheds almost nothing outside its outline.
+  - Higher Density gives a brighter figure.
+  - The three Start from points differ measurably in how bright the figure is and in how much smoke leaves it.
+
+Unchanged: person finding, its filters, Show people, the smoke simulation, the movement-only fallback, and the other controls.
