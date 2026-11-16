@@ -16,6 +16,22 @@ import { Paint } from './Paint';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
 
+/** Operator setup view: the camera dimmed, people in blue with a pink outline. Never shown in the artwork window. */
+const peopleViewFragment = /* glsl */`
+uniform sampler2D uCamera, uPeople; uniform vec2 uTexel; uniform float uRoomMissing;
+void main() {
+  vec3 camera = texture2D(uCamera, vUv).rgb;
+  float p = texture2D(uPeople, vUv).r;
+  vec2 e = uTexel * 3.;
+  float edge = step(.3, abs(texture2D(uPeople, vUv + vec2(e.x, 0.)).r - texture2D(uPeople, vUv - vec2(e.x, 0.)).r)
+    + abs(texture2D(uPeople, vUv + vec2(0., e.y)).r - texture2D(uPeople, vUv - vec2(0., e.y)).r));
+  vec3 c = camera * .45 + vec3(.05, .75, .9) * p * .55;
+  c = mix(c, vec3(1., .2, .75), edge);
+  // Use empty room is on but nothing is captured: an amber corner.
+  if (uRoomMissing > .5 && vUv.x > .94 && vUv.y > .9) c = vec3(.95, .7, .2);
+  gl_FragColor = vec4(c, 1.);
+}`;
+
 const finalFragment = /* glsl */`
 uniform sampler2D uImage; uniform float uBlackout, uEncode;
 vec3 encode(vec3 c) { c = clamp(c, 0., 1.); return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }
@@ -27,13 +43,14 @@ void main() {
 export class LiveRenderer {
   settings: LiveSettings = defaultLiveSettings();
   blackout = false;
-  /** 'tracking' is the operator's setup view. The artwork window never uses it. */
-  view: 'art' | 'tracking' = 'art';
+  /** 'tracking' and 'people' are the operator's setup views. The artwork window never uses them. */
+  view: 'art' | 'tracking' | 'people' = 'art';
 
   private readonly renderer: THREE.WebGLRenderer;
   private readonly passes: Passes;
   private readonly final: THREE.ShaderMaterial;
   private readonly trackingView: THREE.ShaderMaterial;
+  private peopleView: THREE.ShaderMaterial | null = null;
   private readonly tracking: Tracking;
   private look: Look | null = null;
   private readonly black: THREE.DataTexture;
@@ -94,6 +111,13 @@ export class LiveRenderer {
       (u.uBox.value as THREE.Vector4).set(box.left, box.right, box.bottom, box.top);
       this.passes.draw(this.trackingView, this.scratch);
       image = this.scratch.texture; encode = 0;
+    } else if (this.view === 'people') {
+      this.peopleView ??= this.passes.material(peopleViewFragment, { uCamera: { value: null }, uPeople: { value: null }, uTexel: { value: new THREE.Vector2(1 / 640, 1 / 360) }, uRoomMissing: { value: 0 } });
+      const u = this.peopleView.uniforms;
+      u.uCamera.value = this.tracking.camera; u.uPeople.value = this.tracking.people;
+      u.uRoomMissing.value = this.settings.people.useEmptyRoom && !this.tracking.roomCaptured ? 1 : 0;
+      this.passes.draw(this.peopleView, this.scratch);
+      image = this.scratch.texture; encode = 0;
     }
     this.final.uniforms.uImage.value = image;
     this.final.uniforms.uEncode.value = encode;
@@ -145,6 +169,7 @@ export class LiveRenderer {
     if (this.disposed) return;
     this.stop(); this.disposed = true;
     for (const item of [this.final, this.trackingView, this.tracking, this.black, this.scratch]) item.dispose();
+    this.peopleView?.dispose();
     this.look?.dispose();
     this.passes.dispose(); this.renderer.dispose();
   }

@@ -16,6 +16,10 @@ await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {LiveRenderer} from './src/live/LiveRenderer';
 export {TestSource, TestMaskProvider} from './src/live/test-source';
 export {defaultLiveSettings} from './src/live/settings';
+export {recolourGLSL, setRamp} from './src/live/recolour';
+export {Passes} from './src/live/passes';
+export * as THREE from 'three';
+export {HOT_SIGNAL, POUR} from './src/core/palettes';
 export const fromHalf = v => { const s = v >> 15, e = (v >> 10) & 31, f = v & 1023; return (s ? -1 : 1) * (e ? Math.pow(2, e - 15) * (1 + f / 1024) : Math.pow(2, -14) * f / 1024); };`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'live.js'), logLevel: 'silent' });
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><body style="margin:0;background:#000"><canvas id="a" style="width:100vw;height:100vh;display:block"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
@@ -251,6 +255,35 @@ try {
   await check('people: Paint never starts person finding', async () => {
     const r = await page.evaluate(() => { window.live.make(undefined, { figure: true }); window.live.run(60); return window.live.current.made.providers; });
     assert.equal(r, 0);
+  });
+  // --- Recolouring and Show people ---
+  await check('recolour: people stay visible on every palette, and bright stays bright (Review Focus 4)', async () => {
+    const r = await page.evaluate(() => {
+      const { THREE, Passes, recolourGLSL, setRamp, HOT_SIGNAL, POUR } = window.live.m;
+      const canvas = new OffscreenCanvas(256, 4), renderer = new THREE.WebGLRenderer({ canvas }), passes = new Passes(renderer);
+      // Brightness 0.1 → 0.9 left to right, standing in for a lit person.
+      const bytes = new Uint8Array(256 * 4 * 4); for (let x = 0; x < 256; x++) for (let y = 0; y < 4; y++) { const v = Math.round((.1 + .8 * x / 255) * 255), i = (y * 256 + x) * 4; bytes.set([v, v, v, 255], i); }
+      const ramp = new THREE.DataTexture(bytes, 256, 4); ramp.needsUpdate = true;
+      const target = passes.target(256, 4), uniforms = { uImage: { value: ramp }, uRamp: { value: [] }, uRampShift: { value: 0 } };
+      const material = passes.material(`${recolourGLSL}\nuniform sampler2D uImage;\nvoid main(){ vec3 c = recolour(texture2D(uImage, vUv).rgb, vUv, 0.); c = clamp(c, 0., 1.); gl_FragColor = vec4(mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)), 1.); }`, uniforms);
+      const out = {};
+      for (const [name, palette] of [['Hot Signal', HOT_SIGNAL], ['Pour', POUR]]) {
+        setRamp(uniforms, palette, 0); passes.draw(material, target);
+        const half = new Uint16Array(256 * 4 * 4); renderer.readRenderTargetPixels(target, 0, 0, 256, 4, half);
+        const px = Array.from(half, v => window.live.m.fromHalf(v) * 255), at = x => px.slice(x * 4, x * 4 + 3), lum = c => .2126 * c[0] + .7152 * c[1] + .0722 * c[2];
+        let darkest = 255; for (let x = 0; x < 256; x++) darkest = Math.min(darkest, Math.max(...at(x)));
+        out[name] = { darkest, low: lum(at(4)), high: lum(at(251)) };
+      }
+      renderer.dispose(); return out;
+    });
+    for (const [name, v] of Object.entries(r)) { assert.ok(v.darkest >= 12, `${name} goes down to ${v.darkest}/255`); assert.ok(v.high > v.low, `${name}: bright ${v.high} not above dark ${v.low}`); }
+  });
+  await check('Show people lights the figure blue and the poster not at all', async () => {
+    const r = await page.evaluate(([px, py]) => { window.live.make(s => { s.look = 'smoke'; }, { figure: true }); window.live.run(180); const { renderer } = window.live.current; renderer.view = 'people'; renderer.frame(1 / 60);
+      const { data, width, height } = window.live.pixels(), f = window.live.figureAt(), at = (x, y) => { const i = (Math.floor((1 - y) * height) * width + Math.floor(x * width)) * 4; return [data[i], data[i + 1], data[i + 2]]; };
+      return { figure: at(f.x, f.y + .08), poster: at(px, py) }; }, [POSTER.x, POSTER.y]);
+    assert.ok(r.figure[2] > r.figure[0] + 40, `figure ${r.figure}`); assert.ok(r.poster[2] < r.poster[0] + 10, `poster ${r.poster}`);
+    await save('show-people', await page.evaluate(() => window.live.png()));
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));

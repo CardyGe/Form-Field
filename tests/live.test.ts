@@ -93,3 +93,6 @@ test('a frame lost by the model is given up on, and the model is behind', () => 
   gate.offer(); assert.equal(gate.behind, false);
   now = READY_MS + 1; assert.equal(gate.behind, true); assert.equal(gate.offer(), true);
 });
+test('near-black palette entries are left out of the ramp, so people never go black', () => {
+  for (const palette of [POUR, HOT_SIGNAL]) assert.ok(paletteRamp(palette).every(([r, g, b]) => .2126 * r + .7152 * g + .0722 * b > .01), palette.join());
+});
