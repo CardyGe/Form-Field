@@ -22,3 +22,17 @@ export function boxWeight(x: number, y: number, box: Box): number {
 export function birthChance(motion: number, response: number, step: number): number {
   return Math.min(1, Math.max(0, motion * response * step * 5));
 }
+
+const ease = (x: number) => { const t = Math.min(1, Math.max(0, x)); return t * t * (3 - 2 * t); };
+/** 1 while something moved (sway included) within the last ignoreSeconds, then eases to 0 over 2 s. null is Off. */
+export function ignoreStillWeight(sinceAnyMove: number, ignoreSeconds: number | null): number {
+  return ignoreSeconds === null ? 1 : 1 - ease((sinceAnyMove - ignoreSeconds) / 2);
+}
+/** How far a still person has burnt away: nothing for the first second still, all of burnAway by three. */
+export function burnFade(sinceDeliberateMove: number, burnAway: number): number {
+  return burnAway * ease((sinceDeliberateMove - 1) / 2);
+}
+/** How much a point counts as a person after the filters. The empty room only applies once captured. */
+export function personWeight(model: number, box: number, still: number, room: { use: boolean; captured: boolean; differs: number }): number {
+  return model * box * still * (room.use && room.captured ? room.differs : 1);
+}
