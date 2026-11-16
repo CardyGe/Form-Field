@@ -1,13 +1,16 @@
 // Person finding in the packaged app: Multiclass loads in its worker from file://, returns masks,
 // nothing goes out to the network, and Live keeps its frame rate.
-// Run: npm run package && node scripts/verify-live-people.mjs [path/to/Form & Field.app]
+// Run: npm run package && node scripts/verify-live-people.mjs [path/to/Form & Field.app] [--performance]
+// --performance: Smoke at 1920 × 1080 with Multiclass running on the fake camera for 120 s (LIVE_PERF_SECONDS to change),
+// written to work/live-people/<run>/performance.json.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { _electron as electron } from 'playwright';
 
 const root = process.cwd(), out = path.join(root, 'work/live-people', new Date().toISOString().replace(/[:.]/g, '-'));
-const bundle = path.resolve(process.argv[2] || 'work/release/mac-arm64/Form & Field.app');
+const performanceRun = process.argv.includes('--performance');
+const bundle = path.resolve(process.argv.slice(2).find(a => !a.startsWith('--')) || 'work/release/mac-arm64/Form & Field.app');
 const profile = path.join(out, 'profile');
 await fs.mkdir(profile, { recursive: true });
 // Smoke chosen before launch, so person finding starts as soon as Live opens.
@@ -44,6 +47,18 @@ try {
     if (blocked.length) console.log(`       ${blocked.length} outgoing request(s) were blocked by the security policy (MediaPipe usage logging)`);
   });
   await check('no page errors', async () => assert.deepEqual(errors, []));
+  if (performanceRun) {
+    const seconds = Number(process.env.LIVE_PERF_SECONDS) || 120;
+    await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setSize(1920, 1080); w.show(); });
+    await page.waitForTimeout(3000);
+    await page.evaluate(() => window.__studioTest.liveFrames.mark());
+    await page.waitForTimeout(seconds * 1000);
+    const frames = await page.evaluate(() => window.__studioTest.liveFrames.read()), people = await page.evaluate(() => window.__studioTest.livePeople());
+    const canvas = await page.getByLabel('Live preview', { exact: true }).evaluate(c => [c.width, c.height]);
+    const result = { seconds, canvas, ...frames, people };
+    await fs.writeFile(path.join(out, 'performance.json'), JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(result, null, 2));
+  }
 } finally {
   await app.close().catch(() => {});
 }

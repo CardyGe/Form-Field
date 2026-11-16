@@ -26,3 +26,24 @@ Measured 15 November 2026 with `node scripts/verify-live.mjs --performance`.
 - Frame rates above 60. The display limits the measurement to 60 Hz, so there is no reading of spare capacity.
 
 These need checking in the real-camera session with a projector attached.
+
+## Smoke, with person finding
+
+Measured 16 November 2026 with `node scripts/verify-live-people.mjs --performance`, in the **packaged app**, on the same Mac.
+
+| | Smoke with Multiclass running |
+|---|---|
+| Length of run | 120 s |
+| Picture size | 1920 × 1080 |
+| Mean frame rate | 60.0 fps |
+| Longest gap between frames | 18.8 ms |
+| 99th-percentile gap | 18.7 ms |
+| Frames later than 25 ms | 0 |
+| Person finding | Multiclass in a background worker, GPU path, about 33 ms per mask, 2,389 masks in the run |
+
+**What was run:** the Live screen with Smoke at its default settings: 256 × 144 simulation grid, smoke colour at 960 × 540, and 20 pressure iterations. The camera was Chromium's built-in fake camera. Person finding ran on every camera frame the worker could take. None of the spec's fallbacks was needed.
+
+**What this does not show:**
+- A real camera, or real people in the picture. The fake camera has no people in it, so the smoke simulation ran with little to inject.
+- The artwork window on a projector. The run used the operator preview, which renders the same 1920 × 1080 picture.
+- A long session.

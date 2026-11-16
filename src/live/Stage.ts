@@ -20,17 +20,21 @@ export class Stage {
   private key = '';
   private raf = 0;
   private last = performance.now();
+  /** Gaps between display frames since the last mark, for the performance check. */
+  private gaps: number[] = [];
 
   constructor(canvas: HTMLCanvasElement) {
     const stage = this;
     this.renderer = new LiveRenderer(canvas, { get element() { return stage.active?.element ?? null; }, get frameId() { return stage.active?.frameId ?? 0; } }, () => new WorkerMaskProvider());
     this.camera.onState = state => { if (this.active === this.camera || state.status !== 'idle') this.onState(state); };
     const tick = (now: number) => {
+      if (this.gaps.length < 100000) this.gaps.push(now - this.last);
       this.pattern?.advance(Math.min(.1, (now - this.last) / 1000)); this.last = now;
       this.raf = requestAnimationFrame(tick);
     };
     // Read-only status for the scripted checks and for support: never any picture.
-    window.__studioTest = { ...window.__studioTest, livePeople: () => this.renderer.peopleDiagnostics() };
+    window.__studioTest = { ...window.__studioTest, livePeople: () => this.renderer.peopleDiagnostics(),
+      liveFrames: { mark: () => { this.gaps = []; }, read: () => frameStats(this.gaps) } };
     this.raf = requestAnimationFrame(tick);
     this.renderer.start();
   }
@@ -71,4 +75,11 @@ export class Stage {
     this.camera.close();
     this.renderer.dispose();
   }
+}
+
+/** Frame-rate summary of display-frame gaps in milliseconds. */
+function frameStats(gaps: number[]): { frames: number; fps: number; worstMs: number; p99Ms: number; over25ms: number } {
+  const sorted = [...gaps].sort((a, b) => a - b), total = gaps.reduce((a, b) => a + b, 0);
+  return { frames: gaps.length, fps: total ? gaps.length / (total / 1000) : 0, worstMs: sorted[sorted.length - 1] ?? 0,
+    p99Ms: sorted[Math.floor(sorted.length * .99)] ?? 0, over25ms: gaps.filter(g => g > 25).length };
 }

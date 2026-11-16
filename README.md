@@ -1,6 +1,12 @@
 # Form & Field
 
-A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.15 alpha.
+A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.16 alpha.
+
+## What's new in 0.16
+
+- **Smoke:** a second Live look. People in front of the camera are recoloured through the palette and turn into curling, billowing smoke as they move. See [Live](#live).
+- **Finding people:** Live can now pick people out from the room, on this computer, with filters for things on the wall and objects that never move.
+- **Show people:** an operator-only view of who Live has found.
 
 ## What's new in 0.15
 
@@ -140,6 +146,24 @@ Live turns a camera into projected artwork as it happens. It is a separate scree
 
 **Paint** is the first look. Moving lays down opaque, bristly strokes of colour; standing still lets them fade. Movement response sets how readily paint appears, Stroke length and Spread shape each throw, Bristle goes from broad strokes to fine hairs, Fade time is how long paint lasts, and Colour change is how quickly the colour moves through the palette.
 
+**Smoke** is the second look. Choose it under **Look**. People are recoloured through the palette and turn into smoke as they move.
+
+- **Start from** sets the look's behaviour:
+  - *Solid until they move*: people look like themselves until they move.
+  - *Always smouldering*: people always give off smoke, and moving whips off more.
+  - *Burning away*: standing still, people dissolve entirely into smoke, and moving brings them back.
+- **Smoulder** and **Burn away** adjust anywhere in between.
+- **Movement response**, **Rise**, **Swirl** and **Smoke life** shape the smoke.
+- **Colour change** and **Palette** set its colours. Smoke keeps its own palette, separate from Paint's.
+
+With Smoke chosen, Setup gains a **Finding people** section:
+- **Show people** marks who Live has found: blue for a person, pink for their outline. It appears on your screen only.
+- **Ignore still objects** stops anything that has not moved for that long from counting as a person, such as a poster or a coat. People standing still still sway enough to stay in. Tick **Count still objects too** to turn this off.
+- **Use empty room**, with **Capture empty room**, only counts what differs from a picture of the room with nobody in it. It needs a fixed camera and steady light. Capture again after opening or closing the output.
+- A status line says whether people finding is running, behind, or has failed. If it fails, Smoke keeps reacting to movement on its own.
+
+People are found on this computer by Google's MediaPipe Multiclass model, which ships with the app. Nothing is downloaded, recorded or sent anywhere.
+
 **Limits to know**
 
 - People are not picked out from the room: anything that moves paints. The Area sliders and camera placement are the remedy.
@@ -147,6 +171,7 @@ Live turns a camera into projected artwork as it happens. It is a separate scree
 - Mirror is on by default, which is right for a camera facing the people.
 - While the output is open the camera belongs to it, so Show tracking is unavailable until you close the output.
 - Video files play in the preview only. Use a camera or the test pattern to drive the output.
+- The person-finding model is built for people fairly near the camera. Crowds at a distance are untested.
 - Measured performance is in `docs/live-performance-2026-11.md`. It has not yet been measured with a real camera and projector.
 
 ## Projection delivery
