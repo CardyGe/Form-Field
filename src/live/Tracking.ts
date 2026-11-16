@@ -7,6 +7,8 @@ import type { Passes, Pair } from './passes';
 import type { FrameSource, TrackingFeed } from './look';
 import type { LiveSettings } from './settings';
 import { cameraFragment, flowFragment, lumaFragment, smoothFragment } from './tracking-shaders';
+import type { MaskProvider, PeopleStatus } from './MaskProvider';
+import { People } from './People';
 
 export const CAMERA_SIZE = [1280, 720] as const;
 export const FLOW_SIZE = [320, 180] as const;
@@ -14,6 +16,9 @@ export const FLOW_SIZE = [320, 180] as const;
 const LUMA_SIZE = [160, 90] as const;
 /** Without a new camera frame for this long, movement is dropped: a camera that went away must not keep painting. */
 const STALE_MS = 500;
+/** Frame ids sent to person finding are offset per source, so a mask from an earlier source is never mistaken for a new one. */
+const EPOCH = 1e9;
+const NOT_STARTED: PeopleStatus = { state: 'loading' };
 
 export class Tracking implements TrackingFeed {
   fresh = false;
@@ -33,8 +38,13 @@ export class Tracking implements TrackingFeed {
   private primed = false;
   private moving = false;
   private lastFrameAt = 0;
+  private readonly peopleStage: People;
+  private provider: MaskProvider | null = null;
+  private epoch = 0;
+  /** Seconds of capped display time, for the slow memory. */
+  private clock = 0;
 
-  constructor(private readonly passes: Passes) {
+  constructor(private readonly passes: Passes, private readonly makeProvider?: () => MaskProvider) {
     this.frames = passes.pair(...CAMERA_SIZE);
     this.flows = passes.pair(...FLOW_SIZE);
     this.lumas = passes.pair(...LUMA_SIZE);
@@ -44,20 +54,48 @@ export class Tracking implements TrackingFeed {
     this.measure = passes.material(flowFragment, { uNow: { value: null }, uBefore: { value: null }, uNoise: { value: 0 }, uSensitivity: { value: 1 }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
     this.smooth = passes.material(smoothFragment, { uOld: { value: null }, uNew: { value: this.raw.texture } });
     this.zero = passes.material('void main(){gl_FragColor=vec4(0.);}', {});
+    this.peopleStage = new People(passes, FLOW_SIZE, LUMA_SIZE);
     this.reset();
   }
+
+  get people(): THREE.Texture { return this.peopleStage.people; }
+  get still(): THREE.Texture { return this.peopleStage.still; }
+  get peopleReady(): boolean { return this.provider !== null && this.peopleStage.ready; }
+  get peopleStatus(): PeopleStatus { return this.provider?.status ?? NOT_STARTED; }
+  get roomCaptured(): boolean { return this.peopleStage.roomCaptured; }
+  /** For the scripted checks and diagnostics: the textures as targets, and how many masks were used. */
+  get peopleTargets() { return { people: this.peopleStage.peopleTarget, still: this.peopleStage.stillTarget, masks: this.peopleStage.masks, provider: this.provider }; }
+  captureRoom(): void { this.peopleStage.captureRoom(); }
 
   get camera(): THREE.Texture { return this.frames.read.texture; }
   get flow(): THREE.Texture { return this.flows.read.texture; }
   get flowTarget(): THREE.WebGLRenderTarget { return this.flows.read; }
+  /** How the source is cropped to 16:9, so a mask made from the raw source lines up with `camera`. */
+  get crop(): THREE.Vector2 { return this.copy.uniforms.uCrop.value as THREE.Vector2; }
 
-  update(source: FrameSource, settings: LiveSettings): void {
+  /** One display frame: movement from new camera frames, and people when the look wants them. `step` is the capped time step. */
+  update(source: FrameSource, settings: LiveSettings, step = 0): void {
+    const wants = settings.look === 'smoke' && !!this.makeProvider;
+    if (wants && !this.provider) this.provider = this.makeProvider!();
+    if (!wants && this.provider) { this.provider.dispose(); this.provider = null; this.peopleStage.reset(); }
+    const before = this.frameId;
+    this.analyse(source, settings);
+    if (!this.provider) return;
+    this.clock += step;
+    const newFrame = this.frameId !== before && this.frameId >= 0;
+    if (newFrame && this.element) this.provider.submit(this.element, this.epoch * EPOCH + this.frameId);
+    this.peopleStage.update(step, { camera: this.camera, flow: this.flow, luma: this.lumas.read.texture, crop: this.crop, fresh: newFrame && this.primed, seconds: this.clock }, this.provider, this.epoch * EPOCH, settings);
+  }
+
+  private analyse(source: FrameSource, settings: LiveSettings): void {
     this.fresh = false;
     const element = source.element, now = performance.now();
     const ready = element && !(element instanceof HTMLVideoElement && (element.readyState < 2 || !element.videoWidth));
     if (!ready || element !== this.element) {
       // No camera, or a different one: the last frame and its movement no longer mean anything.
       if (this.primed || this.moving) this.reset();
+      // People from the old source never carry over.
+      if ((ready ? element : null) !== this.element) { this.epoch++; this.peopleStage.reset(); }
       this.element = ready ? element : null;
       this.frameId = -1;
       this.sourceTexture?.dispose();
@@ -105,6 +143,8 @@ export class Tracking implements TrackingFeed {
 
   dispose(): void {
     this.sourceTexture?.dispose();
+    this.provider?.dispose(); this.provider = null;
+    this.peopleStage.dispose();
     for (const item of [this.frames, this.flows, this.lumas, this.average, this.raw, this.copy, this.measure, this.smooth, this.zero]) item.dispose();
   }
 

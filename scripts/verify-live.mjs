@@ -14,8 +14,9 @@ const performanceRun = process.argv.includes('--performance');
 const out = path.join(root, 'work/live');
 await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {LiveRenderer} from './src/live/LiveRenderer';
-export {TestSource} from './src/live/test-source';
-export {defaultLiveSettings} from './src/live/settings';`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'live.js'), logLevel: 'silent' });
+export {TestSource, TestMaskProvider} from './src/live/test-source';
+export {defaultLiveSettings} from './src/live/settings';
+export const fromHalf = v => { const s = v >> 15, e = (v >> 10) & 31, f = v & 1023; return (s ? -1 : 1) * (e ? Math.pow(2, e - 15) * (1 + f / 1024) : Math.pow(2, -14) * f / 1024); };`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'live.js'), logLevel: 'silent' });
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><body style="margin:0;background:#000"><canvas id="a" style="width:100vw;height:100vh;display:block"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
 app.setPath('userData',${JSON.stringify(path.join(out, 'user-data'))});app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -46,12 +47,18 @@ try {
     const STEP = 1 / 60;
     window.live = {
       m, STEP,
-      make(change) {
+      // options.figure: a person-shaped figure instead of the discs. The source can be swapped with swap().
+      make(change, options = {}) {
         window.live.current?.renderer.dispose();
         const old = document.querySelector('#a'), canvas = old.cloneNode(); old.replaceWith(canvas);
-        const source = new m.TestSource(), renderer = new m.LiveRenderer(canvas, source);
+        const first = new m.TestSource(); first.figure = !!options.figure;
+        const holder = { source: first }, made = { providers: 0 };
+        const frames = { get element() { return holder.source.element; }, get frameId() { return holder.source.frameId; } };
+        const renderer = new m.LiveRenderer(canvas, frames, () => { made.providers++; return made.provider = new m.TestMaskProvider(() => holder.source); });
         const settings = m.defaultLiveSettings(); settings.quality = 720; change?.(settings); renderer.settings = settings;
-        return window.live.current = { source, renderer, canvas };
+        const current = { get source() { return holder.source; }, renderer, canvas, made,
+          swap() { const next = new m.TestSource(); next.figure = holder.source.figure; holder.source = next; return next; } };
+        return window.live.current = current;
       },
       run(frames) { const { source, renderer } = window.live.current; for (let i = 0; i < frames; i++) { source.advance(STEP); renderer.frame(STEP); } },
       // The canvas as 8-bit RGBA, row 0 at the top. Must be called in the same task as the last frame.
@@ -201,6 +208,49 @@ try {
   await check('paint: the camera image never reaches the artwork', async () => {
     const r = await page.evaluate(() => { window.live.make(s => { s.paint.response = 0; }); window.live.run(120); return window.live.painted(0, 0); });
     assert.equal(r.max, 0);
+  });
+  // --- People in tracking ---
+  await page.evaluate(() => {
+    // people: person likelihood at a uv point (origin bottom-left, as the artwork shows it). still: the two timers there.
+    window.live.peopleAt = (x, y) => { const p = window.live.current.renderer.readPeople(); const at = (img, ch, n) => img.data[(Math.min(img.height - 1, Math.floor(y * img.height)) * img.width + Math.min(img.width - 1, Math.floor(x * img.width))) * n + ch];
+      return { people: at(p.people, 0, 4), still: at(p.still, 0, 4), deliberate: at(p.still, 1, 4) }; };
+    window.live.peopleMax = (left = 0, right = 1, bottom = 0, top = 1) => { const { people } = window.live.current.renderer.readPeople(); let max = 0;
+      for (let y = Math.floor(bottom * people.height); y < Math.floor(top * people.height); y++) for (let x = Math.floor(left * people.width); x < Math.floor(right * people.width); x++) max = Math.max(max, people.data[(y * people.width + x) * 4]);
+      return max; };
+    // Where the figure appears in the artwork: mirrored by default.
+    window.live.figureAt = () => { const { source, renderer } = window.live.current, f = source.figurePlace(); return { x: renderer.settings.mirror ? 1 - f.x : f.x, y: f.y }; };
+  });
+  const POSTER = { x: 1 - .915, y: .72 }; // poster centre, mirrored
+  // Nothing counts as moved during the first 2 s after a source starts (camera warm-up), so runs here go past that.
+  await check('people: the figure is found and empty room is not', async () => {
+    const r = await page.evaluate(() => { window.live.make(s => { s.look = 'smoke'; }, { figure: true }); window.live.run(180); const f = window.live.figureAt();
+      return { figure: window.live.peopleAt(f.x, f.y + .08).people, empty: window.live.peopleAt(f.x < .5 ? .9 : .1, .1).people }; });
+    assert.ok(r.figure > .5, `figure ${r.figure}`); assert.ok(r.empty < .05, `empty room ${r.empty}`);
+  });
+  await check('people: the poster never counts; a figure standing with sway stays counted', async () => {
+    const r = await page.evaluate(([px, py]) => { window.live.make(s => { s.look = 'smoke'; }, { figure: true }); window.live.run(180);
+      const poster = window.live.peopleAt(px, py).people; window.live.current.source.standing = true; window.live.run(60 * 40); const f = window.live.figureAt();
+      return { poster, posterLater: window.live.peopleAt(px, py).people, figure: window.live.peopleAt(f.x, f.y + .08).people }; }, [POSTER.x, POSTER.y]);
+    assert.ok(r.poster < .05 && r.posterLater < .05, `poster ${r.poster}, ${r.posterLater}`); assert.ok(r.figure > .5, `standing figure ${r.figure}`);
+  });
+  await check('people: sway keeps the any-movement timer low while the deliberate timer counts up', async () => {
+    const r = await page.evaluate(() => { window.live.make(s => { s.look = 'smoke'; }, { figure: true }); window.live.run(180); window.live.current.source.standing = true; window.live.run(150); const f = window.live.figureAt();
+      return window.live.peopleAt(f.x, f.y); });
+    assert.ok(r.deliberate > 1, `deliberate ${r.deliberate}`); assert.ok(r.still < 1, `any ${r.still}`);
+  });
+  await check('people: nothing is found outside the area box', async () => {
+    const max = await page.evaluate(() => { window.live.make(s => { s.look = 'smoke'; s.box.right = .5; }, { figure: true }); window.live.run(180); return window.live.peopleMax(.5, 1); });
+    assert.equal(max, 0);
+  });
+  await check('people: a new source starts afresh (Review Focus 2)', async () => {
+    const r = await page.evaluate(() => { window.live.make(s => { s.look = 'smoke'; }, { figure: true }); window.live.run(90); const next = window.live.current.swap();
+      window.live.current.renderer.frame(1 / 60); const f = window.live.figureAt();
+      return { people: window.live.peopleMax(), still: window.live.peopleAt(f.x, f.y).still, nextFrames: next.frameId }; });
+    assert.equal(r.people, 0); assert.ok(r.still > 1000, `timers carried over (${r.still})`);
+  });
+  await check('people: Paint never starts person finding', async () => {
+    const r = await page.evaluate(() => { window.live.make(undefined, { figure: true }); window.live.run(60); return window.live.current.made.providers; });
+    assert.equal(r, 0);
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));

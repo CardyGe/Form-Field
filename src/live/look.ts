@@ -8,6 +8,7 @@
  */
 import type * as THREE from 'three';
 import type { LiveSettings } from './settings';
+import type { PeopleStatus } from './MaskProvider';
 
 export interface TrackingFeed {
   /** The camera image after mirroring, up to 1280 × 720. Stored as it arrives (sRGB values). */
@@ -16,6 +17,13 @@ export interface TrackingFeed {
   readonly flow: THREE.Texture;
   /** True on display frames where a new camera frame was analysed. */
   readonly fresh: boolean;
+  /** People, lined up with `camera`: likelihood 0..1 with the filters applied. Zero while not ready or not wanted. */
+  readonly people: THREE.Texture;
+  /** Two timers per point in seconds. r: since any movement nearby (sway counts). g: since deliberate movement. */
+  readonly still: THREE.Texture;
+  /** A mask arrived for this source within the last two seconds. */
+  readonly peopleReady: boolean;
+  readonly peopleStatus: PeopleStatus;
 }
 
 export interface Look {

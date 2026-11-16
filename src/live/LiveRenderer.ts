@@ -10,6 +10,7 @@ import { Passes } from './passes';
 import { capStep } from './maths';
 import { defaultLiveSettings, type LiveSettings } from './settings';
 import type { FrameSource } from './look';
+import type { MaskProvider } from './MaskProvider';
 import { Tracking, FLOW_SIZE } from './Tracking';
 import { Paint } from './Paint';
 import type { Look } from './look';
@@ -46,7 +47,8 @@ export class LiveRenderer {
   private disposed = false;
   private counted = { frames: 0, since: 0, worst: 0 };
 
-  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource) {
+  /** `makeProvider` starts person finding when a look needs people. Without it, people are never found. */
+  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource, makeProvider?: () => MaskProvider) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(1);
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
@@ -55,7 +57,7 @@ export class LiveRenderer {
     try { this.passes = new Passes(this.renderer); } catch (error) { this.renderer.dispose(); throw error; }
     this.black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); this.black.needsUpdate = true;
     this.final = this.passes.material(finalFragment, { uImage: { value: this.black }, uBlackout: { value: 0 }, uEncode: { value: 1 } });
-    this.tracking = new Tracking(this.passes);
+    this.tracking = new Tracking(this.passes, makeProvider);
     this.trackingView = this.passes.material(trackingViewFragment, { uCamera: { value: null }, uFlow: { value: null }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
     this.scratch = this.passes.target(1, 1);
     this.counted.since = performance.now();
@@ -82,7 +84,7 @@ export class LiveRenderer {
     const step = capStep(seconds);
     this.time += step;
     this.resize();
-    this.tracking.update(this.source, this.settings);
+    this.tracking.update(this.source, this.settings, step);
     this.look ??= new Paint(this.passes, this.width, this.height);
     this.look.step(step, this.time, this.tracking, this.settings);
     let image: THREE.Texture = this.look.output, encode = 1;
@@ -110,6 +112,27 @@ export class LiveRenderer {
     this.counted = { frames: 0, since: now, worst: 0 };
     return result;
   }
+
+  /** People and the still timers as floats, row 0 at the bottom. For the scripted checks. */
+  readPeople(): { people: { data: Float32Array; width: number; height: number }; still: { data: Float32Array; width: number; height: number } } {
+    const read = (target: THREE.WebGLRenderTarget) => {
+      const { width, height } = target;
+      if (target.texture.type === THREE.FloatType) { const data = new Float32Array(width * height * 4); this.renderer.readRenderTargetPixels(target, 0, 0, width, height, data); return { data, width, height }; }
+      const half = new Uint16Array(width * height * 4); this.renderer.readRenderTargetPixels(target, 0, 0, width, height, half);
+      return { data: Float32Array.from(half, THREE.DataUtils.fromHalfFloat), width, height };
+    };
+    const { people, still } = this.tracking.peopleTargets;
+    return { people: read(people), still: read(still) };
+  }
+
+  /** Read-only person-finding state: never any picture. */
+  peopleDiagnostics(): { status: unknown; ready: boolean; masks: number; delegate: string } {
+    const t = this.tracking.peopleTargets;
+    return { status: this.tracking.peopleStatus, ready: this.tracking.peopleReady, masks: t.masks, delegate: (t.provider as { delegate?: string } | null)?.delegate ?? '' };
+  }
+
+  captureRoom(): void { this.tracking.captureRoom(); }
+  get roomCaptured(): boolean { return this.tracking.roomCaptured; }
 
   /** The movement field as floats, row 0 at the bottom. For the scripted checks. */
   readFlow(): { data: Float32Array; width: number; height: number } {
