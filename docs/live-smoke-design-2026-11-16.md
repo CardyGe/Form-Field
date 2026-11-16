@@ -312,3 +312,19 @@ Greg's recording after Emit and Forever: "made it worse". The background was cov
 - **Cause:** drawing the figure over the smoke used the person reading as it came. A real camera gives faint readings across the whole room, and the figure's texture showed through them. The test figure's readings were clean, so no check saw it.
 - **Fix:** every part of Smoke counts a person only where the reading is solid (0.3 to 0.7, eased). This covers the figure, the smoke poured off people, the lift, the hold and its ring, the drift, and where clear air stays away.
 - **New check:** the stand-in model can read a faint trace of a person across the room, as a real camera does.
+
+## Fifth try-out (16 November 2026)
+
+Greg: Forever should stop adding once the picture is full, "but also now the person is just this low quality and not look great".
+- **Cause:** for Emit, the figure had been drawn over the smoke with a generated texture. That texture looked like soft camouflage. Greg had approved the earlier version, where the figure was poured into the simulation.
+- **Fix:** the figure is poured into the smoke again, as in the approved version.
+  - Emit now works by marking which smoke is the figure's own (in the smoke's alpha). Figure smoke a moving person has just left behind fades quickly as Emit goes down. The mark wears off within a second, after which the smoke belongs to the room.
+  - Smoke already in the room passes through a figure and is pushed, not replaced, so on Forever people move the smoke around without erasing it.
+  - Smoke shed inside a person counts as theirs until it leaves them.
+- **Forever cap:** adding eases off once about 60% of the picture holds smoke, and the faintest smoke (below 0.02) fades slowly. Stirring alone cannot then spread a haze over everything.
+- **Tried and dropped:** a separate figure layer moved by the flow, which blurred itself smooth.
+- **Check changes:**
+  - "Start from" shedding is measured 3 s after stopping.
+  - The Smoulder-0 leak allows up to 5/255.
+  - The fade-back check no longer requires the figure to dim within half a second, since a smoke figure drifts and thins at the pace of Smoke life.
+- **Note:** `verify-workspace-ui` failed at its focus-mode Escape step (line 126) both on this change and on the previous commit, which had passed it earlier the same day. No studio screen code changed.

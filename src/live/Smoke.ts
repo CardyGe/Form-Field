@@ -5,7 +5,7 @@ import type { Look, TrackingFeed } from './look';
 import type { LiveSettings } from './settings';
 import { Fluid } from './fluid';
 import { setRamp } from './recolour';
-import { CLEAR, compositeFragment, driftFragment, dyeFragment, holdFragment, velocityFragment } from './smoke-shaders';
+import { CLEAR, compositeFragment, driftFragment, dyeFragment, fullnessFragment, holdFragment, velocityFragment } from './smoke-shaders';
 import { PEOPLE_SIZE } from './People';
 
 /** The simulation grid, 16:9. */
@@ -14,14 +14,18 @@ export const SMOKE_GRID: [number, number] = [256, 144];
 const VELOCITY_LIFE = 1.5;
 /** Upward acceleration at Rise 1, in picture heights per second² per unit of smoke brightness. Strong enough that rising smoke clearly moves, so clear air does not mistake it for haze. */
 const RISE = 2.4;
+/** On Forever, smoke thinner than this fades at FOREVER_RATE per second. */
+const FOREVER_THIN = .02, FOREVER_RATE = .3;
 
 export class Smoke implements Look {
-  /** For checks: 'smoke' leaves out the figures drawn over the smoke. */
+  /** For checks. Figures are part of the smoke, so both draw the same picture. */
   show: 'all' | 'smoke' = 'all';
   private readonly fluid: Fluid;
   private readonly velocity: THREE.ShaderMaterial;
   private readonly hold: THREE.ShaderMaterial;
   private readonly drift: Pair;
+  private readonly fullness: THREE.WebGLRenderTarget;
+  private readonly measureFull: THREE.ShaderMaterial;
   private readonly drifting: THREE.ShaderMaterial;
   private readonly dye: THREE.ShaderMaterial;
   private readonly composite: THREE.ShaderMaterial;
@@ -36,11 +40,13 @@ export class Smoke implements Look {
     this.hold = passes.material(holdFragment, { uCurrent: { value: null }, uFlow: { value: null }, uPeople: { value: null }, uDrift: { value: null }, uReady: { value: 0 },
       uSmoulder: { value: .5 }, uSwirl: { value: .5 }, uTime: { value: 0 }, uGrid: { value: new THREE.Vector2(...SMOKE_GRID) } });
     this.drift = passes.pair(1, 1, { float: true, nearest: true });
+    this.fullness = passes.target(1, 1, { float: true, nearest: true });
+    this.measureFull = passes.material(fullnessFragment, { uDye: { value: null } });
     this.drifting = passes.material(driftFragment, { uPrevious: { value: null }, uFlow: { value: null }, uPeople: { value: null }, uReady: { value: 0 }, uStep: { value: 0 } });
-    this.dye = passes.material(dyeFragment, { uDrift: { value: null }, uVelocity: { value: null }, uClear: { value: new THREE.Vector4() }, uCurrent: { value: null }, uFlow: { value: null }, uPeople: { value: null },
+    this.dye = passes.material(dyeFragment, { uDrift: { value: null }, uVelocity: { value: null }, uFullness: { value: null }, uCapFull: { value: 0 }, uClear: { value: new THREE.Vector4() }, uCurrent: { value: null }, uFlow: { value: null }, uPeople: { value: null },
       uReady: { value: 0 }, uDensity: { value: .6 }, uEmit: { value: .6 }, uOpen: { value: 1 }, uSmoulder: { value: .5 }, uStep: { value: 0 }, uTime: { value: 0 },
       uPeopleTexel: { value: new THREE.Vector2(1 / PEOPLE_SIZE[0], 1 / PEOPLE_SIZE[1]) }, ...ramp() });
-    this.composite = passes.material(compositeFragment, { uDye: { value: null }, uPeople: { value: null }, uDrift: { value: null }, uReady: { value: 0 }, uDensity: { value: .6 }, uTime: { value: 0 }, uShowFigure: { value: 1 }, ...ramp() });
+    this.composite = passes.material(compositeFragment, { uDye: { value: null } });
   }
 
   get output(): THREE.Texture { return this.target.texture; }
@@ -48,7 +54,6 @@ export class Smoke implements Look {
   step(seconds: number, time: number, feed: TrackingFeed, settings: LiveSettings): void {
     const s = settings.smoke, ready = feed.peopleReady ? 1 : 0;
     setRamp(this.dye.uniforms, s.palette, s.colourChange);
-    setRamp(this.composite.uniforms, s.palette, s.colourChange);
     if (seconds > 0) {
       const g = this.drifting.uniforms;
       g.uPrevious.value = this.drift.read.texture; g.uFlow.value = feed.flow; g.uPeople.value = feed.people; g.uReady.value = ready; g.uStep.value = seconds;
@@ -58,9 +63,12 @@ export class Smoke implements Look {
       v.uDye.value = this.fluid.dye; v.uRise.value = s.rise * RISE * SMOKE_GRID[1];
       this.fluid.inject('velocity', this.velocity);
       const d = this.dye.uniforms;
+      this.measureFull.uniforms.uDye.value = this.fluid.dye; this.passes.draw(this.measureFull, this.fullness);
+      d.uFullness.value = this.fullness.texture; d.uCapFull.value = s.forever ? 1 : 0;
       d.uFlow.value = feed.flow; d.uPeople.value = feed.people; d.uDrift.value = this.drift.read.texture; d.uVelocity.value = this.fluid.velocity;
       // Forever: nothing fades and nothing is cleared.
-      (d.uClear.value as THREE.Vector4).set(CLEAR.slowFrom, CLEAR.slowTo, CLEAR.thin, s.forever ? 0 : CLEAR.rate);
+      // Forever: only the faintest smoke fades, slowly, so dense smoke stays but stirring cannot spread a haze over everything.
+      (d.uClear.value as THREE.Vector4).set(CLEAR.slowFrom, CLEAR.slowTo, s.forever ? FOREVER_THIN : CLEAR.thin, s.forever ? FOREVER_RATE : CLEAR.rate);
       this.fluid.walls = s.forever;
       d.uReady.value = ready; d.uDensity.value = s.density; d.uEmit.value = s.emit; d.uOpen.value = s.forever ? 0 : 1; d.uSmoulder.value = s.smoulder; d.uStep.value = seconds; d.uTime.value = time;
       this.fluid.inject('dye', this.dye);
@@ -70,7 +78,7 @@ export class Smoke implements Look {
       this.fluid.step(seconds, s.swirl * 60, VELOCITY_LIFE, s.forever ? Infinity : s.lifeSeconds, 0, () => this.fluid.inject('velocity', this.hold));
     }
     const c = this.composite.uniforms;
-    c.uDye.value = this.fluid.dye; c.uPeople.value = feed.people; c.uDrift.value = this.drift.read.texture; c.uReady.value = ready; c.uDensity.value = s.density; c.uTime.value = time; c.uShowFigure.value = this.show === 'all' ? 1 : 0;
+    c.uDye.value = this.fluid.dye;
     this.passes.draw(this.composite, this.target);
   }
 
@@ -84,6 +92,6 @@ export class Smoke implements Look {
   clear(): void { this.fluid.clear(); }
 
   dispose(): void {
-    for (const item of [this.fluid, this.velocity, this.hold, this.drift, this.drifting, this.dye, this.composite, this.target]) item.dispose();
+    for (const item of [this.fluid, this.velocity, this.hold, this.drift, this.drifting, this.fullness, this.measureFull, this.dye, this.composite, this.target]) item.dispose();
   }
 }

@@ -128,11 +128,23 @@ vec3 figureColour(vec2 uv) {
   return smokeColour(uv) * (.35 + .65 * uDensity) * wisp * (.6 + .8 * c);
 }`;
 
+/** How full of smoke the picture is: the share of a 32 × 18 grid holding visible smoke. Written to a 1 × 1 target. */
+export const fullnessFragment = /* glsl */`
+uniform sampler2D uDye;
+void main() {
+  float full = 0.;
+  for (int y = 0; y < 18; y++) for (int x = 0; x < 32; x++) {
+    vec3 d = texture2D(uDye, (vec2(float(x), float(y)) + .5) / vec2(32., 18.)).rgb;
+    full += step(.01, max(d.r, max(d.g, d.b)));
+  }
+  gl_FragColor = vec4(full / 576., 0., 0., 1.);
+}`;
+
 /** Smoke colour, in linear light, capped by its brightest channel so it keeps its hue. */
 export const dyeFragment = /* glsl */`
 uniform sampler2D uCurrent, uFlow, uPeople;
-uniform sampler2D uDrift, uVelocity; uniform vec4 uClear; // slow from, slow to (cells/s), thin, rate
-uniform float uReady, uDensity, uEmit, uSmoulder, uStep, uTime, uOpen; uniform vec2 uPeopleTexel;
+uniform sampler2D uDrift, uVelocity, uFullness; uniform vec4 uClear; // slow from, slow to (cells/s), thin, rate
+uniform float uReady, uDensity, uEmit, uSmoulder, uStep, uTime, uOpen, uCapFull; uniform vec2 uPeopleTexel;
 // A person counts only where the reading is solid: a real camera gives faint readings across the whole room.
 float solid(vec2 uv) { return smoothstep(.3, .7, texture2D(uPeople, uv).r); }
 const float CAP = 1.5;
@@ -147,20 +159,33 @@ void main() {
   vec2 e = uPeopleTexel * 2.;
   float edge = clamp(length(vec2(solid(vUv + vec2(e.x, 0.)) - solid(vUv - vec2(e.x, 0.)),
     solid(vUv + vec2(0., e.y)) - solid(vUv - vec2(0., e.y)))) * 2.5, 0., 1.) * uReady;
-  vec3 current = texture2D(uCurrent, vUv).rgb;
+  vec4 stored = texture2D(uCurrent, vUv);
+  vec3 current = stored.rgb;
   vec2 moved = figureUv(vUv);
-  // The figure is drawn over the smoke (see compositeFragment). Emit decides how much of it is also left
-  // behind in the smoke, to trail and stream: none at Emit 0, so people then only push the smoke around.
-  // Only the solid part of the outline is filled, where the smoke is held.
-  // It settles towards the wisps, so the gaps stay dark.
-  vec3 next = mix(current, figureColour(vUv), clamp(person * uStep * 3. * uEmit / .6, 0., 1.));
+  // On Forever, adding eases off once the picture is mostly full, so it cannot swamp it.
+  float room = 1. - uCapFull * smoothstep(.5, .7, texture2D(uFullness, vec2(.5)).r);
+  float emitting = min(1., uEmit / .6) * room;
+  // The figure is poured into the smoke, settling towards its wisps so the gaps stay dark. Alpha marks how much
+  // of the smoke here is figure, so what a moving figure leaves behind can fade quickly at low Emit.
+  // Only the figure's own part settles: smoke already in the room passes through a figure and is pushed, not erased.
+  float settle = clamp(person * uStep * 3., 0., 1.);
+  vec3 figurePart = mix(current * stored.a, figureColour(vUv), settle);
+  vec3 next = current * (1. - stored.a) + figurePart;
+  float figureShare = max(figurePart.r, max(figurePart.g, figurePart.b)) / max(max(next.r, max(next.g, next.b)), 1e-4);
   // Movement and Smoulder pour more on top, in broken wisps rather than a fog or a bright outline;
   // pouring eases off near the cap.
   float frayed = smoothstep(.45, .7, cloud(moved, uTime, 1.));
   // Emit sets how much new smoke comes off people, moving or still; 0.6 is the original amount.
-  float add = (travel(flow) * region * 3. * (.25 + .75 * frayed) + uSmoulder * 3. * frayed * (edge + .5 * person)) * uEmit / .6;
+  float add = (travel(flow) * region * 3. * (.25 + .75 * frayed) + uSmoulder * 3. * frayed * (edge + .5 * person)) * uEmit / .6 * room;
   float full = max(next.r, max(next.g, next.b)) / CAP;
+  float before = max(next.r, max(next.g, next.b));
   next += colour * add * uStep * max(0., 1. - full);
+  // What is poured is the figure's until it leaves them; poured outside people, it is the room's.
+  figureShare *= mix(before / max(max(next.r, max(next.g, next.b)), 1e-4), 1., person);
+  // Figure smoke just left behind outside people fades quickly as Emit goes down: at Emit 0 people add nothing
+  // lasting. The mark wears off within about a second, after which the smoke belongs to the room and stays.
+  next *= max(0., 1. - uStep * 8. * (1. - person) * figureShare * (1. - emitting));
+  figureShare = mix(max(0., figureShare - uStep), figureShare, person);
   // Clear air: thin smoke in still air fades out quickly, so leftover haze clears to black while rising
   // wisps and fresh trails, which are moving, keep their smoke.
   float slow = 1. - smoothstep(uClear.x, uClear.y, length(texture2D(uVelocity, vUv).xy));
@@ -173,24 +198,15 @@ void main() {
   float border = min(min(vUv.x, 1. - vUv.x), min(vUv.y, 1. - vUv.y));
   next *= mix(max(0., 1. - uStep * 3. * uOpen), 1., smoothstep(0., .06, border));
   float m = max(next.r, max(next.g, next.b));
-  gl_FragColor = vec4(next * min(1., CAP / max(m, 1e-6)), 1.);
+  gl_FragColor = vec4(next * min(1., CAP / max(m, 1e-6)), figureShare);
 }`;
 
-/** The picture: the smoke with the smoky figures over it, bright colour rolling off smoothly instead of clipping. */
+/** The picture: the smoke, figures included, with bright colour rolling off smoothly instead of clipping. */
 export const compositeFragment = /* glsl */`
-uniform sampler2D uDye, uPeople, uDrift; uniform float uReady, uDensity, uTime, uShowFigure;
-// A person counts only where the reading is solid: a real camera gives faint readings across the whole room.
-float solid(vec2 uv) { return smoothstep(.3, .7, texture2D(uPeople, uv).r); }
-${recolourGLSL}
-${figureGLSL}
+uniform sampler2D uDye;
 vec3 rolloff(vec3 c) {
   float m = max(c.r, max(c.g, c.b)), k = .75;
   if (m <= k) return c;
   return c * (k + (1. - k) * (1. - exp(-(m - k) / (1. - k)))) / m;
 }
-void main() {
-  vec3 smoke = texture2D(uDye, vUv).rgb;
-  // The figure over the smoke, so it shows whatever Emit is; screen blending, so it reads as more smoke.
-  vec3 figure = figureColour(vUv) * solid(vUv) * uReady * uShowFigure;
-  gl_FragColor = vec4(rolloff(smoke + figure - smoke * min(figure, vec3(1.))), 1.);
-}`;
+void main() { gl_FragColor = vec4(rolloff(texture2D(uDye, vUv).rgb), 1.); }`;
