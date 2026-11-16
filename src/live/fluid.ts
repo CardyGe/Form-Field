@@ -5,6 +5,7 @@
  *
  * Velocity is in grid cells per second. Each step: curl → vorticity confinement and
  * buoyancy → divergence → pressure (Jacobi) → gradient subtract → advect velocity → advect dye.
+ * The edges are open: smoke can leave the picture.
  */
 import * as THREE from 'three';
 import type { Pair, Passes } from './passes';
@@ -42,9 +43,6 @@ void main() {
   vec2 c = texture2D(uVelocity, vUv).xy;
   float l = texture2D(uVelocity, vUv - vec2(uTexel.x, 0.)).x, r = texture2D(uVelocity, vUv + vec2(uTexel.x, 0.)).x;
   float b = texture2D(uVelocity, vUv - vec2(0., uTexel.y)).y, t = texture2D(uVelocity, vUv + vec2(0., uTexel.y)).y;
-  // Solid walls at the edges of the picture.
-  if (vUv.x - uTexel.x < 0.) l = -c.x; if (vUv.x + uTexel.x > 1.) r = -c.x;
-  if (vUv.y - uTexel.y < 0.) b = -c.y; if (vUv.y + uTexel.y > 1.) t = -c.y;
   gl_FragColor = vec4(.5 * (r - l + t - b), 0., 0., 1.);
 }`;
 const scale = /* glsl */`uniform sampler2D uSource; uniform float uAmount; void main() { gl_FragColor = texture2D(uSource, vUv) * uAmount; }`;
@@ -53,7 +51,10 @@ uniform sampler2D uPressure, uDivergence; uniform vec2 uTexel;
 void main() {
   float l = texture2D(uPressure, vUv - vec2(uTexel.x, 0.)).x, r = texture2D(uPressure, vUv + vec2(uTexel.x, 0.)).x;
   float b = texture2D(uPressure, vUv - vec2(0., uTexel.y)).x, t = texture2D(uPressure, vUv + vec2(0., uTexel.y)).x;
-  gl_FragColor = vec4((l + r + b + t - texture2D(uDivergence, vUv).x) * .25, 0., 0., 1.);
+  float p = (l + r + b + t - texture2D(uDivergence, vUv).x) * .25;
+  // Open edges: pressure is zero at the border, so smoke flows out of the picture rather than piling up against it.
+  if (vUv.x < uTexel.x || vUv.x > 1. - uTexel.x || vUv.y < uTexel.y || vUv.y > 1. - uTexel.y) p = 0.;
+  gl_FragColor = vec4(p, 0., 0., 1.);
 }`;
 const gradient = /* glsl */`
 uniform sampler2D uPressure, uVelocity; uniform vec2 uTexel;

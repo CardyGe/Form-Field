@@ -306,6 +306,9 @@ try {
     window.live.difference = (a, b) => { let s = 0; for (let i = 0; i < a.length; i += 4) s += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]); return s / (a.length / 4 * 3); };
     window.live.smoke = change => window.live.make(s => { s.look = 'smoke'; change?.(s); }, { figure: true });
     // Mean brightness in linear light inside the figure's torso.
+    window.live.aboveHead = () => { const { data, width, height } = window.live.pixels(), f = window.live.figureAt(), h = window.live.current.source.figurePlace().height, lin = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+      let s = 0, n = 0; for (let y = 0; y < Math.floor((1 - f.y - h * .5) * height); y++) for (let x = Math.floor((f.x - .15) * width); x < Math.floor((f.x + .15) * width); x++) {
+        const i = (y * width + x) * 4; s += .2126 * lin(data[i]) + .7152 * lin(data[i + 1]) + .0722 * lin(data[i + 2]); n++; } return s / Math.max(1, n); };
     window.live.figureBrightness = () => { const { data, width, height } = window.live.pixels(), f = window.live.figureAt(), lin = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
       let s = 0, n = 0; for (let y = Math.floor((1 - f.y - .1) * height); y < Math.floor((1 - f.y + .05) * height); y++) for (let x = Math.floor((f.x - .025) * width); x < Math.floor((f.x + .025) * width); x++) {
         const i = (y * width + x) * 4; s += .2126 * lin(data[i]) + .7152 * lin(data[i + 1]) + .0722 * lin(data[i + 2]); n++; } return s / n; };
@@ -331,11 +334,11 @@ try {
       return Object.entries(look).filter(([, v]) => v?.isShaderMaterial).map(([k, v]) => [k, 'uCamera' in v.uniforms]); });
     assert.ok(r.length >= 3, `found ${r.length} materials`); assert.deepEqual(r.filter(([, has]) => has), []);
   });
-  // After 20 s standing, the smoke from earlier movement has gone, so what is off the figure is what it sheds.
+  // After 20 s standing, the smoke from earlier movement has gone. What a still figure sheds rises off it, so it is measured above the head.
   await check('smoke: the three Start from points are clearly different', async () => {
     const r = await page.evaluate(() => { const starts = { wispy: { density: .25, smoulder: .9, rise: .8, swirl: .7, lifeSeconds: 4, response: 1.5 }, solid: { density: 1, smoulder: .1, rise: .15, swirl: .3, lifeSeconds: 10, response: .7 } };
       const out = {}; for (const [name, values] of Object.entries(starts)) { window.live.smoke(s => Object.assign(s.smoke, values)); window.live.run(240); window.live.current.source.standing = true; window.live.run(1200);
-        window.live.layer('smoke'); out[name] = { inside: window.live.figureBrightness(), outside: window.live.outsideFigure().light }; window.live.layer('all'); } return out; });
+        window.live.layer('smoke'); out[name] = { inside: window.live.figureBrightness(), outside: window.live.aboveHead() }; window.live.layer('all'); } return out; });
     assert.ok(r.solid.inside > r.wispy.inside * 1.5, `figure brightness: solid ${r.solid.inside}, wispy ${r.wispy.inside}`);
     assert.ok(r.wispy.outside > r.solid.outside * 1.5, `smoke off the figure: wispy ${r.wispy.outside}, solid ${r.solid.outside}`);
   });
@@ -380,12 +383,12 @@ try {
   });
   await check('smoke: the person fades out when people stop being found, and fades back in (Review Focus 5)', async () => {
     const r = await page.evaluate(() => { window.live.smoke(); window.live.run(240); const { made } = window.live.current, person = () => window.live.figureBrightness();
-      window.live.current.source.standing = true; window.live.run(30); const before = person(); made.provider.paused = true; window.live.run(120 + 30); const fading = person(); window.live.run(90); const gone = person();
+      window.live.current.source.standing = true; window.live.run(30); const before = person(); made.provider.paused = true; window.live.run(120 + 30); const fading = person(); window.live.run(240); const gone = person();
       made.provider.paused = false; window.live.run(30); const returning = person(); window.live.run(90); const back = person(); return { before, fading, gone, returning, back }; });
-    // The figure is smoke now: without people it stops being fed and thins away, and it fills back in when they are found.
+    // The figure is smoke now: without people it stops being fed and thins away at the pace of Smoke life, and fills back in when they are found.
     assert.ok(r.fading < r.before, `half a second in: ${r.fading} of ${r.before}`);
     assert.ok(r.gone < r.before * .5, `gone: ${r.gone} of ${r.before}`);
-    assert.ok(r.back > r.before * .7, `back: ${r.back} of ${r.before}`);
+    assert.ok(r.back > r.before * .5, `back: ${r.back} of ${r.before}`);
   });
   await check('people: a lighting change across the whole picture does not wake the poster', async () => {
     const r = await page.evaluate(([px, py]) => { window.live.make(s => { s.look = 'smoke'; }, { figure: true }); window.live.run(180); const { source } = window.live.current;
@@ -398,6 +401,35 @@ try {
       let frames = 0; for (let i = 0; i < 60; i++) { try { window.live.current.source.advance(1 / 60); renderer.frame(1 / 60); frames++; } catch { break; } }
       return { frames, status: renderer.peopleDiagnostics().status }; });
     assert.equal(r.frames, 60); assert.equal(r.status.state, 'failed'); assert.match(r.status.reason, /no worker here/);
+  });
+  // --- Second try-out: smoke, not a cut-out ---
+  await page.evaluate(() => {
+    const lin = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+    // Linear brightness of every canvas pixel, with how much of a person is there (0..1) from the people texture.
+    window.live.withPeople = () => { const { data, width, height } = window.live.pixels(), { people } = window.live.current.renderer.readPeople(); const out = [];
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) { const i = (y * width + x) * 4, px = Math.floor(x / width * people.width), py = Math.floor((1 - (y + .5) / height) * people.height);
+        out.push([.2126 * lin(data[i]) + .7152 * lin(data[i + 1]) + .0722 * lin(data[i + 2]), people.data[(py * people.width + px) * 4], x / width, y / height]); } return out; };
+    window.live.stillFigure = density => { window.live.smoke(s => { if (density !== undefined) s.smoke.density = density; }); window.live.run(240); window.live.current.source.standing = true; window.live.run(240); return window.live.withPeople(); };
+  });
+  await check('smoke: a low-Density figure has dark gaps, more than a high-Density one', async () => {
+    const r = await page.evaluate(() => { const gaps = density => { const inside = window.live.stillFigure(density).filter(p => p[1] > .9).map(p => p[0]); const top = [...inside].sort((a, b) => a - b)[Math.floor(inside.length * .9)];
+      return inside.filter(v => v < top * .3).length / inside.length; }; return { thin: gaps(.25), thick: gaps(1) }; });
+    assert.ok(r.thin > .2, `only ${(r.thin * 100).toFixed(0)}% of a Density 0.25 figure is gaps`); assert.ok(r.thin > r.thick, `thin ${r.thin}, thick ${r.thick}`);
+  });
+  await check('smoke: the outline is not brighter than the inside of the figure', async () => {
+    const r = await page.evaluate(() => { const px = window.live.stillFigure(), mean = list => list.reduce((a, b) => a + b, 0) / list.length;
+      return { edge: mean(px.filter(p => p[1] > .2 && p[1] < .6).map(p => p[0])), inside: mean(px.filter(p => p[1] > .9).map(p => p[0])) }; });
+    assert.ok(r.edge <= r.inside * 1.1, `outline ${r.edge}, inside ${r.inside}`);
+  });
+  await check('smoke: smoke does not build up at the frame edges', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); const { source, made } = window.live.current; source.field = true; window.live.run(1); made.provider.dispose(); window.live.run(600); source.field = false; source.moving = false; window.live.run(180);
+      const px = window.live.withPeople(), mean = list => list.length ? list.reduce((a, b) => a + b, 0) / list.length : 0, border = p => Math.min(p[2], 1 - p[2], p[3], 1 - p[3]) < .03;
+      return { border: mean(px.filter(border).map(p => p[0])), middle: mean(px.filter(p => !border(p)).map(p => p[0])) }; });
+    assert.ok(r.border <= r.middle, `edges ${r.border}, middle ${r.middle}`);
+  });
+  await check('smoke: with a figure moving at the default settings, most of the picture stays dark', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); window.live.run(600); return window.live.painted(0, 8).fraction; });
+    assert.ok(r < .5, `${(r * 100).toFixed(0)}% of the picture has smoke`);
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));

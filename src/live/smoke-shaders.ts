@@ -74,15 +74,17 @@ float noise(vec2 p) {
   vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
   return mix(mix(hash(i), hash(i + vec2(1., 0.)), f.x), mix(hash(i + vec2(0., 1.)), hash(i + vec2(1., 1.)), f.x), f.y);
 }
-// Billowing cloud texture, drifting upward, so a figure looks like smoke rather than a flat shape.
-float cloud(vec2 uv, float t) {
-  vec2 p = uv * vec2(16. / 9., 1.) * 9. + vec2(0., -t * .6);
+// Turbulent cloud texture, 0..1, drifting upward and twisting, so a figure is made of wisps rather than a flat shape.
+float cloud(vec2 uv, float t, float seed) {
+  vec2 p = uv * vec2(16. / 9., 1.) * 14. + vec2(seed * 13.1, -t * 1.1);
+  p += .9 * vec2(noise(p * .5 + vec2(0., t * .4)), noise(p * .5 + vec2(5.2, -t * .3))) - .45;
   return .5 * noise(p) + .3 * noise(p * 2.1 + vec2(t * .3, 7.)) + .2 * noise(p * 4.3 - vec2(3., t * .9));
 }
-// The palette drifting over the picture and over time; uRampShift is Colour change.
+// The palette drifting through the smoke at about the scale of its wisps; uRampShift is Colour change.
 vec3 smokeColour(vec2 uv) {
   float t = uTime * (.15 + uRampShift);
-  float p = .5 + .32 * sin(uv.x * 4. + t * .37) * cos(uv.y * 3. - t * .23) + .18 * sin((uv.x + uv.y) * 9. + t);
+  vec2 q = uv * vec2(16. / 9., 1.);
+  float p = .5 + .3 * sin(q.x * 9. + t * .7 + 2. * noise(q * 4. + t * .2)) * cos(q.y * 7. - t * .5) + .2 * (noise(q * 6. - vec2(0., t * .6)) - .5) * 2.;
   return rampAt(p);
 }
 void main() {
@@ -92,17 +94,25 @@ void main() {
   float region = uReady > .5 ? texture2D(uPeople, vUv).r : 1.;
   vec2 e = uPeopleTexel * 2.;
   float edge = clamp(length(vec2(texture2D(uPeople, vUv + vec2(e.x, 0.)).r - texture2D(uPeople, vUv - vec2(e.x, 0.)).r,
-    texture2D(uPeople, vUv + vec2(0., e.y)).r - texture2D(uPeople, vUv - vec2(0., e.y)).r)) * 4., 0., 1.) * uReady;
+    texture2D(uPeople, vUv + vec2(0., e.y)).r - texture2D(uPeople, vUv - vec2(0., e.y)).r)) * 2.5, 0., 1.) * uReady;
   vec3 current = texture2D(uCurrent, vUv).rgb;
   // The figure: smoke filling their shape up to Density.
   // Only the solid part of the outline is filled, where the smoke is held; the soft edge is left to what drifts there.
-  float billow = mix(.35, 1.25, cloud(vUv, uTime));
-  // The figure settles towards its textured level, so the billowing shows even when it is full.
-  vec3 next = mix(current, colour * uDensity * billow, clamp(smoothstep(.3, .7, person) * uStep * 6., 0., 1.));
-  // Movement and Smoulder pour more on top; pouring eases off near the cap.
-  float add = travel(flow) * region * uResponse * 6. + uSmoulder * 1.5 * (edge + .3 * person);
+  // The figure is wisps with dark gaps: Density sets how much of the cloud is filled in, and how bright.
+  float c = cloud(vUv, uTime, 0.), coverage = mix(.25, .9, uDensity);
+  float wisp = smoothstep(.88 - coverage, 1.12 - coverage, c);
+  vec3 figure = colour * (.35 + .65 * uDensity) * wisp * (.6 + .8 * c);
+  // The figure settles towards its wisps, so the gaps stay dark even after it has been full.
+  vec3 next = mix(current, figure, clamp(smoothstep(.3, .7, person) * uStep * 6., 0., 1.));
+  // Movement and Smoulder pour more on top, in broken wisps rather than a fog or a bright outline;
+  // pouring eases off near the cap.
+  float frayed = smoothstep(.45, .7, cloud(vUv, uTime, 1.));
+  float add = travel(flow) * region * uResponse * 3. * (.25 + .75 * frayed) + uSmoulder * 3. * frayed * (edge + .5 * person);
   float full = max(next.r, max(next.g, next.b)) / CAP;
   next += colour * add * uStep * max(0., 1. - full);
+  // Near the frame edges smoke thins away, so it leaves the picture instead of piling up there.
+  float border = min(min(vUv.x, 1. - vUv.x), min(vUv.y, 1. - vUv.y));
+  next *= mix(max(0., 1. - uStep * 3.), 1., smoothstep(0., .06, border));
   float m = max(next.r, max(next.g, next.b));
   gl_FragColor = vec4(next * min(1., CAP / max(m, 1e-6)), 1.);
 }`;
