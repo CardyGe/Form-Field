@@ -282,3 +282,19 @@ He agreed to these changes:
 - The outline is not brighter than the inside of the figure.
 - Smoke does not build up at the frame edges.
 - With a figure moving at the default settings, most of the picture stays dark.
+
+## Third try-out (16 November 2026)
+
+Greg's third recording showed the figure reading as smoke, but with three problems:
+- The background filled with dim fog.
+- The texture inside the figure looked like spots fixed to the screen.
+- Smoke did not clearly stream off him.
+
+He agreed to these changes, made together with the fixes they needed:
+- **Clear air.** Thin smoke in slow-moving air fades out at up to 1.2 per second. This does not happen near people, where smoke is born thin and slow, and it does not touch moving smoke or trails.
+  - In a scene that used to leave about 60% of the picture as dim haze four seconds after everything stopped, clear air leaves under 25%.
+  - Stronger clearing would also wipe out real trails within two seconds. *(My call: trails matter more.)*
+- **The texture travels with people.** The average movement of the moving parts of people is added up; the figure's texture is drawn shifted by it, and smoke held inside a figure is carried along at that speed. The texture is also finer and streams upward faster.
+- **Smoulder releases the hold quickly.** The hold is full at Smoulder 0 and falls with the cube of (1 − Smoulder), so the default 0.5 really gives off smoke.
+- **Rise is three times stronger.** Rising smoke clearly moves, so clear air does not mistake it for haze.
+- **Smoke life goes up to 12 s** (it was 20). Longer saved values are brought down to 12.

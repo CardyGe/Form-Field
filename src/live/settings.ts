@@ -46,7 +46,7 @@ export const SMOKE_CONTROLS: LiveControl<SmokeKey>[] = [
   { key: 'response', label: 'Movement response', min: 0, max: 3, step: .01, default: 1 },
   { key: 'rise', label: 'Rise', min: 0, max: 1, step: .01, default: .4 },
   { key: 'swirl', label: 'Swirl', min: 0, max: 1, step: .01, default: .5 },
-  { key: 'lifeSeconds', label: 'Smoke life', min: 1, max: 20, step: .5, default: 6 },
+  { key: 'lifeSeconds', label: 'Smoke life', min: 1, max: 12, step: .5, default: 6 },
   { key: 'colourChange', label: 'Colour change', min: 0, max: 1, step: .01, default: .3 },
 ];
 /** Starting points: each sets every smoke control except colour, so they look clearly different. Smouldering is the default. */

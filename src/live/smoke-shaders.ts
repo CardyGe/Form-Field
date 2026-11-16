@@ -5,6 +5,9 @@
  */
 import { recolourGLSL } from './recolour';
 
+/** Clear air: thin smoke (below `thin`) in slow air (below `slowTo` cells/s) fades out at up to `rate` per second. */
+export const CLEAR = { slowFrom: 4, slowTo: 20, thin: .4, rate: 1.2 };
+
 /**
  * Deliberate movement from the flow field: how far things moved per camera frame, so sway does not count.
  * Starts at People's deliberate-movement threshold (0.002 uv a frame).
@@ -28,7 +31,7 @@ void main() {
   vec3 flow = texture2D(uFlow, vUv).rgb;
   float person = texture2D(uPeople, vUv).r * uReady;
   // Smoke rises in proportion to how dense it is, except where a figure is holding it (see holdFragment).
-  float hold = smoothstep(.05, .4, person) * (1. - uSmoulder) * (1. - travel(flow));
+  float hold = smoothstep(.05, .4, person) * pow(1. - uSmoulder, 3.) * (1. - travel(flow));
   v.y += uRise * dot(texture2D(uDye, vUv).rgb, vec3(.2126, .7152, .0722)) * uStep * (1. - hold);
   // Smoulder lifts smoke off them.
   v.y += uSmoulder * person * .25 * uGrid.y * uStep;
@@ -45,7 +48,7 @@ void main() {
  * and so does movement, so moving still tears smoke off.
  */
 export const holdFragment = /* glsl */`
-uniform sampler2D uCurrent, uFlow, uPeople; uniform float uReady, uSmoulder, uSwirl, uTime; uniform vec2 uGrid;
+uniform sampler2D uCurrent, uFlow, uPeople, uDrift; uniform float uReady, uSmoulder, uSwirl, uTime; uniform vec2 uGrid;
 ${travel}
 ${churn}
 void main() {
@@ -57,14 +60,39 @@ void main() {
     float a = float(i) * .785398;
     near = max(near, texture2D(uPeople, vUv + vec2(cos(a), sin(a)) * 2.5 / uGrid).r * uReady);
   }
-  float hold = smoothstep(.05, .4, near) * (1. - uSmoulder) * (1. - travel(texture2D(uFlow, vUv).rgb));
-  vec2 held = churn(vUv, uTime) * uGrid.y * .06 * (.3 + uSwirl) * smoothstep(.6, .95, person);
+  // Held smoke churns, and is carried along at the people's own speed, so it moves with them.
+  // Fully held at Smoulder 0, and let go quickly as Smoulder rises, so a smouldering figure really does give off smoke.
+  float hold = smoothstep(.05, .4, near) * pow(1. - uSmoulder, 3.);
+  vec2 carried = texture2D(uDrift, vec2(.5)).zw * uGrid;
+  vec2 held = churn(vUv, uTime) * uGrid.y * .06 * (.3 + uSwirl) * smoothstep(.6, .95, person) + carried * smoothstep(.05, .4, person);
   gl_FragColor = vec4(mix(v, held, hold), 0., 1.);
+}`;
+
+/**
+ * How far the people in the picture have moved, added up over time (uv), in a 1 × 1 target: the figure's
+ * texture is drawn shifted by it, so it travels with them instead of staying fixed to the screen.
+ * The average movement of everything counted as a person, from a 32 × 18 grid.
+ */
+export const driftFragment = /* glsl */`
+uniform sampler2D uPrevious, uFlow, uPeople; uniform float uReady, uStep;
+void main() {
+  vec2 sum = vec2(0.); float weight = 0.;
+  for (int y = 0; y < 18; y++) for (int x = 0; x < 32; x++) {
+    vec2 q = (vec2(float(x), float(y)) + .5) / vec2(32., 18.);
+    // Only the parts of people that are actually moving: a still middle would dilute the average to nothing.
+    vec2 f = texture2D(uFlow, q).rg;
+    float p = texture2D(uPeople, q).r * uReady * smoothstep(.0005, .003, length(f));
+    sum += f * p; weight += p;
+  }
+  // move: uv per second. xy: how far, added up; zw: how fast now, which also carries the held smoke along.
+  vec2 move = weight > .5 ? sum / weight * 30. : vec2(0.);
+  gl_FragColor = vec4(texture2D(uPrevious, vec2(.5)).xy + move * uStep, move);
 }`;
 
 /** Smoke colour, in linear light, capped by its brightest channel so it keeps its hue. */
 export const dyeFragment = /* glsl */`
 uniform sampler2D uCurrent, uFlow, uPeople;
+uniform sampler2D uDrift, uVelocity; uniform vec4 uClear; // slow from, slow to (cells/s), thin, rate
 uniform float uReady, uDensity, uResponse, uSmoulder, uStep, uTime; uniform vec2 uPeopleTexel;
 const float CAP = 1.5;
 ${recolourGLSL}
@@ -74,9 +102,10 @@ float noise(vec2 p) {
   vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
   return mix(mix(hash(i), hash(i + vec2(1., 0.)), f.x), mix(hash(i + vec2(0., 1.)), hash(i + vec2(1., 1.)), f.x), f.y);
 }
-// Turbulent cloud texture, 0..1, drifting upward and twisting, so a figure is made of wisps rather than a flat shape.
+// Turbulent cloud texture, 0..1, streaming upward and twisting, so a figure is made of wisps rather than a flat shape.
+// uv is already shifted by how far people have moved, so the texture travels with them.
 float cloud(vec2 uv, float t, float seed) {
-  vec2 p = uv * vec2(16. / 9., 1.) * 14. + vec2(seed * 13.1, -t * 1.1);
+  vec2 p = uv * vec2(16. / 9., 1.) * 20. + vec2(seed * 13.1, -t * 2.2);
   p += .9 * vec2(noise(p * .5 + vec2(0., t * .4)), noise(p * .5 + vec2(5.2, -t * .3))) - .45;
   return .5 * noise(p) + .3 * noise(p * 2.1 + vec2(t * .3, 7.)) + .2 * noise(p * 4.3 - vec2(3., t * .9));
 }
@@ -99,17 +128,26 @@ void main() {
   // The figure: smoke filling their shape up to Density.
   // Only the solid part of the outline is filled, where the smoke is held; the soft edge is left to what drifts there.
   // The figure is wisps with dark gaps: Density sets how much of the cloud is filled in, and how bright.
-  float c = cloud(vUv, uTime, 0.), coverage = mix(.25, .9, uDensity);
+  vec2 moved = vUv - texture2D(uDrift, vec2(.5)).xy;
+  float c = cloud(moved, uTime, 0.), coverage = mix(.25, .9, uDensity);
   float wisp = smoothstep(.88 - coverage, 1.12 - coverage, c);
   vec3 figure = colour * (.35 + .65 * uDensity) * wisp * (.6 + .8 * c);
   // The figure settles towards its wisps, so the gaps stay dark even after it has been full.
-  vec3 next = mix(current, figure, clamp(smoothstep(.3, .7, person) * uStep * 6., 0., 1.));
+  vec3 next = mix(current, figure, clamp(smoothstep(.3, .7, person) * uStep * 3., 0., 1.));
   // Movement and Smoulder pour more on top, in broken wisps rather than a fog or a bright outline;
   // pouring eases off near the cap.
-  float frayed = smoothstep(.45, .7, cloud(vUv, uTime, 1.));
+  float frayed = smoothstep(.45, .7, cloud(moved, uTime, 1.));
   float add = travel(flow) * region * uResponse * 3. * (.25 + .75 * frayed) + uSmoulder * 3. * frayed * (edge + .5 * person);
   float full = max(next.r, max(next.g, next.b)) / CAP;
   next += colour * add * uStep * max(0., 1. - full);
+  // Clear air: thin smoke in still air fades out quickly, so leftover haze clears to black while rising
+  // wisps and fresh trails, which are moving, keep their smoke.
+  float slow = 1. - smoothstep(uClear.x, uClear.y, length(texture2D(uVelocity, vUv).xy));
+  // Not around people, where smoke is born thin and slow before it rises.
+  float source = person;
+  for (int i = 0; i < 8; i++) { float a = float(i) * .785398; source = max(source, texture2D(uPeople, vUv + vec2(cos(a) * 9. / 16., sin(a)) * .06).r * uReady); }
+  float thin = (1. - smoothstep(.02, uClear.z, max(current.r, max(current.g, current.b)))) * slow * (1. - smoothstep(.1, .5, source));
+  next *= max(0., 1. - uStep * uClear.w * thin);
   // Near the frame edges smoke thins away, so it leaves the picture instead of piling up there.
   float border = min(min(vUv.x, 1. - vUv.x), min(vUv.y, 1. - vUv.y));
   next *= mix(max(0., 1. - uStep * 3.), 1., smoothstep(0., .06, border));

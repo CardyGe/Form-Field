@@ -425,11 +425,34 @@ try {
     const r = await page.evaluate(() => { window.live.smoke(); const { source, made } = window.live.current; source.field = true; window.live.run(1); made.provider.dispose(); window.live.run(600); source.field = false; source.moving = false; window.live.run(180);
       const px = window.live.withPeople(), mean = list => list.length ? list.reduce((a, b) => a + b, 0) / list.length : 0, border = p => Math.min(p[2], 1 - p[2], p[3], 1 - p[3]) < .03;
       return { border: mean(px.filter(border).map(p => p[0])), middle: mean(px.filter(p => !border(p)).map(p => p[0])) }; });
-    assert.ok(r.border <= r.middle, `edges ${r.border}, middle ${r.middle}`);
+    // A picture that has fully cleared passes too.
+    assert.ok(r.border <= r.middle || r.border < 1e-4, `edges ${r.border}, middle ${r.middle}`);
   });
   await check('smoke: with a figure moving at the default settings, most of the picture stays dark', async () => {
     const r = await page.evaluate(() => { window.live.smoke(); window.live.run(600); return window.live.painted(0, 8).fraction; });
     assert.ok(r < .5, `${(r * 100).toFixed(0)}% of the picture has smoke`);
+  });
+  // --- Third try-out: clear air, texture that travels ---
+  await check('smoke: faint haze clears to black, even with long Smoke life', async () => {
+    // Faint smoke everywhere (gentle movement across the whole frame, no people found), then everything stops: the leftover haze must clear.
+    const r = await page.evaluate(() => { window.live.smoke(s => Object.assign(s.smoke, { lifeSeconds: 12, response: .15 })); const { source, made } = window.live.current; source.field = true; window.live.run(1); made.provider.dispose();
+      window.live.run(300); source.field = false; source.moving = false; window.live.run(240);
+      const { data } = window.live.pixels(); let haze = 0; for (let i = 0; i < data.length; i += 4) { const v = Math.max(data[i], data[i + 1], data[i + 2]); if (v > 3 && v < 100) haze++; } return haze / (data.length / 4); });
+    // Without clear air this scene leaves about 60% of the picture as dim haze; clear air must cut that to well under half.
+    assert.ok(r < .25, `${(r * 100).toFixed(0)}% of the picture is dim haze four seconds after everything stopped`);
+  });
+  await check('smoke: the texture inside a moving figure travels with it', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(s => { s.smoke.density = .6; s.smoke.smoulder = 0; }); window.live.run(240);
+      const patch = (data, width, height, cx, cy) => { const out = []; for (let y = -12; y < 12; y++) for (let x = -12; x < 12; x++) { const i = ((Math.floor((1 - cy) * height) + y) * width + Math.floor(cx * width) + x) * 4; out.push(data[i] + data[i + 1] + data[i + 2]); } return out; };
+      const diff = (a, b) => a.reduce((s, v, i) => s + Math.abs(v - b[i]), 0) / a.length;
+      let screen = 0, travelling = 0;
+      for (let k = 0; k < 6; k++) {
+        const one = window.live.pixels(), f1 = window.live.figureAt(); const a = patch(one.data, one.width, one.height, f1.x, f1.y + .05);
+        window.live.run(4); const two = window.live.pixels(), f2 = window.live.figureAt();
+        screen += diff(a, patch(two.data, two.width, two.height, f1.x, f1.y + .05)); travelling += diff(a, patch(two.data, two.width, two.height, f2.x, f2.y + .05)); window.live.run(20);
+      }
+      return { screen, travelling }; });
+    assert.ok(r.travelling < r.screen, `with the figure ${r.travelling}, fixed to the screen ${r.screen}`);
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));

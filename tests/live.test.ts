@@ -39,7 +39,7 @@ test('a display that has gone is replaced, preferring one that is not this scree
   assert.equal(chooseDisplay([], 7), null);
 });
 
-import { SMOKE_STARTS } from '../src/live/settings';
+import { SMOKE_STARTS, SMOKE_CONTROLS } from '../src/live/settings';
 import { paletteRamp } from '../src/live/colour';
 import { ignoreStillWeight, personWeight } from '../src/live/maths';
 import { HOT_SIGNAL, POUR, CANDY } from '../src/core/palettes';
@@ -117,4 +117,8 @@ test('a mask after a restart resets the count of restarts', () => {
 });
 test('near-black palette entries are left out of the ramp, so people never go black', () => {
   for (const palette of [POUR, HOT_SIGNAL]) assert.ok(paletteRamp(palette).every(([r, g, b]) => .2126 * r + .7152 * g + .0722 * b > .01), palette.join());
+});
+test('Smoke life goes up to 12 seconds, and longer saved values are brought down to it', () => {
+  assert.equal(SMOKE_CONTROLS.find(c => c.key === 'lifeSeconds')!.max, 12);
+  assert.equal(validateLiveSettings({ smoke: { lifeSeconds: 20 } }).smoke.lifeSeconds, 12);
 });
