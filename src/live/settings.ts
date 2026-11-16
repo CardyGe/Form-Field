@@ -10,7 +10,7 @@ export interface Box { left: number; right: number; bottom: number; top: number 
 export type PaintKey = 'response' | 'strokeLength' | 'bristle' | 'spread' | 'fadeSeconds' | 'colourChange' | 'ground';
 export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number }
 export type LookKind = 'paint' | 'smoke';
-export type SmokeKey = 'density' | 'smoulder' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange';
+export type SmokeKey = 'density' | 'emit' | 'smoulder' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange';
 /** Where people are found. ignoreStillSeconds null means Off. */
 export interface PeopleSettings { ignoreStillSeconds: number | null; useEmptyRoom: boolean }
 export interface LiveSettings {
@@ -27,7 +27,8 @@ export interface LiveSettings {
   /** Paint's palette. Smoke keeps its own in `smoke.palette`. */
   palette: string[];
   look: LookKind;
-  smoke: Record<SmokeKey, number> & { palette: string[] };
+  /** forever: smoke never fades, and stays in the picture. */
+  smoke: Record<SmokeKey, number> & { palette: string[]; forever: boolean };
   people: PeopleSettings;
 }
 
@@ -42,6 +43,7 @@ export const PAINT_CONTROLS: LiveControl[] = [
 ];
 export const SMOKE_CONTROLS: LiveControl<SmokeKey>[] = [
   { key: 'density', label: 'Density', min: 0, max: 1, step: .01, default: .6 },
+  { key: 'emit', label: 'Emit', min: 0, max: 1, step: .01, default: .6 },
   { key: 'smoulder', label: 'Smoulder', min: 0, max: 1, step: .01, default: .5 },
   { key: 'response', label: 'Movement response', min: 0, max: 3, step: .01, default: 1 },
   { key: 'rise', label: 'Rise', min: 0, max: 1, step: .01, default: .4 },
@@ -49,8 +51,8 @@ export const SMOKE_CONTROLS: LiveControl<SmokeKey>[] = [
   { key: 'lifeSeconds', label: 'Smoke life', min: 1, max: 12, step: .5, default: 6 },
   { key: 'colourChange', label: 'Colour change', min: 0, max: 1, step: .01, default: .3 },
 ];
-/** Starting points: each sets every smoke control except colour, so they look clearly different. Smouldering is the default. */
-export const SMOKE_STARTS: { id: 'wispy' | 'smouldering' | 'solid'; label: string; values: Record<Exclude<SmokeKey, 'colourChange'>, number> }[] = [
+/** Starting points: each sets every smoke control except colour and Emit, so they look clearly different. Smouldering is the default. */
+export const SMOKE_STARTS: { id: 'wispy' | 'smouldering' | 'solid'; label: string; values: Record<Exclude<SmokeKey, 'colourChange' | 'emit'>, number> }[] = [
   { id: 'wispy', label: 'Wispy', values: { density: .25, smoulder: .9, rise: .8, swirl: .7, lifeSeconds: 4, response: 1.5 } },
   { id: 'smouldering', label: 'Smouldering', values: { density: .6, smoulder: .5, rise: .4, swirl: .5, lifeSeconds: 6, response: 1 } },
   { id: 'solid', label: 'Solid', values: { density: 1, smoulder: .1, rise: .15, swirl: .3, lifeSeconds: 10, response: .7 } },
@@ -67,7 +69,7 @@ export function defaultLiveSettings(): LiveSettings {
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, c.default])) as Record<PaintKey, number>,
     palette: [...HOT_SIGNAL],
     look: 'paint',
-    smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL] },
+    smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
   };
 }
@@ -97,7 +99,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     palette: [...palette],
     look: v.look === 'smoke' ? 'smoke' : 'paint',
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, ranged(smoke[c.key], c.min, c.max, c.default)])) as Record<SmokeKey, number>,
-      palette: [...(isPalette(smoke.palette) ? smoke.palette : d.smoke.palette)] },
+      palette: [...(isPalette(smoke.palette) ? smoke.palette : d.smoke.palette)], forever: smoke.forever === true },
     people: { ignoreStillSeconds: still, useEmptyRoom: typeof people.useEmptyRoom === 'boolean' ? people.useEmptyRoom : false },
   };
 }

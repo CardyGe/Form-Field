@@ -17,9 +17,9 @@ function peopleLine(status: PeopleStatus | null): string {
 }
 const CAMERA_OFF = 'Camera access is off. Allow Form & Field in System Settings › Privacy & Security › Camera, then reopen the app.';
 
-function Slider({ label, value, min, max, step, unit = '', onChange }: { label: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (value: number) => void }) {
-  return <label className="live-control"><span>{label}<output>{step >= 1 ? value : value.toFixed(2)}{unit}</output></span>
-    <input aria-label={label} type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(Number(e.target.value))} /></label>;
+function Slider({ label, value, min, max, step, unit = '', shown, disabled = false, onChange }: { label: string; value: number; min: number; max: number; step: number; unit?: string; shown?: string; disabled?: boolean; onChange: (value: number) => void }) {
+  return <label className="live-control"><span>{label}<output>{shown ?? `${step >= 1 ? value : value.toFixed(2)}${unit}`}</output></span>
+    <input aria-label={label} type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={e => onChange(Number(e.target.value))} /></label>;
 }
 
 /** The Live screen. `header` is the app's own mode switch, so both screens share it. */
@@ -112,7 +112,11 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
           <p className="live-note">People are made of smoke. Moving tears it off them.</p>
           <div className="live-starts" role="group" aria-label="Start from">{SMOKE_STARTS.map(start =>
             <button key={start.id} className={`text-button ${Object.entries(start.values).every(([k, v]) => s.smoke[k as keyof typeof start.values] === v) ? 'on' : ''}`} onClick={() => setSmoke({ ...start.values })}>{start.label}</button>)}</div>
-          {SMOKE_CONTROLS.map(c => <Slider key={c.key} label={c.label} value={s.smoke[c.key]} min={c.min} max={c.max} step={c.step} unit={c.key === 'lifeSeconds' ? ' s' : ''} onChange={value => setSmoke({ [c.key]: value })} />)}
+          {SMOKE_CONTROLS.map(c => c.key === 'lifeSeconds' ? <div key={c.key}>
+            <Slider label={c.label} value={s.smoke.lifeSeconds} min={c.min} max={c.max} step={c.step} unit=" s" shown={s.smoke.forever ? 'Forever' : undefined} disabled={s.smoke.forever} onChange={value => setSmoke({ lifeSeconds: value })} />
+            <label className="live-check"><input aria-label="Forever" type="checkbox" checked={s.smoke.forever} onChange={e => setSmoke({ forever: e.target.checked })} />Forever
+              <small>Smoke never fades and stays in the picture: people move it around. Turn Emit down once it is full; Clear empties it.</small></label>
+          </div> : <Slider key={c.key} label={c.label} value={s.smoke[c.key]} min={c.min} max={c.max} step={c.step} onChange={value => setSmoke({ [c.key]: value })} />)}
           <label className="stacked-label">Palette<select aria-label="Palette" value={smokePaletteName} onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) setSmoke({ palette: [...found[1]] }); }}>
             {!smokePaletteName && <option value="">Custom</option>}{PALETTES.map(([name]) => <option key={name}>{name}</option>)}</select></label>
           <div className="live-swatches" title="Darkest to brightest, as people are coloured">{rampHex(s.smoke.palette).map((c, i) => <i key={i} style={{ background: c }} />)}</div>

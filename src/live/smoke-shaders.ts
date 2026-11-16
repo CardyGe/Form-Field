@@ -89,14 +89,13 @@ void main() {
   gl_FragColor = vec4(texture2D(uPrevious, vec2(.5)).xy + move * uStep, move);
 }`;
 
-/** Smoke colour, in linear light, capped by its brightest channel so it keeps its hue. */
-export const dyeFragment = /* glsl */`
-uniform sampler2D uCurrent, uFlow, uPeople;
-uniform sampler2D uDrift, uVelocity; uniform vec4 uClear; // slow from, slow to (cells/s), thin, rate
-uniform float uReady, uDensity, uResponse, uSmoulder, uStep, uTime; uniform vec2 uPeopleTexel;
-const float CAP = 1.5;
-${recolourGLSL}
-${travel}
+/**
+ * The smoky figure: the palette drifting through a turbulent cloud texture that travels with people
+ * (uDrift) and streams upward. Density sets how much of the cloud is filled in, and how bright.
+ * Shared by the smoke pass (which leaves some of it behind as smoke, set by Emit) and the picture
+ * (which draws the figure over the smoke).
+ */
+const figureGLSL = /* glsl */`
 float hash(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float noise(vec2 p) {
   vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
@@ -116,6 +115,22 @@ vec3 smokeColour(vec2 uv) {
   float p = .5 + .3 * sin(q.x * 9. + t * .7 + 2. * noise(q * 4. + t * .2)) * cos(q.y * 7. - t * .5) + .2 * (noise(q * 6. - vec2(0., t * .6)) - .5) * 2.;
   return rampAt(p);
 }
+vec2 figureUv(vec2 uv) { return uv - texture2D(uDrift, vec2(.5)).xy; }
+vec3 figureColour(vec2 uv) {
+  float c = cloud(figureUv(uv), uTime, 0.), coverage = mix(.25, .9, uDensity);
+  float wisp = smoothstep(.88 - coverage, 1.12 - coverage, c);
+  return smokeColour(uv) * (.35 + .65 * uDensity) * wisp * (.6 + .8 * c);
+}`;
+
+/** Smoke colour, in linear light, capped by its brightest channel so it keeps its hue. */
+export const dyeFragment = /* glsl */`
+uniform sampler2D uCurrent, uFlow, uPeople;
+uniform sampler2D uDrift, uVelocity; uniform vec4 uClear; // slow from, slow to (cells/s), thin, rate
+uniform float uReady, uDensity, uEmit, uSmoulder, uStep, uTime, uOpen; uniform vec2 uPeopleTexel;
+const float CAP = 1.5;
+${recolourGLSL}
+${travel}
+${figureGLSL}
 void main() {
   vec3 colour = smokeColour(vUv);
   vec3 flow = texture2D(uFlow, vUv).rgb;
@@ -125,19 +140,17 @@ void main() {
   float edge = clamp(length(vec2(texture2D(uPeople, vUv + vec2(e.x, 0.)).r - texture2D(uPeople, vUv - vec2(e.x, 0.)).r,
     texture2D(uPeople, vUv + vec2(0., e.y)).r - texture2D(uPeople, vUv - vec2(0., e.y)).r)) * 2.5, 0., 1.) * uReady;
   vec3 current = texture2D(uCurrent, vUv).rgb;
-  // The figure: smoke filling their shape up to Density.
-  // Only the solid part of the outline is filled, where the smoke is held; the soft edge is left to what drifts there.
-  // The figure is wisps with dark gaps: Density sets how much of the cloud is filled in, and how bright.
-  vec2 moved = vUv - texture2D(uDrift, vec2(.5)).xy;
-  float c = cloud(moved, uTime, 0.), coverage = mix(.25, .9, uDensity);
-  float wisp = smoothstep(.88 - coverage, 1.12 - coverage, c);
-  vec3 figure = colour * (.35 + .65 * uDensity) * wisp * (.6 + .8 * c);
-  // The figure settles towards its wisps, so the gaps stay dark even after it has been full.
-  vec3 next = mix(current, figure, clamp(smoothstep(.3, .7, person) * uStep * 3., 0., 1.));
+  vec2 moved = figureUv(vUv);
+  // The figure is drawn over the smoke (see compositeFragment). Emit decides how much of it is also left
+  // behind in the smoke, to trail and stream: none at Emit 0, so people then only push the smoke around.
+  // Only the solid part of the outline is filled, where the smoke is held.
+  // It settles towards the wisps, so the gaps stay dark.
+  vec3 next = mix(current, figureColour(vUv), clamp(smoothstep(.3, .7, person) * uStep * 3. * uEmit / .6, 0., 1.));
   // Movement and Smoulder pour more on top, in broken wisps rather than a fog or a bright outline;
   // pouring eases off near the cap.
   float frayed = smoothstep(.45, .7, cloud(moved, uTime, 1.));
-  float add = travel(flow) * region * uResponse * 3. * (.25 + .75 * frayed) + uSmoulder * 3. * frayed * (edge + .5 * person);
+  // Emit sets how much new smoke comes off people, moving or still; 0.6 is the original amount.
+  float add = (travel(flow) * region * 3. * (.25 + .75 * frayed) + uSmoulder * 3. * frayed * (edge + .5 * person)) * uEmit / .6;
   float full = max(next.r, max(next.g, next.b)) / CAP;
   next += colour * add * uStep * max(0., 1. - full);
   // Clear air: thin smoke in still air fades out quickly, so leftover haze clears to black while rising
@@ -150,17 +163,24 @@ void main() {
   next *= max(0., 1. - uStep * uClear.w * thin);
   // Near the frame edges smoke thins away, so it leaves the picture instead of piling up there.
   float border = min(min(vUv.x, 1. - vUv.x), min(vUv.y, 1. - vUv.y));
-  next *= mix(max(0., 1. - uStep * 3.), 1., smoothstep(0., .06, border));
+  next *= mix(max(0., 1. - uStep * 3. * uOpen), 1., smoothstep(0., .06, border));
   float m = max(next.r, max(next.g, next.b));
   gl_FragColor = vec4(next * min(1., CAP / max(m, 1e-6)), 1.);
 }`;
 
-/** The picture: the smoke, with bright colour rolling off smoothly instead of clipping. */
+/** The picture: the smoke with the smoky figures over it, bright colour rolling off smoothly instead of clipping. */
 export const compositeFragment = /* glsl */`
-uniform sampler2D uDye;
+uniform sampler2D uDye, uPeople, uDrift; uniform float uReady, uDensity, uTime, uShowFigure;
+${recolourGLSL}
+${figureGLSL}
 vec3 rolloff(vec3 c) {
   float m = max(c.r, max(c.g, c.b)), k = .75;
   if (m <= k) return c;
   return c * (k + (1. - k) * (1. - exp(-(m - k) / (1. - k)))) / m;
 }
-void main() { gl_FragColor = vec4(rolloff(texture2D(uDye, vUv).rgb), 1.); }`;
+void main() {
+  vec3 smoke = texture2D(uDye, vUv).rgb;
+  // The figure over the smoke, so it shows whatever Emit is; screen blending, so it reads as more smoke.
+  vec3 figure = figureColour(vUv) * texture2D(uPeople, vUv).r * uReady * uShowFigure;
+  gl_FragColor = vec4(rolloff(smoke + figure - smoke * min(figure, vec3(1.))), 1.);
+}`;

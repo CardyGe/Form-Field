@@ -122,3 +122,13 @@ test('Smoke life goes up to 12 seconds, and longer saved values are brought down
   assert.equal(SMOKE_CONTROLS.find(c => c.key === 'lifeSeconds')!.max, 12);
   assert.equal(validateLiveSettings({ smoke: { lifeSeconds: 20 } }).smoke.lifeSeconds, 12);
 });
+test('Emit runs 0 to 1, defaults to 0.6, and the starting points leave it alone', () => {
+  const emit = SMOKE_CONTROLS.find(c => c.key === 'emit')!;
+  assert.deepEqual([emit.label, emit.min, emit.max, emit.default], ['Emit', 0, 1, .6]);
+  for (const start of SMOKE_STARTS) assert.equal('emit' in start.values, false, start.label);
+});
+test('Forever is off unless saved as true', () => {
+  assert.equal(defaultLiveSettings().smoke.forever, false);
+  assert.equal(validateLiveSettings({ smoke: { forever: true } }).smoke.forever, true);
+  assert.equal(validateLiveSettings({ smoke: { forever: 'yes' } }).smoke.forever, false);
+});

@@ -120,6 +120,9 @@ try {
     await page.getByLabel('Look', { exact: true }).selectOption('smoke');
     await page.getByText(/^People finding running/).waitFor({ timeout: 30000 });
     await page.getByLabel('Smoulder', { exact: true }).fill('0.8');
+    await page.getByLabel('Emit', { exact: true }).fill('0.2');
+    await page.getByLabel('Forever', { exact: true }).check();
+    assert.equal(await page.getByLabel('Smoke life', { exact: true }).isDisabled(), true);
     await page.getByLabel('Use empty room', { exact: true }).check();
     await page.getByText('Capture the empty room again', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Capture empty room', exact: true }).click();
@@ -146,7 +149,7 @@ try {
     await page.getByLabel('Look', { exact: true }).selectOption('paint');
     assert.equal(await page.getByLabel('Palette', { exact: true }).inputValue(), 'Hot Signal');
     await page.getByLabel('Look', { exact: true }).selectOption('smoke');
-    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'smoke' && v?.smoke?.smoulder === .8, 'smoke settings were not saved');
+    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'smoke' && v?.smoke?.smoulder === .8 && v?.smoke?.emit === .2 && v?.smoke?.forever === true, 'smoke settings were not saved');
     await app.close();
     ({ app, page } = await launch());
     await page.getByRole('button', { name: 'Live', exact: true }).click();

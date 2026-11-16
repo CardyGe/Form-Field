@@ -5,7 +5,7 @@
  *
  * Velocity is in grid cells per second. Each step: curl → vorticity confinement and
  * buoyancy → divergence → pressure (Jacobi) → gradient subtract → advect velocity → advect dye.
- * The edges are open: smoke can leave the picture.
+ * The edges are open unless `walls` is set: smoke can leave the picture.
  */
 import * as THREE from 'three';
 import type { Pair, Passes } from './passes';
@@ -38,22 +38,27 @@ void main() {
   gl_FragColor = vec4(clamp(v, vec2(-1000.), vec2(1000.)), 0., 1.);
 }`;
 const divergence = /* glsl */`
-uniform sampler2D uVelocity; uniform vec2 uTexel;
+uniform sampler2D uVelocity; uniform vec2 uTexel; uniform float uWalls;
 void main() {
   vec2 c = texture2D(uVelocity, vUv).xy;
   float l = texture2D(uVelocity, vUv - vec2(uTexel.x, 0.)).x, r = texture2D(uVelocity, vUv + vec2(uTexel.x, 0.)).x;
   float b = texture2D(uVelocity, vUv - vec2(0., uTexel.y)).y, t = texture2D(uVelocity, vUv + vec2(0., uTexel.y)).y;
+  // With walls, nothing flows out through the edges of the picture.
+  if (uWalls > .5) {
+    if (vUv.x - uTexel.x < 0.) l = -c.x; if (vUv.x + uTexel.x > 1.) r = -c.x;
+    if (vUv.y - uTexel.y < 0.) b = -c.y; if (vUv.y + uTexel.y > 1.) t = -c.y;
+  }
   gl_FragColor = vec4(.5 * (r - l + t - b), 0., 0., 1.);
 }`;
 const scale = /* glsl */`uniform sampler2D uSource; uniform float uAmount; void main() { gl_FragColor = texture2D(uSource, vUv) * uAmount; }`;
 const pressure = /* glsl */`
-uniform sampler2D uPressure, uDivergence; uniform vec2 uTexel;
+uniform sampler2D uPressure, uDivergence; uniform vec2 uTexel; uniform float uWalls;
 void main() {
   float l = texture2D(uPressure, vUv - vec2(uTexel.x, 0.)).x, r = texture2D(uPressure, vUv + vec2(uTexel.x, 0.)).x;
   float b = texture2D(uPressure, vUv - vec2(0., uTexel.y)).x, t = texture2D(uPressure, vUv + vec2(0., uTexel.y)).x;
   float p = (l + r + b + t - texture2D(uDivergence, vUv).x) * .25;
   // Open edges: pressure is zero at the border, so smoke flows out of the picture rather than piling up against it.
-  if (vUv.x < uTexel.x || vUv.x > 1. - uTexel.x || vUv.y < uTexel.y || vUv.y > 1. - uTexel.y) p = 0.;
+  if (uWalls < .5 && (vUv.x < uTexel.x || vUv.x > 1. - uTexel.x || vUv.y < uTexel.y || vUv.y > 1. - uTexel.y)) p = 0.;
   gl_FragColor = vec4(p, 0., 0., 1.);
 }`;
 const gradient = /* glsl */`
@@ -89,14 +94,17 @@ export class Fluid {
       advect: passes.material(advect, { uVelocity: { value: null }, uSource: { value: null }, uGridTexel: texel, uStep: { value: 0 }, uKeep: { value: 1 } }),
       curl: passes.material(curl, { uVelocity: { value: null }, uTexel: texel }),
       vorticity: passes.material(vorticity, { uVelocity: { value: null }, uCurl: { value: null }, uDye: { value: null }, uTexel: texel, uCurlAmount: { value: 30 }, uStep: { value: 0 }, uBuoyancy: { value: 0 } }),
-      divergence: passes.material(divergence, { uVelocity: { value: null }, uTexel: texel }),
+      divergence: passes.material(divergence, { uVelocity: { value: null }, uTexel: texel, uWalls: { value: 0 } }),
       scale: passes.material(scale, { uSource: { value: null }, uAmount: { value: .8 } }),
-      pressure: passes.material(pressure, { uPressure: { value: null }, uDivergence: { value: null }, uTexel: texel }),
+      pressure: passes.material(pressure, { uPressure: { value: null }, uDivergence: { value: null }, uTexel: texel, uWalls: { value: 0 } }),
       gradient: passes.material(gradient, { uPressure: { value: null }, uVelocity: { value: null }, uTexel: texel }),
       zero: passes.material(zero, {}),
     };
     this.clear();
   }
+
+  /** Closed edges: smoke stays in the picture. Open (the default): it can flow out. */
+  walls = false;
 
   get velocity(): THREE.Texture { return this.velocityPair.read.texture; }
   get dye(): THREE.Texture { return this.dyePair.read.texture; }
@@ -121,6 +129,7 @@ export class Fluid {
     v.uVelocity.value = this.velocity; v.uCurl.value = this.curlTarget.texture; v.uDye.value = this.dye;
     v.uCurlAmount.value = curlAmount; v.uStep.value = seconds; v.uBuoyancy.value = buoyancy;
     passes.draw(m.vorticity, this.velocityPair.write); this.velocityPair.swap();
+    m.divergence.uniforms.uWalls.value = m.pressure.uniforms.uWalls.value = this.walls ? 1 : 0;
     m.divergence.uniforms.uVelocity.value = this.velocity; passes.draw(m.divergence, this.divergenceTarget);
     m.scale.uniforms.uSource.value = this.pressurePair.read.texture; m.scale.uniforms.uAmount.value = .8;
     passes.draw(m.scale, this.pressurePair.write); this.pressurePair.swap();

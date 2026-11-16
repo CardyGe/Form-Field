@@ -16,7 +16,7 @@ const VELOCITY_LIFE = 1.5;
 const RISE = 2.4;
 
 export class Smoke implements Look {
-  /** For checks. People are made of smoke, so both draw the same picture. */
+  /** For checks: 'smoke' leaves out the figures drawn over the smoke. */
   show: 'all' | 'smoke' = 'all';
   private readonly fluid: Fluid;
   private readonly velocity: THREE.ShaderMaterial;
@@ -38,9 +38,9 @@ export class Smoke implements Look {
     this.drift = passes.pair(1, 1, { float: true, nearest: true });
     this.drifting = passes.material(driftFragment, { uPrevious: { value: null }, uFlow: { value: null }, uPeople: { value: null }, uReady: { value: 0 }, uStep: { value: 0 } });
     this.dye = passes.material(dyeFragment, { uDrift: { value: null }, uVelocity: { value: null }, uClear: { value: new THREE.Vector4() }, uCurrent: { value: null }, uFlow: { value: null }, uPeople: { value: null },
-      uReady: { value: 0 }, uDensity: { value: .6 }, uResponse: { value: 1 }, uSmoulder: { value: .5 }, uStep: { value: 0 }, uTime: { value: 0 },
+      uReady: { value: 0 }, uDensity: { value: .6 }, uEmit: { value: .6 }, uOpen: { value: 1 }, uSmoulder: { value: .5 }, uStep: { value: 0 }, uTime: { value: 0 },
       uPeopleTexel: { value: new THREE.Vector2(1 / PEOPLE_SIZE[0], 1 / PEOPLE_SIZE[1]) }, ...ramp() });
-    this.composite = passes.material(compositeFragment, { uDye: { value: null } });
+    this.composite = passes.material(compositeFragment, { uDye: { value: null }, uPeople: { value: null }, uDrift: { value: null }, uReady: { value: 0 }, uDensity: { value: .6 }, uTime: { value: 0 }, uShowFigure: { value: 1 }, ...ramp() });
   }
 
   get output(): THREE.Texture { return this.target.texture; }
@@ -48,6 +48,7 @@ export class Smoke implements Look {
   step(seconds: number, time: number, feed: TrackingFeed, settings: LiveSettings): void {
     const s = settings.smoke, ready = feed.peopleReady ? 1 : 0;
     setRamp(this.dye.uniforms, s.palette, s.colourChange);
+    setRamp(this.composite.uniforms, s.palette, s.colourChange);
     if (seconds > 0) {
       const g = this.drifting.uniforms;
       g.uPrevious.value = this.drift.read.texture; g.uFlow.value = feed.flow; g.uPeople.value = feed.people; g.uReady.value = ready; g.uStep.value = seconds;
@@ -58,15 +59,18 @@ export class Smoke implements Look {
       this.fluid.inject('velocity', this.velocity);
       const d = this.dye.uniforms;
       d.uFlow.value = feed.flow; d.uPeople.value = feed.people; d.uDrift.value = this.drift.read.texture; d.uVelocity.value = this.fluid.velocity;
-      (d.uClear.value as THREE.Vector4).set(CLEAR.slowFrom, CLEAR.slowTo, CLEAR.thin, CLEAR.rate);
-      d.uReady.value = ready; d.uDensity.value = s.density; d.uResponse.value = s.response; d.uSmoulder.value = s.smoulder; d.uStep.value = seconds; d.uTime.value = time;
+      // Forever: nothing fades and nothing is cleared.
+      (d.uClear.value as THREE.Vector4).set(CLEAR.slowFrom, CLEAR.slowTo, CLEAR.thin, s.forever ? 0 : CLEAR.rate);
+      this.fluid.walls = s.forever;
+      d.uReady.value = ready; d.uDensity.value = s.density; d.uEmit.value = s.emit; d.uOpen.value = s.forever ? 0 : 1; d.uSmoulder.value = s.smoulder; d.uStep.value = seconds; d.uTime.value = time;
       this.fluid.inject('dye', this.dye);
       // Rise is applied in the velocity pass above, where a held figure can switch it off.
       const h = this.hold.uniforms;
       h.uFlow.value = feed.flow; h.uPeople.value = feed.people; h.uDrift.value = this.drift.read.texture; h.uReady.value = ready; h.uSmoulder.value = s.smoulder; h.uSwirl.value = s.swirl; h.uTime.value = time;
-      this.fluid.step(seconds, s.swirl * 60, VELOCITY_LIFE, s.lifeSeconds, 0, () => this.fluid.inject('velocity', this.hold));
+      this.fluid.step(seconds, s.swirl * 60, VELOCITY_LIFE, s.forever ? Infinity : s.lifeSeconds, 0, () => this.fluid.inject('velocity', this.hold));
     }
-    this.composite.uniforms.uDye.value = this.fluid.dye;
+    const c = this.composite.uniforms;
+    c.uDye.value = this.fluid.dye; c.uPeople.value = feed.people; c.uDrift.value = this.drift.read.texture; c.uReady.value = ready; c.uDensity.value = s.density; c.uTime.value = time; c.uShowFigure.value = this.show === 'all' ? 1 : 0;
     this.passes.draw(this.composite, this.target);
   }
 

@@ -298,3 +298,10 @@ He agreed to these changes, made together with the fixes they needed:
 - **Smoulder releases the hold quickly.** The hold is full at Smoulder 0 and falls with the cube of (1 − Smoulder), so the default 0.5 really gives off smoke.
 - **Rise is three times stronger.** Rising smoke clearly moves, so clear air does not mistake it for haze.
 - **Smoke life goes up to 12 s** (it was 20). Longer saved values are brought down to 12.
+
+## Emit and Forever (16 November 2026)
+
+Greg asked to control "the smoke emmiter", and how long smoke stays, "so i could have it never diderpear and the msokey person will just be moving it around". He agreed to:
+- **Emit** (0–1, default 0.6, the previous amount). It sets how much new smoke comes off people, moving or still. Movement response now only sets how hard people push. The Start from points leave Emit alone.
+- **The figure is drawn over the smoke,** so it shows at any Emit. Emit decides how much of it is also left behind in the smoke. At Emit 0 people add nothing and only push. *(Found while building: a figure poured into the smoke kept adding smoke as it moved.)*
+- **Forever,** a tick box under Smoke life. With it on, smoke never fades, clear air is off, and the edges of the picture close, so smoke stays in. Clear still empties it.

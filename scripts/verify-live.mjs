@@ -454,6 +454,25 @@ try {
       return { screen, travelling }; });
     assert.ok(r.travelling < r.screen, `with the figure ${r.travelling}, fixed to the screen ${r.screen}`);
   });
+  // --- Emit and Forever ---
+  await check('smoke: at Emit 0 a moving figure adds far less smoke than at Emit 1', async () => {
+    const r = await page.evaluate(() => { const at = emit => { window.live.smoke(s => { s.smoke.emit = emit; }); window.live.run(360); window.live.layer('smoke'); const out = window.live.outsideFigure().light; window.live.layer('all'); return out; };
+      return { none: at(0), full: at(1) }; });
+    assert.ok(r.none < r.full * .3, `Emit 0: ${r.none}, Emit 1: ${r.full}`);
+  });
+  await check('smoke: on Forever, smoke stays in the picture and movement pushes it around', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(s => { s.smoke.forever = true; s.smoke.emit = 1; }); window.live.run(360); const { renderer } = window.live.current;
+      const off = () => { window.live.layer('smoke'); const v = window.live.outsideFigure().light; window.live.layer('all'); return v; };
+      renderer.settings.smoke.emit = 0; window.live.run(1); const before = off(), a = window.live.pixels().data.slice();
+      window.live.run(600); return { before, after: off(), change: window.live.difference(a, window.live.pixels().data) }; });
+    assert.ok(r.after > r.before * .6, `smoke off the figure ${r.before} -> ${r.after} after 10 s with nothing added`); assert.ok(r.change > 2, `the smoke barely moved (${r.change}/255)`);
+  });
+  await check('smoke: Forever keeps smoke at the frame edges instead of letting it drift out', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(s => { s.smoke.forever = true; s.smoke.emit = 1; s.smoke.rise = 1; }); window.live.run(600);
+      const { renderer, source } = window.live.current; renderer.settings.smoke.emit = 0; source.moving = false; window.live.run(300);
+      const { data, width, height } = window.live.pixels(); let top = 0; for (let y = 0; y < Math.floor(height * .05); y++) for (let x = 0; x < width; x++) { const i = (y * width + x) * 4; top = Math.max(top, data[i], data[i + 1], data[i + 2]); } return top; });
+    assert.ok(r > 20, `top edge up to ${r}/255: the risen smoke left the picture`);
+  });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));
 } finally {

@@ -153,8 +153,10 @@ Live turns a camera into projected artwork as it happens. It is a separate scree
   - *Smouldering*: a clear smoky figure steadily giving off smoke.
   - *Solid*: a thick figure that barely sheds, with heavy smoke hanging where they moved.
 - **Density** runs from a faint figure to a thick one.
+- **Emit** is how much new smoke comes off people, moving or still. At 0 they add none and only push the smoke that is already there.
 - **Smoulder** is how much smoke streams off a still figure.
-- **Movement response**, **Rise**, **Swirl** and **Smoke life** shape the smoke.
+- **Movement response** is how hard people push the smoke. **Rise**, **Swirl** and **Smoke life** shape it.
+- **Forever**, under Smoke life, keeps smoke from ever fading and keeps it inside the picture. Fill the room with Emit up, turn Emit down, then move through it and swirl it around. **Clear** empties it.
 - **Colour change** and **Palette** set its colours. Smoke keeps its own palette, separate from Paint's.
 
 With Smoke chosen, Setup gains a **Finding people** section:
