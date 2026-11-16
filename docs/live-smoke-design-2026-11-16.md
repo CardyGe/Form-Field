@@ -260,3 +260,25 @@ Greg tried Smoke on his camera: "the smoke effect is really cool but i dont want
   - The three Start from points differ measurably in how bright the figure is and in how much smoke leaves it.
 
 Unchanged: person finding, its filters, Show people, the smoke simulation, the movement-only fallback, and the other controls.
+
+## Second try-out (16 November 2026)
+
+Greg recorded Smoke on his camera and said it "could be improved". The recording showed five problems:
+- The figure looked like a flat colour cut-out, even at Density 0.25.
+- A bright neon line traced the outline.
+- After a few seconds the whole picture filled with smoke.
+- Smoke piled up against the frame edges.
+- Colour swept across the body in broad bands.
+
+He agreed to these changes:
+- **The figure is made of wisps.** It is turbulent, drifting smoke with dark gaps. **Density** decides how much of the figure is filled in, as well as how bright it is: low is a broken, ghostly shape, high is thick.
+- **Edges fray.** Smoke peels off the outline in broken wisps instead of collecting into a bright line.
+- **Smoke leaves the frame.** The edges are open, and smoke thins away near them instead of piling up.
+- **The background stays mostly dark.** Less smoke is poured by movement, and what is poured comes in wisps rather than as a fog.
+- **Colour drifts at the scale of the smoke,** not in bands across the body.
+
+**Checks:**
+- A low-Density figure has dark gaps, and more of them than a high-Density one.
+- The outline is not brighter than the inside of the figure.
+- Smoke does not build up at the frame edges.
+- With a figure moving at the default settings, most of the picture stays dark.
