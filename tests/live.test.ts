@@ -75,3 +75,21 @@ test('empty room only applies once captured', () => {
   assert.equal(personWeight(1, 1, 1, { use: true, captured: true, differs: 0 }), 0);
   assert.equal(personWeight(1, 0, 1, { use: false, captured: false, differs: 1 }), 0);
 });
+
+import { MaskGate, READY_MS } from '../src/live/MaskProvider';
+test('one frame at a time goes to the model; the rest are dropped', () => {
+  let now = 0; const gate = new MaskGate(() => now);
+  assert.equal(gate.offer(), true); assert.equal(gate.offer(), false);
+  gate.received(); assert.equal(gate.offer(), true);
+});
+test('people are ready only while masks keep arriving', () => {
+  let now = 0; const gate = new MaskGate(() => now);
+  assert.equal(gate.ready, false);
+  gate.offer(); now = 30; gate.received(); assert.equal(gate.ready, true);
+  now = 30 + READY_MS + 1; assert.equal(gate.ready, false);
+});
+test('a frame lost by the model is given up on, and the model is behind', () => {
+  let now = 0; const gate = new MaskGate(() => now);
+  gate.offer(); assert.equal(gate.behind, false);
+  now = READY_MS + 1; assert.equal(gate.behind, true); assert.equal(gate.offer(), true);
+});

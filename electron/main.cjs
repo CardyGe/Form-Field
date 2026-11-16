@@ -210,7 +210,7 @@ function createWindow() {
   const ours = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents || !!liveControl?.isOutput(contents);
   session.setPermissionRequestHandler((contents, permission, callback, details) => callback(live.allowPermission(permission, details, ours(contents))));
   session.setPermissionCheckHandler((contents, permission, _origin, details) => live.allowPermissionCheck(permission, details, ours(contents)));
-  const csp = ["default-src 'self'", `script-src 'self'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "media-src 'self' blob:", "font-src 'self' data:", `connect-src 'self'${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');
+  const csp = ["default-src 'self'", `script-src 'self' 'wasm-unsafe-eval'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "media-src 'self' blob:", "font-src 'self' data:", `connect-src 'self'${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');
   session.webRequest.onHeadersReceived((details, callback) => callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [csp] } }));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-attach-webview', event => event.preventDefault());

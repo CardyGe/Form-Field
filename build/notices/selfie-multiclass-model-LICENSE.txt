@@ -1,0 +1,7 @@
+MediaPipe Selfie Multiclass Segmentation model (selfie_multiclass_256x256.tflite)
+Copyright Google LLC.
+
+Licensed under the Apache License, Version 2.0. See
+http://www.apache.org/licenses/LICENSE-2.0
+
+Model card: https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Multiclass%20Segmentation.pdf

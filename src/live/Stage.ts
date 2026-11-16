@@ -8,6 +8,8 @@ import { LiveSource, type SourceState } from './source';
 import { TestSource } from './test-source';
 import type { FrameSource } from './look';
 import type { LiveSettings } from './settings';
+import type { MaskProvider } from './MaskProvider';
+import { WorkerMaskProvider } from './WorkerMaskProvider';
 
 export class Stage {
   readonly renderer: LiveRenderer;
@@ -18,12 +20,23 @@ export class Stage {
   private key = '';
   private raf = 0;
   private last = performance.now();
+  /** Person finding, only while the look needs people. */
+  private provider: MaskProvider | null = null;
+  private submitted = -1;
+  private masks = 0;
+  private lastMask: unknown = null;
 
   constructor(canvas: HTMLCanvasElement) {
     const stage = this;
     this.renderer = new LiveRenderer(canvas, { get element() { return stage.active?.element ?? null; }, get frameId() { return stage.active?.frameId ?? 0; } });
     this.camera.onState = state => { if (this.active === this.camera || state.status !== 'idle') this.onState(state); };
-    const tick = (now: number) => { this.pattern?.advance(Math.min(.1, (now - this.last) / 1000)); this.last = now; this.raf = requestAnimationFrame(tick); };
+    const tick = (now: number) => {
+      this.pattern?.advance(Math.min(.1, (now - this.last) / 1000)); this.last = now;
+      this.feedPeople();
+      this.raf = requestAnimationFrame(tick);
+    };
+    // Read-only status for the scripted checks and for support: never any picture.
+    window.__studioTest = { ...window.__studioTest, livePeople: () => ({ status: this.provider?.status ?? null, delegate: (this.provider as WorkerMaskProvider | null)?.delegate ?? '', ready: this.provider?.ready ?? false, masks: this.masks }) };
     this.raf = requestAnimationFrame(tick);
     this.renderer.start();
   }
@@ -31,6 +44,9 @@ export class Stage {
   /** Follows the settings. The source is reopened only when the choice of source changes. */
   apply(settings: LiveSettings, file: File | null = null): void {
     this.renderer.settings = settings;
+    const wantsPeople = settings.look === 'smoke';
+    if (wantsPeople && !this.provider) { this.provider = new WorkerMaskProvider(); this.masks = 0; this.lastMask = null; }
+    if (!wantsPeople && this.provider) { this.provider.dispose(); this.provider = null; }
     const { kind, deviceId } = settings.source;
     const key = kind === 'camera' ? `camera:${deviceId ?? ''}` : kind === 'file' ? `file:${file ? `${file.name}:${file.size}:${file.lastModified}` : ''}` : 'test';
     if (key === this.key) return;
@@ -52,8 +68,18 @@ export class Stage {
 
   listCameras() { return this.camera.listCameras(); }
 
+  /** Offers each new camera frame to person finding. */
+  private feedPeople(): void {
+    const provider = this.provider, active = this.active;
+    if (!provider || !active?.element) return;
+    if (active.frameId !== this.submitted) { this.submitted = active.frameId; provider.submit(active.element, active.frameId); }
+    const mask = provider.latest();
+    if (mask && mask !== this.lastMask) { this.lastMask = mask; this.masks++; }
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.raf);
+    this.provider?.dispose(); this.provider = null;
     this.camera.onState = () => {};
     this.camera.close();
     this.renderer.dispose();
