@@ -158,9 +158,9 @@ export class LiveRenderer {
   }
 
   /** Read-only person-finding state: never any picture. */
-  peopleDiagnostics(): { status: unknown; ready: boolean; masks: number; delegate: string } {
+  peopleDiagnostics(): { status: unknown; ready: boolean; masks: number; delegate: string; roomCaptured: boolean } {
     const t = this.tracking.peopleTargets;
-    return { status: this.tracking.peopleStatus, ready: this.tracking.peopleReady, masks: t.masks, delegate: (t.provider as { delegate?: string } | null)?.delegate ?? '' };
+    return { status: this.tracking.peopleStatus, ready: this.tracking.peopleReady, masks: t.masks, delegate: (t.provider as { delegate?: string } | null)?.delegate ?? '', roomCaptured: this.tracking.roomCaptured };
   }
 
   captureRoom(): void { this.tracking.captureRoom(); }

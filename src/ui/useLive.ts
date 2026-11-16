@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stage } from '../live/Stage';
 import { chooseDisplay, defaultLiveSettings, validateLiveSettings, type LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
+import type { PeopleStatus } from '../live/MaskProvider';
 
 export interface Display { id: number; label: string; primary: boolean }
 
@@ -20,7 +21,8 @@ export function useLive(onError: (message: string) => void) {
   const [displays, setDisplays] = useState<Display[]>([]);
   const [outputOpen, setOutputOpen] = useState(false);
   const [blackout, setBlackoutState] = useState(false);
-  const [view, setView] = useState<'art' | 'tracking'>('art');
+  const [view, setView] = useState<'art' | 'tracking' | 'people'>('art');
+  const [people, setPeople] = useState<{ status: PeopleStatus | null; roomCaptured: boolean }>({ status: null, roomCaptured: false });
   const [file, setFile] = useState<File | null>(null);
   const [fps, setFps] = useState(0);
   const [preview, setPreview] = useState<string | null>(null);
@@ -66,7 +68,7 @@ export function useLive(onError: (message: string) => void) {
         bridge.send({ type: 'blackout', on: now.blackout });
       }
     });
-    const offState = bridge.onState(setSourceState);
+    const offState = bridge.onState(({ people: status, roomCaptured, ...state }) => { setSourceState(state as SourceState); setPeople({ status: status ?? null, roomCaptured: roomCaptured === true }); });
     const offDisplays = bridge.onDisplaysChanged(() => void refreshDisplays());
     let url: string | null = null;
     const offPreview = bridge.onPreview((jpeg, rate) => {
@@ -94,7 +96,8 @@ export function useLive(onError: (message: string) => void) {
     made.renderer.blackout = now.blackout;
     if (now.settings) made.apply(now.settings, now.file);
     const timer = setInterval(() => setFps(made.renderer.stats().fps), 1000);
-    return () => { clearInterval(timer); stage.current = null; made.dispose(); setSourceState({ status: 'idle' }); };
+    const peopleTimer = setInterval(() => { const r = made.peopleReport(); setPeople({ status: r.people, roomCaptured: r.roomCaptured }); }, 500);
+    return () => { clearInterval(timer); clearInterval(peopleTimer); stage.current = null; made.dispose(); setSourceState({ status: 'idle' }); };
   }, [canvas, ready, outputOpen]);
 
   // Every change goes to whichever side is drawing, and is saved shortly after.
@@ -119,9 +122,13 @@ export function useLive(onError: (message: string) => void) {
     catch (error) { onError((error as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); await refreshDisplays(); }
   };
   const closeOutput = () => { void bridge?.closeOutput(); };
+  const captureRoom = () => {
+    if (outputOpen) bridge?.send({ type: 'captureRoom' });
+    else { stage.current?.renderer.captureRoom(); setTimeout(() => { const r = stage.current?.peopleReport(); if (r) setPeople({ status: r.people, roomCaptured: r.roomCaptured }); }, 200); }
+  };
   const retry = () => { if (settings) stage.current?.retry(settings, file); if (outputOpen) bridge?.send({ type: 'retry' }); };
   const chooseFile = (chosen: File) => { setFile(chosen); update(s => ({ ...s, source: { kind: 'file', deviceId: s.source.deviceId } })); };
 
   return { settings: settings ?? defaultLiveSettings(), ready, access, update, sourceState, cameras, displays, outputOpen, blackout, setBlackout, clear,
-    openOutput, closeOutput, view, setView, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge };
+    openOutput, closeOutput, view, setView, people, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge };
 }

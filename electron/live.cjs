@@ -28,7 +28,8 @@ const path = require('node:path');
 
 const MESSAGE_LIMIT = 16 * 1024;
 const PREVIEW_LIMIT = 512 * 1024;
-const MESSAGE_TYPES = new Set(['settings', 'blackout', 'clear', 'retry']);
+const MESSAGE_TYPES = new Set(['settings', 'blackout', 'clear', 'retry', 'captureRoom']);
+const PEOPLE_STATES = new Set(['loading', 'running', 'failed', 'behind']);
 const SOURCE_STATES = new Set(['idle', 'starting', 'running', 'refused', 'none', 'lost', 'error']);
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const small = value => { try { return JSON.stringify(value).length < MESSAGE_LIMIT; } catch { return false; } };
@@ -55,7 +56,10 @@ function acceptMessage(message) {
 
 /** What the artwork window may tell the studio about its camera. */
 function acceptState(state) {
-  return plain(state) && SOURCE_STATES.has(state.status) && small(state);
+  if (!plain(state) || !SOURCE_STATES.has(state.status) || !small(state)) return false;
+  if ('people' in state && !(plain(state.people) && PEOPLE_STATES.has(state.people.state))) return false;
+  if ('roomCaptured' in state && typeof state.roomCaptured !== 'boolean') return false;
+  return true;
 }
 
 function acceptPreview(bytes) {

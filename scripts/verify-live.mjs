@@ -252,6 +252,11 @@ try {
       return { people: window.live.peopleMax(), still: window.live.peopleAt(f.x, f.y).still, nextFrames: next.frameId }; });
     assert.equal(r.people, 0); assert.ok(r.still > 1000, `timers carried over (${r.still})`);
   });
+  await check('people: an empty-room capture asked for while a source is starting is not lost', async () => {
+    const r = await page.evaluate(() => { const { renderer } = window.live.make(s => { s.look = 'smoke'; s.people.useEmptyRoom = true; }, { figure: true }); renderer.captureRoom(); window.live.run(1);
+      window.live.current.swap(); window.live.run(1); const early = renderer.roomCaptured; window.live.run(180); return { early, later: renderer.roomCaptured }; });
+    assert.equal(r.early, false, 'captured during the camera warm-up'); assert.equal(r.later, true, 'the capture was lost');
+  });
   await check('people: Paint never starts person finding', async () => {
     const r = await page.evaluate(() => { window.live.make(undefined, { figure: true }); window.live.run(60); return window.live.current.made.providers; });
     assert.equal(r, 0);

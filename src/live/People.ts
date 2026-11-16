@@ -79,11 +79,6 @@ export class People {
    * a mask from before a source change is never used.
    */
   update(step: number, inputs: { camera: THREE.Texture; flow: THREE.Texture; luma: THREE.Texture; crop: THREE.Vector2; fresh: boolean; seconds: number }, provider: MaskProvider, firstFrameId: number, settings: LiveSettings): void {
-    if (this.captureNext && inputs.fresh) {
-      this.copy.uniforms.uImage.value = inputs.camera;
-      this.passes.draw(this.copy, this.room);
-      this.captured = true; this.captureNext = false;
-    }
     const mask = provider.latest();
     if (mask && mask !== this.lastMask && mask.frameId >= firstFrameId) {
       this.lastMask = mask;
@@ -99,6 +94,12 @@ export class People {
 
     this.startedAt ??= inputs.seconds;
     const warming = inputs.seconds - this.startedAt < WARM_UP_SECONDS;
+    // An empty-room capture waits for a settled camera: it is taken from the first frame after warm-up.
+    if (this.captureNext && inputs.fresh && !warming) {
+      this.copy.uniforms.uImage.value = inputs.camera;
+      this.passes.draw(this.copy, this.room);
+      this.captured = true; this.captureNext = false;
+    }
     if (inputs.fresh) {
       // While warming up the memory simply follows the picture, so nothing reads as moved at start.
       const r = this.remember.uniforms, elapsed = inputs.seconds - this.lastFrameSeconds;
@@ -130,7 +131,8 @@ export class People {
     value.set(NEVER_MOVED, NEVER_MOVED, 0, 1);
     this.passes.draw(this.fill, this.timers.read); this.passes.draw(this.fill, this.timers.write);
     this.memoryPrimed = false; this.startedAt = null;
-    this.haveMask = false; this.ready = false; this.captured = false; this.captureNext = false; this.lastMask = null;
+    // A capture asked for while a source is starting is kept, and taken once that source has settled.
+    this.haveMask = false; this.ready = false; this.captured = false; this.lastMask = null;
   }
 
   dispose(): void {

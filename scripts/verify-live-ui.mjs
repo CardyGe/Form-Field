@@ -116,6 +116,44 @@ try {
     await page.getByText(/^Camera running/).waitFor();
     assert.equal(await page.getByLabel('Fade time', { exact: true }).inputValue(), '30');
   });
+  await check('Smoke can be chosen, and its people status shows on the operator screen', async () => {
+    await page.getByLabel('Look', { exact: true }).selectOption('smoke');
+    await page.getByText(/^People finding running/).waitFor({ timeout: 30000 });
+    await page.getByLabel('Smoulder', { exact: true }).fill('0.8');
+    await page.getByLabel('Use empty room', { exact: true }).check();
+    await page.getByText('Capture the empty room again', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Capture empty room', exact: true }).click();
+    await page.getByText('Capture the empty room again', { exact: true }).waitFor({ state: 'hidden' });
+    await page.getByLabel('Show people', { exact: true }).check();
+    await until(() => lit(page, preview(page)), v => v > .3, 'Show people stayed dark');
+    await page.getByLabel('Show people', { exact: true }).uncheck();
+  });
+  await check('With the output open, people status and the empty room come from the artwork window', async () => {
+    const opened = app.waitForEvent('window');
+    await page.getByRole('button', { name: 'Open output', exact: true }).click();
+    const output = await opened; await output.waitForLoadState();
+    await page.getByRole('button', { name: 'Close output', exact: true }).waitFor();
+    await page.getByText(/People finding running/).waitFor({ timeout: 30000 });
+    // A new window has no captured room: the operator is told, and can capture it there.
+    await page.getByText('Capture the empty room again', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Capture empty room', exact: true }).click();
+    await page.getByText('Capture the empty room again', { exact: true }).waitFor({ state: 'hidden' });
+    await until(() => lit(output, output.locator('canvas'), 2), v => v >= 0, 'output');
+    await page.getByRole('button', { name: 'Close output', exact: true }).click();
+    await page.getByRole('button', { name: 'Open output', exact: true }).waitFor();
+  });
+  await check('Smoke settings persist, and Paint keeps its own', async () => {
+    await page.getByLabel('Look', { exact: true }).selectOption('paint');
+    assert.equal(await page.getByLabel('Palette', { exact: true }).inputValue(), 'Hot Signal');
+    await page.getByLabel('Look', { exact: true }).selectOption('smoke');
+    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'smoke' && v?.smoke?.smoulder === .8, 'smoke settings were not saved');
+    await app.close();
+    ({ app, page } = await launch());
+    await page.getByRole('button', { name: 'Live', exact: true }).click();
+    await until(() => page.getByLabel('Smoulder', { exact: true }).inputValue(), v => v === '0.8', 'Smoulder was not restored');
+    await page.getByLabel('Use empty room', { exact: true }).uncheck();
+    await page.getByLabel('Look', { exact: true }).selectOption('paint');
+  });
   await check('No page errors with the camera allowed', async () => assert.deepEqual(errors, []));
   await check('Refused camera access explains where to allow it and offers other sources', async () => {
     await app.close();

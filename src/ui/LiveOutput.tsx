@@ -15,12 +15,17 @@ export default function LiveOutput() {
     let stage: Stage;
     try { stage = new Stage(canvas.current); } catch (error) { setFailure((error as Error).message); return; }
     let latest = validateLiveSettings(null);
-    stage.onState = state => bridge.sendState(state);
+    // The camera and person finding, reported to the operator: on every camera change and once a second.
+    let source: import('../live/source').SourceState = { status: 'idle' };
+    const report = () => { const { people, roomCaptured } = stage.peopleReport(); bridge.sendState({ ...source, ...(people ? { people } : {}), roomCaptured }); };
+    stage.onState = state => { source = state; report(); };
+    const reporting = setInterval(report, 1000);
     const off = bridge.onMessage(message => {
       if (message.type === 'settings') stage.apply(latest = validateLiveSettings(message.settings));
       else if (message.type === 'blackout') stage.renderer.blackout = message.on === true;
       else if (message.type === 'clear') stage.renderer.clear();
       else if (message.type === 'retry') stage.retry(latest);
+      else if (message.type === 'captureRoom') { stage.renderer.captureRoom(); setTimeout(report, 200); }
     });
     // A small picture for the operator, taken straight after a frame is drawn, ten times a second.
     const small = new OffscreenCanvas(...PREVIEW), context = small.getContext('2d')!;
@@ -37,7 +42,7 @@ export default function LiveOutput() {
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };
     window.addEventListener('keydown', key);
     bridge.ready();
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', key); off(); stage.dispose(); };
+    return () => { clearInterval(reporting); cancelAnimationFrame(raf); window.removeEventListener('keydown', key); off(); stage.dispose(); };
   }, []);
   return <div className="live-output">{failure ? <p>{failure}</p> : <canvas ref={canvas} />}</div>;
 }

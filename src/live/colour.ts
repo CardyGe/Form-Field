@@ -16,3 +16,9 @@ export function paletteRamp(palette: string[]): [number, number, number][] {
 /** Linear luminance below which a palette colour counts as near-black. */
 const NEAR_BLACK = .01;
 const luminance = ([r, g, b]: [number, number, number]) => .2126 * r + .7152 * g + .0722 * b;
+
+/** The ramp as CSS colours, darkest first, for swatches. */
+export function rampHex(palette: string[]): string[] {
+  const colour = new THREE.Color();
+  return paletteRamp(palette).map(([r, g, b]) => `#${colour.setRGB(r, g, b, THREE.LinearSRGBColorSpace).getHexString(THREE.SRGBColorSpace)}`);
+}

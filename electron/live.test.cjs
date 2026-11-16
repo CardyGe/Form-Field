@@ -130,3 +130,11 @@ test('a window that is not the studio cannot open the output', async () => {
   const h = harness();
   await assert.rejects(h.handlers.get('studio:live:openOutput')({ sender: {}, senderFrame: {} }, 7), /cannot control Live/);
 });
+
+test('the empty room can be captured in the artwork window', () => assert.equal(live.acceptMessage({ type: 'captureRoom' }), true));
+test('the artwork window may report people finding alongside its camera, and only in a known shape', () => {
+  assert.equal(live.acceptState({ status: 'running', label: 'x', width: 1, height: 1, people: { state: 'behind' }, roomCaptured: true }), true);
+  assert.equal(live.acceptState({ status: 'running', label: 'x', width: 1, height: 1, people: { state: 'hacked' } }), false);
+  assert.equal(live.acceptState({ status: 'running', label: 'x', width: 1, height: 1, people: 'running' }), false);
+  assert.equal(live.acceptState({ status: 'running', label: 'x', width: 1, height: 1, roomCaptured: 'yes' }), false);
+});

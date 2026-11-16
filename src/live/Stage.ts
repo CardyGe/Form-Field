@@ -8,6 +8,7 @@ import { LiveSource, type SourceState } from './source';
 import { TestSource } from './test-source';
 import type { FrameSource } from './look';
 import type { LiveSettings } from './settings';
+import type { PeopleStatus } from './MaskProvider';
 import { WorkerMaskProvider } from './WorkerMaskProvider';
 
 export class Stage {
@@ -57,6 +58,12 @@ export class Stage {
   retry(settings: LiveSettings, file: File | null = null): void { this.key = ''; this.apply(settings, file); }
 
   listCameras() { return this.camera.listCameras(); }
+
+  /** Person finding as the operator sees it: status and whether the empty room is captured. */
+  peopleReport(): { people: PeopleStatus | null; roomCaptured: boolean } {
+    const d = this.renderer.peopleDiagnostics();
+    return { people: this.renderer.settings.look === 'smoke' ? d.status as PeopleStatus : null, roomCaptured: this.renderer.roomCaptured };
+  }
 
   dispose(): void {
     cancelAnimationFrame(this.raf);
