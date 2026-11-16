@@ -473,6 +473,14 @@ try {
       const { data, width, height } = window.live.pixels(); let top = 0; for (let y = 0; y < Math.floor(height * .05); y++) for (let x = 0; x < width; x++) { const i = (y * width + x) * 4; top = Math.max(top, data[i], data[i + 1], data[i + 2]); } return top; });
     assert.ok(r > 20, `top edge up to ${r}/255: the risen smoke left the picture`);
   });
+  // --- Fourth try-out: a real camera's faint readings ---
+  await check('smoke: a faint trace of a person across the room draws nothing there (real-camera confetti)', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); window.live.current.made; window.live.run(1); window.live.current.made.provider.faintRoom = .25; window.live.run(360);
+      window.live.current.source.standing = true; window.live.run(600); const f = window.live.figureAt(); let lit = 0, n = 0; const { data, width, height } = window.live.pixels();
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) { if (Math.abs(x / width - f.x) < .25) continue; n++; const i = (y * width + x) * 4; if (Math.max(data[i], data[i + 1], data[i + 2]) > 8) lit++; }
+      return lit / n; });
+    assert.ok(r < .05, `${(r * 100).toFixed(0)}% of the room away from the figure is lit`);
+  });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));
 } finally {

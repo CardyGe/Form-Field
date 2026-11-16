@@ -305,3 +305,10 @@ Greg asked to control "the smoke emmiter", and how long smoke stays, "so i could
 - **Emit** (0–1, default 0.6, the previous amount). It sets how much new smoke comes off people, moving or still. Movement response now only sets how hard people push. The Start from points leave Emit alone.
 - **The figure is drawn over the smoke,** so it shows at any Emit. Emit decides how much of it is also left behind in the smoke. At Emit 0 people add nothing and only push. *(Found while building: a figure poured into the smoke kept adding smoke as it moved.)*
 - **Forever,** a tick box under Smoke life. With it on, smoke never fades, clear air is off, and the edges of the picture close, so smoke stays in. Clear still empties it.
+
+## Fourth try-out (16 November 2026)
+
+Greg's recording after Emit and Forever: "made it worse". The background was covered in dark confetti far from him.
+- **Cause:** drawing the figure over the smoke used the person reading as it came. A real camera gives faint readings across the whole room, and the figure's texture showed through them. The test figure's readings were clean, so no check saw it.
+- **Fix:** every part of Smoke counts a person only where the reading is solid (0.3 to 0.7, eased). This covers the figure, the smoke poured off people, the lift, the hold and its ring, the drift, and where clear air stays away.
+- **New check:** the stand-in model can read a faint trace of a person across the room, as a real camera does.

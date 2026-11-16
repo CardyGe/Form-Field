@@ -127,6 +127,8 @@ export class TestMaskProvider implements MaskProvider {
   private readonly context = this.canvas.getContext('2d', { willReadFrequently: true })!;
   /** For checks: the stand-in model calls 90% of the frame a person. */
   coverAll = false;
+  /** For checks: like a real camera, the stand-in model reads a faint trace of a person (0..1) across the whole room. */
+  faintRoom = 0;
   /** For checks: the stand-in model stops answering, as if it had fallen behind, until this is cleared. */
   paused = false;
   constructor(private readonly source: () => TestSource) {}
@@ -138,7 +140,8 @@ export class TestMaskProvider implements MaskProvider {
     c.clearRect(0, 0, w, h); c.fillStyle = '#fff'; source.drawPeople(c, w, h, true);
     if (this.coverAll) c.fillRect(w * .05, 0, w * .9, h);
     const rgba = c.getImageData(0, 0, w, h).data, data = new Uint8Array(w * h);
-    for (let i = 0; i < data.length; i++) data[i] = rgba[i * 4 + 3];
+    const faint = Math.round(this.faintRoom * 255);
+    for (let i = 0; i < data.length; i++) data[i] = Math.max(faint, rgba[i * 4 + 3]);
     this.mask = { data, width: w, height: h, frameId };
     this.lastAt = source.seconds * 1000;
   }
