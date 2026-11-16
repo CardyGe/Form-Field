@@ -1,6 +1,9 @@
 /** Shaders for people in tracking. GLSL ES 1.00, run through Passes.material. */
 import { BOX_EDGE } from './maths';
 
+/** Above this share of the picture changing at once, it is a lighting change rather than movement. */
+export const LIGHTING_CHANGE = .4;
+
 const box = /* glsl */`
 float box(vec2 p, vec4 b) {
   return smoothstep(b.x, b.x + ${BOX_EDGE}, p.x) * (1. - smoothstep(b.y - ${BOX_EDGE}, b.y, p.x))
@@ -29,9 +32,12 @@ void main() {
  *    person swaying in place still reads as still.
  */
 export const stillFragment = /* glsl */`
-uniform sampler2D uStill, uFlow, uLuma, uMemory, uMask; uniform float uStep; uniform vec2 uTexel, uLumaTexel, uStillTexel;
+const float LIGHTING = ${LIGHTING_CHANGE.toFixed(3)};
+uniform sampler2D uStill, uFlow, uLuma, uMemory, uMask, uGlobal; uniform float uStep; uniform vec2 uTexel, uLumaTexel, uStillTexel;
 uniform float uAny, uDeliberate;
 void main() {
+  // A change over the whole picture (lights, the camera re-exposing) is not movement.
+  bool lighting = texture2D(uGlobal, vec2(.5)).r > LIGHTING;
   float drift = 0., travel = 0.;
   for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
     vec2 o = vec2(float(x), float(y));
@@ -41,7 +47,7 @@ void main() {
   }
   float strength = drift;
   vec2 t = min(texture2D(uStill, vUv).rg + uStep, vec2(1e4));
-  if (strength > uAny) t.r = 0.;
+  if (strength > uAny && !lighting) t.r = 0.;
   // Within a person, any sway anywhere keeps all of them counted: the shortest time spreads across
   // the body. It spreads only where the model sees a person, so it never reaches the wall.
   if (texture2D(uMask, vUv).r > .5) {
@@ -78,10 +84,31 @@ void main() {
   gl_FragColor = vec4(people, 0., 0., 1.);
 }`;
 
-/** The slow memory of the picture: eases towards each new camera frame. */
+/**
+ * How much of the picture outside people has changed from the memory at once: the share of a 16 × 9
+ * grid that drifted past the movement threshold. Most of it changing together is the lights or the
+ * camera re-exposing, not movement. Written to a 1 × 1 target.
+ */
+export const globalFragment = /* glsl */`
+uniform sampler2D uLuma, uMemory, uMask; uniform float uAny;
+void main() {
+  float n = 0., changed = 0.;
+  for (int y = 0; y < 9; y++) for (int x = 0; x < 16; x++) {
+    vec2 q = (vec2(float(x), float(y)) + .5) / vec2(16., 9.);
+    float w = 1. - step(.3, texture2D(uMask, q).r);
+    n += w; changed += w * step(uAny, abs(texture2D(uLuma, q).r - texture2D(uMemory, q).r));
+  }
+  gl_FragColor = vec4(n > 8. ? changed / n : 0., 0., 0., 1.);
+}`;
+
+/** The slow memory of the picture: eases towards each new camera frame, and snaps to it on a lighting change. */
 export const memoryFragment = /* glsl */`
-uniform sampler2D uMemory, uLuma; uniform float uRate;
-void main() { gl_FragColor = vec4(mix(texture2D(uMemory, vUv).r, texture2D(uLuma, vUv).r, uRate), 0., 0., 1.); }`;
+const float LIGHTING = ${LIGHTING_CHANGE.toFixed(3)};
+uniform sampler2D uMemory, uLuma, uGlobal; uniform float uRate;
+void main() {
+  float rate = texture2D(uGlobal, vec2(.5)).r > LIGHTING ? 1. : uRate;
+  gl_FragColor = vec4(mix(texture2D(uMemory, vUv).r, texture2D(uLuma, vUv).r, rate), 0., 0., 1.);
+}`;
 
 export const fillFragment = /* glsl */`uniform vec4 uValue; void main() { gl_FragColor = uValue; }`;
 export const copyFragment = /* glsl */`uniform sampler2D uImage; void main() { gl_FragColor = texture2D(uImage, vUv); }`;

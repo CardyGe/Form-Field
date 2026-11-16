@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import type { Passes, Pair } from './passes';
 import type { Mask, MaskProvider, PeopleStatus } from './MaskProvider';
 import type { LiveSettings } from './settings';
-import { alignFragment, copyFragment, fillFragment, memoryFragment, peopleFragment, stillFragment } from './people-shaders';
+import { alignFragment, copyFragment, fillFragment, globalFragment, memoryFragment, peopleFragment, stillFragment } from './people-shaders';
 
 export const PEOPLE_SIZE = [640, 360] as const;
 export const STILL_SIZE = [160, 90] as const;
@@ -20,6 +20,8 @@ const ANY_MOVEMENT = .015;
 const MEMORY_SECONDS = 1.5;
 /** After a source starts, nothing counts as moved for this long: a camera settling its exposure must not mark the wall as moved. */
 export const WARM_UP_SECONDS = 2;
+/** How long the person takes to fade out when people stop being found, and back in when they are found again. */
+export const PRESENCE_SECONDS = 1;
 /** Movement per camera frame (uv) above which it counts as deliberate rather than sway: about 1.3 px a frame at 640 wide. */
 const DELIBERATE_MOVEMENT = .002;
 
@@ -28,6 +30,8 @@ export class People {
   private readonly timers: Pair;
   private readonly memory: Pair;
   private readonly remember: THREE.ShaderMaterial;
+  private readonly globalTarget: THREE.WebGLRenderTarget;
+  private readonly global: THREE.ShaderMaterial;
   private memoryPrimed = false;
   private lastFrameSeconds = 0;
   private startedAt: number | null = null;
@@ -46,16 +50,20 @@ export class People {
   /** Masks taken since start, for diagnostics. */
   masks = 0;
   ready = false;
+  /** 0..1: eases towards `ready`, so the person fades rather than popping in and out. */
+  presence = 0;
 
   constructor(private readonly passes: Passes, flowSize: readonly [number, number], lumaSize: readonly [number, number]) {
     this.smoothed = passes.pair(...PEOPLE_SIZE);
     this.timers = passes.pair(...STILL_SIZE, { float: true, nearest: true });
     this.memory = passes.pair(...lumaSize);
-    this.remember = passes.material(memoryFragment, { uMemory: { value: null }, uLuma: { value: null }, uRate: { value: 1 } });
+    this.globalTarget = passes.target(1, 1, { float: true, nearest: true });
+    this.global = passes.material(globalFragment, { uLuma: { value: null }, uMemory: { value: null }, uMask: { value: null }, uAny: { value: ANY_MOVEMENT } });
+    this.remember = passes.material(memoryFragment, { uMemory: { value: null }, uLuma: { value: null }, uGlobal: { value: this.globalTarget.texture }, uRate: { value: 1 } });
     this.output = passes.target(...PEOPLE_SIZE);
     this.room = passes.target(...PEOPLE_SIZE);
     this.align = passes.material(alignFragment, { uRaw: { value: null }, uPrevious: { value: null }, uMirror: { value: 1 }, uCrop: { value: new THREE.Vector2(1, 1) } });
-    this.time = passes.material(stillFragment, { uStill: { value: null }, uFlow: { value: null }, uLuma: { value: null }, uMemory: { value: null }, uMask: { value: null }, uStep: { value: 0 }, uStillTexel: { value: new THREE.Vector2(1 / STILL_SIZE[0], 1 / STILL_SIZE[1]) },
+    this.time = passes.material(stillFragment, { uStill: { value: null }, uFlow: { value: null }, uLuma: { value: null }, uMemory: { value: null }, uMask: { value: null }, uGlobal: { value: this.globalTarget.texture }, uStep: { value: 0 }, uStillTexel: { value: new THREE.Vector2(1 / STILL_SIZE[0], 1 / STILL_SIZE[1]) },
       uTexel: { value: new THREE.Vector2(2 / flowSize[0], 2 / flowSize[1]) }, uLumaTexel: { value: new THREE.Vector2(1 / lumaSize[0], 1 / lumaSize[1]) },
       uAny: { value: ANY_MOVEMENT }, uDeliberate: { value: DELIBERATE_MOVEMENT } });
     this.filter = passes.material(peopleFragment, { uSmoothed: { value: null }, uStill: { value: null }, uCamera: { value: null }, uRoom: { value: this.room.texture },
@@ -78,7 +86,7 @@ export class People {
    * One display frame. `firstFrameId` is the lowest frame id that belongs to the current source:
    * a mask from before a source change is never used.
    */
-  update(step: number, inputs: { camera: THREE.Texture; flow: THREE.Texture; luma: THREE.Texture; crop: THREE.Vector2; fresh: boolean; seconds: number }, provider: MaskProvider, firstFrameId: number, settings: LiveSettings): void {
+  update(step: number, inputs: { camera: THREE.Texture; flow: THREE.Texture; luma: THREE.Texture; crop: THREE.Vector2; fresh: boolean; seconds: number; restarted?: boolean }, provider: MaskProvider, firstFrameId: number, settings: LiveSettings): void {
     const mask = provider.latest();
     if (mask && mask !== this.lastMask && mask.frameId >= firstFrameId) {
       this.lastMask = mask;
@@ -91,7 +99,16 @@ export class People {
       this.haveMask = true; this.masks++;
     }
     this.ready = this.haveMask && provider.ready;
+    const wasPresent = this.presence > 0;
+    this.presence = Math.min(1, Math.max(0, this.presence + (this.ready ? 1 : -1) * step / PRESENCE_SECONDS));
+    // Once faded right out, the old mask is forgotten, so the next person found does not start from a ghost of the last.
+    if (wasPresent && this.presence === 0 && !this.ready) {
+      (this.fill.uniforms.uValue.value as THREE.Vector4).set(0, 0, 0, 1);
+      this.passes.draw(this.fill, this.smoothed.read); this.passes.draw(this.fill, this.smoothed.write);
+    }
 
+    // After a stall the camera may have changed a lot: settle again, as at start, keeping the timers.
+    if (inputs.restarted) this.startedAt = null;
     this.startedAt ??= inputs.seconds;
     const warming = inputs.seconds - this.startedAt < WARM_UP_SECONDS;
     // An empty-room capture waits for a settled camera: it is taken from the first frame after warm-up.
@@ -100,6 +117,10 @@ export class People {
       this.passes.draw(this.copy, this.room);
       this.captured = true; this.captureNext = false;
     }
+    // How much of the picture changed at once, measured before the memory moves on.
+    const g = this.global.uniforms;
+    g.uLuma.value = inputs.luma; g.uMemory.value = this.memory.read.texture; g.uMask.value = this.smoothed.read.texture; g.uAny.value = Math.max(ANY_MOVEMENT, settings.noiseFloor);
+    this.passes.draw(this.global, this.globalTarget);
     if (inputs.fresh) {
       // While warming up the memory simply follows the picture, so nothing reads as moved at start.
       const r = this.remember.uniforms, elapsed = inputs.seconds - this.lastFrameSeconds;
@@ -119,7 +140,7 @@ export class People {
     f.uSmoothed.value = this.smoothed.read.texture; f.uStill.value = this.timers.read.texture; f.uCamera.value = inputs.camera;
     (f.uBox.value as THREE.Vector4).set(box.left, box.right, box.bottom, box.top);
     f.uIgnore.value = settings.people.ignoreStillSeconds ?? -1;
-    f.uUseRoom.value = settings.people.useEmptyRoom ? 1 : 0; f.uCaptured.value = this.captured ? 1 : 0; f.uReady.value = this.ready ? 1 : 0;
+    f.uUseRoom.value = settings.people.useEmptyRoom ? 1 : 0; f.uCaptured.value = this.captured ? 1 : 0; f.uReady.value = this.presence;
     this.passes.draw(this.filter, this.output);
   }
 
@@ -132,12 +153,12 @@ export class People {
     this.passes.draw(this.fill, this.timers.read); this.passes.draw(this.fill, this.timers.write);
     this.memoryPrimed = false; this.startedAt = null;
     // A capture asked for while a source is starting is kept, and taken once that source has settled.
-    this.haveMask = false; this.ready = false; this.captured = false; this.lastMask = null;
+    this.haveMask = false; this.ready = false; this.presence = 0; this.captured = false; this.lastMask = null;
   }
 
   dispose(): void {
     this.raw?.dispose();
-    for (const item of [this.smoothed, this.timers, this.memory, this.remember, this.output, this.room, this.align, this.time, this.filter, this.fill, this.copy]) item.dispose();
+    for (const item of [this.smoothed, this.timers, this.memory, this.remember, this.globalTarget, this.global, this.output, this.room, this.align, this.time, this.filter, this.fill, this.copy]) item.dispose();
   }
 
   private upload(mask: Mask): void {

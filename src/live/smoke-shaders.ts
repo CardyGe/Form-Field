@@ -32,6 +32,7 @@ void main() {
 export const dyeFragment = /* glsl */`
 uniform sampler2D uCurrent, uCamera, uFlow, uPeople, uStill;
 uniform float uReady, uResponse, uSmoulder, uBurn, uStep, uTime; uniform vec2 uPeopleTexel;
+const float CAP = 1.5;
 ${recolourGLSL}
 ${travel}
 ${burn}
@@ -46,7 +47,13 @@ void main() {
   float add = travel(flow) * region * uResponse * 6.
     + uSmoulder * 1.5 * (edge + .3 * person) * uReady
     + burnFade(texture2D(uStill, vUv).g, uBurn) * 2. * person;
-  gl_FragColor = vec4(min(texture2D(uCurrent, vUv).rgb + colour * add * uStep, vec3(1.5)), 1.);
+  // Capped by its brightest channel, so colour keeps its hue at the cap instead of every channel
+  // filling up to white; pouring eases off as the smoke there approaches the cap.
+  vec3 current = texture2D(uCurrent, vUv).rgb;
+  float full = max(current.r, max(current.g, current.b)) / CAP;
+  vec3 next = current + colour * add * uStep * max(0., 1. - full);
+  float m = max(next.r, max(next.g, next.b));
+  gl_FragColor = vec4(next * min(1., CAP / max(m, 1e-6)), 1.);
 }`;
 
 /** The picture: smoke, with the person on top fading as they burn away. uShow: 0 all, 1 smoke only, 2 person only. */

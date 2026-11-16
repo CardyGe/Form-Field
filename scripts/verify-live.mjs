@@ -351,6 +351,37 @@ try {
     const r = await page.evaluate(() => { window.live.smoke(); window.live.run(240); const before = window.live.painted(0).fraction; window.live.current.renderer.frame(5); return { before, after: window.live.painted(0).fraction }; });
     assert.ok(Math.abs(r.after - r.before) < .05, `${r.before} -> ${r.after}`);
   });
+  // --- Review fixes ---
+  await check('smoke: bright movement across the whole frame does not go white, with or without people found (Review Focus 3)', async () => {
+    const r = await page.evaluate(() => {
+      const white = () => { const { data } = window.live.pixels(); let hot = 0; for (let i = 0; i < data.length; i += 4) if (Math.min(data[i], data[i + 1], data[i + 2]) > 250) hot++; return hot / (data.length / 4); };
+      const run = fallback => { window.live.smoke(); const { source, made } = window.live.current; source.field = true; window.live.run(150);
+        if (fallback) made.provider.dispose(); else made.provider.coverAll = true; window.live.run(600); return white(); };
+      return { covered: run(false), fallback: run(true) };
+    });
+    assert.ok(r.covered < .05, `${(r.covered * 100).toFixed(1)}% white with people everywhere`); assert.ok(r.fallback < .05, `${(r.fallback * 100).toFixed(1)}% white without people found`);
+  });
+  await check('smoke: the person fades out when people stop being found, and fades back in (Review Focus 5)', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); window.live.run(240); const { made } = window.live.current, person = () => { window.live.layer('person'); const v = window.live.meanLuma(); window.live.layer('all'); return v; };
+      window.live.current.source.standing = true; window.live.run(30); const before = person(); made.provider.paused = true; window.live.run(120 + 30); const fading = person(); window.live.run(90); const gone = person();
+      made.provider.paused = false; window.live.run(30); const returning = person(); window.live.run(90); const back = person(); return { before, fading, gone, returning, back }; });
+    assert.ok(r.fading > r.before * .2 && r.fading < r.before * .8, `half a second in: ${r.fading} of ${r.before}`);
+    assert.ok(r.gone < r.before * .05, `gone: ${r.gone}`);
+    assert.ok(r.returning > r.before * .2 && r.returning < r.before * .85, `half a second back: ${r.returning}`);
+    assert.ok(r.back > r.before * .8, `back: ${r.back}`);
+  });
+  await check('people: a lighting change across the whole picture does not wake the poster', async () => {
+    const r = await page.evaluate(([px, py]) => { window.live.make(s => { s.look = 'smoke'; }, { figure: true }); window.live.run(180); const { source } = window.live.current;
+      source.brightness = .15; window.live.run(20); return { poster: window.live.peopleAt(px, py), figure: window.live.peopleAt(window.live.figureAt().x, window.live.figureAt().y + .08).people }; }, [POSTER.x, POSTER.y]);
+    assert.ok(r.poster.people < .05, `poster ${r.poster.people} (any-movement timer ${r.poster.still})`); assert.ok(r.figure > .5, `figure ${r.figure}`);
+  });
+  await check('people: an error starting person finding does not stop Live', async () => {
+    const r = await page.evaluate(() => { window.live.make(s => { s.look = 'smoke'; }, { figure: true }); const { renderer } = window.live.current;
+      renderer.tracking.makeProvider = () => { throw new Error('no worker here'); };
+      let frames = 0; for (let i = 0; i < 60; i++) { try { window.live.current.source.advance(1 / 60); renderer.frame(1 / 60); frames++; } catch { break; } }
+      return { frames, status: renderer.peopleDiagnostics().status }; });
+    assert.equal(r.frames, 60); assert.equal(r.status.state, 'failed'); assert.match(r.status.reason, /no worker here/);
+  });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));
 } finally {

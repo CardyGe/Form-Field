@@ -18,6 +18,10 @@ export class TestSource implements FrameSource {
   figure = false;
   /** Holds the figure in place with a slight sway, like a person standing still. */
   standing = false;
+  /** For checks: bright stripes scrolling across the whole frame, so everything moves. */
+  field = false;
+  /** For checks: added to the whole picture, like a lighting change or a camera re-exposing. 0..1. */
+  brightness = 0;
   private time = 0;
   private clock = 0;
   private swayTime = 0;
@@ -78,7 +82,12 @@ export class TestSource implements FrameSource {
   private paint(): void {
     const c = this.context, w = this.element.width, h = this.element.height;
     c.fillStyle = '#16181c'; c.fillRect(0, 0, w, h);
-    if (this.figure) { this.paintFigure(w, h); return; }
+    if (this.figure) this.paintFigure(w, h);
+    if (this.field) {
+      for (let x = -80; x < w + 80; x += 40) { c.fillStyle = (x / 40) % 2 ? '#fff4d0' : '#ffe0f0'; c.fillRect(x + (this.time * 120) % 80, 0, 20, h); }
+    }
+    if (this.brightness > 0) { c.fillStyle = `rgba(255,255,255,${this.brightness})`; c.fillRect(0, 0, w, h); }
+    if (this.figure || this.field) return;
     for (const [index, disc] of this.discs().entries()) {
       const x = disc.x * w, y = (1 - disc.y) * h, r = disc.radius * h;
       const fill = c.createRadialGradient(x - r * .3, y - r * .3, r * .1, x, y, r);
@@ -118,11 +127,13 @@ export class TestMaskProvider implements MaskProvider {
   private readonly context = this.canvas.getContext('2d', { willReadFrequently: true })!;
   /** For checks: the stand-in model calls 90% of the frame a person. */
   coverAll = false;
+  /** For checks: the stand-in model stops answering, as if it had fallen behind, until this is cleared. */
+  paused = false;
   constructor(private readonly source: () => TestSource) {}
   get status(): PeopleStatus { return this.disposed ? { state: 'failed', reason: 'stopped' } : { state: 'running', ms: 1 }; }
   get ready(): boolean { return !this.disposed && (this.source().seconds * 1000 - this.lastAt) <= READY_MS; }
   submit(_frame: HTMLVideoElement | HTMLCanvasElement, frameId: number): void {
-    if (this.disposed) return;
+    if (this.disposed || this.paused) return;
     const c = this.context, { width: w, height: h } = this.canvas, source = this.source();
     c.clearRect(0, 0, w, h); c.fillStyle = '#fff'; source.drawPeople(c, w, h, true);
     if (this.coverAll) c.fillRect(w * .05, 0, w * .9, h);

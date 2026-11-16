@@ -41,6 +41,8 @@ export class Tracking implements TrackingFeed {
   private readonly peopleStage: People;
   private provider: MaskProvider | null = null;
   private epoch = 0;
+  /** Counts restarts after a stalled camera, so people settle again. */
+  private restarts = 0;
   /** Seconds of capped display time, for the slow memory. */
   private clock = 0;
 
@@ -76,15 +78,24 @@ export class Tracking implements TrackingFeed {
   /** One display frame: movement from new camera frames, and people when the look wants them. `step` is the capped time step. */
   update(source: FrameSource, settings: LiveSettings, step = 0): void {
     const wants = settings.look === 'smoke' && !!this.makeProvider;
-    if (wants && !this.provider) this.provider = this.makeProvider!();
+    if (wants && !this.provider) {
+      try { this.provider = this.makeProvider!(); }
+      catch (error) { this.provider = new FailedProvider(error); }
+    }
     if (!wants && this.provider) { this.provider.dispose(); this.provider = null; this.peopleStage.reset(); }
-    const before = this.frameId;
+    const before = this.frameId, restartsBefore = this.restarts;
     this.analyse(source, settings);
     if (!this.provider) return;
     this.clock += step;
     const newFrame = this.frameId !== before && this.frameId >= 0;
-    if (newFrame && this.element) this.provider.submit(this.element, this.epoch * EPOCH + this.frameId);
-    this.peopleStage.update(step, { camera: this.camera, flow: this.flow, luma: this.lumas.read.texture, crop: this.crop, fresh: newFrame && this.primed, seconds: this.clock }, this.provider, this.epoch * EPOCH, settings);
+    // Person finding must never stop Live: if it throws, it is marked failed and Live carries on without it.
+    try {
+      if (newFrame && this.element) this.provider.submit(this.element, this.epoch * EPOCH + this.frameId);
+      this.peopleStage.update(step, { camera: this.camera, flow: this.flow, luma: this.lumas.read.texture, crop: this.crop, fresh: newFrame && this.primed,
+        seconds: this.clock, restarted: this.restarts !== restartsBefore }, this.provider, this.epoch * EPOCH, settings);
+    } catch (error) {
+      this.provider.dispose(); this.provider = new FailedProvider(error);
+    }
   }
 
   private analyse(source: FrameSource, settings: LiveSettings): void {
@@ -112,7 +123,7 @@ export class Tracking implements TrackingFeed {
     }
     // After a gap (sleep, a stalled camera, a dragged window) the last frame is too old to compare with:
     // the difference would read as movement everywhere. Start again from this frame.
-    if (this.primed && now - this.lastFrameAt > STALE_MS) { this.stillFlow(); this.primed = false; }
+    if (this.primed && now - this.lastFrameAt > STALE_MS) { this.stillFlow(); this.primed = false; this.restarts++; }
     this.frameId = source.frameId; this.lastFrameAt = now;
     const width = element instanceof HTMLVideoElement ? element.videoWidth : element.width, height = element instanceof HTMLVideoElement ? element.videoHeight : element.height;
     const aspect = width / height, wide = 16 / 9;
@@ -158,4 +169,14 @@ export class Tracking implements TrackingFeed {
     this.passes.draw(this.zero, this.frames.read); this.passes.draw(this.zero, this.frames.write);
     this.primed = false;
   }
+}
+
+/** Stands in for person finding that could not start or broke: says why, and finds nobody. */
+class FailedProvider implements MaskProvider {
+  readonly status: PeopleStatus;
+  readonly ready = false;
+  constructor(error: unknown) { this.status = { state: 'failed', reason: (error as Error)?.message ?? String(error) }; }
+  submit(): void {}
+  latest(): null { return null; }
+  dispose(): void {}
 }

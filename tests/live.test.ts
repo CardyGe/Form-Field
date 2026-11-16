@@ -76,7 +76,7 @@ test('empty room only applies once captured', () => {
   assert.equal(personWeight(1, 0, 1, { use: false, captured: false, differs: 1 }), 0);
 });
 
-import { MaskGate, READY_MS } from '../src/live/MaskProvider';
+import { MaskGate, READY_MS, RestartPolicy } from '../src/live/MaskProvider';
 test('one frame at a time goes to the model; the rest are dropped', () => {
   let now = 0; const gate = new MaskGate(() => now);
   assert.equal(gate.offer(), true); assert.equal(gate.offer(), false);
@@ -88,10 +88,23 @@ test('people are ready only while masks keep arriving', () => {
   gate.offer(); now = 30; gate.received(); assert.equal(gate.ready, true);
   now = 30 + READY_MS + 1; assert.equal(gate.ready, false);
 });
-test('a frame lost by the model is given up on, and the model is behind', () => {
+test('a frame the model is slow with makes it behind, and no second frame is sent', () => {
   let now = 0; const gate = new MaskGate(() => now);
   gate.offer(); assert.equal(gate.behind, false);
-  now = READY_MS + 1; assert.equal(gate.behind, true); assert.equal(gate.offer(), true);
+  now = READY_MS + 1; assert.equal(gate.behind, true); assert.equal(gate.offer(), false);
+});
+test('a frame that could not be sent frees the gate without counting as a mask', () => {
+  let now = 0; const gate = new MaskGate(() => now);
+  gate.offer(); gate.cancelled(); assert.equal(gate.ready, false); assert.equal(gate.offer(), true);
+  gate.received(); now = 1500; gate.offer(); gate.cancelled(); now = READY_MS + 100; assert.equal(gate.ready, false);
+});
+test('person finding restarts twice, the second time on the CPU, then gives up', () => {
+  const policy = new RestartPolicy();
+  assert.equal(policy.failed(), 'restart'); assert.equal(policy.failed(), 'restart-cpu'); assert.equal(policy.failed(), 'give-up');
+});
+test('a mask after a restart resets the count of restarts', () => {
+  const policy = new RestartPolicy();
+  policy.failed(); policy.succeeded(); assert.equal(policy.failed(), 'restart');
 });
 test('near-black palette entries are left out of the ramp, so people never go black', () => {
   for (const palette of [POUR, HOT_SIGNAL]) assert.ok(paletteRamp(palette).every(([r, g, b]) => .2126 * r + .7152 * g + .0722 * b > .01), palette.join());
