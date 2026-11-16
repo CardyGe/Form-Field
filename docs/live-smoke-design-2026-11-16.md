@@ -328,3 +328,23 @@ Greg: Forever should stop adding once the picture is full, "but also now the per
   - The Smoulder-0 leak allows up to 5/255.
   - The fade-back check no longer requires the figure to dim within half a second, since a smoke figure drifts and thins at the pace of Smoke life.
 - **Note:** `verify-workspace-ui` failed at its focus-mode Escape step (line 126) both on this change and on the previous commit, which had passed it earlier the same day. No studio screen code changed.
+
+## Sixth try-out (16 November 2026)
+
+Greg: "better but not great when forever is off. the emiited particles are too wild. needs controll. and more vivid". He agreed to two controls:
+- **Calm ↔ Wild** replaces Swirl. It is saved under the same key, so old settings carry over, with a default of 0.35 (was 0.5).
+  - 0.5 behaves exactly as Smoke did before.
+  - Below the middle, movement throws smoke more gently (down to 0.35× its old strength), never faster than 20 cells/s, and movement's smoke is poured more smoothly.
+  - Above the middle, movement throws harder (up to 1.4×).
+  - Eddies follow it in a straight line, as Swirl did (curl 0–60).
+  - The Start from points use Wispy 0.45, Smouldering 0.35 and Solid 0.2.
+- **Vividness** (0–1, default 0.8). It lifts saturation, most where smoke has mixed towards grey and least where colour is already vivid, and keeps each pixel's brightest channel where it was. The Start from points leave it alone.
+
+**Tried and dropped:**
+- Snapping mixed colour to the nearest palette colour: it made flat bands.
+- A curved eddy response, with extra eddies inside people: the extra eddies made no difference, and the curve lost a thin figure's gaps.
+- Calming from the very bottom of the range.
+
+The gaps that make a thin figure ghostly come from the eddies, the throw and the pour together. Keeping the middle unchanged keeps them; at the Calm end a thin figure is smoother. *(Measured: 34% gaps at the middle; about 6% at 0.35 when calming started from 0.)* The gaps check runs at the middle.
+
+Forever's cap now starts at 25% of the picture holding smoke (eased to 45%), since smoother pouring spreads further.

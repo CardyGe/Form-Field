@@ -44,9 +44,9 @@ export class Smoke implements Look {
     this.measureFull = passes.material(fullnessFragment, { uDye: { value: null } });
     this.drifting = passes.material(driftFragment, { uPrevious: { value: null }, uFlow: { value: null }, uPeople: { value: null }, uReady: { value: 0 }, uStep: { value: 0 } });
     this.dye = passes.material(dyeFragment, { uDrift: { value: null }, uVelocity: { value: null }, uFullness: { value: null }, uCapFull: { value: 0 }, uClear: { value: new THREE.Vector4() }, uCurrent: { value: null }, uFlow: { value: null }, uPeople: { value: null },
-      uReady: { value: 0 }, uDensity: { value: .6 }, uEmit: { value: .6 }, uOpen: { value: 1 }, uSmoulder: { value: .5 }, uStep: { value: 0 }, uTime: { value: 0 },
+      uReady: { value: 0 }, uDensity: { value: .6 }, uEmit: { value: .6 }, uSwirl: { value: .35 }, uOpen: { value: 1 }, uSmoulder: { value: .5 }, uStep: { value: 0 }, uTime: { value: 0 },
       uPeopleTexel: { value: new THREE.Vector2(1 / PEOPLE_SIZE[0], 1 / PEOPLE_SIZE[1]) }, ...ramp() });
-    this.composite = passes.material(compositeFragment, { uDye: { value: null } });
+    this.composite = passes.material(compositeFragment, { uDye: { value: null }, uVividness: { value: .8 } });
   }
 
   get output(): THREE.Texture { return this.target.texture; }
@@ -70,7 +70,7 @@ export class Smoke implements Look {
       // Forever: only the faintest smoke fades, slowly, so dense smoke stays but stirring cannot spread a haze over everything.
       (d.uClear.value as THREE.Vector4).set(CLEAR.slowFrom, CLEAR.slowTo, s.forever ? FOREVER_THIN : CLEAR.thin, s.forever ? FOREVER_RATE : CLEAR.rate);
       this.fluid.walls = s.forever;
-      d.uReady.value = ready; d.uDensity.value = s.density; d.uEmit.value = s.emit; d.uOpen.value = s.forever ? 0 : 1; d.uSmoulder.value = s.smoulder; d.uStep.value = seconds; d.uTime.value = time;
+      d.uReady.value = ready; d.uDensity.value = s.density; d.uEmit.value = s.emit; d.uSwirl.value = s.swirl; d.uOpen.value = s.forever ? 0 : 1; d.uSmoulder.value = s.smoulder; d.uStep.value = seconds; d.uTime.value = time;
       this.fluid.inject('dye', this.dye);
       // Rise is applied in the velocity pass above, where a held figure can switch it off.
       const h = this.hold.uniforms;
@@ -78,7 +78,7 @@ export class Smoke implements Look {
       this.fluid.step(seconds, s.swirl * 60, VELOCITY_LIFE, s.forever ? Infinity : s.lifeSeconds, 0, () => this.fluid.inject('velocity', this.hold));
     }
     const c = this.composite.uniforms;
-    c.uDye.value = this.fluid.dye;
+    c.uDye.value = this.fluid.dye; c.uVividness.value = s.vividness;
     this.passes.draw(this.composite, this.target);
   }
 

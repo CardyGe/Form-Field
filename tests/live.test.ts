@@ -59,7 +59,7 @@ test('smoke settings repair field by field and keep their own palette', () => {
 test('the three starting points set every smoke control, and differ', () => {
   assert.deepEqual(SMOKE_STARTS.map(s => s.label), ['Wispy', 'Smouldering', 'Solid']);
   assert.deepEqual(SMOKE_STARTS.map(s => [s.values.density, s.values.smoulder, s.values.rise, s.values.swirl, s.values.lifeSeconds, s.values.response]),
-    [[.25, .9, .8, .7, 4, 1.5], [.6, .5, .4, .5, 6, 1], [1, .1, .15, .3, 10, .7]]);
+    [[.25, .9, .8, .45, 4, 1.5], [.6, .5, .4, .35, 6, 1], [1, .1, .15, .2, 10, .7]]);
 });
 test('Smouldering is where Smoke starts', () => {
   const d = defaultLiveSettings().smoke, start = SMOKE_STARTS[1].values;
@@ -131,4 +131,14 @@ test('Forever is off unless saved as true', () => {
   assert.equal(defaultLiveSettings().smoke.forever, false);
   assert.equal(validateLiveSettings({ smoke: { forever: true } }).smoke.forever, true);
   assert.equal(validateLiveSettings({ smoke: { forever: 'yes' } }).smoke.forever, false);
+});
+
+test('Swirl is now Calm ↔ Wild, calmer by default', () => {
+  const wild = SMOKE_CONTROLS.find(c => c.key === 'swirl')!;
+  assert.deepEqual([wild.label, wild.min, wild.max, wild.default], ['Calm ↔ Wild', 0, 1, .35]);
+});
+test('Vividness runs 0 to 1, defaults high, and the starting points leave it alone', () => {
+  const vivid = SMOKE_CONTROLS.find(c => c.key === 'vividness')!;
+  assert.deepEqual([vivid.label, vivid.min, vivid.max, vivid.default], ['Vividness', 0, 1, .8]);
+  for (const start of SMOKE_STARTS) assert.equal('vividness' in start.values, false, start.label);
 });

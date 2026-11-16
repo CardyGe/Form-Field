@@ -19,7 +19,7 @@ export {defaultLiveSettings} from './src/live/settings';
 export {recolourGLSL, setRamp} from './src/live/recolour';
 export {Passes} from './src/live/passes';
 export * as THREE from 'three';
-export {HOT_SIGNAL, POUR} from './src/core/palettes';
+export {HOT_SIGNAL, POUR, NEON_STRATA} from './src/core/palettes';
 export const fromHalf = v => { const s = v >> 15, e = (v >> 10) & 31, f = v & 1023; return (s ? -1 : 1) * (e ? Math.pow(2, e - 15) * (1 + f / 1024) : Math.pow(2, -14) * f / 1024); };`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'live.js'), logLevel: 'silent' });
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><body style="margin:0;background:#000"><canvas id="a" style="width:100vw;height:100vh;display:block"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
@@ -414,7 +414,8 @@ try {
       for (let y = 2; y < height - 2; y++) for (let x = 2; x < width - 2; x++) { const px = Math.floor(x / width * people.width), py = Math.floor((1 - (y + .5) / height) * people.height);
         if (people.data[(py * people.width + px) * 4] < .9 || v(x, y) < 20) continue; sum += Math.abs(v(x + 1, y) - v(x, y)) + Math.abs(v(x, y + 1) - v(x, y)) + .5 * (Math.abs(v(x + 2, y) - v(x, y)) + Math.abs(v(x, y + 2) - v(x, y))); n++; }
       return sum / Math.max(1, n); };
-    window.live.stillFigure = density => { window.live.smoke(s => { if (density !== undefined) s.smoke.density = density; }); window.live.run(240); window.live.current.source.standing = true; window.live.run(240); return window.live.withPeople(); };
+    // At the middle of Calm ↔ Wild: a thin figure is broken up by the eddies, which calmer settings smooth out.
+    window.live.stillFigure = density => { window.live.smoke(s => { s.smoke.swirl = .5; if (density !== undefined) s.smoke.density = density; }); window.live.run(240); window.live.current.source.standing = true; window.live.run(240); return window.live.withPeople(); };
   });
   await check('smoke: a low-Density figure has dark gaps, more than a high-Density one', async () => {
     const r = await page.evaluate(() => { const gaps = density => { const inside = window.live.stillFigure(density).filter(p => p[1] > .9).map(p => p[0]); const top = [...inside].sort((a, b) => a - b)[Math.floor(inside.length * .9)];
@@ -498,6 +499,25 @@ try {
       window.live.run(1200); return window.live.painted(0, 40).fraction; });
     // Visible smoke: with nothing fading, the faintest trace spreads everywhere and does not swamp the picture.
     assert.ok(r < .8, `${(r * 100).toFixed(0)}% of the picture has visible smoke`);
+  });
+  // --- Sixth try-out: calm or wild, vivid ---
+  await page.evaluate(() => {
+    // Fine detail in the smoke away from the figure, and how saturated its colours are, where it is lit.
+    window.live.offFigure = () => { const { data, width, height } = window.live.pixels(), f = window.live.figureAt(); let detail = 0, n = 0, sat = 0, m = 0;
+      const v = (x, y) => { const i = (y * width + x) * 4; return .2126 * data[i] + .7152 * data[i + 1] + .0722 * data[i + 2]; };
+      for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) { if (Math.abs(x / width - f.x) < .15) continue; const i = (y * width + x) * 4, hi = Math.max(data[i], data[i + 1], data[i + 2]); if (hi < 30) continue;
+        detail += Math.abs(v(x + 1, y) - v(x, y)) + Math.abs(v(x, y + 1) - v(x, y)); n++; sat += (hi - Math.min(data[i], data[i + 1], data[i + 2])) / hi; m++; }
+      return { detail: detail / Math.max(1, n), saturation: sat / Math.max(1, m), lit: n }; };
+  });
+  await check('smoke: Calm gives smooth flowing smoke, Wild breaks it into curls', async () => {
+    const r = await page.evaluate(() => { const at = swirl => { window.live.smoke(s => { s.smoke.swirl = swirl; s.smoke.response = 2; }); window.live.run(360); return window.live.offFigure(); }; return { calm: at(0), wild: at(1) }; });
+    assert.ok(r.calm.lit > 1000 && r.wild.lit > 1000, `too little smoke to judge (${r.calm.lit}, ${r.wild.lit})`);
+    assert.ok(r.calm.detail < r.wild.detail * .6, `calm ${r.calm.detail.toFixed(2)}, wild ${r.wild.detail.toFixed(2)}`);
+  });
+  await check('smoke: Vividness keeps mixed colours saturated instead of grey', async () => {
+    const r = await page.evaluate(() => { const at = vividness => { window.live.smoke(s => { s.smoke.vividness = vividness; s.smoke.swirl = 1; s.smoke.colourChange = 1; s.smoke.palette = [...window.live.m.NEON_STRATA]; }); window.live.run(480); return window.live.offFigure().saturation; };
+      return { flat: at(0), vivid: at(1) }; });
+    assert.ok(r.vivid > r.flat * 1.3, `saturation at Vividness 1: ${r.vivid.toFixed(2)}, at 0: ${r.flat.toFixed(2)}`);
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));

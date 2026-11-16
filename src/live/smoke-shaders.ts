@@ -39,7 +39,12 @@ void main() {
   v.y += uSmoulder * person * .25 * uGrid.y * uStep;
   // Without people found, movement anywhere in the area still drives the smoke.
   float region = uReady > .5 ? solid(vUv) : 1.;
-  vec2 pushed = flow.rg * uGrid * 30. * uResponse * 1.5;
+  // Calm ↔ Wild: the middle (0.5) behaves as the smoke always did. Below it, movement throws smoke more gently and
+  // never hard; above it, harder.
+  float calm = 1. - clamp(uSwirl / .5, 0., 1.), wild = clamp((uSwirl - .5) / .5, 0., 1.);
+  vec2 pushed = flow.rg * uGrid * 30. * uResponse * 1.5 * mix(1., .35, calm) * (1. + .4 * wild);
+  float fling = length(pushed), most = mix(1e4, 20., calm);
+  if (fling > most) pushed *= most / fling;
   v = mix(v, pushed, clamp(region * travel(flow) * uStep * 15., 0., 1.));
   gl_FragColor = vec4(v, 0., 1.);
 }`;
@@ -68,7 +73,8 @@ void main() {
   // Fully held at Smoulder 0, and let go quickly as Smoulder rises, so a smouldering figure really does give off smoke.
   float hold = smoothstep(.05, .4, near) * pow(1. - uSmoulder, 3.);
   vec2 carried = texture2D(uDrift, vec2(.5)).zw * uGrid;
-  vec2 held = churn(vUv, uTime) * uGrid.y * .06 * (.3 + uSwirl) * smoothstep(.6, .95, person) + carried * smoothstep(.05, .4, person);
+  // The stirring inside figures is fixed (as it was before Calm ↔ Wild existed), so figures always read as smoke.
+  vec2 held = churn(vUv, uTime) * uGrid.y * .06 * .8 * smoothstep(.6, .95, person) + carried * smoothstep(.05, .4, person);
   gl_FragColor = vec4(mix(v, held, hold), 0., 1.);
 }`;
 
@@ -144,7 +150,7 @@ void main() {
 export const dyeFragment = /* glsl */`
 uniform sampler2D uCurrent, uFlow, uPeople;
 uniform sampler2D uDrift, uVelocity, uFullness; uniform vec4 uClear; // slow from, slow to (cells/s), thin, rate
-uniform float uReady, uDensity, uEmit, uSmoulder, uStep, uTime, uOpen, uCapFull; uniform vec2 uPeopleTexel;
+uniform float uReady, uDensity, uEmit, uSmoulder, uSwirl, uStep, uTime, uOpen, uCapFull; uniform vec2 uPeopleTexel;
 // A person counts only where the reading is solid: a real camera gives faint readings across the whole room.
 float solid(vec2 uv) { return smoothstep(.3, .7, texture2D(uPeople, uv).r); }
 const float CAP = 1.5;
@@ -163,7 +169,7 @@ void main() {
   vec3 current = stored.rgb;
   vec2 moved = figureUv(vUv);
   // On Forever, adding eases off once the picture is mostly full, so it cannot swamp it.
-  float room = 1. - uCapFull * smoothstep(.5, .7, texture2D(uFullness, vec2(.5)).r);
+  float room = 1. - uCapFull * smoothstep(.25, .45, texture2D(uFullness, vec2(.5)).r);
   float emitting = min(1., uEmit / .6) * room;
   // The figure is poured into the smoke, settling towards its wisps so the gaps stay dark. Alpha marks how much
   // of the smoke here is figure, so what a moving figure leaves behind can fade quickly at low Emit.
@@ -174,9 +180,12 @@ void main() {
   float figureShare = max(figurePart.r, max(figurePart.g, figurePart.b)) / max(max(next.r, max(next.g, next.b)), 1e-4);
   // Movement and Smoulder pour more on top, in broken wisps rather than a fog or a bright outline;
   // pouring eases off near the cap.
-  float frayed = smoothstep(.45, .7, cloud(moved, uTime, 1.));
+  // Smoke is poured in broken wisps. What movement throws off is poured more smoothly below the middle of
+  // Calm ↔ Wild; what the figure gives off itself (Smoulder) always stays broken.
+  float broken = smoothstep(.45, .7, cloud(moved, uTime, 1.));
+  float frayed = mix(broken, 1., .75 * (1. - clamp(uSwirl / .5, 0., 1.)));
   // Emit sets how much new smoke comes off people, moving or still; 0.6 is the original amount.
-  float add = (travel(flow) * region * 3. * (.25 + .75 * frayed) + uSmoulder * 3. * frayed * (edge + .5 * person)) * uEmit / .6 * room;
+  float add = (travel(flow) * region * 3. * (.25 + .75 * frayed) + uSmoulder * 3. * broken * (edge + .5 * person)) * uEmit / .6 * room;
   float full = max(next.r, max(next.g, next.b)) / CAP;
   float before = max(next.r, max(next.g, next.b));
   next += colour * add * uStep * max(0., 1. - full);
@@ -203,10 +212,22 @@ void main() {
 
 /** The picture: the smoke, figures included, with bright colour rolling off smoothly instead of clipping. */
 export const compositeFragment = /* glsl */`
-uniform sampler2D uDye;
+uniform sampler2D uDye; uniform float uVividness;
 vec3 rolloff(vec3 c) {
   float m = max(c.r, max(c.g, c.b)), k = .75;
   if (m <= k) return c;
   return c * (k + (1. - k) * (1. - exp(-(m - k) / (1. - k)))) / m;
 }
-void main() { gl_FragColor = vec4(rolloff(texture2D(uDye, vUv).rgb), 1.); }`;
+// Vividness: lifts saturation, most where colours have mixed towards grey and least where they are already vivid,
+// so mixed smoke stays colourful without flattening into bands.
+vec3 vivid(vec3 c) {
+  float m = max(c.r, max(c.g, c.b));
+  if (m < 1e-4) return c;
+  float saturation = (m - min(c.r, min(c.g, c.b))) / m;
+  float l = dot(c, vec3(.2126, .7152, .0722));
+  float lift = 1. + uVividness * 2.6 * (1. - saturation);
+  vec3 lifted = max(mix(vec3(l), c, lift), vec3(0.));
+  // Keep the brightest channel where it was, so lifting colour does not dim or flare the smoke.
+  return lifted * m / max(max(lifted.r, max(lifted.g, lifted.b)), 1e-4);
+}
+void main() { gl_FragColor = vec4(rolloff(vivid(texture2D(uDye, vUv).rgb)), 1.); }`;
