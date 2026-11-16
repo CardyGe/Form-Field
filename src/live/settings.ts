@@ -10,7 +10,7 @@ export interface Box { left: number; right: number; bottom: number; top: number 
 export type PaintKey = 'response' | 'strokeLength' | 'bristle' | 'spread' | 'fadeSeconds' | 'colourChange' | 'ground';
 export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number }
 export type LookKind = 'paint' | 'smoke';
-export type SmokeKey = 'smoulder' | 'burnAway' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange';
+export type SmokeKey = 'density' | 'smoulder' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange';
 /** Where people are found. ignoreStillSeconds null means Off. */
 export interface PeopleSettings { ignoreStillSeconds: number | null; useEmptyRoom: boolean }
 export interface LiveSettings {
@@ -41,18 +41,19 @@ export const PAINT_CONTROLS: LiveControl[] = [
   { key: 'ground', label: 'Ground', min: 0, max: 1, step: 1, default: 0 },
 ];
 export const SMOKE_CONTROLS: LiveControl<SmokeKey>[] = [
+  { key: 'density', label: 'Density', min: 0, max: 1, step: .01, default: .6 },
   { key: 'smoulder', label: 'Smoulder', min: 0, max: 1, step: .01, default: .5 },
-  { key: 'burnAway', label: 'Burn away', min: 0, max: 1, step: .01, default: 0 },
   { key: 'response', label: 'Movement response', min: 0, max: 3, step: .01, default: 1 },
   { key: 'rise', label: 'Rise', min: 0, max: 1, step: .01, default: .4 },
   { key: 'swirl', label: 'Swirl', min: 0, max: 1, step: .01, default: .5 },
   { key: 'lifeSeconds', label: 'Smoke life', min: 1, max: 20, step: .5, default: 6 },
   { key: 'colourChange', label: 'Colour change', min: 0, max: 1, step: .01, default: .3 },
 ];
-export const SMOKE_STARTS: { id: 'solid' | 'smoulder' | 'burn'; label: string; smoulder: number; burnAway: number }[] = [
-  { id: 'solid', label: 'Solid until they move', smoulder: 0, burnAway: 0 },
-  { id: 'smoulder', label: 'Always smouldering', smoulder: .5, burnAway: 0 },
-  { id: 'burn', label: 'Burning away', smoulder: .9, burnAway: .9 },
+/** Starting points: each sets every smoke control except colour, so they look clearly different. Smouldering is the default. */
+export const SMOKE_STARTS: { id: 'wispy' | 'smouldering' | 'solid'; label: string; values: Record<Exclude<SmokeKey, 'colourChange'>, number> }[] = [
+  { id: 'wispy', label: 'Wispy', values: { density: .25, smoulder: .9, rise: .8, swirl: .7, lifeSeconds: 4, response: 1.5 } },
+  { id: 'smouldering', label: 'Smouldering', values: { density: .6, smoulder: .5, rise: .4, swirl: .5, lifeSeconds: 6, response: 1 } },
+  { id: 'solid', label: 'Solid', values: { density: 1, smoulder: .1, rise: .15, swirl: .3, lifeSeconds: 10, response: .7 } },
 ];
 export const IGNORE_STILL = { min: 10, max: 120, default: 30 };
 export const SENSITIVITY = { min: .2, max: 4, default: 1 };

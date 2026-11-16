@@ -109,9 +109,9 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
       <aside className="live-column" aria-label={smoke ? 'Smoke' : 'Paint'}>
         <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value === 'smoke' ? 'smoke' : 'paint' }); }}><option value="paint">Paint</option><option value="smoke">Smoke</option></select></label>
         {smoke ? <>
-          <p className="live-note">People become smoke. Moving tears it off them.</p>
+          <p className="live-note">People are made of smoke. Moving tears it off them.</p>
           <div className="live-starts" role="group" aria-label="Start from">{SMOKE_STARTS.map(start =>
-            <button key={start.id} className={`text-button ${s.smoke.smoulder === start.smoulder && s.smoke.burnAway === start.burnAway ? 'on' : ''}`} onClick={() => setSmoke({ smoulder: start.smoulder, burnAway: start.burnAway })}>{start.label}</button>)}</div>
+            <button key={start.id} className={`text-button ${Object.entries(start.values).every(([k, v]) => s.smoke[k as keyof typeof start.values] === v) ? 'on' : ''}`} onClick={() => setSmoke({ ...start.values })}>{start.label}</button>)}</div>
           {SMOKE_CONTROLS.map(c => <Slider key={c.key} label={c.label} value={s.smoke[c.key]} min={c.min} max={c.max} step={c.step} unit={c.key === 'lifeSeconds' ? ' s' : ''} onChange={value => setSmoke({ [c.key]: value })} />)}
           <label className="stacked-label">Palette<select aria-label="Palette" value={smokePaletteName} onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) setSmoke({ palette: [...found[1]] }); }}>
             {!smokePaletteName && <option value="">Custom</option>}{PALETTES.map(([name]) => <option key={name}>{name}</option>)}</select></label>

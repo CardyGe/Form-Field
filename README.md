@@ -4,7 +4,7 @@ A local visual instrument studio for Apple Silicon Macs. Create looping liquid f
 
 ## What's new in 0.16
 
-- **Smoke:** a second Live look. People in front of the camera are recoloured through the palette and turn into curling, billowing smoke as they move. See [Live](#live).
+- **Smoke:** a second Live look. People in front of the camera become figures made of smoke, in the palette's colours, shedding curling smoke as they move. Their camera picture never reaches the wall. See [Live](#live).
 - **Finding people:** Live can now pick people out from the room, on this computer, with filters for things on the wall and objects that never move.
 - **Show people:** an operator-only view of who Live has found.
 
@@ -146,13 +146,14 @@ Live turns a camera into projected artwork as it happens. It is a separate scree
 
 **Paint** is the first look. Moving lays down opaque, bristly strokes of colour; standing still lets them fade. Movement response sets how readily paint appears, Stroke length and Spread shape each throw, Bristle goes from broad strokes to fine hairs, Fade time is how long paint lasts, and Colour change is how quickly the colour moves through the palette.
 
-**Smoke** is the second look. Choose it under **Look**. People are recoloured through the palette and turn into smoke as they move.
+**Smoke** is the second look. Choose it under **Look**. People are made of smoke: their shape fills with churning smoke in the palette's colours, and moving tears smoke off them. Their camera picture never appears on the wall.
 
-- **Start from** sets the look's behaviour:
-  - *Solid until they move*: people look like themselves until they move.
-  - *Always smouldering*: people always give off smoke, and moving whips off more.
-  - *Burning away*: standing still, people dissolve entirely into smoke, and moving brings them back.
-- **Smoulder** and **Burn away** adjust anywhere in between.
+- **Start from** sets every smoke control at once:
+  - *Wispy*: a faint figure streaming long trails upward.
+  - *Smouldering*: a clear smoky figure steadily giving off smoke.
+  - *Solid*: a thick figure that barely sheds, with heavy smoke hanging where they moved.
+- **Density** runs from a faint figure to a thick one.
+- **Smoulder** is how much smoke streams off a still figure.
 - **Movement response**, **Rise**, **Swirl** and **Smoke life** shape the smoke.
 - **Colour change** and **Palette** set its colours. Smoke keeps its own palette, separate from Paint's.
 

@@ -41,7 +41,7 @@ test('a display that has gone is replaced, preferring one that is not this scree
 
 import { SMOKE_STARTS } from '../src/live/settings';
 import { paletteRamp } from '../src/live/colour';
-import { ignoreStillWeight, burnFade, personWeight } from '../src/live/maths';
+import { ignoreStillWeight, personWeight } from '../src/live/maths';
 import { HOT_SIGNAL, POUR, CANDY } from '../src/core/palettes';
 test('a 0.15.0 settings file loads unchanged as Paint', () => {
   const old = { ...defaultLiveSettings() } as Record<string, unknown>; delete old.look; delete old.smoke; delete old.people;
@@ -56,7 +56,19 @@ test('smoke settings repair field by field and keep their own palette', () => {
   assert.equal(validateLiveSettings({ people: { ignoreStillSeconds: null } }).people.ignoreStillSeconds, null);
   assert.equal(validateLiveSettings({ look: 'dust' }).look, 'paint');
 });
-test('the three starting points', () => assert.deepEqual(SMOKE_STARTS.map(s => [s.smoulder, s.burnAway]), [[0, 0], [.5, 0], [.9, .9]]));
+test('the three starting points set every smoke control, and differ', () => {
+  assert.deepEqual(SMOKE_STARTS.map(s => s.label), ['Wispy', 'Smouldering', 'Solid']);
+  assert.deepEqual(SMOKE_STARTS.map(s => [s.values.density, s.values.smoulder, s.values.rise, s.values.swirl, s.values.lifeSeconds, s.values.response]),
+    [[.25, .9, .8, .7, 4, 1.5], [.6, .5, .4, .5, 6, 1], [1, .1, .15, .3, 10, .7]]);
+});
+test('Smouldering is where Smoke starts', () => {
+  const d = defaultLiveSettings().smoke, start = SMOKE_STARTS[1].values;
+  for (const key of Object.keys(start) as (keyof typeof start)[]) assert.equal(d[key], start[key], key);
+});
+test('a settings file with Burn away loads with Density instead', () => {
+  const s = validateLiveSettings({ look: 'smoke', smoke: { burnAway: .9, density: .3 } });
+  assert.equal('burnAway' in s.smoke, false); assert.equal(s.smoke.density, .3);
+});
 test('the ramp leaves out the ground colour and runs dark to light', () => {
   for (const palette of [HOT_SIGNAL, POUR, CANDY]) {
     const ramp = paletteRamp(palette), lum = ramp.map(([r, g, b]) => .2126 * r + .7152 * g + .0722 * b);
@@ -66,9 +78,6 @@ test('the ramp leaves out the ground colour and runs dark to light', () => {
 });
 test('sway keeps a still person counted; nothing moved for longer than the time drops out', () => {
   assert.equal(ignoreStillWeight(29, 30), 1); assert.equal(ignoreStillWeight(33, 30), 0); assert.equal(ignoreStillWeight(1e6, null), 1);
-});
-test('burn away starts after a second still and is complete at three', () => {
-  assert.equal(burnFade(.9, .8), 0); assert.ok(Math.abs(burnFade(3, .8) - .8) < 1e-9); assert.equal(burnFade(10, 0), 0);
 });
 test('empty room only applies once captured', () => {
   assert.equal(personWeight(1, 1, 1, { use: true, captured: false, differs: 0 }), 1);

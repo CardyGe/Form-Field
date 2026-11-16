@@ -110,8 +110,9 @@ export class Fluid {
   /**
    * One simulation step. `curl` is the vorticity amount (Pavel's default is 30); lives are the seconds
    * after which 5% is left; `buoyancy` is upward acceleration in cells/s² per unit of dye brightness.
+   * `beforeDye` runs after the velocity is final and before the dye is moved by it.
    */
-  step(seconds: number, curlAmount: number, velocityLife: number, dyeLife: number, buoyancy: number): void {
+  step(seconds: number, curlAmount: number, velocityLife: number, dyeLife: number, buoyancy: number, beforeDye?: () => void): void {
     if (seconds <= 0) return;
     const { m, passes } = this;
     m.curl.uniforms.uVelocity.value = this.velocity; passes.draw(m.curl, this.curlTarget);
@@ -132,6 +133,8 @@ export class Fluid {
     const a = m.advect.uniforms;
     a.uVelocity.value = this.velocity; a.uSource.value = this.velocity; a.uStep.value = seconds; a.uKeep.value = keep(seconds, velocityLife);
     passes.draw(m.advect, this.velocityPair.write); this.velocityPair.swap();
+    // A caller may set the velocity one last time, for example to hold smoke in place, before the dye moves.
+    beforeDye?.();
     a.uVelocity.value = this.velocity; a.uSource.value = this.dye; a.uKeep.value = keep(seconds, dyeLife);
     passes.draw(m.advect, this.dyePair.write); this.dyePair.swap();
   }
