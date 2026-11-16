@@ -285,6 +285,67 @@ try {
     assert.ok(r.figure[2] > r.figure[0] + 40, `figure ${r.figure}`); assert.ok(r.poster[2] < r.poster[0] + 10, `poster ${r.poster}`);
     await save('show-people', await page.evaluate(() => window.live.png()));
   });
+  // --- Smoke ---
+  await page.evaluate(() => {
+    // Smoke's layers on their own: 'smoke', 'person' or 'all'. Then the usual pixel helpers apply.
+    window.live.layer = show => { window.live.current.renderer.look.show = show; window.live.current.renderer.frame(0); };
+    // Painted pixels outside a box around the figure, and their centroid (y from the top).
+    window.live.outsideFigure = () => { const { data, width, height } = window.live.pixels(), f = window.live.figureAt(), h = window.live.current.source.figurePlace().height;
+      let count = 0, sy = 0, sum = 0; const x0 = (f.x - h * .32 * 9 / 16) * width, x1 = (f.x + h * .32 * 9 / 16) * width, y0 = (1 - f.y - h * .5) * height, y1 = (1 - f.y + h * .5) * height;
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) { if (x > x0 && x < x1 && y > y0 && y < y1) continue; const i = (y * width + x) * 4, v = Math.max(data[i], data[i + 1], data[i + 2]); sum = Math.max(sum, v); if (v > 8) { count++; sy += y / height; } }
+      return { fraction: count / (width * height), y: count ? sy / count : 1, max: sum }; };
+    // Mean brightness in linear light (the output is sRGB-encoded, which makes 10% of the light look like 35%).
+    window.live.meanLuma = () => { const { data } = window.live.pixels(), lin = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+      let s = 0; for (let i = 0; i < data.length; i += 4) s += .2126 * lin(data[i]) + .7152 * lin(data[i + 1]) + .0722 * lin(data[i + 2]); return s / (data.length / 4); };
+    window.live.difference = (a, b) => { let s = 0; for (let i = 0; i < a.length; i += 4) s += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]); return s / (a.length / 4 * 3); };
+    window.live.smoke = change => window.live.make(s => { s.look = 'smoke'; change?.(s); }, { figure: true });
+  });
+  await check('smoke: comes off the moving figure and rises', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); window.live.run(240); window.live.layer('smoke'); const before = window.live.outsideFigure();
+      window.live.layer('all'); window.live.current.source.standing = true; window.live.run(120); window.live.layer('smoke'); const after = window.live.outsideFigure(); window.live.layer('all'); return { before, after }; });
+    assert.ok(r.before.fraction > .01, `only ${r.before.fraction} smoke`); assert.ok(r.after.y < r.before.y, `centroid ${r.before.y} -> ${r.after.y}`);
+    await save('smoke', await page.evaluate(() => window.live.png()));
+  });
+  await check('smoke: keeps moving after the figure stops', async () => {
+    const d = await page.evaluate(() => { window.live.smoke(); window.live.run(240); window.live.current.source.moving = false; window.live.current.source.figure = true; window.live.run(30);
+      const a = window.live.pixels().data.slice(); window.live.run(30); return window.live.difference(a, window.live.pixels().data); });
+    assert.ok(d > .5, `mean change ${d}/255`);
+  });
+  await check('smoke: Burning away fades a still figure, and moving brings it back', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(s => { s.smoke.smoulder = .9; s.smoke.burnAway = .9; }); window.live.run(240); window.live.layer('person'); const moving = window.live.meanLuma();
+      window.live.layer('all'); const { source } = window.live.current; source.standing = true; window.live.run(300); window.live.layer('person'); const still = window.live.meanLuma();
+      window.live.layer('all'); source.standing = false; window.live.run(30); window.live.layer('person'); const back = window.live.meanLuma(); window.live.layer('all'); return { moving, still, back }; });
+    assert.ok(r.still < r.moving * .3, `still ${r.still} vs moving ${r.moving}`); assert.ok(r.back > r.moving * .8, `back ${r.back} vs moving ${r.moving}`);
+  });
+  // 20 s: at the default Smoke life of 6 s, older smoke is then far below one 8-bit step.
+  await check('smoke: Solid until they move gives no new smoke from a still figure', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(s => { s.smoke.smoulder = 0; s.smoke.burnAway = 0; }); window.live.run(240); window.live.current.source.standing = true; window.live.run(1200);
+      window.live.layer('smoke'); const out = window.live.outsideFigure(); window.live.layer('all'); return out; });
+    assert.ok(r.max < 2, `smoke up to ${r.max}/255 after 20 s still`);
+  });
+  await check('smoke: nothing that never moved smokes, the poster included', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); window.live.current.source.moving = false; window.live.run(600); return window.live.painted(0, 2); });
+    assert.ok(r.fraction < .001, `${r.fraction} painted, up to ${r.max}`);
+  });
+  await check('smoke: clear gives exactly black', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); window.live.run(240); const { renderer, source } = window.live.current; source.moving = false; renderer.settings.smoke.smoulder = 0;
+      renderer.clear(); renderer.look.show = 'smoke'; renderer.frame(0); const out = window.live.painted(0, 0); renderer.look.show = 'all'; return out; });
+    assert.equal(r.max, 0);
+  });
+  await check('smoke: a frame full of people does not turn into a white sheet (Review Focus 3)', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); window.live.run(150); window.live.current.made.provider.coverAll = true; window.live.run(600);
+      const { data } = window.live.pixels(); let hot = 0; for (let i = 0; i < data.length; i += 4) if (Math.min(data[i], data[i + 1], data[i + 2]) > 250) hot++; return hot / (data.length / 4); });
+    assert.ok(r < .05, `${(r * 100).toFixed(1)}% white`);
+  });
+  await check('smoke: without person finding, movement still makes smoke (Review Focus 5)', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); window.live.run(240); window.live.current.made.provider.dispose(); window.live.run(180);
+      const a = window.live.pixels().data.slice(); window.live.run(30); return { painted: window.live.painted(0).fraction, change: window.live.difference(a, window.live.pixels().data), ready: window.live.current.renderer.peopleDiagnostics().ready }; });
+    assert.equal(r.ready, false); assert.ok(r.painted > .01, `${r.painted} painted`); assert.ok(r.change > .3, `change ${r.change}`);
+  });
+  await check('smoke: a long stall does not throw smoke across the picture', async () => {
+    const r = await page.evaluate(() => { window.live.smoke(); window.live.run(240); const before = window.live.painted(0).fraction; window.live.current.renderer.frame(5); return { before, after: window.live.painted(0).fraction }; });
+    assert.ok(Math.abs(r.after - r.before) < .05, `${r.before} -> ${r.after}`);
+  });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));
 } finally {

@@ -13,6 +13,7 @@ import type { FrameSource } from './look';
 import type { MaskProvider } from './MaskProvider';
 import { Tracking, FLOW_SIZE } from './Tracking';
 import { Paint } from './Paint';
+import { Smoke } from './Smoke';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
 
@@ -53,6 +54,7 @@ export class LiveRenderer {
   private peopleView: THREE.ShaderMaterial | null = null;
   private readonly tracking: Tracking;
   private look: Look | null = null;
+  private lookKind: LiveSettings['look'] | null = null;
   private readonly black: THREE.DataTexture;
   private scratch: THREE.WebGLRenderTarget;
   private width = 0;
@@ -102,7 +104,13 @@ export class LiveRenderer {
     this.time += step;
     this.resize();
     this.tracking.update(this.source, this.settings, step);
-    this.look ??= new Paint(this.passes, this.width, this.height);
+    if (this.lookKind !== this.settings.look) {
+      // Switching looks starts the new one fresh; each keeps its own settings.
+      this.look?.dispose();
+      this.look = this.settings.look === 'smoke' ? new Smoke(this.passes, this.width, this.height) : new Paint(this.passes, this.width, this.height);
+      this.lookKind = this.settings.look;
+    }
+    if (!this.look) return;
     this.look.step(step, this.time, this.tracking, this.settings);
     let image: THREE.Texture = this.look.output, encode = 1;
     if (this.view === 'tracking') {

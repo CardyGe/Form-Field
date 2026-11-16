@@ -116,6 +116,8 @@ export class TestMaskProvider implements MaskProvider {
   private disposed = false;
   private readonly canvas = new OffscreenCanvas(256, 144);
   private readonly context = this.canvas.getContext('2d', { willReadFrequently: true })!;
+  /** For checks: the stand-in model calls 90% of the frame a person. */
+  coverAll = false;
   constructor(private readonly source: () => TestSource) {}
   get status(): PeopleStatus { return this.disposed ? { state: 'failed', reason: 'stopped' } : { state: 'running', ms: 1 }; }
   get ready(): boolean { return !this.disposed && (this.source().seconds * 1000 - this.lastAt) <= READY_MS; }
@@ -123,6 +125,7 @@ export class TestMaskProvider implements MaskProvider {
     if (this.disposed) return;
     const c = this.context, { width: w, height: h } = this.canvas, source = this.source();
     c.clearRect(0, 0, w, h); c.fillStyle = '#fff'; source.drawPeople(c, w, h, true);
+    if (this.coverAll) c.fillRect(w * .05, 0, w * .9, h);
     const rgba = c.getImageData(0, 0, w, h).data, data = new Uint8Array(w * h);
     for (let i = 0; i < data.length; i++) data[i] = rgba[i * 4 + 3];
     this.mask = { data, width: w, height: h, frameId };
