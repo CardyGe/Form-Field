@@ -1,6 +1,6 @@
 # Map: projection mapping design
 
-16 November 2026 · Form & Field 0.16.0 · Design for approval. Nothing is built and nothing here has been measured.
+16 November 2026 · Form & Field 0.16.0 · Approved 17 November. Stage 0 is measured (see Stage 0 results). Stage 1 is built and waits for its projector session (see Known limits, stage 1).
 
 ## Intent
 
@@ -246,7 +246,7 @@ Each stage ends with something usable. Detailed step-by-step plans are written p
 |---|---|---|
 | **0. Measure** | A throwaway test: 4, 8 and 12 instruments at once, separate renderers against one shared renderer. | Numbers are written down and the route for instrument sources is chosen. |
 | **1. Stage and first shapes** | Map section, show file and autosave, output window, compositor, Colour sources, rectangle and four-corner shapes, select / move / points / nudge / exact positions, wall crosshair, Test grid, Identify, Blackout, undo. The fade-in rule for "output never blanks" moves to stage 2: a solid colour has no not-ready state, so in stage 1 the output cannot blank either way. | Greg lines four-corner shapes up on real objects with a projector. |
-| **2. Instruments in shapes** | Instrument sources, Library and presets on a shape, own settings per shape, Vary, palette, speed, Edit in Studio and back, Fit placement, sizing to the wall, the frame-rate governor, fade on change. | Eight shapes play four instruments at the measured rate, and editing one never disturbs the others. |
+| **2. Instruments in shapes** | Instrument sources, Library and presets on a shape, own settings per shape, Vary, palette, speed, Edit in Studio and back, Fit placement, sizing to the wall, the frame-rate governor, fade on change, Freeze (stage 1 has nothing moving to freeze). | Eight shapes play four instruments at the measured rate, and editing one never disturbs the others. |
 | **3. The full drawing kit** | Pen with curves, triangle, ellipse, add / remove / convert points, holes, Snap, Photo, duplicate / flip / mirror, Make a grid, groups, lock / hide / solo, soft edge, border, Blockers. | A photographed scene of about 20 pieces is traced and aligned in one sitting. |
 | **4. Placement** | Pin, Across group, Across stage, Share with / Make separate, stage corners, brightness and tint. | A grid pinned to an angled box face looks square to the eye; nudging the projector is fixed with four handles. |
 | **5. Scenes** | Save, switch, fade, keys 1 to 9, per-scene fade time; two-hour run. | A three-scene show runs for two hours and switches without a black frame. |
@@ -256,9 +256,15 @@ Each stage ends with something usable. Detailed step-by-step plans are written p
 
 **Known limits, stage 1**
 
-- At most 64 shapes.
-- Corners are sent to the output rounded to 4 decimal places (0.2 projector pixels at 1920 wide), so 64 shapes fit in one message. The show file keeps full precision.
-- Undo history is not kept when leaving Map. To fix later.
+- At most 64 shapes, 32 corners a shape, names up to 40 characters. A show file with more is opened without the extra shapes, and says how many were left out; a shape is never cut down to fit.
+- Map has its own message limit of 256 KB, well above the largest valid show, so a valid show always reaches the wall. Corners are sent rounded to 4 decimal places (0.2 projector pixels at 1920 wide) to keep messages small; the show file keeps full precision.
+- The operator screen shows the wall's own picture, about ten times a second, behind outlines drawn at once. With the output closed it draws the stage itself.
+- A drag that would be refused draws the refused outline in red on the operator screen only; the wall keeps the last valid picture.
+- Undo history lasts while the app is open, including leaving Map and coming back. It is not saved with the show.
+- Lock protects a shape from every change except Show/Hide and Unlock, deleting included.
+- Delete, Backspace and Tab act on shapes only while the stage has focus, so a key pressed on a button never deletes a shape. Tab steps through the corners.
+- Corners are editable as soon as a shape is selected, so there is no separate Enter step.
+- Open asks before replacing the shapes on screen. A save that keeps failing refuses to close the app, even after leaving Map.
 - The output draws an outline on the selected shape, to show which shape is being lined up.
 - The test grid draws numbered grid lines and each shape's outline, name and colour, with no fills.
 
