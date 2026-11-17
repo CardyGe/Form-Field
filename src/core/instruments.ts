@@ -72,7 +72,7 @@ const studies:Partial<Record<InstrumentKind,InstrumentInfo['looks']>>={
   {id:'breathing-facade',name:'Breathing Facade',params:{reliefMode:1,scale:1,columns:7,motion:1,opening:.85,phaseSpread:.8,organic:.6,phrase:1,shadow:.7,backgroundOpacity:0}},
   {id:'copper-concertina',name:'Copper Concertina',
    palette:['#c46738','#781d27','#ffbf80','#d97849','#ffcf97','#241523'],
-   params:{reliefMode:2,scale:1.35,columns:6,motion:1,opening:1,delaySpread:.94,pause:.7,
+   params:{reliefMode:2,scale:1.52,columns:6,motion:1,opening:1,delaySpread:.94,pause:.7,
      lightAngle:2.6,lightHeight:.24,fillLight:.42,roughness:.38,clearcoat:.34,shadow:.85,
      backgroundOpacity:1,toonMix:0}},
   {id:'folding-copper',name:'Folding Copper',palette:warm,params:{reliefMode:1,scale:1,columns:5,axis:1,motion:1,opening:.95,phaseSpread:1,organic:.8,phrase:2,shadow:.85,depth:.8,lightAngle:-.9,backgroundOpacity:0}},

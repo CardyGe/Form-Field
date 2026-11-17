@@ -7,6 +7,19 @@ const ease = (x: number) => {
   return t * t * (3 - 2 * t);
 };
 
+// Wind up to a shallow angle, catch, then snap through. Later pleats
+// follow the leader in close succession. The broad tip settles last.
+function pull(t: number, u: number, v: number, spread: number, dwell: number) {
+  const leader = 1 - ease((u - .08) / .20);
+  const tip = ease((u - .68) / .25);
+  const arrival = spread * (.06 * v + .19 * u);
+  const local = t - arrival;
+  const preload = .23 * ease(local / .078);
+  const snap = .77 * ease((local - .083 - leader * .065) / (.070 + tip * .045));
+  const release = .44 + .09 * dwell + arrival + .0625 * spread * tip;
+  return (preload + snap) * (1 - ease((t - release) / (.11 + .038 * tip)));
+}
+
 /** Samples one continuous cross-section. The two unequal faces share a ridge.
  * The long and short faces retain their lengths as the pleat closes. */
 function foldSection(angle: number, pitch: number) {
@@ -49,39 +62,40 @@ export class ConcertinaSheet extends THREE.BufferGeometry {
     if (this.folds !== folds) this.allocate(folds);
     const positions = this.getAttribute('position'), colors = this.getAttribute('color');
     const palette = layer.palette.map(c => new THREE.Color(c));
-    const width = 2.15, height = 1.24, pitch = width / folds;
+    const width = 2.15, height = 1.24;
     const t = THREE.MathUtils.euclideanModulo(phase / (2 * Math.PI) * p.cycles + p.phaseOffset, 1);
     const face = new THREE.Color(), lip = new THREE.Color();
     for (let row = 0; row <= SLICES; row++) {
       const v = row / SLICES;
       // A second, oblique crease crosses the pleats. Sample its displacement
       // at each shared vertex, independent of which face owns that vertex.
-      const strengthAt = (u: number) => {
-        const delay = (u * .67 + v * .33) * p.delaySpread * .24;
-        const open = ease((t - delay) / .24);
-        const release = ease((t - .50 - .09 * p.pause - delay) / .16);
-        return open * (1 - release) * p.motion;
+      const strengthAt = (u: number) => p.motion * pull(t, u, v, p.delaySpread, p.pause);
+      const y = (v - .5) * height;
+      const point = (vertex: number, horizontal: number, z: number, u: number) => {
+        const load = strengthAt(u) * p.opening;
+        const bend = load * (1 - 2 * Math.abs(v - (.26 + .43 * u)));
+        const swing = load * (.20 * v - .18 * u * (1 - v));
+        const lift = load * (.40 * u * u * (1 - v) - .08 * (1 - u) * v);
+        positions.setXYZ(vertex, horizontal + bend * .37 + swing, y + lift, z + bend * .24);
       };
-      const bendAt = (u: number) =>
-        strengthAt(u) * p.opening * (1 - 2 * Math.abs(v - (.26 + .43 * u)));
       let x = -width * .5 + .27 * (v - .5);
-      let start = bendAt(0);
       for (let i = 0; i < folds; i++) {
-        const amount = strengthAt((i + .5) / folds);
-        const angle = (.12 + amount * 1.08) * p.opening;
+        const u = (i + .5) / folds;
+        const amount = strengthAt(u);
+        // These widths sum to the sheet width at every supported pleat count.
+        const pitch = width / folds * (.55 + .90 * u);
+        // A loaded pleat closes tightly at its foot and gently at its crown.
+        // The shared cross-sections open into a fan with a fixed lower heel.
+        const angle = (.12 + amount * (1.36 - .68 * ease(v))) * p.opening;
         const section = foldSection(angle, pitch);
         face.copy(palette[0]).lerp(palette[2], .10 + .20 * v);
         lip.copy(palette[1]).lerp(palette[3], .40 * (1 - amount));
         const base = (row * folds + i) * 4;
-        const y = (v - .5) * height;
-        const peak = bendAt((i + .64) / folds);
-        const end = bendAt((i + 1) / folds);
-        positions.setXYZ(base, x + start * .37, y, start * .24);
-        positions.setXYZ(base + 1, x + section.ridge + peak * .37, y, section.height + peak * .24);
-        positions.setXYZ(base + 2, x + section.ridge + peak * .37, y, section.height + peak * .24);
+        point(base, x, 0, i / folds);
+        point(base + 1, x + section.ridge, section.height, (i + .64) / folds);
+        positions.setXYZ(base + 2, positions.getX(base + 1), positions.getY(base + 1), positions.getZ(base + 1));
         x += section.span;
-        positions.setXYZ(base + 3, x + end * .37, y, end * .24);
-        start = end;
+        point(base + 3, x, 0, (i + 1) / folds);
         for (let j = 0; j < 4; j++) {
           const c = j < 2 ? face : lip;
           colors.setXYZ(base + j, c.r, c.g, c.b);
