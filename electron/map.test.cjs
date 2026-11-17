@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { loadShowFile, saveShowFile } = require('./map.cjs');
+const { EventEmitter } = require('node:events');
+const { loadShowFile, saveShowFile, setupMap, acceptMapMessage } = require('./map.cjs');
 
 async function inTempDir(body) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'map-show-'));
@@ -72,5 +73,128 @@ test('a failed rename leaves the original untouched and removes the temporary fi
     assert.equal(await fs.readFile(file, 'utf8'), '{"n":1}');
     const left = (await fs.readdir(dir)).filter(name => name.endsWith('.tmp'));
     assert.deepEqual(left, []);
+  });
+});
+
+function harness(overrides = {}) {
+  const handlers = new Map(), listeners = new Map(), screen = new EventEmitter(), sent = [], blocker = { started: [], stopped: [] };
+  const displays = [{ id: 1, label: 'Built-in', size: { width: 1512, height: 982 }, bounds: { x: 0, y: 0, width: 1512, height: 982 } }, { id: 7, label: 'Projector', size: { width: 1920, height: 1080 }, bounds: { x: 1512, y: 0, width: 1920, height: 1080 } }];
+  screen.getAllDisplays = () => displays; screen.getPrimaryDisplay = () => displays[0];
+  const contents = () => Object.assign(new EventEmitter(), { mainFrame: {}, send: (...args) => sent.push(args), setWindowOpenHandler() {} });
+  const studio = { isDestroyed: () => false, webContents: contents() };
+  const windows = [];
+  class BrowserWindow extends EventEmitter {
+    constructor(options) { super(); this.options = options; this.webContents = contents(); this.destroyed = false; windows.push(this); }
+    isDestroyed() { return this.destroyed; } show() {} setSimpleFullScreen() {} setFullScreen() {}
+    close() { if (this.destroyed) return; this.destroyed = true; this.emit('closed'); }
+  }
+  const calls = { closeLive: 0 };
+  const control = setupMap({
+    BrowserWindow, screen, preload: '/preload.cjs', studio: () => studio, open() {}, autosavePath: '/nonexistent/map-autosave.formshow',
+    closeLiveOutput: () => { calls.closeLive += 1; },
+    dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }), showSaveDialog: async () => ({ canceled: true }) },
+    ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => listeners.set(name, fn) },
+    powerSaveBlocker: { start: kind => { blocker.started.push(kind); return 42; }, stop: id => blocker.stopped.push(id), isStarted: () => true },
+    ...overrides,
+  });
+  const fromStudio = { sender: studio.webContents, senderFrame: studio.webContents.mainFrame };
+  const fromOutput = () => ({ sender: windows.at(-1).webContents, senderFrame: windows.at(-1).webContents.mainFrame });
+  return { handlers, listeners, screen, sent, blocker, windows, control, fromStudio, fromOutput, displays, calls };
+}
+const stranger = { sender: {}, senderFrame: {} };
+
+test('a window that is not the studio cannot control Map', async () => {
+  const h = harness();
+  for (const name of ['loadAutosave', 'saveAutosave', 'openShow', 'saveShow', 'displays', 'openOutput', 'closeOutput']) {
+    await assert.rejects(async () => h.handlers.get(`studio:map:${name}`)(stranger, 7), { message: 'This window cannot control Map.' }, name);
+  }
+});
+
+test('opening a display that is gone throws', async () => {
+  const h = harness();
+  await assert.rejects(async () => h.handlers.get('studio:map:openOutput')(h.fromStudio, 99), { message: 'That display is no longer connected.' });
+  assert.equal(h.windows.length, 0);
+});
+
+test('opening Map output closes Live output first, once, and uses the Map title', async () => {
+  const h = harness();
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  assert.equal(h.calls.closeLive, 1);
+  assert.equal(h.windows[0].options.title, 'Form & Field Map');
+  assert.deepEqual(h.blocker.started, ['prevent-display-sleep']);
+  h.windows[0].close();
+  assert.deepEqual(h.blocker.stopped, [42]);
+});
+
+test('unplugging the display closes the output and tells the studio', async () => {
+  const h = harness();
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  h.screen.emit('display-removed', {}, h.displays[1]);
+  assert.equal(h.windows[0].destroyed, true);
+  assert.ok(h.sent.some(([channel, open]) => channel === 'studio:map:output' && open === false));
+  assert.ok(h.sent.some(([channel]) => channel === 'studio:map:displays'));
+});
+
+test('only the output window can say it is ready, and only the studio can send messages', async () => {
+  const h = harness();
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  h.listeners.get('studio:map:ready')(h.fromStudio);
+  assert.equal(h.sent.some(([channel]) => channel === 'studio:map:output'), false);
+  h.listeners.get('studio:map:ready')(h.fromOutput());
+  assert.ok(h.sent.some(([channel, open]) => channel === 'studio:map:output' && open === true));
+  const out = h.windows[0].webContents;
+  const sentToOutput = () => h.sent.filter(([channel]) => channel === 'studio:map:message').length;
+  h.listeners.get('studio:map:send')(h.fromOutput(), { type: 'blackout', on: true });
+  h.listeners.get('studio:map:send')(h.fromStudio, { type: 'bogus' });
+  h.listeners.get('studio:map:send')(h.fromStudio, { type: 'blackout', on: 'yes' });
+  assert.equal(sentToOutput(), 0);
+  const delivered = [];
+  out.send = (...args) => delivered.push(args);
+  h.listeners.get('studio:map:send')(h.fromStudio, { type: 'blackout', on: true });
+  assert.deepEqual(delivered, [['studio:map:message', { type: 'blackout', on: true }]]);
+});
+
+test('acceptMapMessage checks the envelope and size', () => {
+  assert.equal(acceptMapMessage({ type: 'show', show: {} }), true);
+  assert.equal(acceptMapMessage({ type: 'show', show: 'x' }), false);
+  assert.equal(acceptMapMessage({ type: 'identify', shapeId: null }), true);
+  assert.equal(acceptMapMessage({ type: 'crosshair', shapeId: 'a', point: { x: 1, y: 2 } }), true);
+  assert.equal(acceptMapMessage({ type: 'crosshair', shapeId: 'a', point: { x: 1 } }), false);
+  assert.equal(acceptMapMessage({ type: 'show', show: { big: 'x'.repeat(20000) } }), false);
+  assert.equal(acceptMapMessage(null), false);
+});
+
+test('autosave and show saves are serialised: overlapping saves never run at once', async () => {
+  await inTempDir(async dir => {
+    const file = path.join(dir, 'auto.formshow');
+    const h = harness({ autosavePath: file });
+    const saves = ['{"a":1}', '{"a":2}', '{"a":3}'].map(text => h.handlers.get('studio:map:saveAutosave')(h.fromStudio, text));
+    await Promise.all(saves);
+    assert.equal(await fs.readFile(file, 'utf8'), '{"a":3}');
+    assert.deepEqual(await h.handlers.get('studio:map:loadAutosave')(h.fromStudio), { a: 3 });
+  });
+});
+
+test('Save As writes to the chosen file; Save reuses it; cancel does nothing', async () => {
+  await inTempDir(async dir => {
+    const chosen = path.join(dir, 'show.formshow');
+    let asked = 0;
+    const h = harness({ autosavePath: path.join(dir, 'auto.formshow'), dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }), showSaveDialog: async () => { asked += 1; return asked === 1 ? { canceled: true } : { canceled: false, filePath: chosen }; } } });
+    const save = h.handlers.get('studio:map:saveShow');
+    assert.equal(await save(h.fromStudio, '{"a":1}', true), null);
+    assert.equal(await save(h.fromStudio, '{"a":2}', true), chosen);
+    assert.equal(await fs.readFile(chosen, 'utf8'), '{"a":2}');
+    assert.equal(await save(h.fromStudio, '{"a":3}', false), chosen);
+    assert.equal(asked, 2);
+    assert.equal(await fs.readFile(chosen, 'utf8'), '{"a":3}');
+  });
+});
+
+test('Open Show loads the chosen file', async () => {
+  await inTempDir(async dir => {
+    const chosen = path.join(dir, 'show.formshow');
+    await fs.writeFile(chosen, '{"version":1}');
+    const h = harness({ dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [chosen] }), showSaveDialog: async () => ({ canceled: true }) } });
+    assert.deepEqual(await h.handlers.get('studio:map:openShow')(h.fromStudio), { version: 1 });
   });
 });

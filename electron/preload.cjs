@@ -42,6 +42,21 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
     closeHandlers.add(callback);
     return () => closeHandlers.delete(callback);
   },
+  map: Object.freeze({
+    loadAutosave: () => invoke('map:loadAutosave'),
+    saveAutosave: text => invoke('map:saveAutosave', text),
+    openShow: () => invoke('map:openShow'),
+    saveShow: (text, saveAs) => invoke('map:saveShow', text, saveAs),
+    displays: () => invoke('map:displays'),
+    openOutput: displayId => invoke('map:openOutput', displayId),
+    closeOutput: () => invoke('map:closeOutput'),
+    send: message => ipcRenderer.send('studio:map:send', message),
+    onMessage: callback => subscribe('studio:map:message', callback),
+    onOutputChanged: callback => subscribe('studio:map:output', callback),
+    onDisplaysChanged: callback => subscribe('studio:map:displays', callback),
+    ready: () => ipcRenderer.send('studio:map:ready'),
+    requestClose: () => ipcRenderer.send('studio:map:close'),
+  }),
   live: Object.freeze({
     loadSettings: () => invoke('live:loadSettings'),
     saveSettings: settings => invoke('live:saveSettings', settings),
