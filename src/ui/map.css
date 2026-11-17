@@ -1,0 +1,11 @@
+.map-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 272px minmax(0, 1fr); }
+.map-stage { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; padding: 16px; background: #0b0c0b; }
+.map-stage canvas { max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9; background: #000; border: 1px solid var(--line); }
+.map-shape-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.map-shape-list li { display: flex; align-items: center; gap: 4px; padding: 2px; border-radius: 4px; }
+.map-shape-list li.selected { background: var(--raised); }
+.map-shape-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; text-align: left; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #484848; flex-shrink: 0; }
+.map-shape-list .text-button { min-height: 24px; padding: 2px 6px; font-size: 10px; }
+.map-shape-list .text-button[aria-pressed="false"] { color: var(--muted); }
+.map-status { padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); background: var(--panel); }

@@ -188,3 +188,27 @@ test('acceptMapMessage refuses a message over the size limit and one that cannot
   loop.self = loop;
   assert.equal(acceptMapMessage(loop), false);
 });
+
+import { autosaveSchedule } from '../src/map/autosave';
+
+test('autosaveSchedule: two saves within 200 ms write once, with the latest value', async () => {
+  const written: string[] = [];
+  const schedule = autosaveSchedule<string>(value => { written.push(value); }, 50);
+  schedule.save('first');
+  await new Promise(r => setTimeout(r, 20));
+  schedule.save('second');
+  await new Promise(r => setTimeout(r, 120));
+  assert.deepEqual(written, ['second']);
+});
+
+test('autosaveSchedule: flush writes a pending value at once and cancel drops it', async () => {
+  const written: string[] = [];
+  const schedule = autosaveSchedule<string>(value => { written.push(value); }, 50);
+  schedule.save('a');
+  schedule.flush();
+  assert.deepEqual(written, ['a']);
+  schedule.save('b');
+  schedule.cancel();
+  await new Promise(r => setTimeout(r, 100));
+  assert.deepEqual(written, ['a']);
+});

@@ -24,6 +24,7 @@ import { Preview } from './Preview';
 import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
 import LivePanel from './LivePanel';
+import MapPanel from './MapPanel';
 import { sameCanvasValues } from '../core/canvas-interaction';
 
 const TAU = Math.PI * 2;
@@ -316,7 +317,7 @@ export default function App() {
   };
   const [playing, setPlaying] = useState(true), phase = useRef(0), rendererRef = useRef<StudioRenderer | null>(null);
   /** Live is a separate screen over the studio; the studio pauses underneath it. */
-  const [mode, setMode] = useState<'studio' | 'live'>('studio');
+  const [mode, setMode] = useState<'studio' | 'live' | 'map'>('studio');
   const [checker, setChecker] = useState(true), [message, setMessage] = useState(''), [error, setError] = useState(''), [saved, setSaved] = useState('Ready');
   const [ready, setReady] = useState(false), [status, setStatus] = useState<StudioStatus | null>(null), [locks, setLocks] = useState({ palette: true, structure: false, motion: true, material: false });
   const [modKey, setModKey] = useState('warp'), [exportOpen, setExportOpen] = useState(false), [jobs, setJobs] = useState<ExportJob[]>([]);
@@ -420,7 +421,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (exportOpen || mode === 'live') return;
+      if (exportOpen || mode !== 'studio') return;
       const command = e.metaKey || e.ctrlKey;
       if (e.key === 'Escape' && workspace.library.current?.matches(':popover-open')) {
         e.preventDefault(); workspace.library.current.hidePopover(); workspace.libraryButton.current?.focus(); return;
@@ -541,16 +542,16 @@ export default function App() {
   };
 
   const modeSwitch = <><div className="brand"><div className="brand-mark">f<span>f</span></div><div>Form <span>&</span> Field</div></div>
-    <div className="mode-switch" role="group" aria-label="Section"><button aria-pressed={mode === 'studio'} onClick={() => setMode('studio')}>Studio</button><button aria-pressed={mode === 'live'} disabled={exporting} title={exporting ? 'Live is available when the export has finished' : 'Live camera to projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); setMode('live'); }}>Live</button></div></>;
+    <div className="mode-switch" role="group" aria-label="Section"><button aria-pressed={mode === 'studio'} onClick={() => setMode('studio')}>Studio</button><button aria-pressed={mode === 'live'} disabled={exporting} title={exporting ? 'Live is available when the export has finished' : 'Live camera to projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); setMode('live'); }}>Live</button><button aria-pressed={mode === 'map'} disabled={exporting} title={exporting ? 'Map is available when the export has finished' : 'Map shapes onto the projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); setMode('map'); }}>Map</button></div></>;
   return <div className={`studio-shell ${workspace.layersExpanded ? 'layers-expanded' : 'layers-collapsed'} ${workspace.inspectorOpen ? '' : 'inspector-hidden'} ${workspace.focusMode ? 'focus-preview' : ''}`}>
     <input ref={imageInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0]); e.target.value = ''; }} />
     <input ref={maskInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0], true); e.target.value = ''; }} />
-    <header className="app-header" inert={mode === 'live'}>{modeSwitch}
+    <header className="app-header" inert={mode !== 'studio'}>{modeSwitch}
       <div className="project-title"><EditableName label="Project name" value={project.name} maxLength={80} onCommit={name => edit(p => ({ ...p, name }))} />{fileName && <span className="project-file" title={filePath}>{fileName}</span>}<span role="status" className={saved === 'Save project to keep changes' ? 'save-failed' : ''}>{saved}</span></div>
       <div className="header-actions"><button className="icon-button" title="Undo · ⌘Z" disabled={!history.current.length} onClick={undo}><Icon name="undo" /></button><button className="icon-button" title="Redo · ⇧⌘Z" disabled={!future.current.length} onClick={redo}><Icon name="redo" /></button><span className="divider" /><button className="text-button" title="New composition · ⌘N" disabled={exporting} onClick={() => void newProject()}><Icon name="plus" size={16} />New</button><button className="text-button" title="Open · ⌘O" onClick={() => void open()}><Icon name="folder" size={16} />Open</button><button className="text-button" title={fileName ? `Save to ${fileName} · ⌘S\nShift-click or ⇧⌘S to save as a new file` : 'Save · ⌘S'} onClick={e => void save(e.shiftKey)}><Icon name="save" size={16} />Save</button><button className="primary-button" onClick={e => { e.currentTarget.focus(); setExportOpen(true); }}><Icon name="download" size={16} />Export</button></div>
     </header>
 
-    <main className="workspace" inert={mode === 'live'}>
+    <main className="workspace" inert={mode !== 'studio'}>
     <aside id="library-drawer" className="library-drawer" popover="auto" ref={workspace.library} onToggle={e => { const opened=e.currentTarget.matches(':popover-open'); workspace.setLibraryOpen(opened); if(opened) e.currentTarget.querySelector<HTMLInputElement>('input[type="search"]')?.focus(); }} aria-label="Library" onKeyDown={e => { if(e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); workspace.library.current?.hidePopover(); workspace.libraryButton.current?.focus(); } }}>
       <div className="drawer-heading"><strong>Library</strong><button className="icon-button" aria-label="Close library" popoverTarget="library-drawer" popoverTargetAction="hide"><Icon name="close" size={16} /></button></div>
       <label className="library-search"><Icon name="search" size={15} /><input type="search" autoFocus aria-label="Search library" placeholder="Search instruments and looks…" value={librarySearch} onChange={e=>setLibrarySearch(e.target.value)} /></label>
@@ -636,8 +637,9 @@ export default function App() {
     </> : <div className="empty-inspector"><Icon name="layers" size={32} /><h2>No layers</h2><p>Add an instrument or image to begin.</p><button className="secondary-button" onClick={() => addLayer('surface')}>Add surface</button></div>}</aside>
     </main>
     {mode === 'live' && <LivePanel header={modeSwitch} onError={reportError} />}
+    {mode === 'map' && <MapPanel header={modeSwitch} onError={reportError} />}
 
-    <footer className="app-footer" inert={mode === 'live'}><span className="workspace-shortcuts"><kbd>F</kbd> focus <kbd>B</kbd> library <kbd>L</kbd> layers <kbd>I</kbd> inspector</span><span className="footer-status"><span className={status && (!status.ffmpeg || !status.ffprobe) ? 'engine-unavailable' : ''}>{status?.ffmpeg && status.ffprobe ? 'Export engine ready' : status ? 'Export engine unavailable' : 'Movies and sequences require the desktop app'}</span><span className="build-label" title={`Commit ${__FORM_FIELD_BUILD__.commit}${__FORM_FIELD_BUILD__.modified ? ' with uncommitted changes' : ''} · built ${new Date(__FORM_FIELD_BUILD__.date).toLocaleString()}`}>v{__FORM_FIELD_BUILD__.version} · build {__FORM_FIELD_BUILD__.build}{__FORM_FIELD_BUILD__.modified ? '+' : ''}</span></span></footer>
+    <footer className="app-footer" inert={mode !== 'studio'}><span className="workspace-shortcuts"><kbd>F</kbd> focus <kbd>B</kbd> library <kbd>L</kbd> layers <kbd>I</kbd> inspector</span><span className="footer-status"><span className={status && (!status.ffmpeg || !status.ffprobe) ? 'engine-unavailable' : ''}>{status?.ffmpeg && status.ffprobe ? 'Export engine ready' : status ? 'Export engine unavailable' : 'Movies and sequences require the desktop app'}</span><span className="build-label" title={`Commit ${__FORM_FIELD_BUILD__.commit}${__FORM_FIELD_BUILD__.modified ? ' with uncommitted changes' : ''} · built ${new Date(__FORM_FIELD_BUILD__.date).toLocaleString()}`}>v{__FORM_FIELD_BUILD__.version} · build {__FORM_FIELD_BUILD__.build}{__FORM_FIELD_BUILD__.modified ? '+' : ''}</span></span></footer>
     {!exportOpen && <Notices message={message} error={error} onDismiss={() => setError('')} />}
 
     {exportOpen && <ExportDialog busy={exporting} onClose={() => setExportOpen(false)}><section className="export-modal"><Notices message={message} error={error} onDismiss={() => setError('')} /><div className="modal-title"><div><h2 id="export-heading">Export</h2></div><button className="icon-button" disabled={exporting} onClick={() => setExportOpen(false)} aria-label="Close export"><Icon name="close" /></button></div>
