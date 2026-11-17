@@ -57,6 +57,7 @@ export interface LiveSettings {
   palette: string[];
   look: LookKind;
   relief: ReliefSettings;
+  reliefPresence: boolean;
   /** forever: smoke never fades, and stays in the picture. */
   smoke: Record<SmokeKey, number> & { palette: string[]; forever: boolean };
   people: PeopleSettings;
@@ -102,6 +103,7 @@ export function defaultLiveSettings(): LiveSettings {
     palette: [...HOT_SIGNAL],
     look: 'paint',
     relief: { ...RELIEF_PRESETS[0].settings },
+    reliefPresence: false,
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
   };
@@ -134,6 +136,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, ranged(paint[c.key], c.min, c.max, c.default)])) as Record<PaintKey, number>,
     palette: [...palette],
     look: v.look === 'smoke' || v.look === 'relief' ? v.look : 'paint',
+    reliefPresence: v.reliefPresence === true,
     relief: {
       ...Object.fromEntries(RELIEF_CONTROLS.map(c => [c.key, ranged(relief[c.key], c.min, c.max, c.default)])) as Record<ReliefKey, number>,
       surface: choice(relief.surface, RELIEF_SURFACES, d.relief.surface),
@@ -151,4 +154,9 @@ export function validateLiveSettings(value: unknown): LiveSettings {
 export function chooseDisplay(displays: { id: number; primary: boolean }[], current: number | null): number | null {
   if (displays.some(d => d.id === current)) return current;
   return (displays.find(d => !d.primary) ?? displays[0])?.id ?? null;
+}
+
+/** Paint and motion-only Relief run with optical flow alone. */
+export function usesPeople(settings: LiveSettings): boolean {
+  return settings.look === 'smoke' || (settings.look === 'relief' && settings.reliefPresence);
 }

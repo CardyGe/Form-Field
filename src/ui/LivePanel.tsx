@@ -1,6 +1,6 @@
 import { useRef, type ReactNode } from 'react';
 import { useLive } from './useLive';
-import { IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, type Box, type LiveSettings } from '../live/settings';
+import { IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, usesPeople, type Box, type LiveSettings } from '../live/settings';
 import { rampHex } from '../live/colour';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, SOLAR } from '../core/palettes';
@@ -46,7 +46,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
   const smokePaletteName = PALETTES.find(([, colours]) => colours.join() === s.smoke.palette.join())?.[0] ?? '';
   const smoke = s.look === 'smoke', people = live.people;
   const peopleStatus = peopleLine(people.status);
-  const roomMissing = smoke && s.people.useEmptyRoom && !people.roomCaptured;
+  const roomMissing = usesPeople(s) && s.people.useEmptyRoom && !people.roomCaptured;
   const setRelief = (change: Partial<ReliefSettings>) => live.update(v => ({ ...v, relief: { ...v.relief, ...change } }));
   const reliefPreset = RELIEF_PRESETS.find(p => (Object.keys(p.settings) as (keyof ReliefSettings)[]).every(k => p.settings[k] === s.relief[k]));
   const setSmoke = (change: Partial<LiveSettings['smoke']>) => live.update(v => ({ ...v, smoke: { ...v.smoke, ...change } }));
@@ -89,13 +89,13 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         <Slider label="Area top" value={s.box.top} min={0} max={1} step={.01} onChange={v => setBox('top', v)} />
         <label className="live-check"><input aria-label="Show tracking" type="checkbox" disabled={live.outputOpen} checked={live.view === 'tracking'} onChange={e => live.setView(e.target.checked ? 'tracking' : 'art')} />Show tracking
           <small>{live.outputOpen ? 'Close the output to adjust tracking.' : 'Camera with movement drawn over it. Only ever shown here.'}</small></label>
-        {smoke && <section className="live-people" aria-label="Finding people">
+        {usesPeople(s) && <section className="live-people" aria-label="Finding people">
           <h3>Finding people</h3>
           <label className="live-check"><input aria-label="Show people" type="checkbox" disabled={live.outputOpen} checked={live.view === 'people'} onChange={e => live.setView(e.target.checked ? 'people' : 'art')} />Show people
             <small>{live.outputOpen ? 'Close the output to adjust tracking.' : 'Blue is a person; pink is their outline. Only ever shown here.'}</small></label>
-          {s.people.ignoreStillSeconds !== null && <Slider label="Ignore still objects" value={s.people.ignoreStillSeconds} min={IGNORE_STILL.min} max={IGNORE_STILL.max} step={1} unit=" s" onChange={v => setPeople({ ignoreStillSeconds: v })} />}
-          <label className="live-check"><input aria-label="Ignore still objects off" type="checkbox" checked={s.people.ignoreStillSeconds === null} onChange={e => setPeople({ ignoreStillSeconds: e.target.checked ? null : IGNORE_STILL.default })} />Count still objects too
-            <small>Off: anything the camera thinks is a person counts, even a poster.</small></label>
+          {smoke && s.people.ignoreStillSeconds !== null && <Slider label="Ignore still objects" value={s.people.ignoreStillSeconds} min={IGNORE_STILL.min} max={IGNORE_STILL.max} step={1} unit=" s" onChange={v => setPeople({ ignoreStillSeconds: v })} />}
+          {smoke && <label className="live-check"><input aria-label="Ignore still objects off" type="checkbox" checked={s.people.ignoreStillSeconds === null} onChange={e => setPeople({ ignoreStillSeconds: e.target.checked ? null : IGNORE_STILL.default })} />Count still objects too
+            <small>Off: anything the camera thinks is a person counts, even a poster.</small></label>}
           <label className="live-check"><input aria-label="Use empty room" type="checkbox" checked={s.people.useEmptyRoom} onChange={e => setPeople({ useEmptyRoom: e.target.checked })} />Use empty room
             <small>Only counts what differs from the empty room. Needs a fixed camera and steady light.</small></label>
           {s.people.useEmptyRoom && <button className="secondary-button live-wide" onClick={live.captureRoom}>Capture empty room</button>}
@@ -111,6 +111,10 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
       <aside className="live-column" aria-label={LOOK_LABELS[s.look]}>
         <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value as LookKind }); }}>{Object.entries(LOOK_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         {s.look === 'relief' ? <>
+          <label className="live-check"><input type="checkbox" checked={s.reliefPresence} onChange={e => {
+            live.setView('art'); set({ reliefPresence: e.target.checked });
+          }} />Body imprint
+            <small>Stand still to see your shape. Sweep toward someone opposite you to meet in the middle.</small></label>
           <label className="stacked-label">Preset<select aria-label="Relief preset" value={reliefPreset?.name ?? ''} onChange={e => {
             const preset = RELIEF_PRESETS.find(p => p.name === e.target.value);
             if (preset) setRelief(preset.settings);

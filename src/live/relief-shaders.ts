@@ -71,18 +71,54 @@ void main() {
   gl_FragColor = vec4(shutter.r+velocity*uStep,velocity,hold,side);
 }`;
 
+// R is the current body imprint. G/B carry inward sweeps from either side
+// of the play area, and A holds the light where those sweeps meet.
+export const audienceFragment = /* glsl */`
+uniform sampler2D uPrevious, uPeople, uFlow;
+uniform float uStep, uFresh;
+uniform vec4 uBox;
+
+float mask(vec2 p) { return texture2D(uPeople,p).r; }
+void main() {
+  vec2 p = vUv;
+  vec2 margin = vec2(.012,.021);
+  float model = max(mask(p), .70*max(
+    max(mask(p+vec2(margin.x,0.)),mask(p-vec2(margin.x,0.))),
+    max(mask(p+vec2(0.,margin.y)),mask(p-vec2(0.,margin.y)))));
+  float body = smoothstep(.23,.64,model);
+  float x = (p.x-uBox.x)/max(.01,uBox.y-uBox.x);
+  float travel = .50*uStep*(uBox.y-uBox.x);
+  vec2 left = p-vec2(travel,0.), right = p+vec2(travel,0.);
+  vec2 waves = vec2(texture2D(uPrevious,left).g,texture2D(uPrevious,right).b);
+  waves *= exp(-2.2*uStep);
+  if (uFresh > .5) {
+    vec3 movement = texture2D(uFlow,p).rgb;
+    float strength = smoothstep(.02,.22,movement.b)*smoothstep(.09,.43,model);
+    vec2 inward = vec2(movement.x,-movement.x);
+    vec2 zones = vec2(1.-smoothstep(.39,.46,x),smoothstep(.54,.61,x));
+    vec2 pulse = smoothstep(vec2(.0006),vec2(.007),inward)*zones*strength;
+    waves += (1.-waves)*pulse*.72;
+  }
+  float centre = smoothstep(.29,.45,x)*(1.-smoothstep(.55,.71,x));
+  float meet = smoothstep(.022,.145,min(waves.x,waves.y))*centre;
+  float glow = max(meet,texture2D(uPrevious,p).a*exp(-4.5*uStep));
+  gl_FragColor = vec4(body,waves,glow);
+}`;
+
 export const reliefVertex = /* glsl */`
 attribute vec3 aInstance;
 attribute float aFinish;
-uniform sampler2D uState;
+uniform sampler2D uState, uAudience;
+uniform bool uBodyImprint;
 uniform float uDepth, uPitch;
 uniform int uSurface, uMotion;
 varying vec3 vWorld, vNormal;
 varying float vFinish, vTurn, vEnergy;
 varying vec2 vTape;
+varying vec2 vAudiencePoint;
 varying float vWeft, vCrimp;
 
-vec3 movement(vec2 panel) {
+vec3 gesture(vec2 panel) {
   vec2 st = panel / vec2(16.,9.) + .5, blur = vec2(.012,.023);
   vec4 f = .4*texture2D(uState,st) + .15*(
     texture2D(uState,st+vec2(blur.x,0.)) + texture2D(uState,st-vec2(blur.x,0.)) +
@@ -95,6 +131,13 @@ vec3 movement(vec2 panel) {
   float turn = tanh(1.8*(f.r-f.g) + 1.5*(f.b-f.a))*uDepth;
   float lift = min(1.,dot(f,vec4(1.)))*uDepth;
   return vec3(turn,lift,lift);
+}
+vec4 audience(vec2 panel) {
+  return uBodyImprint ? texture2D(uAudience,panel/vec2(16.,9.)+.5) : vec4(0.);
+}
+vec3 movement(vec2 panel) {
+  vec4 a = audience(panel);
+  return gesture(panel) + vec3(.46*a.r+.29*a.a, .36*a.r+.55*a.a, .22*a.a);
 }
 float restAngle(vec2 p) {
   float spine = p.y - .24*p.x - .8*sin(p.x*.55);
@@ -151,8 +194,10 @@ vec3 hinge(vec3 p, float tilt, float yaw) {
 void main() {
   vec3 motion;
   vTape = vec2(0.); vWeft = 0.; vCrimp = 0.;
+  float along = position.y*mix(9.,16.,aInstance.z);
+  vAudiencePoint = aInstance.xy + (uSurface == 1 ? position.xy : orient(vec2(position.x,along)));
   if (uSurface == 2) {
-    weave(position.y*mix(9.,16.,aInstance.z),motion);
+    weave(along,motion);
   } else if (uSurface == 1) {
     vec2 centre = aInstance.xy;
     motion = movement(centre);
@@ -162,7 +207,6 @@ void main() {
     vWorld = vec3(centre, .32*motion.y) + pin + hinge(position-pin,tilt,yaw);
     vNormal = hinge(normal,tilt,yaw);
   } else {
-    float along = position.y * mix(9.,16.,aInstance.z);
     float angle, unusedAngle;
     vec3 unusedMotion;
     vWorld = ribbon(along,angle,motion);
@@ -178,9 +222,12 @@ export const reliefFragment = /* glsl */`
 varying vec3 vWorld, vNormal;
 varying float vFinish, vTurn, vEnergy;
 varying vec2 vTape;
+varying vec2 vAudiencePoint;
 varying float vWeft, vCrimp;
 uniform int uFinish, uSurface;
 uniform float uEdgeLight;
+uniform sampler2D uAudience;
+uniform bool uBodyImprint;
 uniform vec2 uLight;
 float square(float x) { return x*x; }
 float filament(float phase) {
@@ -231,10 +278,19 @@ vec3 wovenFinish(vec3 n) {
   fabric += accent*uEdgeLight*lift*(.12+.21*selvedge+.29*glint);
   return fabric;
 }
+vec3 audienceLight(vec3 surface, vec3 normal) {
+  if (!uBodyImprint) return surface;
+  vec4 imprint = texture2D(uAudience,vAudiencePoint/vec2(16.,9.)+.5);
+  float body = imprint.r;
+  vec3 inner = mix(surface, .24*surface+vec3(.067,.22,.29), .64*body);
+  inner += body*(.1+.3*abs(normal.x))*vec3(.04,.27,.31);
+  vec3 path = vec3(.26,.081,.018)*imprint.g + vec3(.025,.12,.26)*imprint.b;
+  return inner + path*.50 + vec3(.30,.59,.43)*imprint.a;
+}
 void main() {
   vec3 n = normalize(vNormal);
   if (uSurface == 2) {
-    gl_FragColor = vec4(wovenFinish(n),1.);
+    gl_FragColor = vec4(audienceLight(wovenFinish(n),n),1.);
     return;
   }
   vec3 r = reflect(vec3(0.,0.,-1.),n);
@@ -273,5 +329,5 @@ void main() {
   if (vFinish < .5) surface += smoothstep(.18,.82,abs(vTurn))*accent*.56*(.35+warm);
   float light = uEdgeLight*smoothstep(.015,.8,vEnergy);
   surface += light*mix(.06,.98,step(.5,vFinish))*(.18+accent);
-  gl_FragColor = vec4(surface,1.);
+  gl_FragColor = vec4(audienceLight(surface,n),1.);
 }`;

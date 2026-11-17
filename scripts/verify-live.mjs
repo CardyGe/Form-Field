@@ -19,6 +19,7 @@ export {TestSource, TestMaskProvider} from './src/live/test-source';
 export {defaultLiveSettings, RELIEF_PRESETS} from './src/live/settings';
 export {recolourGLSL, setRamp} from './src/live/recolour';
 export {Passes} from './src/live/passes';
+export {audienceFragment} from './src/live/relief-shaders';
 export * as THREE from 'three';
 export {HOT_SIGNAL, POUR, NEON_STRATA} from './src/core/palettes';
 export const fromHalf = v => { const s = v >> 15, e = (v >> 10) & 31, f = v & 1023; return (s ? -1 : 1) * (e ? Math.pow(2, e - 15) * (1 + f / 1024) : Math.pow(2, -14) * f / 1024); };`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'live.js'), logLevel: 'silent' });
@@ -190,6 +191,80 @@ try {
       assert.ok(result.tail < .45, preset.name + ' failed to settle: ' + result.tail);
     }
     assert.ok(count >= 5);
+  });
+  await check('Relief shows a standing person on each surface and switches back to motion only', async () => {
+    for (const surface of ['blades','scales','weave']) {
+      const result = await page.evaluate(async surface => {
+        const { source, renderer, made } = window.live.make(s => {
+          s.look = 'relief'; s.relief.surface = surface; s.relief.size = 'broad';
+        });
+        source.audience = true; source.moving = false;
+        source.advance(1/30); // Prime with the performers already in place.
+        window.live.run(30);
+        const idle = window.live.pixels();
+        function difference() {
+          const { data, width, height } = window.live.pixels();
+          let body = 0, other = 0;
+          for (let y=0; y<height; y+=4) for (let x=0; x<width; x+=4) {
+            const i = 4*(y*width+x);
+            const delta = Math.abs(data[i+1]-idle.data[i+1]);
+            if (x > .12*width && x < .37*width || x > .63*width && x < .88*width) body += delta;
+            else other += delta;
+          }
+          return { body, other };
+        }
+        renderer.settings.reliefPresence = true;
+        window.live.run(90);
+        const standing = difference(), image = await window.live.png();
+        renderer.settings.reliefPresence = false;
+        renderer.frame(1/60);
+        return { standing, off: difference(), image, providers: made.providers };
+      }, surface);
+      await save('relief-presence-'+surface,result.image);
+      assert.ok(result.standing.body > 10000, surface + ' imprint too faint');
+      assert.ok(result.standing.body > 2*result.standing.other, surface + ' imprint spread too far');
+      assert.deepEqual(result.off, { body: 0, other: 0 });
+      assert.equal(result.providers, 1);
+    }
+  });
+  await check('Relief encounter lights up only when two inward sweeps meet', async () => {
+    const result = await page.evaluate(() => {
+      const { THREE, Passes, audienceFragment } = window.live.m;
+      const width = 160, height = 90;
+      const gpu = new THREE.WebGLRenderer({ canvas: new OffscreenCanvas(width,height) });
+      const passes = new Passes(gpu), pair = passes.pair(width,height);
+      const mask = new THREE.DataTexture(new Uint8Array(width*height).fill(255),width,height,THREE.RedFormat);
+      const flowData = new Float32Array(width*height*4);
+      const flow = new THREE.DataTexture(flowData,width,height,THREE.RGBAFormat,THREE.FloatType);
+      mask.needsUpdate = true;
+      const uniforms = { uPrevious: {value:null}, uPeople: {value:mask}, uFlow: {value:flow},
+        uStep: {value:1/60}, uFresh: {value:1}, uBox: {value:new THREE.Vector4(0,1,0,1)} };
+      const sim = passes.material(audienceFragment,uniforms);
+      const zero = passes.material('void main(){gl_FragColor=vec4(0.);}',{});
+      function trial(two) {
+        flowData.fill(0);
+        for (let y=36;y<52;y++) for (let x=0;x<width;x++) {
+          const left = x>=57 && x<64, right = two && x>=96 && x<103;
+          if (!left && !right) continue;
+          const i = 4*(y*width+x); flowData[i] = left ? .012 : -.012; flowData[i+2] = .9;
+        }
+        flow.needsUpdate = true;
+        passes.draw(zero,pair.read);
+        let peak = 0;
+        for (let frame=0;frame<60;frame++) {
+          uniforms.uPrevious.value = pair.read.texture; uniforms.uFresh.value = Number(frame<7);
+          passes.draw(sim,pair.write); pair.swap();
+          const pixel = new Uint16Array(4);
+          gpu.readRenderTargetPixels(pair.read,80,44,1,1,pixel);
+          peak = Math.max(peak,THREE.DataUtils.fromHalfFloat(pixel[3]));
+        }
+        return peak;
+      }
+      try { return { solo: trial(false), pair: trial(true) }; }
+      finally { sim.dispose(); zero.dispose(); mask.dispose(); flow.dispose(); pair.dispose(); passes.dispose(); gpu.dispose(); }
+    });
+    assert.equal(result.solo,0);
+    assert.ok(result.pair > .2, 'overlapping wakes did not light up');
   });
   await check('bare pipeline: the picture is not uniform', async () => {
     const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); const p = window.live.painted(0); return { p, frames: window.live.current.renderer.stats().frames }; });

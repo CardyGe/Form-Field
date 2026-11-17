@@ -5,9 +5,9 @@
  */
 import { LiveRenderer } from './LiveRenderer';
 import { LiveSource, type SourceState } from './source';
-import { TestSource } from './test-source';
+import { TestSource, TestMaskProvider } from './test-source';
 import type { FrameSource } from './look';
-import type { LiveSettings } from './settings';
+import { usesPeople, type LiveSettings } from './settings';
 import type { PeopleStatus } from './MaskProvider';
 import { WorkerMaskProvider } from './WorkerMaskProvider';
 
@@ -25,7 +25,10 @@ export class Stage {
 
   constructor(canvas: HTMLCanvasElement) {
     const stage = this;
-    this.renderer = new LiveRenderer(canvas, { get element() { return stage.active?.element ?? null; }, get frameId() { return stage.active?.frameId ?? 0; } }, () => new WorkerMaskProvider());
+    this.renderer = new LiveRenderer(canvas, { get element() { return stage.active?.element ?? null; }, get frameId() { return stage.active?.frameId ?? 0; } }, () => {
+      const pattern = stage.pattern;
+      return pattern?.audience ? new TestMaskProvider(() => pattern) : new WorkerMaskProvider();
+    });
     this.camera.onState = state => { if (this.active === this.camera || state.status !== 'idle') this.onState(state); };
     const tick = (now: number) => {
       if (this.gaps.length < 100000) this.gaps.push(now - this.last);
@@ -44,11 +47,12 @@ export class Stage {
     this.renderer.settings = settings;
     const { kind, deviceId } = settings.source;
     const key = kind === 'camera' ? `camera:${deviceId ?? ''}` : kind === 'file' ? `file:${file ? `${file.name}:${file.size}:${file.lastModified}` : ''}` : 'test';
+    if (this.pattern) this.pattern.audience = settings.look === 'relief';
     if (key === this.key) return;
     this.key = key;
     if (kind === 'test') {
       this.camera.close();
-      this.pattern = new TestSource(); this.active = this.pattern;
+      this.pattern = new TestSource(); this.pattern.audience = settings.look === 'relief'; this.active = this.pattern;
       this.onState({ status: 'running', label: 'Test pattern', width: 640, height: 360 });
       return;
     }
@@ -66,7 +70,7 @@ export class Stage {
   /** Person finding as the operator sees it: status and whether the empty room is captured. */
   peopleReport(): { people: PeopleStatus | null; roomCaptured: boolean } {
     const d = this.renderer.peopleDiagnostics();
-    return { people: this.renderer.settings.look === 'smoke' ? d.status as PeopleStatus : null, roomCaptured: this.renderer.roomCaptured };
+    return { people: usesPeople(this.renderer.settings) ? d.status as PeopleStatus : null, roomCaptured: this.renderer.roomCaptured };
   }
 
   dispose(): void {

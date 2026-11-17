@@ -6,7 +6,12 @@ const profile = app.commandLine.getSwitchValue('user-data-dir') || path.join(app
 fs.mkdirSync(profile, { recursive: true });
 app.setPath('userData', profile);
 try {
-  fs.writeFileSync(path.join(profile, 'live-settings.json'), JSON.stringify({ look: 'relief', source: { kind: 'test' } }), { flag: 'wx' });
+  const rehearsal = {
+    look: 'relief', source: { kind: 'test' }, reliefPresence: true,
+    relief: { surface: 'scales', size: 'broad', motion: 'latch', finish: 'brass',
+      depth: .85, reach: .4, settle: 1.05, lightAngle: -34, edgeLight: .65 },
+  };
+  fs.writeFileSync(path.join(profile, 'live-settings.json'), JSON.stringify(rehearsal), { flag: 'wx' });
 } catch (error) {
   if (error.code !== 'EEXIST') throw error;
 }

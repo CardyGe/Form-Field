@@ -122,8 +122,11 @@ try {
     await page.getByLabel('Relief preset').selectOption('Gold brocade');
     await page.getByLabel('Motion', { exact: true }).selectOption('ripple');
     await page.getByLabel('Settle', { exact: true }).fill('1.5');
+    const imprint = page.getByRole('checkbox', { name: /Body imprint/ });
+    await imprint.check();
+    await page.getByText(/^People finding running/).waitFor();
     assert.equal(await page.getByLabel('Relief preset').inputValue(), '');
-    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'relief' && v.relief.surface === 'weave' && v.relief.finish === 'brass' && v.relief.motion === 'ripple' && v.relief.settle === 1.5, 'Relief settings were not saved');
+    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'relief' && v.reliefPresence === true && v.relief.surface === 'weave' && v.relief.finish === 'brass' && v.relief.motion === 'ripple' && v.relief.settle === 1.5, 'Relief settings were not saved');
     const opened = app.waitForEvent('window');
     await page.getByRole('button', { name: 'Open output', exact: true }).click();
     const output = await opened;
@@ -136,6 +139,7 @@ try {
     await look.selectOption('paint');
     await look.selectOption('relief');
     assert.equal(await page.getByLabel('Settle', { exact: true }).inputValue(), '1.5');
+    assert.equal(await imprint.isChecked(),true);
   });
   await check('Smoke can be chosen, and its people status shows on the operator screen', async () => {
     await page.getByLabel('Look', { exact: true }).selectOption('smoke');

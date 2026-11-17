@@ -3,7 +3,7 @@ import type { Look, TrackingFeed } from './look';
 import type { LiveSettings, ReliefSettings } from './settings';
 import { Passes, type Pair } from './passes';
 import { reliefGeometry, scaleDimensions } from './relief-geometry';
-import { latchFragment, reliefFragment, reliefVertex, rippleFragment, sweepFragment } from './relief-shaders';
+import { audienceFragment, latchFragment, reliefFragment, reliefVertex, rippleFragment, sweepFragment } from './relief-shaders';
 
 const surfaceIndex = { blades: 0, scales: 1, weave: 2 };
 const motionIndex = { sweep: 0, ripple: 1, latch: 2 };
@@ -11,6 +11,9 @@ const finishIndex = { silver: 0, brass: 1, pearl: 2, foil: 3 };
 
 export class Relief implements Look {
   private readonly field: Pair;
+  private readonly audience: Pair;
+  private readonly audiencePass: THREE.ShaderMaterial;
+  private imprint = false;
   private readonly sweep: THREE.ShaderMaterial;
   private readonly ripple: THREE.ShaderMaterial;
   private readonly latch: THREE.ShaderMaterial;
@@ -20,7 +23,7 @@ export class Relief implements Look {
   private readonly material = new THREE.ShaderMaterial({
     vertexShader: reliefVertex, fragmentShader: reliefFragment,
     uniforms: {
-      uState: { value: null }, uDepth: { value: 1 }, uMotion: { value: 0 }, uSurface: { value: 0 },
+      uState: { value: null }, uAudience: { value: null }, uBodyImprint: { value: false }, uDepth: { value: 1 }, uMotion: { value: 0 }, uSurface: { value: 0 },
       uPitch: { value: .5 }, uFinish: { value: 0 }, uEdgeLight: { value: 0 }, uLight: { value: new THREE.Vector2(1,0) },
     },
   });
@@ -32,6 +35,11 @@ export class Relief implements Look {
 
   constructor(private readonly passes: Passes, width: number, height: number) {
     this.field = passes.pair(160, 90);
+    this.audience = passes.pair(160, 90);
+    this.audiencePass = passes.material(audienceFragment, {
+      uPrevious: { value: null }, uPeople: { value: null }, uFlow: { value: null },
+      uStep: { value: 0 }, uFresh: { value: 0 }, uBox: { value: new THREE.Vector4() },
+    });
     const simUniforms = { uState: { value: null }, uFlow: { value: null }, uStep: { value: 0 },
       uReach: { value: 0 }, uSettle: { value: 1 }, uFresh: { value: 0 } };
     this.sweep = passes.material(sweepFragment, simUniforms);
@@ -76,7 +84,25 @@ export class Relief implements Look {
       this.passes.draw(pass, this.field.write);
       this.field.swap();
     }
+    if (this.imprint !== settings.reliefPresence) {
+      this.clearAudience();
+      this.imprint = settings.reliefPresence;
+    }
+    if (this.imprint) {
+      const a = this.audiencePass.uniforms, box = settings.box;
+      a.uPrevious.value = this.audience.read.texture;
+      a.uPeople.value = feed.people;
+      a.uFlow.value = feed.flow;
+      a.uStep.value = seconds;
+      a.uFresh.value = feed.fresh ? 1 : 0;
+      a.uBox.value.set(box.left, box.right, box.bottom, box.top);
+      this.passes.draw(this.audiencePass, this.audience.write);
+      this.audience.swap();
+    }
+
     const art = this.material.uniforms;
+    art.uBodyImprint.value = this.imprint;
+    art.uAudience.value = this.audience.read.texture;
     art.uState.value = this.field.read.texture;
     art.uDepth.value = style.depth;
     art.uPitch.value = scaleDimensions[this.size].pitch;
@@ -92,8 +118,17 @@ export class Relief implements Look {
   }
 
   resize(width: number, height: number) { this.target.setSize(width, height); }
-  clear() { this.passes.draw(this.zero, this.field.read); this.passes.draw(this.zero, this.field.write); }
+  clear() {
+    this.passes.draw(this.zero, this.field.read);
+    this.passes.draw(this.zero, this.field.write);
+    this.clearAudience();
+  }
+  private clearAudience() {
+    this.passes.draw(this.zero, this.audience.read);
+    this.passes.draw(this.zero, this.audience.write);
+  }
   dispose() {
+    this.audience.dispose(); this.audiencePass.dispose();
     this.field.dispose(); this.sweep.dispose(); this.ripple.dispose(); this.latch.dispose(); this.zero.dispose();
     this.material.dispose(); this.wall.geometry.dispose(); this.target.dispose();
   }
