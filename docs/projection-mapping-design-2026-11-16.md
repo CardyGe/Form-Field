@@ -309,6 +309,75 @@ Measured 17 November 2026 on this Mac (Electron 45, display at 120 Hz) with `scr
 - Undo history covers the show (shapes and what they play), including a whole Edit in Studio session as one step; it is not saved with the show.
 - Placement is Fit only: the picture fills the shape's bounding box, undistorted, and the outline cuts it. Pin and Across group / stage are stage 4.
 
+## Stage 3 decisions
+
+Made 17 November 2026, before building stage 3. Greg chose the first four; the rest are my calls and can be changed.
+
+**Greg's choices**
+
+- **Curves have handles.** In the Pen, a click places a corner and a click-and-drag places a curve point with two handles. Handles are dragged to shape the curve, and they mirror each other unless Alt is held. Alt-click switches a point between corner and curve.
+- **Make a grid gives each cell its own copy** of the shape's instrument, as Duplicate does. A grid of more than 24 instrument cells passes the 24-at-once limit, and the extra cells play their colour, with the operator told why.
+- **Joined corners move together.** While Snap is on, corners of different shapes that sit on the same spot (within half a projector pixel) move together when one is dragged or nudged. Holding Ctrl while dragging moves one corner on its own and switches snapping off.
+- **Groups are one level deep.** A group is a folder of shapes, with no groups inside groups.
+
+**My calls**
+
+- **Show format, version 3.**
+  - A point may carry curve handles, `in` and `out`, stored as offsets from the point in stage fractions. A point without handles is a corner, and a side between two corners is straight.
+  - A shape gains:
+    - `holes`: up to 8 outlines, each one also able to curve
+    - `groupId`
+    - `blocker`
+    - `softEdge`: in projector pixels, 0 to 200
+    - `border`: width 0 to 40, colour, glow 0 to 40
+  - The show gains `groups` (up to 32) and `photo`.
+  - Version 1 and 2 files open with every new field at its default. That is not counted as a repair.
+- **Point limit.** 32 points a shape counts the outline and its holes together, so the largest show still fits one message to the wall.
+- **Outline rules for curves.** Each curved side is checked as 16 short straight pieces, with the same crossing and size rules as before. A hole must sit wholly inside its shape and must not touch the outline or another hole. Anchor points must stay on the stage; a curve may bulge past the edge of the stage, and that part is simply not drawn.
+- **Ellipse and triangle.**
+  - An ellipse is drawn as four curve points, so it can be bent like any Pen shape afterwards.
+  - A triangle is drawn as three corners, its tip at the top centre of the dragged box.
+  - Holding Shift while dragging out a rectangle, triangle or ellipse makes its box square.
+- **Holes.**
+  - With a shape selected, hold Alt while drawing any shape inside it. What you draw becomes a hole in the selected shape.
+  - A hole's points are edited like the outline's.
+  - Undo takes a hole away again.
+- **Snap targets.** Other shapes' points, then their sides, then the stage edges and centre lines, within 10 screen pixels. Snap is on by default. Its switch is kept for the session, not in the show.
+- **Selection.**
+  - Shift-click adds or removes shapes.
+  - Dragging on empty stage selects every shape wholly inside the dragged box.
+  - Clicking a group in the list selects its members.
+  - Moving, deleting, duplicating, flipping, scaling and turning act on everything selected.
+  - Points are picked one at a time; there is no box for picking points.
+- **Scale and turn.** The selection gets a box with four corner handles, which scale it from the opposite corner (Shift keeps the proportions), and a turn handle above it (Shift turns in 15° steps). The edit is refused if any point would leave the stage.
+- **Flip and mirror.**
+  - Flip turns the selection over, left to right or top to bottom, about its own centre.
+  - Mirror makes a mirrored copy across the stage's centre line, left to right or top to bottom.
+  - Mirroring across a line you draw yourself is left out.
+- **Make a grid.**
+  - Works on a shape with four corners and no curves.
+  - 1 to 16 rows and columns, with a gap of 0 to 100 projector pixels between cells.
+  - The cells follow the shape's own perspective.
+  - The cells replace the shape and go into a new group named after it.
+- **Groups.**
+  - A group's members sit together in the list, which is also the stacking order. Moving the group in the list moves them all.
+  - Hiding or locking a group hides or locks its members, but leaves each member's own setting as it was.
+  - A group with no members left is removed.
+- **Solo** shows only the soloed shapes and groups, on the wall as well. It is not saved and is not an undo step, like Test grid. While solo is on, the header says so in the accent colour.
+- **Blocker.**
+  - A shape that plays nothing and blacks out everything beneath it, on the wall too, with its soft edge.
+  - On the operator screen it is drawn hatched, so you can still see it.
+- **Soft edge.**
+  - Fades the content to nothing at the outline, over the given distance inwards.
+  - The fade is made once, as a small picture, whenever the shape changes, and reused on every frame. Shapes without a soft edge are clipped as before.
+- **Border.**
+  - Drawn inside the outline, so it never spills off the object.
+  - Its colour is a fixed colour or the first colour of the shape's instrument palette.
+  - Glow is a blur of the border, also inside the outline.
+- **Photo.**
+  - Chosen from a file on this screen and stored in the show, shrunk to fit 1920 × 1080 as a JPEG, so it travels with Save As.
+  - It is drawn under the outlines on the operator screen only, with its own opacity. It is never sent to the wall.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
