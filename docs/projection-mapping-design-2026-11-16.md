@@ -299,6 +299,14 @@ Measured 17 November 2026 on this Mac (Electron 45, display at 120 Hz) with `scr
 - Shapes larger than a quarter of the stage each, or more than eight sources.
 - The operator screen playing instruments itself (output closed): that doubles the work only when no wall is open.
 
+**Known limits, stage 2**
+
+- At most 24 instruments play at once (Chromium limits live graphics contexts). More play their shape's colour, and the operator is told why.
+- Every preset change starts a fresh instrument (and graphics context); the old one is given back at once.
+- A composition with large images is slower to edit: each change is sent to the projector whole (at most once a frame).
+- Undo history covers the show (shapes and what they play), including a whole Edit in Studio session as one step; it is not saved with the show.
+- Placement is Fit only: the picture fills the shape's bounding box, undistorted, and the outline cuts it. Pin and Across group / stage are stage 4.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
