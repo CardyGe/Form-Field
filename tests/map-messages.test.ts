@@ -91,13 +91,16 @@ test('the page and the main process accept and refuse exactly the same messages'
   }
 });
 
-test('the wall keeps compositions by revision and ignores older or broken ones', () => {
+test('the wall takes any composition revision different from the one it holds, and ignores broken ones', () => {
   const show = showWithInstruments(1);
   const project = show.sources[0].project;
   let wall = applyMapMessage(initialWall(), { type: 'source', id: 'src0', revision: 2, project });
   assert.equal(wall.projects.get('src0')?.revision, 2);
-  const older = applyMapMessage(wall, { type: 'source', id: 'src0', revision: 1, project: { ...project, name: 'old' } });
-  assert.equal(older, wall);
+  // Undo brings back an older revision: the wall must show it.
+  const undone = applyMapMessage(wall, { type: 'source', id: 'src0', revision: 1, project: { ...project, name: 'old' } });
+  assert.equal(undone.projects.get('src0')?.project.name, 'old');
+  // The same revision again is the same composition: nothing to do.
+  assert.equal(applyMapMessage(wall, { type: 'source', id: 'src0', revision: 2, project }), wall);
   const broken = applyMapMessage(wall, { type: 'source', id: 'src0', revision: 3, project: { layers: 'nonsense' } });
   assert.equal(broken, wall);
   wall = applyMapMessage(wall, { type: 'show', show: toWire(show) });
@@ -108,4 +111,23 @@ test('the wall keeps compositions by revision and ignores older or broken ones',
   wall = applyMapMessage(wall, { type: 'show', show: toWire(colour.show) });
   assert.equal(wall.projects.has('src0'), false);
   assert.equal(applyMapMessage(wall, { type: 'freeze', on: true }).freeze, true);
+});
+
+test('undo and redo of a composition change reach the wall', () => {
+  const show = showWithInstruments(1);
+  const varied = applyEdit(show, { type: 'varySource', sourceId: 'src0', entropy: 99 });
+  assert.ok(varied.ok);
+  let wall = initialWall(), sent = new Map<string, number>();
+  const push = (s: ShowDocument) => {
+    const out = sourcesToSend(s, sent); sent = out.sent;
+    for (const m of [...out.messages, { type: 'show', show: toWire(s) }]) wall = applyMapMessage(wall, m);
+  };
+  push(show); push(varied.show);
+  assert.deepEqual(wall.projects.get('src0')?.project.layers[0].params, varied.show.sources[0].project.layers[0].params);
+  push(show); // undo
+  assert.deepEqual(wall.projects.get('src0')?.project.layers[0].params, show.sources[0].project.layers[0].params);
+  const again = applyEdit(show, { type: 'varySource', sourceId: 'src0', entropy: 7 }); // the same revision number as before, new content
+  assert.ok(again.ok);
+  push(again.show);
+  assert.deepEqual(wall.projects.get('src0')?.project.layers[0].params, again.show.sources[0].project.layers[0].params);
 });

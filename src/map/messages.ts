@@ -16,8 +16,11 @@ export type MapMessage =
  * names and ids at their limits) is about 110 KB, so a valid show is never refused. Tested.
  */
 export const MAP_MESSAGE_LIMIT = 256 * 1024;
-/** A composition can hold images of up to 20 MB (Studio's MAX_ASSET_BYTES), so its message has its own limit. */
-export const SOURCE_MESSAGE_LIMIT = 24 * 1024 * 1024;
+/**
+ * A composition can hold up to four layers, each with an image and a mask of up to 20 MB (Studio's MAX_ASSET_BYTES),
+ * stored as text about a third larger: so its message has its own, much larger limit.
+ */
+export const SOURCE_MESSAGE_LIMIT = 256 * 1024 * 1024;
 
 /** Four decimal places of a stage fraction: 0.2 projector pixels at 1920 wide. */
 const WIRE_PLACES = 1e4;

@@ -17,6 +17,9 @@ const REASONS: Record<string, string> = {
   'too-many': 'Too many corners', outside: 'Outline must stay on the stage', locked: 'That shape is locked',
   'not-found': 'That shape is gone', 'too-many-shapes': 'Too many shapes', 'duplicate-id': 'That shape already exists',
   'name-too-long': `Names can be at most ${MAX_NAME_LENGTH} characters`,
+  'too-many-sources': 'Too many instruments in this show', 'needs-source-id': 'That shape could not be copied',
+  'unknown-preset': 'That look is not in the Library', 'bad-palette': 'That palette could not be used',
+  'too-many-layers': 'A shape\'s composition can have at most four layers', 'bad-composition': 'That composition could not be read',
 };
 const COLOURS = ['#ff3b30', '#34c759', '#0a84ff', '#ffcc00', '#bf5af2', '#ff9f0a'];
 const MIN_DRAG_PX = 4;       // a rectangle drag smaller than this (projector pixels) creates nothing
@@ -88,7 +91,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     try { compositor.current = new MapCompositor(canvas.current); } catch { compositor.current = null; }
     return () => { compositor.current?.dispose(); compositor.current = null; };
   }, []);
-  const drawInputs = { shown, refused, selectedId: map.selectedId, selectedIndex: map.selectedIndex, outputOpen: map.outputOpen, wallPicture: map.wallPicture };
+  const drawInputs = { shown, refused, selectedId: map.selectedId, selectedIndex: map.selectedIndex, outputOpen: map.outputOpen, wallPicture: map.wallPicture, freeze: map.freeze };
   const inputs = useRef(drawInputs);
   inputs.current = drawInputs;
   const playedShow = useRef<ShowDocument | null>(null);
@@ -106,8 +109,13 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     if (local) {
       if (playedShow.current !== picture) { local.setShow(picture, new Map(picture.sources.map(s => [s.id, s.project]))); playedShow.current = picture; }
       local.setOptions(options);
+      local.setFrozen(inputs.current.freeze);
       local.frame(now);
-    } else paint(ctx, picture, options, background);
+    } else {
+      // Not playing here (the wall plays them, or nothing does): the instruments here give their graphics contexts back.
+      if (playedShow.current && compositor.current) { compositor.current.setShow({ shapes: [], sources: [] }, new Map()); playedShow.current = null; }
+      paint(ctx, picture, options, background);
+    }
     // Corner handles are for the operator only; the output never draws them.
     const selected = picture.shapes.find(s => s.id === selectedId);
     // Handles keep a fixed size on screen, whatever size the canvas is displayed at.

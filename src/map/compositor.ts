@@ -104,7 +104,8 @@ export class MapCompositor {
       const before = this.playing.get(shape.id);
       if (shouldFade(before, next)) {
         const old = before!.sourceId ? this.slots.get(before!.sourceId)?.frame : null;
-        const from = old ? copyFrame(old, old.width, old.height, null) : shape.colour;
+        // Changing again before the last change was ready keeps fading from what is on the wall, not from the colour.
+        const from = old ? copyFrame(old, old.width, old.height, null) : this.fades.get(shape.id)?.from ?? shape.colour;
         this.fades.set(shape.id, { from, start: shape.sourceId === null ? now : null });
       }
       this.playing.set(shape.id, next);
@@ -131,9 +132,9 @@ export class MapCompositor {
     for (const source of this.show.sources) {
       const project = this.projects.get(source.id);
       if (!project) continue;
-      // Only sources some visible shape plays are started.
+      // Only sources some visible shape plays are started; one whose shapes are all hidden gives its context back.
       const users = this.show.shapes.filter(s => s.sourceId === source.id && s.visible);
-      if (!users.length) continue;
+      if (!users.length) { const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
       const slot = this.slot(source.id, now);
       if (!slot) continue;
       if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) this.prepare(slot, project);

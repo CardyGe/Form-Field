@@ -38,8 +38,8 @@ const { acceptPreview } = require('./live.cjs');
 // A copy of acceptMapMessage in src/map/messages.ts (the main process cannot load TypeScript).
 // tests/map-messages.test.ts runs one table of messages against both copies, so they stay in step.
 const MESSAGE_LIMIT = 256 * 1024; // MAP_MESSAGE_LIMIT
-const SOURCE_MESSAGE_LIMIT = 24 * 1024 * 1024; // a composition can hold images of up to 20 MB
-const SHOW_TEXT_LIMIT = 128 * 1024 * 1024; // a show's compositions can hold images
+const SOURCE_MESSAGE_LIMIT = 256 * 1024 * 1024; // up to four layers, each with images of up to 20 MB, as text
+const SHOW_TEXT_LIMIT = 1024 * 1024 * 1024; // a show's compositions can hold many images
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const within = (value, limit) => { try { const text = JSON.stringify(value); return typeof text === 'string' && text.length < limit; } catch { return false; } };
 const idOrNull = value => value === null || typeof value === 'string';

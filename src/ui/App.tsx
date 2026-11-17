@@ -25,7 +25,7 @@ import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
 import LivePanel from './LivePanel';
 import { KIND_LABELS } from '../core/library';
-import { beginStudioEdit, endStudioEdit, studioEdit } from './useMap';
+import { beginStudioEdit, endStudioEdit, onStudioWallWarning, studioEdit } from './useMap';
 import { projectForStudioSave, stashStudio, type ShapeEdit } from './studio-edit';
 import MapPanel from './MapPanel';
 import { sameCanvasValues } from '../core/canvas-interaction';
@@ -467,6 +467,7 @@ export default function App() {
     await window.studio!.saveAutosave(validateProject(projectForStudioSave(projectRef.current, shapeEditRef.current)));
   }), []);
 
+  useEffect(() => { onStudioWallWarning(text => notify(`Map: ${text}.`)); return () => onStudioWallWarning(null); }, [notify]);
   /** Opens a Map shape's composition in Studio, setting Studio's own project, history and file aside. */
   const editShapeInStudio = (sourceId: string, shapeId: string) => {
     if (shapeEditRef.current) return;

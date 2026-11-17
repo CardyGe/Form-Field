@@ -34,8 +34,10 @@ export function applyMapMessage(state: WallState, value: unknown): WallState {
       return { ...state, show, projects };
     }
     case 'source': {
+      // Any revision other than the one held replaces it: undo brings back an older one, and the studio's record of
+      // what it sent decides what the wall should have (messages arrive in order).
       const held = state.projects.get(message.id);
-      if (held && held.revision >= message.revision) return state;
+      if (held && held.revision === message.revision) return state;
       let project: Project;
       try { project = validateProject(message.project); } catch { return state; }
       if (project.layers.length > MAX_SOURCE_LAYERS) return state;

@@ -9,7 +9,7 @@ import { createShow, validateShow, type ShowDocument } from '../map/show';
 export interface Display { id: number; label: string; primary: boolean }
 
 const TOO_LARGE = 'This show is too large to send to the wall. The wall keeps its last show.';
-const TOO_LARGE_SOURCE = 'A composition is too large to send to the wall (over 24 MB). Its shape keeps its last picture.';
+const TOO_LARGE_SOURCE = 'A composition is too large to send to the projector, so its shape keeps what the projector already had, or its colour.';
 export const SAVE_FAILED = 'Could not save — keep working, then use Save As';
 const DAMAGED = 'That file could not be read. Nothing was changed.';
 const fileName = (file: string) => file.split(/[\\/]/).pop() || file;
@@ -28,7 +28,8 @@ interface Session {
   state: MapState;
   loaded: boolean;
   saveFailed: boolean;
-  saver: ReturnType<typeof autosaveSchedule<string>>;
+  /** Writes the show when it has been still for half a second; the show is turned into text only then. */
+  saver: ReturnType<typeof autosaveSchedule<ShowDocument>>;
   /** The screen showing the session, told when a save fails or recovers; null while Map is not shown. */
   onSaveResult: ((failed: boolean) => void) | null;
   /** Whether the wall's window is open, and which composition revisions it has been sent (emptied when it opens). */
@@ -42,6 +43,10 @@ interface Session {
   studioEdit: { sourceId: string; shapeId: string; first: boolean } | null;
   /** How many Map screens are mounted (React may mount one twice in development). */
   mounted: number;
+  /** A Studio edit waiting to reach the wall at the next frame (edits come faster than frames while a slider moves). */
+  wallFrame: number | null;
+  /** Told when a Studio edit could not reach the wall. */
+  onStudioWarning: ((text: string) => void) | null;
 }
 let session: Session | null = null;
 function mapSession(): Session {
@@ -49,11 +54,11 @@ function mapSession(): Session {
   const bridge = window.studio?.map;
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
-    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, mounted: 0,
-    saver: autosaveSchedule<string>(async text => {
+    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, mounted: 0, wallFrame: null, onStudioWarning: null,
+    saver: autosaveSchedule<ShowDocument>(async show => {
       if (!bridge) return;
       // A failed write is reported, never swallowed: the operator keeps working and can Save As.
-      try { await bridge.saveAutosave(text); created.saveFailed = false; created.onSaveResult?.(false); }
+      try { await bridge.saveAutosave(JSON.stringify(show)); created.saveFailed = false; created.onSaveResult?.(false); }
       catch (error) { created.saveFailed = true; created.onSaveResult?.(true); throw error; }
     }, 500),
   };
@@ -113,11 +118,18 @@ export function studioEdit(project: Project): string | null {
   s.state = applyStudioEdit(before, edit.sourceId, project, edit.first);
   if (s.state.show === before.show) return STUDIO_REFUSALS[s.state.refusal ?? ''] ?? s.state.refusal;
   edit.first = false;
-  s.saver.save(JSON.stringify(s.state.show));
-  const sent = pushToWall(s, s.state.show);
-  if (!sent.sources) return 'the composition is over 24 MB, too large to send to the projector, so the projector keeps the last one (the show keeps the change)';
+  s.saver.save(s.state.show);
+  // At most once a frame: the latest change goes, earlier ones in the same frame are skipped.
+  if (s.wallFrame === null) s.wallFrame = requestAnimationFrame(() => {
+    s.wallFrame = null;
+    const sent = pushToWall(s, s.state.show);
+    if (!sent.sources) s.onStudioWarning?.('the composition is too large to send to the projector, so the projector keeps what it had (the show keeps the change)');
+  });
   return null;
 }
+
+/** Studio's way to hear that an edit could not reach the projector. */
+export function onStudioWallWarning(listener: ((text: string) => void) | null): void { mapSession().onStudioWarning = listener; }
 
 /** Back to Map. */
 export function endStudioEdit(): void {
@@ -138,6 +150,10 @@ export function useMap(onError: (message: string) => void) {
   const [tool, setTool] = useState<'select' | 'rectangle'>('select');
   const [lastRefusal, setLastRefusal] = useState<string | null>(null);
   const [sendWarning, setSendWarning] = useState<string | null>(null);
+  /** Kept apart from the show's own warning, which every show message clears. */
+  const [sourceWarning, setSourceWarning] = useState<string | null>(null);
+  /** Goes up every time an output says it is ready, even one that reloaded while already open: it is sent everything. */
+  const [outputEpoch, setOutputEpoch] = useState(0);
   const [blackout, setBlackoutState] = useState(kept.blackout);
   const [testGrid, setTestGridState] = useState(kept.testGrid);
   const [freeze, setFreezeState] = useState(kept.freeze);
@@ -182,7 +198,7 @@ export function useMap(onError: (message: string) => void) {
   useEffect(() => {
     void refreshDisplays();
     if (!bridge) return;
-    const offOutput = bridge.onOutputChanged(setOutputOpen);
+    const offOutput = bridge.onOutputChanged(open => { setOutputOpen(open); if (open) setOutputEpoch(n => n + 1); });
     const offDisplays = bridge.onDisplaysChanged(() => void refreshDisplays());
     // The wall's own picture, for the operator screen. Old pictures are left to the garbage collector,
     // so one still being drawn is never closed under it.
@@ -236,10 +252,13 @@ export function useMap(onError: (message: string) => void) {
   const sendSources = (s: ShowDocument) => {
     const { messages, sent } = sourcesToSend(s, kept.sentSources);
     kept.sentSources = sent;
+    if (!messages.length) return;
+    let refused = false;
     for (const message of messages) {
-      if (!acceptMapMessage(message as unknown)) { setSendWarning(`${TOO_LARGE_SOURCE}`); continue; }
+      if (!acceptMapMessage(message as unknown)) { refused = true; continue; }
       bridge?.send(message);
     }
+    setSourceWarning(refused ? TOO_LARGE_SOURCE : null);
   };
 
   // When the wall reports ready: blackout and test grid first, so the wall never paints shapes while Blackout is on.
@@ -251,7 +270,7 @@ export function useMap(onError: (message: string) => void) {
     sendNow({ type: 'freeze', on: latest.current.freeze });
     sendSources(latest.current.shown);
     sendNow(showMessage(latest.current.shown));
-  }, [outputOpen]);
+  }, [outputOpen, outputEpoch]);
   // Then the whole show again after every edit, and the trial show while a drag is in progress.
   const dragging = preview !== null;
   useEffect(() => {
@@ -268,7 +287,7 @@ export function useMap(onError: (message: string) => void) {
     const after = mapReducer(before, action);
     kept.state = stateRef.current = after;
     setState(after);
-    if (after.show !== before.show) { saver.save(JSON.stringify(after.show)); setNotice(null); }
+    if (after.show !== before.show) { saver.save(after.show); setNotice(null); }
     return after;
   }, []);
   const dispatch = useCallback((action: EditAction) => {
@@ -343,5 +362,5 @@ export function useMap(onError: (message: string) => void) {
   const setSelection = (id: string | null, index: number | null = null) => { setSelectedId(id); setSelectedIndex(id === null ? null : index); };
 
   return { show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIndex, setSelection, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
-    lastRefusal, sendWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
+    lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }
