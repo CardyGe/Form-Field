@@ -71,3 +71,14 @@ test('stageCommands: selected shape and point are marked', () => {
     assert.equal(cmds.some((c) => c.kind === 'stroke' && c.shapeId === 'a'), true);
     assert.equal(cmds.some((c) => c.kind === 'rect'), true);
 });
+
+test('stageCommands: identify highlight comes after all fills and labels, before the crosshair', () => {
+  const cmds = stageCommands(show(shape('a'), shape('b')), opts({ identifyId: 'a', testGrid: true, crosshair: { x: 0.5, y: 0.5 } }));
+  const id = cmds.findIndex((c) => c.kind === 'stroke' && c.colour === '#ffffff');
+  const lastFill = cmds.map((c) => c.kind).lastIndexOf('fill');
+  const lastGridOrText = Math.max(cmds.map((c) => c.kind).lastIndexOf('text'), cmds.map((c) => c.kind === 'line' && c.width === 1).lastIndexOf(true));
+  const firstCross = cmds.length - 2;
+  assert.ok(id > lastFill);
+  assert.ok(id > lastGridOrText);
+  assert.ok(id < firstCross);
+});

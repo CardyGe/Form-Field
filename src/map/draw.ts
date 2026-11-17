@@ -34,7 +34,6 @@ export function stageCommands(show: ShowDocument, options: DrawOptions): PathCom
     if (invalid.has(s.id)) out.push({ kind: 'stroke', shapeId: s.id, points, colour: '#ff0000', width: 3 });
     else if (options.outlinesOnly) out.push({ kind: 'stroke', shapeId: s.id, points, colour: s.colour, width: 2 });
     else out.push({ kind: 'fill', shapeId: s.id, points, colour: s.colour });
-    if (s.id === options.identifyId) out.push({ kind: 'stroke', shapeId: s.id, points, colour: '#ffffff', width: 6 });
   }
 
   if (options.testGrid) {
@@ -47,6 +46,11 @@ export function stageCommands(show: ShowDocument, options: DrawOptions): PathCom
       if (!s.visible || s.points.length === 0) continue;
       out.push({ kind: 'text', text: s.name, at: px(s.points[0]), colour: '#ffffff' });
     }
+  }
+
+  const identified = show.shapes.find((s) => s.id === options.identifyId);
+  if (identified && identified.visible) {
+    out.push({ kind: 'stroke', shapeId: identified.id, points: identified.points.map(px), colour: '#ffffff', width: 6 });
   }
 
   const selected = show.shapes.find((s) => s.id === options.selectedId);
