@@ -1,21 +1,58 @@
-import { MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, SPEED_RANGE, STAGE_SIZE, type Point, type Shape, type ShowDocument, type Source } from './show';
-import { clampToStage, isValidOutline, nudge, rectangleFromDrag } from './geometry';
+import {
+  BORDER_MAX, GLOW_MAX, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, PHOTO_TEXT_LIMIT, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE,
+  isShapeLocked, normaliseGroups, shapeExtras,
+  type Border, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source,
+} from './show';
+import { clampToStage, nudge, rectangleFromDrag } from './geometry';
+import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
+import { joinedAnchors } from './snap';
 import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer } from '../core/project';
 import type { Project } from '../shared/types';
 
+/** ring: which outline of a shape a point belongs to. Missing or -1 is the shape's own outline; 0 and up are its holes. */
+type RingRef = { ring?: number };
+
 export type EditAction =
   | { type: 'addRectangle'; id: string; a: Point; b: Point; colour: string }
-  | { type: 'movePoint'; shapeId: string; index: number; to: Point }
+  /** Any new shape: rectangle, triangle, ellipse or a Pen outline. */
+  | { type: 'addShape'; id: string; points: CurvePoint[]; colour: string; name?: string }
+  | { type: 'addHole'; shapeId: string; points: CurvePoint[] }
+  /** joined: corners of other shapes on the same spot move with this one. */
+  | ({ type: 'movePoint'; shapeId: string; index: number; to: Point; joined?: boolean } & RingRef)
+  | ({ type: 'nudgePoint'; shapeId: string; index: number; dxPx: number; dyPx: number; joined?: boolean } & RingRef)
+  | ({ type: 'insertPoint'; shapeId: string; side: number; t: number } & RingRef)
+  | ({ type: 'removePoint'; shapeId: string; index: number } & RingRef)
+  | ({ type: 'setCurve'; shapeId: string; index: number; curved: boolean } & RingRef)
+  | ({ type: 'moveHandle'; shapeId: string; index: number; which: 'in' | 'out'; to: Point; mirror: boolean } & RingRef)
   | { type: 'moveShape'; shapeId: string; dx: number; dy: number }   // fractions
-  | { type: 'nudgePoint'; shapeId: string; index: number; dxPx: number; dyPx: number }
+  | { type: 'moveShapes'; shapeIds: string[]; dx: number; dy: number }
+  /** Scale, turn or flip, in projector pixels. */
+  | { type: 'transformShapes'; shapeIds: string[]; matrix: Matrix }
   | { type: 'rename'; shapeId: string; name: string }
   | { type: 'setColour'; shapeId: string; colour: string }
   | { type: 'setVisible'; shapeId: string; visible: boolean }
   | { type: 'setLocked'; shapeId: string; locked: boolean }
   | { type: 'delete'; shapeId: string }
+  | { type: 'deleteShapes'; shapeIds: string[] }
   /** sourceId: the copy's own source, needed when the shape plays an instrument. */
   | { type: 'duplicate'; shapeId: string; id: string; sourceId?: string }
+  /** ids and sourceIds line up with shapeIds. offset: where the copies go (an Alt-drag); otherwise 20 projector pixels away. */
+  | { type: 'duplicateShapes'; shapeIds: string[]; ids: string[]; sourceIds: string[]; offset?: { dx: number; dy: number } }
+  /** Mirrored copies across the stage's centre line: vertical mirrors left and right, horizontal top and bottom. */
+  | { type: 'mirrorShapes'; shapeIds: string[]; axis: 'vertical' | 'horizontal'; ids: string[]; sourceIds: string[] }
+  | { type: 'makeGrid'; shapeId: string; rows: number; cols: number; gapPx: number; ids: string[]; sourceIds: string[]; groupId: string }
   | { type: 'reorder'; shapeId: string; to: 'front' | 'back' | 'forward' | 'backward' }
+  | { type: 'group'; shapeIds: string[]; groupId: string; name: string }
+  | { type: 'ungroup'; groupId: string }
+  | { type: 'renameGroup'; groupId: string; name: string }
+  | { type: 'setGroupVisible'; groupId: string; visible: boolean }
+  | { type: 'setGroupLocked'; groupId: string; locked: boolean }
+  | { type: 'reorderGroup'; groupId: string; to: 'front' | 'back' | 'forward' | 'backward' }
+  | { type: 'setBlocker'; shapeId: string; blocker: boolean }
+  | { type: 'setSoftEdge'; shapeId: string; px: number }
+  | { type: 'setBorder'; shapeId: string; border: Border }
+  | { type: 'setPhoto'; photo: Photo | null }
+  | { type: 'setPhotoOpacity'; opacity: number }
   /** What a shape plays: its own colour, or a Library preset in a new source of its own. */
   | { type: 'setContent'; shapeId: string; content: { kind: 'colour' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number } }
   | { type: 'varySource'; sourceId: string; entropy: number }
@@ -33,22 +70,43 @@ function nextName(show: ShowDocument): string {
   while (names.has(`Shape ${n}`)) n++;
   return `Shape ${n}`;
 }
+function nextGroupName(show: ShowDocument): string {
+  const names = new Set(show.groups.map(g => g.name));
+  let n = show.groups.length + 1;
+  while (names.has(`Group ${n}`)) n++;
+  return `Group ${n}`;
+}
 
 const COPY_STEP = { x: 20 / STAGE_SIZE.width, y: 20 / STAGE_SIZE.height }; // 20 projector pixels
 
 /** "Name copy", shortened so it stays within the name limit. */
 const copyName = (name: string) => `${name.slice(0, MAX_NAME_LENGTH - ' copy'.length)} copy`;
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** The corners moved 20 projector pixels down and right, or up and left on an axis where that would leave the stage. */
-function copyPoints(points: Point[]): Point[] {
+/** Every anchor of a shape, its holes included. */
+const anchors = (shape: Shape): Point[] => [...shape.points, ...shape.holes.flat()];
+/** A ring moved by a fraction of the stage; handles move with their points. */
+const shiftRing = (ring: Ring, dx: number, dy: number): Ring => ring.map(p => ({ ...p, ...clampToStage({ x: p.x + dx, y: p.y + dy }) }));
+const shiftShape = (shape: Shape, dx: number, dy: number) => { shape.points = shiftRing(shape.points, dx, dy); shape.holes = shape.holes.map(h => shiftRing(h, dx, dy)); };
+
+/** How far a set of shapes may move by (dx, dy) so no anchor leaves the stage: the whole amount, limited at the edge. */
+function limitMove(shapes: Shape[], dx: number, dy: number): { dx: number; dy: number } {
+  const pts = shapes.flatMap(anchors);
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  return { dx: Math.min(1 - Math.max(...xs), Math.max(-Math.min(...xs), dx)), dy: Math.min(1 - Math.max(...ys), Math.max(-Math.min(...ys), dy)) };
+}
+/** The copy step: 20 projector pixels down and right, or up and left on an axis where that would leave the stage. */
+function copyStep(shapes: Shape[]): { dx: number; dy: number } {
+  const pts = shapes.flatMap(anchors);
   const step = (values: number[], size: number) => Math.max(...values) + size <= 1 ? size : Math.min(...values) - size >= 0 ? -size : 0;
-  const dx = step(points.map(p => p.x), COPY_STEP.x), dy = step(points.map(p => p.y), COPY_STEP.y);
-  return points.map(p => clampToStage({ x: p.x + dx, y: p.y + dy }));
+  return { dx: step(pts.map(p => p.x), COPY_STEP.x), dy: step(pts.map(p => p.y), COPY_STEP.y) };
 }
 
 const VARY_STRENGTH = 0.5;
 const NO_LOCKS = { palette: false, structure: false, motion: false, material: false };
 const HEX = /^#[0-9a-f]{6}$/i;
+const PHOTO = /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/;
+const MAX_GRID_SIDE = 16;
 
 /** Sources no shape plays any more are dropped. */
 const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => show.shapes.some(s => s.sourceId === src.id)); };
@@ -68,13 +126,13 @@ function presetComposition(presetId: string, seed: number): Project | null {
 function stageSource(next: ShowDocument, action: Extract<EditAction, { sourceId: string; type: 'varySource' | 'setSourcePalette' | 'setSourceSpeed' | 'setSourceProject' }>): Staged {
   const i = next.sources.findIndex(s => s.id === action.sourceId);
   if (i < 0) return { reason: 'not-found' };
-  if (next.shapes.some(s => s.sourceId === action.sourceId && s.locked)) return { reason: 'locked' };
+  if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
   const source = next.sources[i];
   // Sources are never changed in place: undo snapshots share them.
-  const replace = (changes: Partial<Source>) => { next.sources[i] = { ...source, ...changes }; return { show: next, touched: null }; };
+  const replace = (changes: Partial<Source>): Staged => { next.sources[i] = { ...source, ...changes }; return { show: next, touched: [] }; };
   switch (action.type) {
     case 'setSourceSpeed': {
-      const speed = Number.isFinite(action.speed) ? Math.min(SPEED_RANGE.max, Math.max(SPEED_RANGE.min, action.speed)) : 1;
+      const speed = Number.isFinite(action.speed) ? clamp(action.speed, SPEED_RANGE.min, SPEED_RANGE.max) : 1;
       return replace({ speed }); // the composition is unchanged, so its revision stays
     }
     case 'varySource': {
@@ -100,57 +158,193 @@ function stageSource(next: ShowDocument, action: Extract<EditAction, { sourceId:
   }
 }
 
-/** The edited copy and the shape whose outline must be checked, or why the edit cannot be made at all. */
-type Staged = { show: ShowDocument; touched: Shape | null } | { reason: string };
+/** The edited copy and the shapes whose outlines must be checked, or why the edit cannot be made at all. */
+type Staged = { show: ShowDocument; touched: Shape[] } | { reason: string };
 
-/** Makes the change on a copy, without checking the outline. The input is never changed. */
-function stage(show: ShowDocument, action: EditAction): Staged {
-  // Shapes are copied; sources are shared and replaced, never changed in place, so a drag stays cheap
-  // even when a composition holds large images.
-  const next: ShowDocument = { ...show, shapes: structuredClone(show.shapes), sources: [...show.sources] };
-
-  if (action.type === 'varySource' || action.type === 'setSourcePalette' || action.type === 'setSourceSpeed' || action.type === 'setSourceProject') return stageSource(next, action);
-
-  if (action.type === 'addRectangle') {
-    if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
-    if (next.shapes.some(s => s.id === action.id)) return { reason: 'duplicate-id' };
-    const shape: Shape = { id: action.id, name: nextName(next), points: rectangleFromDrag(clampToStage(action.a), clampToStage(action.b)), colour: action.colour, visible: true, locked: false, sourceId: null };
-    next.shapes.push(shape);
-    return { show: next, touched: shape };
-  }
-
-  const at = next.shapes.findIndex(s => s.id === action.shapeId);
-  if (at < 0) return { reason: 'not-found' };
-  const shape: Shape = next.shapes[at];
-
-  if (action.type === 'setVisible') { shape.visible = action.visible; return { show: next, touched: null }; }
-  // A copy leaves the original untouched, so a locked shape can be copied; the copy starts unlocked, just above it.
-  if (action.type === 'duplicate') {
-    if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
-    if (next.shapes.some(s => s.id === action.id)) return { reason: 'duplicate-id' };
-    const copy: Shape = { ...structuredClone(shape), id: action.id, name: copyName(shape.name), visible: true, locked: false, points: copyPoints(shape.points) };
+/**
+ * Copies of shapes, each placed right after its original (so a copy stays in its original's group), with its own
+ * source when the original plays one. `place` gives each copy's points.
+ */
+function addCopies(next: ShowDocument, originals: Shape[], ids: string[], sourceIds: (string | undefined)[], place: (shape: Shape) => Pick<Shape, 'points' | 'holes'>, name: (shape: Shape) => string): Staged {
+  if (ids.length !== originals.length) return { reason: 'not-found' };
+  if (next.shapes.length + originals.length > MAX_SHAPES) return { reason: 'too-many-shapes' };
+  const taken = new Set([...next.shapes.map(s => s.id), ...next.sources.map(s => s.id)]);
+  if (new Set(ids).size !== ids.length || ids.some(id => next.shapes.some(s => s.id === id))) return { reason: 'duplicate-id' };
+  const copies: Shape[] = [];
+  for (const [n, shape] of originals.entries()) {
+    const copy: Shape = { ...structuredClone(shape), ...place(shape), id: ids[n], name: name(shape), visible: true, locked: false };
     // The copy gets its own source, so from here on its settings are its own.
     if (shape.sourceId !== null) {
       const original = next.sources.find(s => s.id === shape.sourceId);
-      if (!action.sourceId) return { reason: 'needs-source-id' };
-      if (next.sources.some(s => s.id === action.sourceId)) return { reason: 'duplicate-id' };
+      const sourceId = sourceIds[n];
+      if (!sourceId) return { reason: 'needs-source-id' };
+      if (taken.has(sourceId)) return { reason: 'duplicate-id' };
       if (next.sources.length >= MAX_SOURCES) return { reason: 'too-many-sources' };
-      if (original) { next.sources.push({ ...original, id: action.sourceId, revision: 0 }); copy.sourceId = action.sourceId; }
+      taken.add(sourceId);
+      if (original) { next.sources.push({ ...original, id: sourceId, revision: 0 }); copy.sourceId = sourceId; }
       else copy.sourceId = null;
     }
-    next.shapes.splice(at + 1, 0, copy);
-    return { show: next, touched: copy };
+    next.shapes.splice(next.shapes.indexOf(shape) + 1, 0, copy);
+    copies.push(copy);
   }
-  if (action.type === 'setLocked') { shape.locked = action.locked; return { show: next, touched: null }; }
+  return { show: next, touched: copies };
+}
 
-  // Lock protects everything else, deleting included.
-  if (shape.locked) return { reason: 'locked' };
+/** The list as items: an ungrouped shape, or a whole group's block of members. */
+function blocks(shapes: Shape[]): Shape[][] {
+  const out: Shape[][] = [];
+  for (const shape of shapes) {
+    const last = out[out.length - 1];
+    if (shape.groupId !== null && last && last[0].groupId === shape.groupId) last.push(shape);
+    else out.push([shape]);
+  }
+  return out;
+}
+/** Moves one item of a list to the front, back, one forward or one back. At the edge already, nothing moves. */
+function moveItem<T>(items: T[], at: number, to: 'front' | 'back' | 'forward' | 'backward'): T[] {
+  const out = [...items];
+  const [item] = out.splice(at, 1);
+  const index = to === 'front' ? out.length : to === 'back' ? 0 : to === 'forward' ? Math.min(out.length, at + 1) : Math.max(0, at - 1);
+  out.splice(index, 0, item);
+  return out;
+}
+
+const ringOf = (shape: Shape, ring: number | undefined): Ring | undefined => ring === undefined || ring < 0 ? shape.points : shape.holes[ring];
+function setRing(shape: Shape, ring: number | undefined, points: Ring): void {
+  if (ring === undefined || ring < 0) shape.points = points;
+  else shape.holes[ring] = points;
+}
+
+/** Makes the change on a copy, without checking outlines. The input is never changed. */
+function stage(show: ShowDocument, action: EditAction): Staged {
+  // Shapes are copied; sources are shared and replaced, never changed in place, so a drag stays cheap
+  // even when a composition holds large images. The photo is shared too.
+  const next: ShowDocument = { ...show, shapes: structuredClone(show.shapes), sources: [...show.sources], groups: show.groups.map(g => ({ ...g })) };
+  const find = (id: string) => next.shapes.find(s => s.id === id);
+  /** Several shapes by id, in list order; a reason when any is missing or locked. */
+  const many = (ids: string[], allowLocked = false): Shape[] | { reason: string } => {
+    const wanted = new Set(ids);
+    const found = next.shapes.filter(s => wanted.has(s.id));
+    if (!ids.length || found.length !== wanted.size) return { reason: 'not-found' };
+    if (!allowLocked && found.some(s => isShapeLocked(next, s))) return { reason: 'locked' };
+    return found;
+  };
+  const done = (touched: Shape[] = []): Staged => ({ show: next, touched });
 
   switch (action.type) {
-    case 'delete': next.shapes.splice(at, 1); dropUnplayed(next); return { show: next, touched: null };
+    case 'varySource': case 'setSourcePalette': case 'setSourceSpeed': case 'setSourceProject': return stageSource(next, action);
+    case 'addRectangle': return stage(show, { type: 'addShape', id: action.id, points: rectangleFromDrag(clampToStage(action.a), clampToStage(action.b)), colour: action.colour });
+    case 'addShape': {
+      if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
+      if (find(action.id)) return { reason: 'duplicate-id' };
+      const name = action.name?.slice(0, MAX_NAME_LENGTH) || nextName(next);
+      const shape: Shape = { id: action.id, name, points: action.points.map(p => ({ ...p, ...clampToStage(p) })), colour: action.colour, visible: true, locked: false, sourceId: null, ...shapeExtras() };
+      next.shapes.push(shape);
+      return done([shape]);
+    }
+    case 'setPhoto': {
+      if (action.photo !== null && (typeof action.photo.data !== 'string' || action.photo.data.length > PHOTO_TEXT_LIMIT || !PHOTO.test(action.photo.data))) return { reason: 'bad-photo' };
+      next.photo = action.photo && { data: action.photo.data, opacity: clamp(Number.isFinite(action.photo.opacity) ? action.photo.opacity : .5, 0, 1) };
+      return done();
+    }
+    case 'setPhotoOpacity': {
+      if (!next.photo) return { reason: 'not-found' };
+      next.photo = { ...next.photo, opacity: clamp(Number.isFinite(action.opacity) ? action.opacity : .5, 0, 1) };
+      return done();
+    }
+    case 'moveShapes': {
+      const shapes = many(action.shapeIds);
+      if ('reason' in shapes) return shapes;
+      // Shift by the whole requested amount, limited so no point leaves the stage.
+      const { dx, dy } = limitMove(shapes, action.dx, action.dy);
+      shapes.forEach(s => shiftShape(s, dx, dy));
+      return done(shapes);
+    }
+    case 'transformShapes': {
+      const shapes = many(action.shapeIds);
+      if ('reason' in shapes) return shapes;
+      for (const s of shapes) { s.points = transformRing(s.points, action.matrix); s.holes = s.holes.map(h => transformRing(h, action.matrix)); }
+      return done(shapes);
+    }
+    case 'deleteShapes': {
+      const shapes = many(action.shapeIds);
+      if ('reason' in shapes) return shapes;
+      next.shapes = next.shapes.filter(s => !shapes.includes(s));
+      dropUnplayed(next);
+      return { show: normaliseGroups(next), touched: [] };
+    }
+    case 'duplicate': {
+      const shape = find(action.shapeId);
+      if (!shape) return { reason: 'not-found' };
+      const { dx, dy } = copyStep([shape]);
+      return addCopies(next, [shape], [action.id], [action.sourceId], s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)) }), s => copyName(s.name));
+    }
+    case 'duplicateShapes': {
+      // A copy leaves the original untouched, so locked shapes can be copied; the copies start unlocked.
+      const shapes = many(action.shapeIds, true);
+      if ('reason' in shapes) return shapes;
+      const order = shapes.map(s => action.shapeIds.indexOf(s.id));
+      const { dx, dy } = action.offset ? limitMove(shapes, action.offset.dx, action.offset.dy) : copyStep(shapes);
+      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)) }), s => copyName(s.name));
+    }
+    case 'mirrorShapes': {
+      const shapes = many(action.shapeIds, true);
+      if ('reason' in shapes) return shapes;
+      const order = shapes.map(s => action.shapeIds.indexOf(s.id));
+      const { width: W, height: H } = STAGE_SIZE;
+      const m: Matrix = action.axis === 'vertical' ? [-1, 0, 0, 1, W, 0] : [1, 0, 0, -1, 0, H];
+      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: transformRing(s.points, m), holes: s.holes.map(h => transformRing(h, m)) }), s => copyName(s.name));
+    }
+    case 'makeGrid': return stageGrid(next, action);
+    case 'group': {
+      const shapes = many(action.shapeIds);
+      if ('reason' in shapes) return shapes;
+      if (next.groups.some(g => g.id === action.groupId)) return { reason: 'duplicate-id' };
+      if (next.groups.length >= MAX_GROUPS) return { reason: 'too-many-groups' };
+      if (action.name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
+      next.groups.push({ id: action.groupId, name: action.name.trim() || nextGroupName(next), visible: true, locked: false });
+      // Members come together at the place of the first of them; a shape leaves any group it was in.
+      shapes.forEach(s => { s.groupId = action.groupId; });
+      return { show: normaliseGroups(next), touched: [] };
+    }
+    case 'ungroup': case 'renameGroup': case 'setGroupVisible': case 'setGroupLocked': case 'reorderGroup': {
+      const group = next.groups.find(g => g.id === action.groupId);
+      if (!group) return { reason: 'not-found' };
+      if (action.type === 'setGroupVisible') { group.visible = action.visible; return done(); }
+      if (action.type === 'setGroupLocked') { group.locked = action.locked; return done(); }
+      if (group.locked) return { reason: 'locked' };
+      if (action.type === 'renameGroup') {
+        if (action.name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
+        group.name = action.name; return done();
+      }
+      if (action.type === 'ungroup') {
+        next.shapes.forEach(s => { if (s.groupId === group.id) s.groupId = null; });
+        next.groups = next.groups.filter(g => g !== group);
+        return done();
+      }
+      const items = blocks(next.shapes);
+      const at = items.findIndex(b => b[0].groupId === group.id);
+      if (at < 0) return { reason: 'not-found' };
+      next.shapes = moveItem(items, at, action.to).flat();
+      return done();
+    }
+  }
+
+  const shape = find(action.shapeId);
+  if (!shape) return { reason: 'not-found' };
+
+  if (action.type === 'setVisible') { shape.visible = action.visible; return done(); }
+  if (action.type === 'setLocked') { shape.locked = action.locked; return done(); }
+
+  // Lock protects everything else, deleting included; a locked group locks its members.
+  if (isShapeLocked(next, shape)) return { reason: 'locked' };
+
+  switch (action.type) {
+    case 'delete': next.shapes = next.shapes.filter(s => s !== shape); dropUnplayed(next); return { show: normaliseGroups(next), touched: [] };
     case 'setContent': {
       const content = action.content;
-      if (content.kind === 'colour') { shape.sourceId = null; dropUnplayed(next); return { show: next, touched: null }; }
+      if (content.kind === 'colour') { shape.sourceId = null; dropUnplayed(next); return done(); }
+      if (shape.blocker) return { reason: 'blocker' };
       if (next.sources.some(s => s.id === content.sourceId)) return { reason: 'duplicate-id' };
       const project = presetComposition(content.presetId, content.seed);
       if (!project) return { reason: 'unknown-preset' };
@@ -160,56 +354,133 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0 });
       shape.sourceId = content.sourceId;
       dropUnplayed(next);
-      return { show: next, touched: null };
+      return done();
     }
     case 'rename':
       if (action.name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
-      shape.name = action.name; return { show: next, touched: null };
-    case 'setColour': shape.colour = action.colour; return { show: next, touched: null };
+      shape.name = action.name; return done();
+    case 'setColour': shape.colour = action.colour; return done();
+    case 'setBlocker':
+      shape.blocker = action.blocker;
+      if (action.blocker) { shape.sourceId = null; dropUnplayed(next); }
+      return done();
+    case 'setSoftEdge': shape.softEdge = clamp(Number.isFinite(action.px) ? action.px : 0, 0, SOFT_EDGE_MAX); return done();
+    case 'setBorder': {
+      const { width, colour, glow } = action.border;
+      if (colour !== 'shape' && colour !== 'palette' && !HEX.test(colour)) return { reason: 'bad-colour' };
+      shape.border = { width: clamp(Number.isFinite(width) ? width : 0, 0, BORDER_MAX), colour, glow: clamp(Number.isFinite(glow) ? glow : 0, 0, GLOW_MAX) };
+      return done();
+    }
     case 'reorder': {
-      // Later in the list is drawn on top. At the edge already, nothing moves.
-      next.shapes.splice(at, 1);
-      const to = action.to === 'front' ? next.shapes.length : action.to === 'back' ? 0
-        : action.to === 'forward' ? Math.min(next.shapes.length, at + 1) : Math.max(0, at - 1);
-      next.shapes.splice(to, 0, shape);
-      return { show: next, touched: null };
+      // Later in the list is drawn on top. A grouped shape moves within its group; an ungrouped one steps over whole groups.
+      const items = blocks(next.shapes);
+      if (shape.groupId !== null) {
+        const b = items.find(block => block.includes(shape))!;
+        const moved = moveItem(b, b.indexOf(shape), action.to);
+        next.shapes = items.map(block => block === b ? moved : block).flat();
+      } else next.shapes = moveItem(items, items.findIndex(block => block[0] === shape), action.to).flat();
+      return done();
     }
-    case 'movePoint':
-    case 'nudgePoint': {
-      if (!Number.isInteger(action.index) || action.index < 0 || action.index >= shape.points.length) return { reason: 'not-found' };
-      shape.points[action.index] = action.type === 'movePoint'
-        ? clampToStage(action.to)
-        : nudge(shape.points[action.index], action.dxPx, action.dyPx);
-      return { show: next, touched: shape };
-    }
+    case 'addHole':
+      shape.holes.push(action.points.map(p => ({ ...p, ...clampToStage(p) })));
+      return done([shape]);
     case 'moveShape': {
-      // Shift by the whole requested amount, limited so no point leaves the stage.
-      const xs = shape.points.map(p => p.x), ys = shape.points.map(p => p.y);
-      const dx = Math.min(1 - Math.max(...xs), Math.max(-Math.min(...xs), action.dx));
-      const dy = Math.min(1 - Math.max(...ys), Math.max(-Math.min(...ys), action.dy));
-      shape.points = shape.points.map(p => clampToStage({ x: p.x + dx, y: p.y + dy })); // clamp only absorbs rounding
-      return { show: next, touched: shape };
+      const { dx, dy } = limitMove([shape], action.dx, action.dy);
+      shiftShape(shape, dx, dy);
+      return done([shape]);
+    }
+    case 'movePoint': case 'nudgePoint': {
+      const ring = ringOf(shape, action.ring);
+      if (!ring || !Number.isInteger(action.index) || action.index < 0 || action.index >= ring.length) return { reason: 'not-found' };
+      const from = ring[action.index];
+      const to = action.type === 'movePoint' ? clampToStage(action.to) : nudge(from, action.dxPx, action.dyPx);
+      const touched = [shape];
+      // Joined corners: every unlocked corner of another shape on the same spot moves by the same amount.
+      if (action.joined) for (const j of joinedAnchors(show, shape.id, from)) {
+        const other = find(j.shapeId)!;
+        if (isShapeLocked(next, other)) continue;
+        const otherRing = ringOf(other, j.ring)!;
+        const p = otherRing[j.index];
+        // Corners exactly on the same spot land exactly on the new one; nearly there, they keep their tiny offset.
+        const same = p.x === from.x && p.y === from.y;
+        otherRing[j.index] = { ...p, ...(same ? to : clampToStage({ x: p.x + to.x - from.x, y: p.y + to.y - from.y })) };
+        if (!touched.includes(other)) touched.push(other);
+      }
+      ring[action.index] = { ...from, ...to };
+      return done(touched);
+    }
+    case 'insertPoint': case 'removePoint': case 'setCurve': case 'moveHandle': {
+      const ring = ringOf(shape, action.ring);
+      if (!ring) return { reason: 'not-found' };
+      const index = action.type === 'insertPoint' ? action.side : action.index;
+      if (!Number.isInteger(index) || index < 0 || index >= ring.length) return { reason: 'not-found' };
+      if (action.type === 'insertPoint') setRing(shape, action.ring, insertPoint(ring, index, clamp(action.t, 0, 1)));
+      else if (action.type === 'setCurve') setRing(shape, action.ring, setCurve(ring, index, action.curved));
+      else if (action.type === 'moveHandle') setRing(shape, action.ring, moveHandle(ring, index, action.which, action.to, action.mirror));
+      // A hole that would be left with fewer than three points goes away whole; an outline cannot.
+      else if (action.ring !== undefined && action.ring >= 0 && ring.length <= 3) shape.holes.splice(action.ring, 1);
+      else setRing(shape, action.ring, removePoint(ring, index));
+      return done([shape]);
     }
   }
+}
+
+/** The cells replace the shape, in a new group named after it (or its own group), each with its own copy of its instrument. */
+function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'makeGrid' }>): Staged {
+  const shape = next.shapes.find(s => s.id === action.shapeId);
+  if (!shape) return { reason: 'not-found' };
+  if (isShapeLocked(next, shape)) return { reason: 'locked' };
+  const { rows, cols } = action;
+  if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 1 || cols < 1 || rows > MAX_GRID_SIDE || cols > MAX_GRID_SIDE || rows * cols < 2) return { reason: 'bad-grid' };
+  if (shape.points.length !== 4 || shape.points.some(isCurved) || shape.holes.length) return { reason: 'not-four-corners' };
+  const count = rows * cols;
+  if (action.ids.length !== count || new Set(action.ids).size !== count) return { reason: 'bad-grid' };
+  if (next.shapes.length - 1 + count > MAX_SHAPES) return { reason: 'too-many-shapes' };
+  const taken = new Set([...next.shapes.filter(s => s !== shape).map(s => s.id), ...next.sources.map(s => s.id)]);
+  if (action.ids.some(id => taken.has(id))) return { reason: 'duplicate-id' };
+  const source = shape.sourceId ? next.sources.find(s => s.id === shape.sourceId) : undefined;
+  if (source) {
+    if (action.sourceIds.length !== count || new Set(action.sourceIds).size !== count || action.sourceIds.some(id => taken.has(id) || action.ids.includes(id))) return { reason: 'duplicate-id' };
+    const sharedElsewhere = next.shapes.some(s => s !== shape && s.sourceId === source.id);
+    if (next.sources.length - (sharedElsewhere ? 0 : 1) + count > MAX_SOURCES) return { reason: 'too-many-sources' };
+  }
+  let groupId = shape.groupId;
+  if (groupId === null) {
+    if (next.groups.some(g => g.id === action.groupId)) return { reason: 'duplicate-id' };
+    if (next.groups.length >= MAX_GROUPS) return { reason: 'too-many-groups' };
+    next.groups.push({ id: action.groupId, name: shape.name, visible: true, locked: false });
+    groupId = action.groupId;
+  }
+  const cells = gridCells(shape.points, rows, cols, Math.max(0, Number.isFinite(action.gapPx) ? action.gapPx : 0));
+  if (!cells) return { reason: 'collapsed' };
+  const base = shape.name.slice(0, MAX_NAME_LENGTH - String(count).length - 1);
+  const made: Shape[] = cells.map((points, k) => ({
+    ...structuredClone(shape), id: action.ids[k], name: `${base} ${k + 1}`, points, holes: [], groupId, locked: false, visible: true,
+    sourceId: source ? action.sourceIds[k] : null,
+  }));
+  if (source) next.sources.push(...action.sourceIds.map(id => ({ ...source, id, revision: 0 })));
+  next.shapes.splice(next.shapes.indexOf(shape), 1, ...made);
+  dropUnplayed(next);
+  return { show: normaliseGroups(next), touched: made };
 }
 
 /** Applies one action to a copy of the show. The input is never changed. */
 export function applyEdit(show: ShowDocument, action: EditAction): EditResult {
   const staged = stage(show, action);
   if ('reason' in staged) return refuse(staged.reason);
-  if (staged.touched) {
-    const valid = isValidOutline(staged.touched.points);
+  for (const shape of staged.touched) {
+    const valid = shapeValidity(shape.points, shape.holes);
     if (!valid.ok) return refuse(valid.reason);
   }
   return { ok: true, show: staged.show };
 }
 
 /**
- * The show an edit would leave, even when its outline would be refused, so the operator screen can draw
- * the refused outline in red. Null when the edit is refused for any other reason, or changes no outline.
+ * The show an edit would leave, even when an outline would be refused, so the operator screen can draw the refused
+ * outlines in red. Null when the edit is refused for any other reason, or changes no outline.
  */
-export function attemptEdit(show: ShowDocument, action: EditAction): { show: ShowDocument; shapeId: string } | null {
+export function attemptEdit(show: ShowDocument, action: EditAction): { show: ShowDocument; shapeId: string; shapeIds: string[] } | null {
   const staged = stage(show, action);
-  if ('reason' in staged || !staged.touched) return null;
-  return { show: staged.show, shapeId: staged.touched.id };
+  if ('reason' in staged || !staged.touched.length) return null;
+  return { show: staged.show, shapeId: staged.touched[0].id, shapeIds: staged.touched.map(s => s.id) };
 }

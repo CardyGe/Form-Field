@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyEdit, type EditAction } from '../src/map/editor';
-import { createShow, MAX_SHAPES, type ShowDocument } from '../src/map/show';
+import { createShow, shapeExtras, MAX_SHAPES, type ShowDocument } from '../src/map/show';
 
 const rect = (id: string, a = { x: 0.1, y: 0.1 }, b = { x: 0.3, y: 0.3 }): EditAction => ({ type: 'addRectangle', id, a, b, colour: '#ff0000' });
 
@@ -256,7 +256,7 @@ test('toWire: a 64-shape show with full-precision corners fits in one message af
     // Corners as a drag leaves them: long fractions such as 0.31770833333333337.
     const x0 = (37 + i * 23.3) / 1920 + 1 / 3e5, y0 = (41 + i * 13.7) / 1080 + 1 / 7e5;
     const x1 = x0 + 211.7 / 1920, y1 = y0 + 97.3 / 1080;
-    return { id: `shape-m3k9x2a${(i % 36).toString(36)}-${(1e6 + i * 7919).toString(36)}`, name: `Stage left panel ${i + 1}`, colour: colours[i % colours.length], visible: true, locked: false, sourceId: null,
+    return { id: `shape-m3k9x2a${(i % 36).toString(36)}-${(1e6 + i * 7919).toString(36)}`, name: `Stage left panel ${i + 1}`, colour: colours[i % colours.length], visible: true, locked: false, sourceId: null, ...shapeExtras(),
       points: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] };
   });
   const show: ShowDocument = { ...createShow(), shapes };
@@ -279,7 +279,7 @@ import { MAX_NAME_LENGTH, MAX_ID_LENGTH, MAX_POINTS } from '../src/map/show';
 test('the largest valid show still fits in one message, rounded or not', () => {
   // 64 shapes of 32 corners, names and ids at their limits, corners at full precision.
   const shapes = Array.from({ length: MAX_SHAPES }, (_, i) => ({
-    id: 'i'.repeat(MAX_ID_LENGTH - 3) + String(i).padStart(3, '0'), name: 'n'.repeat(MAX_NAME_LENGTH), colour: '#ff9f0a', visible: true, locked: false, sourceId: null,
+    id: 'i'.repeat(MAX_ID_LENGTH - 3) + String(i).padStart(3, '0'), name: 'n'.repeat(MAX_NAME_LENGTH), colour: '#ff9f0a', visible: true, locked: false, sourceId: null, ...shapeExtras(),
     points: Array.from({ length: MAX_POINTS }, (_, k) => ({ x: 0.5 + 0.3 * Math.cos(k / MAX_POINTS * 2 * Math.PI) + i / 1e7 + 1 / 3e5, y: 0.5 + 0.3 * Math.sin(k / MAX_POINTS * 2 * Math.PI) + 1 / 7e5 })),
   }));
   const show: ShowDocument = { ...createShow(), shapes };

@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { stageCommands, type DrawOptions } from '../src/map/draw';
-import { createShow, STAGE_SIZE, type Shape } from '../src/map/show';
+import { createShow, shapeExtras, STAGE_SIZE, type Shape } from '../src/map/show';
 
 const opts = (o: Partial<DrawOptions> = {}): DrawOptions => ({
   blackout: false, testGrid: false, identifyId: null, crosshair: null,
   selectedId: null, selectedIndex: null, outlinesOnly: false, invalidIds: [], ...o,
 });
 const shape = (id: string, o: Partial<Shape> = {}): Shape => ({
-  id, name: `Name ${id}`, colour: '#336699', visible: true, locked: false, sourceId: null,
+  id, name: `Name ${id}`, colour: '#336699', visible: true, locked: false, sourceId: null, ...shapeExtras(),
   points: [{ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.2 }, { x: 0.5, y: 0.8 }], ...o,
 });
 const show = (...shapes: Shape[]) => ({ ...createShow(), shapes });

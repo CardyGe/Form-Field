@@ -1,53 +1,14 @@
 // show.ts imports isValidOutline too, so nothing from show.ts is read while this module loads, only inside functions.
-import { STAGE_SIZE, MAX_POINTS, MIN_OUTLINE_AREA, type Point } from './show';
+import { STAGE_SIZE, MIN_OUTLINE_AREA, type CurvePoint, type Point } from './show';
+import { pointInPolygon, shapeValidity, type Validity } from './outline';
 export { MIN_OUTLINE_AREA };
-// Two corners closer than this are the same corner; the outline has collapsed there.
-const SAME_POINT = 1e-9;
-
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
-const cross = (a: Point, b: Point, c: Point) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
 
-function edgesMeet(a: Point, b: Point, c: Point, d: Point): boolean {
-  const overlap =
-    Math.max(Math.min(a.x, b.x), Math.min(c.x, d.x)) <= Math.min(Math.max(a.x, b.x), Math.max(c.x, d.x)) &&
-    Math.max(Math.min(a.y, b.y), Math.min(c.y, d.y)) <= Math.min(Math.max(a.y, b.y), Math.max(c.y, d.y));
-  return overlap && cross(a, b, c) * cross(a, b, d) <= 0 && cross(c, d, a) * cross(c, d, b) <= 0;
+/** The outline rules for a shape without holes; curved sides are checked as drawn. See outline.ts. */
+export function isValidOutline(points: CurvePoint[]): Validity {
+  return shapeValidity(points, []);
 }
-
-function hasCrossing(points: Point[]): boolean {
-  const n = points.length;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 2; j < n; j++) {
-      if (i === 0 && j === n - 1) continue;
-      if (edgesMeet(points[i], points[(i + 1) % n], points[j], points[(j + 1) % n])) return true;
-    }
-  }
-  return false;
-}
-
-/** Enclosed area in stage fractions squared (always positive). */
-function outlineArea(points: Point[]): number {
-  let twice = 0;
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i], b = points[(i + 1) % points.length];
-    twice += a.x * b.y - b.x * a.y;
-  }
-  return Math.abs(twice) / 2;
-}
-
-const hasRepeatedCorner = (points: Point[]) =>
-  points.some((a, i) => { const b = points[(i + 1) % points.length]; return Math.hypot(a.x - b.x, a.y - b.y) < SAME_POINT; });
-
-export function isValidOutline(points: Point[]): { ok: true } | { ok: false; reason: 'crossing' | 'collapsed' | 'too-few' | 'too-many' | 'outside' } {
-  if (points.length < 3) return { ok: false, reason: 'too-few' };
-  if (points.length > MAX_POINTS) return { ok: false, reason: 'too-many' };
-  if (points.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1)) return { ok: false, reason: 'outside' };
-  // The same rules for every corner count, from 3 to MAX_POINTS.
-  if (hasRepeatedCorner(points)) return { ok: false, reason: 'collapsed' };
-  if (hasCrossing(points)) return { ok: false, reason: 'crossing' };
-  if (outlineArea(points) < MIN_OUTLINE_AREA) return { ok: false, reason: 'collapsed' };
-  return { ok: true };
-}
+export { pointInPolygon };
 
 /** Four corners, clockwise from the top-left of the drag box. */
 export function rectangleFromDrag(a: Point, b: Point): Point[] {
@@ -63,15 +24,6 @@ export function clampToStage(point: Point): Point {
 /** Move by projector pixels (screen y is down), clamped to the stage. */
 export function nudge(point: Point, dxPx: number, dyPx: number): Point {
   return clampToStage({ x: point.x + dxPx / STAGE_SIZE.width, y: point.y + dyPx / STAGE_SIZE.height });
-}
-
-export function pointInPolygon(point: Point, points: Point[]): boolean {
-  let inside = false;
-  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-    const a = points[i], b = points[j];
-    if ((a.y > point.y) !== (b.y > point.y) && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
-  }
-  return inside;
 }
 
 export function stageFromPointer(rect: { left: number; top: number; width: number; height: number }, clientX: number, clientY: number): Point {
