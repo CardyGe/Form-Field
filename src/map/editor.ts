@@ -47,7 +47,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
   if (action.type === 'addRectangle') {
     if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
     if (next.shapes.some(s => s.id === action.id)) return { reason: 'duplicate-id' };
-    const shape: Shape = { id: action.id, name: nextName(next), points: rectangleFromDrag(clampToStage(action.a), clampToStage(action.b)), colour: action.colour, visible: true, locked: false };
+    const shape: Shape = { id: action.id, name: nextName(next), points: rectangleFromDrag(clampToStage(action.a), clampToStage(action.b)), colour: action.colour, visible: true, locked: false, sourceId: null };
     next.shapes.push(shape);
     return { show: next, touched: shape };
   }

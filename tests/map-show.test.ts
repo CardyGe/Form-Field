@@ -64,7 +64,7 @@ test('long names are shortened and long ids replaced, so a show always fits on t
 
 test('unknown version still loads valid shapes', () => {
   const r = validateShow(doc([shape()], { version: 9 }));
-  assert.equal(r.show.version, 1);
+  assert.equal(r.show.version, 2);
   assert.equal(r.show.shapes.length, 1);
 });
 
@@ -96,4 +96,65 @@ test('a loaded shape with no area is dropped; valid shapes load unrepaired', () 
   const ok = validateShow(doc([shape({ id: 'a' }), shape({ id: 'b' })]));
   assert.deepEqual(ok.show.shapes.map(s => s.id), ['a', 'b']);
   assert.equal(ok.repaired, false);
+});
+
+// Version 2: instrument sources.
+import { MAX_SOURCES, SPEED_RANGE } from '../src/map/show';
+import { applyPreset, createLayer, createProject } from '../src/core/project';
+
+const composition = () => { const p = createProject(); p.layers = [applyPreset(createLayer('relief'), 'porcelain-shutters')]; return p; };
+const source = (over: Record<string, unknown> = {}) => ({ id: 'src-a', kind: 'instrument', project: composition(), speed: 1, revision: 0, ...over });
+const doc2 = (shapes: unknown[], sources: unknown[], over: Record<string, unknown> = {}) => ({ format: 'formshow', version: 2, stage: { width: 1920, height: 1080 }, shapes, sources, ...over });
+
+test('a version 1 file opens as an all-colour show without being called repaired', () => {
+  const r = validateShow(doc([shape()]));
+  assert.equal(r.show.version, 2);
+  assert.equal(r.show.shapes[0].sourceId, null);
+  assert.deepEqual(r.show.sources, []);
+  assert.equal(r.repaired, false);
+});
+
+test('a version 2 show with an instrument source round-trips', () => {
+  const input = doc2([shape({ sourceId: 'src-a' })], [source({ speed: 1.5, revision: 3 })]);
+  const r = validateShow(input);
+  assert.equal(r.repaired, false);
+  assert.equal(r.show.shapes[0].sourceId, 'src-a');
+  assert.equal(r.show.sources.length, 1);
+  assert.equal(r.show.sources[0].speed, 1.5);
+  assert.equal(r.show.sources[0].revision, 3);
+  assert.equal(r.show.sources[0].project.layers[0].kind, 'relief');
+  assert.deepEqual(validateShow(JSON.parse(JSON.stringify(r.show))).show, r.show);
+});
+
+test('a source whose composition cannot be read is dropped, and its shape plays its colour', () => {
+  const r = validateShow(doc2([shape({ sourceId: 'src-a' })], [source({ project: { layers: 'nonsense' } })]));
+  assert.equal(r.show.sources.length, 0);
+  assert.equal(r.show.shapes[0].sourceId, null);
+  assert.equal(r.repaired, true);
+});
+
+test('a shape naming a missing source plays its colour; a source no shape uses is dropped', () => {
+  const missing = validateShow(doc2([shape({ sourceId: 'gone' })], []));
+  assert.equal(missing.show.shapes[0].sourceId, null);
+  assert.equal(missing.repaired, true);
+  const orphan = validateShow(doc2([shape()], [source()]));
+  assert.equal(orphan.show.sources.length, 0);
+  assert.equal(orphan.repaired, true);
+});
+
+test('source speed is clamped, revision repaired, and at most 64 sources kept', () => {
+  const r = validateShow(doc2([shape({ sourceId: 'src-a' })], [source({ speed: 99, revision: -2 })]));
+  assert.equal(r.show.sources[0].speed, SPEED_RANGE.max);
+  assert.equal(r.show.sources[0].revision, 0);
+  assert.equal(r.repaired, true);
+  const many = Array.from({ length: 70 }, (_, i) => source({ id: `s${i}` }));
+  const shapes = Array.from({ length: 64 }, (_, i) => shape({ id: `sh${i}`, sourceId: `s${i}` }));
+  assert.ok(validateShow(doc2(shapes, many)).show.sources.length <= MAX_SOURCES);
+});
+
+test('a composition with more than four layers is not a valid source', () => {
+  const big = composition(); big.layers = [0, 1, 2, 3, 4].map(i => ({ ...big.layers[0], id: `l${i}` }));
+  const r = validateShow(doc2([shape({ sourceId: 'src-a' })], [source({ project: big })]));
+  assert.equal(r.show.sources.length, 0);
+  assert.equal(r.show.shapes[0].sourceId, null);
 });

@@ -8,7 +8,7 @@ const opts = (o: Partial<DrawOptions> = {}): DrawOptions => ({
   selectedId: null, selectedIndex: null, outlinesOnly: false, invalidIds: [], ...o,
 });
 const shape = (id: string, o: Partial<Shape> = {}): Shape => ({
-  id, name: `Name ${id}`, colour: '#336699', visible: true, locked: false,
+  id, name: `Name ${id}`, colour: '#336699', visible: true, locked: false, sourceId: null,
   points: [{ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.2 }, { x: 0.5, y: 0.8 }], ...o,
 });
 const show = (...shapes: Shape[]) => ({ ...createShow(), shapes });
