@@ -1,4 +1,4 @@
-.map-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 272px minmax(0, 1fr); }
+.map-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 272px minmax(0, 1fr) 248px; }
 .map-stage { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; padding: 16px; background: #0b0c0b; }
 .map-stage canvas { max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9; background: #000; border: 1px solid var(--line); }
 .map-shape-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
@@ -9,3 +9,10 @@
 .map-shape-list .text-button { min-height: 24px; padding: 2px 6px; font-size: 10px; }
 .map-shape-list .text-button[aria-pressed="false"] { color: var(--muted); }
 .map-status { padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); background: var(--panel); }
+
+.map-stage:focus { outline: none; }
+.map-inspector { display: grid; align-content: start; gap: 8px; }
+.map-inspector h3 { margin: 8px 0 0; font-size: 12px; }
+.map-field { display: grid; gap: 2px; font-size: 11px; color: var(--muted); }
+.map-field input { width: 100%; box-sizing: border-box; }
+.map-toggles { display: flex; gap: 4px; }

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { useMap } from './useMap';
 import { paint } from '../map/draw';
 import { applyEdit, type EditAction } from '../map/editor';
-import { pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel } from '../map/geometry';
+import { parsePixelField, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel } from '../map/geometry';
+import { isTypingTarget } from '../map/keys';
 import { STAGE_SIZE, type Point, type ShowDocument } from '../map/show';
 
 const REASONS: Record<string, string> = {
@@ -22,6 +23,17 @@ type Drag =
 
 const stagePx = (p: Point) => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height });
 const newId = () => `shape-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+
+/** A text box that keeps its own draft and hands it over on blur or Enter. */
+function CommitField({ label, value, onCommit, narrow }: { label: string; value: string; onCommit: (text: string) => void; narrow?: boolean }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => { onCommit(draft); setDraft(value); };
+  return <label className="map-field">{label}<input aria-label={label} className={narrow ? 'narrow' : ''} value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit}
+    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }} /></label>;
+}
 
 /** The Map screen. `header` is the app's own mode switch, so all screens share it. */
 export default function MapPanel({ header, onError }: { header: ReactNode; onError: (message: string) => void }) {
@@ -117,8 +129,40 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
     if (map.dispatch(action) && d.kind === 'rectangle') map.setSelection(d.id);
   };
 
+  // Arrow keys move the chosen corner, unless the key press belongs to a text box.
+  const onStageKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    const step = ARROWS[e.key];
+    if (!step || isTypingTarget(e.target as HTMLElement) || !selectedShape || map.selectedIndex === null) return;
+    e.preventDefault();
+    const size = e.shiftKey ? 10 : 1;
+    map.dispatch({ type: 'nudgePoint', shapeId: selectedShape.id, index: map.selectedIndex, dxPx: step[0] * size, dyPx: step[1] * size });
+  };
+  const selectedShape = map.show.shapes.find(s => s.id === map.selectedId) ?? null;
+  const selectedPoint = selectedShape && map.selectedIndex !== null ? selectedShape.points[map.selectedIndex] ?? null : null;
+  const [inspectorNote, setInspectorNote] = useState<string | null>(null);
+  useEffect(() => setInspectorNote(null), [map.selectedId, map.selectedIndex]);
+  const commitPosition = (axis: 'x' | 'y', text: string) => {
+    if (!selectedShape || !selectedPoint || map.selectedIndex === null) return;
+    const px = parsePixelField(text, { min: 0, max: axis === 'x' ? STAGE_SIZE.width : STAGE_SIZE.height });
+    if (px === null) return;
+    const to = axis === 'x' ? { x: px / STAGE_SIZE.width, y: selectedPoint.y } : { x: selectedPoint.x, y: px / STAGE_SIZE.height };
+    if (to.x === selectedPoint.x && to.y === selectedPoint.y) return;
+    map.dispatch({ type: 'movePoint', shapeId: selectedShape.id, index: map.selectedIndex, to });
+  };
+  const commitName = (text: string) => {
+    const name = text.trim();
+    if (selectedShape && name && name !== selectedShape.name) map.dispatch({ type: 'rename', shapeId: selectedShape.id, name });
+  };
+  const commitColour = (text: string) => {
+    if (!selectedShape) return;
+    const colour = text.trim();
+    if (!/^#[0-9a-f]{6}$/i.test(colour)) { setInspectorNote('Colour must look like #rrggbb'); return; }
+    setInspectorNote(null);
+    if (colour !== selectedShape.colour) map.dispatch({ type: 'setColour', shapeId: selectedShape.id, colour });
+  };
+
   const reason = dragNote ?? (map.lastRefusal ? (map.lastRefusal.endsWith('…') ? map.lastRefusal : `Not applied: ${reasonText(map.lastRefusal)}`) : null);
-  const status = reason ?? map.sendWarning ?? (map.outputOpen ? 'Showing on the output' : map.loaded ? 'Ready' : 'Loading…');
+  const status = reason ?? inspectorNote ?? map.sendWarning ?? (map.outputOpen ? 'Showing on the output' : map.loaded ? 'Ready' : 'Loading…');
 
   return <section className="live-shell map-shell" role="region" aria-label="Map">
     <header className="app-header">{header}<div className="live-actions">
@@ -143,8 +187,25 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
           <button className="text-button" aria-pressed={shape.locked} aria-label={`${shape.locked ? 'Unlock' : 'Lock'} ${shape.name}`} onClick={() => map.dispatch({ type: 'setLocked', shapeId: shape.id, locked: !shape.locked })}>{shape.locked ? 'Locked' : 'Unlocked'}</button>
         </li>)}</ul>
       </aside>
-      <main className="map-stage"><canvas ref={canvas} aria-label="Stage" style={{ cursor: map.tool === 'rectangle' ? 'crosshair' : 'default', touchAction: 'none' }}
+      <main className="map-stage" tabIndex={0} aria-label="Stage area" onKeyDown={onStageKeyDown}><canvas ref={canvas} aria-label="Stage" style={{ cursor: map.tool === 'rectangle' ? 'crosshair' : 'default', touchAction: 'none' }}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} width={STAGE_SIZE.width} height={STAGE_SIZE.height} /></main>
+      <aside className="live-column map-inspector" aria-label="Details">
+        <h2>Details</h2>
+        {!selectedShape ? <p className="muted-text">Pick a shape to see its details.</p> : <>
+          <CommitField label="Name" value={selectedShape.name} onCommit={commitName} />
+          <CommitField label="Colour" value={selectedShape.colour} onCommit={commitColour} narrow />
+          <div className="map-toggles">
+            <button className="text-button" aria-pressed={selectedShape.visible} onClick={() => map.dispatch({ type: 'setVisible', shapeId: selectedShape.id, visible: !selectedShape.visible })}>{selectedShape.visible ? 'Shown' : 'Hidden'}</button>
+            <button className="text-button" aria-pressed={selectedShape.locked} onClick={() => map.dispatch({ type: 'setLocked', shapeId: selectedShape.id, locked: !selectedShape.locked })}>{selectedShape.locked ? 'Locked' : 'Unlocked'}</button>
+          </div>
+          {selectedPoint ? <>
+            <h3>Corner {map.selectedIndex! + 1}</h3>
+            <CommitField label="X" value={String(Math.round(selectedPoint.x * STAGE_SIZE.width))} onCommit={t => commitPosition('x', t)} narrow />
+            <CommitField label="Y" value={String(Math.round(selectedPoint.y * STAGE_SIZE.height))} onCommit={t => commitPosition('y', t)} narrow />
+            <p className="muted-text">Positions are in pixels on the projector. Click the stage, then use the arrow keys to nudge (Shift for 10).</p>
+          </> : <p className="muted-text">Click a corner on the stage to set its exact position.</p>}
+        </>}
+      </aside>
     </div>
     <footer className="map-status" role="status">{status}</footer>
   </section>;

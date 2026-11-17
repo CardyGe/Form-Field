@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isValidOutline, rectangleFromDrag, nudge, clampToStage, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel, parsePixelField } from '../src/map/geometry';
+import { isTypingTarget } from '../src/map/keys';
 
 const square = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
 
@@ -50,9 +51,18 @@ test('stagePixelsPerScreenPixel scales stage pixels to the displayed canvas', ()
 });
 test('parsePixelField', () => {
   const r = {min:0, max:1920};
+  assert.equal(parsePixelField('1920', r), 1920);
   assert.equal(parsePixelField('-5', r), 0);
   assert.equal(parsePixelField('5000', r), 1920);
   assert.equal(parsePixelField(' 12 ', r), 12);
   assert.equal(parsePixelField('abc', r), null);
   assert.equal(parsePixelField('', r), null);
+});
+test('isTypingTarget is true for text boxes only', () => {
+  assert.equal(isTypingTarget({ tagName: 'INPUT' }), true);
+  assert.equal(isTypingTarget({ tagName: 'textarea' }), true);
+  assert.equal(isTypingTarget({ tagName: 'SELECT' }), true);
+  assert.equal(isTypingTarget({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(isTypingTarget({ tagName: 'CANVAS' }), false);
+  assert.equal(isTypingTarget(null), false);
 });
