@@ -1,9 +1,11 @@
 import { useRef, type ReactNode } from 'react';
 import { useLive } from './useLive';
-import { IGNORE_STILL, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, type Box, type LiveSettings } from '../live/settings';
+import { IGNORE_STILL, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SIGNAL_STARTS, SMOKE_CONTROLS, SMOKE_STARTS, type Box, type LiveSettings, type SignalKey } from '../live/settings';
 import { rampHex } from '../live/colour';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, SOLAR } from '../core/palettes';
+
+const POSE_CONTROLS: SignalKey[] = ['poseEcho', 'poseCount', 'poseSpacing', 'poseFill'];
 
 const PALETTES: [string, string[]][] = [['Hot Signal', HOT_SIGNAL], ['Neon Strata', NEON_STRATA], ['Acid Drip', ACID_DRIP], ['Pop Portal', POP_PORTAL],
   ['Lime Violet', LIME_VIOLET], ['Electric', ELECTRIC], ['Candy', CANDY], ['Solar', SOLAR], ['Cyan Yellow', CYAN_YELLOW]];
@@ -43,11 +45,14 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
     : state.status === 'error' ? state.message : '';
   const status = live.outputOpen ? ['Showing on the output', sourceStatus].filter(Boolean).join(' · ') : sourceStatus;
   const paletteName = PALETTES.find(([, colours]) => colours.join() === s.palette.join())?.[0] ?? '';
+  const signalPaletteName = PALETTES.find(([, colours]) => colours.join() === s.signal.palette.join())?.[0] ?? '';
   const smokePaletteName = PALETTES.find(([, colours]) => colours.join() === s.smoke.palette.join())?.[0] ?? '';
-  const smoke = s.look === 'smoke', people = live.people;
+  const signal = s.look === 'signal', smoke = s.look === 'smoke', people = live.people;
   const peopleStatus = peopleLine(people.status);
-  const roomMissing = smoke && s.people.useEmptyRoom && !people.roomCaptured;
+  const findingPeople = smoke || (signal && s.signal.removeBackground);
+  const roomMissing = findingPeople && s.people.useEmptyRoom && !people.roomCaptured;
   const setSmoke = (change: Partial<LiveSettings['smoke']>) => live.update(v => ({ ...v, smoke: { ...v.smoke, ...change } }));
+  const setSignal = (change: Partial<LiveSettings['signal']>) => live.update(v => ({ ...v, signal: { ...v.signal, ...change } }));
   const setPeople = (change: Partial<LiveSettings['people']>) => live.update(v => ({ ...v, people: { ...v.people, ...change } }));
 
   return <section className="live-shell" role="region" aria-label="Live">
@@ -87,13 +92,13 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         <Slider label="Area top" value={s.box.top} min={0} max={1} step={.01} onChange={v => setBox('top', v)} />
         <label className="live-check"><input aria-label="Show tracking" type="checkbox" disabled={live.outputOpen} checked={live.view === 'tracking'} onChange={e => live.setView(e.target.checked ? 'tracking' : 'art')} />Show tracking
           <small>{live.outputOpen ? 'Close the output to adjust tracking.' : 'Camera with movement drawn over it. Only ever shown here.'}</small></label>
-        {smoke && <section className="live-people" aria-label="Finding people">
+        {findingPeople && <section className="live-people" aria-label="Finding people">
           <h3>Finding people</h3>
           <label className="live-check"><input aria-label="Show people" type="checkbox" disabled={live.outputOpen} checked={live.view === 'people'} onChange={e => live.setView(e.target.checked ? 'people' : 'art')} />Show people
             <small>{live.outputOpen ? 'Close the output to adjust tracking.' : 'Blue is a person; pink is their outline. Only ever shown here.'}</small></label>
-          {s.people.ignoreStillSeconds !== null && <Slider label="Ignore still objects" value={s.people.ignoreStillSeconds} min={IGNORE_STILL.min} max={IGNORE_STILL.max} step={1} unit=" s" onChange={v => setPeople({ ignoreStillSeconds: v })} />}
-          <label className="live-check"><input aria-label="Ignore still objects off" type="checkbox" checked={s.people.ignoreStillSeconds === null} onChange={e => setPeople({ ignoreStillSeconds: e.target.checked ? null : IGNORE_STILL.default })} />Count still objects too
-            <small>Off: anything the camera thinks is a person counts, even a poster.</small></label>
+          {!(signal && s.signal.keepStill) && s.people.ignoreStillSeconds !== null && <Slider label="Ignore still objects" value={s.people.ignoreStillSeconds} min={IGNORE_STILL.min} max={IGNORE_STILL.max} step={1} unit=" s" onChange={v => setPeople({ ignoreStillSeconds: v })} />}
+          {!(signal && s.signal.keepStill) && <label className="live-check"><input aria-label="Ignore still objects off" type="checkbox" checked={s.people.ignoreStillSeconds === null} onChange={e => setPeople({ ignoreStillSeconds: e.target.checked ? null : IGNORE_STILL.default })} />Count still objects too
+            <small>Off: anything the camera thinks is a person counts, even a poster.</small></label>}
           <label className="live-check"><input aria-label="Use empty room" type="checkbox" checked={s.people.useEmptyRoom} onChange={e => setPeople({ useEmptyRoom: e.target.checked })} />Use empty room
             <small>Only counts what differs from the empty room. Needs a fixed camera and steady light.</small></label>
           {s.people.useEmptyRoom && <button className="secondary-button live-wide" onClick={live.captureRoom}>Capture empty room</button>}
@@ -106,9 +111,32 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         {live.outputOpen ? (live.preview ? <img alt="Output preview" src={live.preview} /> : <p className="live-status">Waiting for the output…</p>)
           : <canvas aria-label="Live preview" ref={live.setCanvas} />}
       </div>
-      <aside className="live-column" aria-label={smoke ? 'Smoke' : 'Paint'}>
-        <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value === 'smoke' ? 'smoke' : 'paint' }); }}><option value="paint">Paint</option><option value="smoke">Smoke</option></select></label>
-        {smoke ? <>
+      <aside className="live-column" aria-label={signal ? 'Signal Melt' : smoke ? 'Smoke' : 'Paint'}>
+        <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value === 'signal' ? 'signal' : e.target.value === 'smoke' ? 'smoke' : 'paint' }); }}><option value="paint">Paint</option><option value="smoke">Smoke</option><option value="signal">Signal Melt</option></select></label>
+        {signal ? <>
+          <p className="live-note">Sweep an arm to leave coloured outlines of earlier poses. Hold still to build light, then move to release it.</p>
+          <div className="live-starts" role="group" aria-label="Start from">{SIGNAL_STARTS.map(start =>
+            <button key={start.label} className={`text-button ${Object.entries(start.values).every(([k, v]) => s.signal[k as keyof typeof start.values] === v) ? 'on' : ''}`} onClick={() => { setSignal({ ...start.values, hold: false }); live.clear(); }}>{start.label}</button>)}</div>
+          <label className="live-check"><input aria-label="Remove background" type="checkbox" checked={s.signal.removeBackground} onChange={e => setSignal({ removeBackground: e.target.checked })} />Remove background<small>Only people enter the artwork. The room stays black while detection loads.</small></label>
+          <label className="live-check"><input aria-label="Keep still poses" type="checkbox" checked={s.signal.keepStill} onChange={e => setSignal({ keepStill: e.target.checked })} />Keep still poses<small>Standing still charges the artwork instead of making you disappear.</small></label>
+          <label className="stacked-label">Palette<select aria-label="Palette" value={signalPaletteName} onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) setSignal({ palette: [...found[1]] }); }}>
+            {!signalPaletteName && <option value="">Custom</option>}{PALETTES.map(([name]) => <option key={name}>{name}</option>)}</select></label>
+          <div className="live-swatches">{rampHex(s.signal.palette).map((c, i) => <i key={i} style={{ background: c }} />)}</div>
+          <div role="group" aria-label="Pose history">
+            {SIGNAL_CONTROLS.filter(c => POSE_CONTROLS.includes(c.key)).map(c => <Slider key={c.key}
+              label={c.label} value={s.signal[c.key]} min={c.min} max={c.max} step={c.step}
+              unit={c.key === 'poseSpacing' ? ' s' : ''}
+              disabled={!s.signal.removeBackground || (c.key !== 'poseEcho' && s.signal.poseEcho === 0)}
+              onChange={value => setSignal({ [c.key]: value })} />)}
+          </div>
+          {SIGNAL_CONTROLS.filter(c => !POSE_CONTROLS.includes(c.key) && !['maskThreshold', 'maskSoftness', 'focus', 'blockSize', 'mix'].includes(c.key)).map(c => <Slider key={c.key}
+            label={c.label} value={s.signal[c.key]} min={c.min} max={c.max} step={c.step}
+            unit={['memorySeconds', 'chargeSeconds'].includes(c.key) ? ' s' : ''}
+            onChange={value => setSignal({ [c.key]: value })} />)}
+          <details><summary>Cutout and detail</summary>{SIGNAL_CONTROLS.filter(c => ['maskThreshold','maskSoftness','focus','blockSize','mix'].includes(c.key)).map(c => <Slider key={c.key} label={c.label} value={s.signal[c.key]} min={c.min} max={c.max} step={c.step} onChange={value => setSignal({ [c.key]: value })} />)}</details>
+          <label className="live-check"><input aria-label="Hold frame memory" type="checkbox" checked={s.signal.hold} onChange={e => setSignal({ hold: e.target.checked })} />Hold frame memory<small>Stops new frames and poses from being captured. Movement still bends the frame memory.</small></label>
+          <p className="live-note">Depth relief uses brightness as a depth map. Depth focus chooses the brightness plane that stays in place.</p>
+        </> : smoke ? <>
           <p className="live-note">People are made of smoke. Moving tears it off them.</p>
           <div className="live-starts" role="group" aria-label="Start from">{SMOKE_STARTS.map(start =>
             <button key={start.id} className={`text-button ${Object.entries(start.values).every(([k, v]) => s.smoke[k as keyof typeof start.values] === v) ? 'on' : ''}`} onClick={() => setSmoke({ ...start.values })}>{start.label}</button>)}</div>

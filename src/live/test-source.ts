@@ -1,13 +1,29 @@
 /**
- * A synthetic camera for development and the scripted checks: two bright,
- * textured discs sweeping left and right on fixed rows over a dark room.
- * Never shown to an audience.
+ * A synthetic camera for development, scripted checks, and the Signal demo.
  */
 import type { FrameSource } from './look';
 import { READY_MS, type Mask, type MaskProvider, type PeopleStatus } from './MaskProvider';
 
 export const TEST_FPS = 30;
 export interface Disc { x: number; y: number; radius: number; vx: number }
+
+// Lateral position, crouch depth, shoulder angles, elbow bend, and foot spread.
+const DEMO_POSES = [
+  [0, 0, .15, .15, .35, .35, .07],
+  [-.16, .015, 1.3, -.55, .4, -.35, .19],
+  [-.06, .075, .65, .8, .7, .7, .14],
+  [.08, 0, 1.45, 1.65, .45, .35, .085],
+  [.18, .045, -.55, 1.25, -.45, .55, .225],
+  [.025, .02, -.8, .35, 1.35, .95, .105],
+];
+
+function demoPose(time: number): number[] {
+  const beat = time / .67;
+  const index = Math.floor(beat) % DEMO_POSES.length;
+  const progress = Math.max(0, (beat % 1 - .18) / .82);
+  const blend = progress * progress * (3 - 2 * progress);
+  return DEMO_POSES[index].map((value, joint) => value + (DEMO_POSES[(index + 1) % DEMO_POSES.length][joint] - value) * blend);
+}
 
 export class TestSource implements FrameSource {
   readonly element: HTMLCanvasElement;
@@ -16,6 +32,8 @@ export class TestSource implements FrameSource {
   moving = true;
   /** Draws a person-shaped figure (and a poster on the wall) instead of the discs. */
   figure = false;
+  /** The public Signal demo uses moving arms and a clean synthetic person mask. */
+  signalDemo = false;
   /** Holds the figure in place with a slight sway, like a person standing still. */
   standing = false;
   /** For checks: bright stripes scrolling across the whole frame, so everything moves. */
@@ -49,6 +67,10 @@ export class TestSource implements FrameSource {
 
   /** The figure's centre in uv (origin bottom-left, not mirrored) and its height in uv. */
   figurePlace(): { x: number; y: number; height: number } {
+    if (this.signalDemo) {
+      const [offset, crouch] = demoPose(this.time);
+      return { x: .5 + offset, y: .48 - crouch, height: .7 };
+    }
     const sway = this.standing ? Math.sin(this.swayTime * 2.4) * SWAY_PX / this.element.width : 0;
     return { x: (this.standing ? this.standX : .5 + .2 * Math.sin(this.time * 1.2)) + sway, y: .45, height: .7 };
   }
@@ -61,10 +83,39 @@ export class TestSource implements FrameSource {
     const f = this.figurePlace(), cx = f.x * w, cy = (1 - f.y) * h, u = f.height * h;
     c.beginPath(); c.arc(cx, cy - u * .36, u * .09, 0, Math.PI * 2); c.fill();                       // head
     c.beginPath(); c.roundRect(cx - u * .13, cy - u * .26, u * .26, u * .42, u * .06); c.fill();      // body
-    c.beginPath(); c.roundRect(cx - u * .3, cy - u * .24, u * .19, u * .06, u * .03); c.fill();       // arms
-    c.beginPath(); c.roundRect(cx + u * .11, cy - u * .24, u * .19, u * .06, u * .03); c.fill();
-    c.beginPath(); c.roundRect(cx - u * .11, cy + u * .14, u * .09, u * .3, u * .03); c.fill();       // legs
-    c.beginPath(); c.roundRect(cx + u * .02, cy + u * .14, u * .09, u * .3, u * .03); c.fill();
+    if (this.signalDemo) {
+      const [, crouch, leftAngle, rightAngle, leftBend, rightBend, spread] = demoPose(this.time);
+      c.save();
+      c.strokeStyle = c.fillStyle;
+      c.lineCap = 'round';
+      c.lineJoin = 'round';
+      for (const side of [-1, 1]) {
+        const shoulderX = cx + side * u * .09, shoulderY = cy - u * .21;
+        const angle = side < 0 ? leftAngle : rightAngle;
+        const forearm = angle + (side < 0 ? leftBend : rightBend);
+        const elbowX = shoulderX + side * Math.cos(angle) * u * .15;
+        const elbowY = shoulderY - Math.sin(angle) * u * .15;
+        c.lineWidth = u * .061;
+        c.beginPath();
+        c.moveTo(shoulderX, shoulderY);
+        c.lineTo(elbowX, elbowY);
+        c.lineTo(elbowX + side * Math.cos(forearm) * u * .15, elbowY - Math.sin(forearm) * u * .15);
+        c.stroke();
+
+        c.lineWidth = u * .08;
+        c.beginPath();
+        c.moveTo(cx + side * u * .065, cy + u * .125);
+        c.lineTo(cx + side * u * (spread + crouch), cy + u * .27);
+        c.lineTo(cx + side * u * spread, cy + u * (.44 - crouch / .7));
+        c.stroke();
+      }
+      c.restore();
+    } else {
+      c.beginPath(); c.roundRect(cx - u * .3, cy - u * .24, u * .19, u * .06, u * .03); c.fill();
+      c.beginPath(); c.roundRect(cx + u * .11, cy - u * .24, u * .19, u * .06, u * .03); c.fill();
+      c.beginPath(); c.roundRect(cx - u * .11, cy + u * .14, u * .09, u * .3, u * .03); c.fill();
+      c.beginPath(); c.roundRect(cx + u * .02, cy + u * .14, u * .09, u * .3, u * .03); c.fill();
+    }
     if (poster) { const p = TestSource.POSTER; c.fillRect(p.left * w, (1 - p.top) * h, (p.right - p.left) * w, (p.top - p.bottom) * h); }
   }
 
@@ -137,7 +188,7 @@ export class TestMaskProvider implements MaskProvider {
   submit(_frame: HTMLVideoElement | HTMLCanvasElement, frameId: number): void {
     if (this.disposed || this.paused) return;
     const c = this.context, { width: w, height: h } = this.canvas, source = this.source();
-    c.clearRect(0, 0, w, h); c.fillStyle = '#fff'; source.drawPeople(c, w, h, true);
+    c.clearRect(0, 0, w, h); c.fillStyle = '#fff'; source.drawPeople(c, w, h, !source.signalDemo);
     if (this.coverAll) c.fillRect(w * .05, 0, w * .9, h);
     const rgba = c.getImageData(0, 0, w, h).data, data = new Uint8Array(w * h);
     const faint = Math.round(this.faintRoom * 255);

@@ -13,6 +13,7 @@ import type { FrameSource } from './look';
 import type { MaskProvider } from './MaskProvider';
 import { Tracking, FLOW_SIZE } from './Tracking';
 import { Paint } from './Paint';
+import { Signal } from './Signal';
 import { Smoke } from './Smoke';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
@@ -54,6 +55,7 @@ export class LiveRenderer {
   private peopleView: THREE.ShaderMaterial | null = null;
   private readonly tracking: Tracking;
   private look: Look | null = null;
+  private signalSource: FrameSource['element'] = null;
   private lookKind: LiveSettings['look'] | null = null;
   private readonly black: THREE.DataTexture;
   private scratch: THREE.WebGLRenderTarget;
@@ -107,10 +109,12 @@ export class LiveRenderer {
     if (this.lookKind !== this.settings.look) {
       // Switching looks starts the new one fresh; each keeps its own settings.
       this.look?.dispose();
-      this.look = this.settings.look === 'smoke' ? new Smoke(this.passes, this.width, this.height) : new Paint(this.passes, this.width, this.height);
+      this.look = this.settings.look === 'signal' ? new Signal(this.passes, this.width, this.height) : this.settings.look === 'smoke' ? new Smoke(this.passes, this.width, this.height) : new Paint(this.passes, this.width, this.height);
       this.lookKind = this.settings.look;
     }
     if (!this.look) return;
+    if (this.settings.look === 'signal' && this.signalSource !== this.source.element) this.look.clear();
+    this.signalSource = this.source.element;
     this.look.step(step, this.time, this.tracking, this.settings);
     let image: THREE.Texture = this.look.output, encode = 1;
     if (this.view === 'tracking') {
@@ -162,6 +166,8 @@ export class LiveRenderer {
     const t = this.tracking.peopleTargets;
     return { status: this.tracking.peopleStatus, ready: this.tracking.peopleReady, masks: t.masks, delegate: (t.provider as { delegate?: string } | null)?.delegate ?? '', roomCaptured: this.tracking.roomCaptured };
   }
+
+  signalInteraction(): {energy:number;charge:number;burst:number} | null { return this.look instanceof Signal ? this.look.readGesture() : null; }
 
   captureRoom(): void { this.tracking.captureRoom(); }
   get roomCaptured(): boolean { return this.tracking.roomCaptured; }

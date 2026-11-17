@@ -1,0 +1,15 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {build} from 'esbuild';
+import {execFileSync} from 'node:child_process';
+const root=process.cwd(),out=path.join(root,'work/signal-art-check'),payload=path.join(out,'payload');
+await fs.mkdir(payload,{recursive:true});
+await build({entryPoints:['scripts/signal-art-check.ts'],bundle:true,format:'esm',outfile:path.join(payload,'check.js'),target:'es2022'});
+await fs.writeFile(path.join(payload,'index.html'),`<!doctype html><style>body{background:#000;color:#eee;font:16px system-ui;margin:0}canvas{width:100%;display:block}header{padding:12px;display:flex;gap:16px;align-items:center}pre{font:12px monospace;padding:10px}select{font:inherit}</style><header>Signal Melt · GPU study<select></select></header><canvas></canvas><pre id="results">Running GPU checks…</pre><script type="module" src="./check.js"></script>`);
+await fs.writeFile(path.join(payload,'package.json'),JSON.stringify({name:'signal-art-check',version:'1.0.0',main:'main.cjs'}));
+await fs.writeFile(path.join(payload,'main.cjs'),`const {app,BrowserWindow}=require('electron');const fs=require('node:fs');app.whenReady().then(()=>{const w=new BrowserWindow({width:1280,height:1000,webPreferences:{backgroundThrottling:false}});w.webContents.on('console-message',(...args)=>{const message=typeof args[1]==='object'?args[1].message:args[2];if(typeof message!=='string')return;if(message?.startsWith('SIGNAL_RESULTS '))fs.writeFileSync(${JSON.stringify(path.join(out,'results.json'))},message.slice(15));if(message?.includes('Error')||message?.startsWith('SIGNAL_FATAL'))fs.appendFileSync(${JSON.stringify(path.join(out,'errors.txt'))},message+'\\n');});w.loadFile(require('node:path').join(__dirname,'index.html'));});`);
+const config = {appId:'local.formandfield.signalstudy',productName:'Signal Study',electronVersion:'45.2.3',electronDist:path.join(root,'node_modules/electron/dist'),directories:{output:path.join(out,'pack')},files:['**/*'],npmRebuild:false,mac:{identity:null,target:'dir'}};
+const configPath=path.join(out,'preview-config.json');await fs.writeFile(configPath,JSON.stringify(config));
+await fs.rm(path.join(out,'results.json'),{force:true});await fs.rm(path.join(out,'errors.txt'),{force:true});
+execFileSync(path.join(root,'node_modules/.bin/electron-builder'),['--dir','--mac','--arm64','--projectDir',payload,'--config',configPath],{stdio:'inherit'});
+console.log(path.join(out,'pack/mac-arm64/Signal Study.app'));
