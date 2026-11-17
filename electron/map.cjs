@@ -35,21 +35,27 @@ async function saveShowFile(file, text) {
 const { createOutputWindow } = require('./output-window.cjs');
 const { acceptPreview } = require('./live.cjs');
 
-// A copy of acceptMapMessage in src/map/messages.ts (the main process cannot load TypeScript). Keep the two in step.
-const MESSAGE_LIMIT = 256 * 1024; // the same as MAP_MESSAGE_LIMIT in src/map/messages.ts
-const SHOW_TEXT_LIMIT = 8 * 1024 * 1024;
+// A copy of acceptMapMessage in src/map/messages.ts (the main process cannot load TypeScript).
+// tests/map-messages.test.ts runs one table of messages against both copies, so they stay in step.
+const MESSAGE_LIMIT = 256 * 1024; // MAP_MESSAGE_LIMIT
+const SOURCE_MESSAGE_LIMIT = 24 * 1024 * 1024; // a composition can hold images of up to 20 MB
+const SHOW_TEXT_LIMIT = 128 * 1024 * 1024; // a show's compositions can hold images
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
-const small = value => { try { const text = JSON.stringify(value); return typeof text === 'string' && text.length < MESSAGE_LIMIT; } catch { return false; } };
+const within = (value, limit) => { try { const text = JSON.stringify(value); return typeof text === 'string' && text.length < limit; } catch { return false; } };
 const idOrNull = value => value === null || typeof value === 'string';
+const finite = value => typeof value === 'number' && Number.isFinite(value);
 
 function acceptMapMessage(value) {
-  if (!plain(value) || !small(value)) return false;
+  if (!plain(value)) return false;
+  if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MESSAGE_LIMIT)) return false;
   switch (value.type) {
     case 'show': return plain(value.show);
+    case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && value.revision >= 0 && plain(value.project);
     case 'blackout':
-    case 'testGrid': return typeof value.on === 'boolean';
+    case 'testGrid':
+    case 'freeze': return typeof value.on === 'boolean';
     case 'identify': return idOrNull(value.shapeId);
-    case 'crosshair': return idOrNull(value.shapeId) && (value.point === null || (plain(value.point) && typeof value.point.x === 'number' && typeof value.point.y === 'number'));
+    case 'crosshair': return idOrNull(value.shapeId) && (value.point === null || (plain(value.point) && finite(value.point.x) && finite(value.point.y)));
     default: return false;
   }
 }

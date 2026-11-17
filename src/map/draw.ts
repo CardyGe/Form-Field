@@ -3,7 +3,10 @@
  * commands in draw order, in stage pixels. paint only translates them to Canvas 2D.
  * invalidIds is for the operator screen; the caller decides what the wall gets.
  */
-import { STAGE_SIZE, type Point, type ShowDocument } from './show';
+import { STAGE_SIZE, type Point, type Shape } from './show';
+
+/** Drawing needs only the shapes, so it takes a stored show or the show as the wall receives it. */
+type Shapes = { shapes: Shape[] };
 
 export interface DrawOptions {
   blackout: boolean; testGrid: boolean; identifyId: string | null; crosshair: Point | null;
@@ -21,7 +24,7 @@ const HANDLE = 8;
 
 const px = (p: Point): Point => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height });
 
-export function stageCommands(show: ShowDocument, options: DrawOptions): PathCommand[] {
+export function stageCommands(show: Shapes, options: DrawOptions): PathCommand[] {
   const { width: W, height: H } = STAGE_SIZE;
   if (options.blackout) {
     return [{ kind: 'rect', colour: '#000000', points: [{ x: 0, y: 0 }, { x: W, y: H }] }];
@@ -79,7 +82,7 @@ export function stageCommands(show: ShowDocument, options: DrawOptions): PathCom
 }
 
 /** `background`, when given, is drawn first and stretched to the stage: the operator screen passes the wall's picture. */
-export function paint(ctx: CanvasRenderingContext2D, show: ShowDocument, options: DrawOptions, background?: CanvasImageSource): void {
+export function paint(ctx: CanvasRenderingContext2D, show: Shapes, options: DrawOptions, background?: CanvasImageSource): void {
   ctx.clearRect(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);

@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EditAction } from '../map/editor';
 import { initialMapState, mapReducer, type MapState } from '../map/state';
 import { autosaveSchedule, canEdit } from '../map/autosave';
-import { acceptMapMessage, toWire, type MapMessage } from '../map/messages';
+import { acceptMapMessage, sourcesToSend, toWire, type MapMessage } from '../map/messages';
 import { createShow, validateShow, type ShowDocument } from '../map/show';
 
 export interface Display { id: number; label: string; primary: boolean }
 
 const TOO_LARGE = 'This show is too large to send to the wall. The wall keeps its last show.';
+const TOO_LARGE_SOURCE = 'A composition is too large to send to the wall (over 24 MB). Its shape keeps its last picture.';
 export const SAVE_FAILED = 'Could not save — keep working, then use Save As';
 const DAMAGED = 'That file could not be read. Nothing was changed.';
 const fileName = (file: string) => file.split(/[\\/]/).pop() || file;
@@ -146,19 +147,33 @@ export function useMap(onError: (message: string) => void) {
   };
   useEffect(() => () => { if (frame.current !== null) cancelAnimationFrame(frame.current); }, []);
   const showMessage = (s: ShowDocument): MapMessage => ({ type: 'show', show: toWire(s) });
+  // Which composition revisions the open output already has. Emptied when an output opens, so it is sent everything.
+  const sentSources = useRef(new Map<string, number>());
+  /** Compositions the output does not have yet go first, so the show never names one the wall cannot play. */
+  const sendSources = (s: ShowDocument) => {
+    const { messages, sent } = sourcesToSend(s, sentSources.current);
+    sentSources.current = sent;
+    for (const message of messages) {
+      if (!acceptMapMessage(message as unknown)) { setSendWarning(`${TOO_LARGE_SOURCE}`); continue; }
+      bridge?.send(message);
+    }
+  };
 
   // When the wall reports ready: blackout and test grid first, so the wall never paints shapes while Blackout is on.
   // This effect is declared before the show effect, so it runs first when the output opens.
   useEffect(() => {
+    sentSources.current = new Map();
     if (!outputOpen || !bridge) return;
     sendNow({ type: 'blackout', on: latest.current.blackout });
     sendNow({ type: 'testGrid', on: latest.current.testGrid });
+    sendSources(latest.current.shown);
     sendNow(showMessage(latest.current.shown));
   }, [outputOpen]);
   // Then the whole show again after every edit, and the trial show while a drag is in progress.
   const dragging = preview !== null;
   useEffect(() => {
     if (!outputOpen || !bridge) return;
+    sendSources(shown);
     if (dragging) sendNextFrame(showMessage(shown) as MapMessage & { type: 'show' });
     else sendNow(showMessage(shown));
   }, [shown, outputOpen]);
