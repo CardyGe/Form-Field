@@ -5,6 +5,9 @@ import { STAGE_SIZE, createShow, validateShow, type ShowDocument } from '../map/
 
 interface WallState { show: ShowDocument; options: DrawOptions }
 
+const PREVIEW = [480, 270] as const;
+const PREVIEW_EVERY_MS = 100;
+
 export function initialWall(): WallState {
   return { show: createShow(), options: { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: null, selectedIndex: null, outlinesOnly: false, invalidIds: [] } };
 }
@@ -31,13 +34,22 @@ export default function MapOutput() {
     const context = element?.getContext('2d');
     if (!bridge || !element || !context) return;
     let state = initialWall();
-    const draw = () => paint(context, state.show, state.options);
+    // The operator screen shows a small picture of what the wall really has, sent after each change.
+    let changed = true, busy = false;
+    const draw = () => { paint(context, state.show, state.options); changed = true; };
     draw();
+    const small = new OffscreenCanvas(...PREVIEW), smallContext = small.getContext('2d')!;
+    const sending = setInterval(() => {
+      if (!changed || busy) return;
+      changed = false; busy = true;
+      smallContext.drawImage(element, 0, 0, ...PREVIEW);
+      void small.convertToBlob({ type: 'image/jpeg', quality: 0.7 }).then(blob => blob.arrayBuffer()).then(bytes => bridge.sendPreview(bytes)).catch(() => {}).finally(() => { busy = false; });
+    }, PREVIEW_EVERY_MS);
     const off = bridge.onMessage(message => { state = applyMapMessage(state, message); draw(); });
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };
     window.addEventListener('keydown', key);
     bridge.ready();
-    return () => { window.removeEventListener('keydown', key); off(); };
+    return () => { clearInterval(sending); window.removeEventListener('keydown', key); off(); };
   }, []);
   return <div className="live-output"><canvas ref={canvas} width={STAGE_SIZE.width} height={STAGE_SIZE.height} /></div>;
 }

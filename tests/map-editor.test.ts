@@ -145,12 +145,7 @@ test('acceptMapMessage refuses unknown types, bad fields and non-objects', () =>
 });
 
 test('acceptMapMessage refuses a message over the size limit and one that cannot be stringified', () => {
-  let show = createShow();
-  for (let i = 0; i < 64; i++) {
-    const r = applyEdit(show, rect(`s${i}`));
-    assert.ok(r.ok);
-    show = { ...r.show, shapes: r.show.shapes.map(s => ({ ...s, name: 'n'.repeat(400) })) };
-  }
+  const show = { ...createShow(), padding: 'n'.repeat(MAP_MESSAGE_LIMIT) };
   assert.equal(acceptMapMessage({ type: 'show', show }), false);
   const loop: Record<string, unknown> = { type: 'blackout', on: true };
   loop.self = loop;
@@ -265,8 +260,8 @@ test('toWire: a 64-shape show with full-precision corners fits in one message af
       points: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] };
   });
   const show: ShowDocument = { ...createShow(), shapes };
-  // The unrounded show is over the limit, so the rounding is what makes it fit.
-  assert.ok(JSON.stringify({ type: 'show', show }).length >= MAP_MESSAGE_LIMIT);
+  // Rounding makes the message smaller; it is not what makes it fit (see the worst-case test).
+  assert.ok(JSON.stringify(toWire(show)).length < JSON.stringify(show).length);
   const wire = { type: 'show' as const, show: toWire(show) };
   assert.ok(JSON.stringify(wire).length < MAP_MESSAGE_LIMIT, `${JSON.stringify(wire).length} bytes`);
   assert.ok(acceptMapMessage(wire));
@@ -275,4 +270,56 @@ test('toWire: a 64-shape show with full-precision corners fits in one message af
   assert.ok(Math.abs(p.x - q.x) * 1920 <= 0.0961 && Math.abs(p.y - q.y) * 1080 <= 0.0541);
   assert.equal(String(p.x).split('.')[1].length <= 4, true);
   assert.equal(show.shapes[5].points[2], q);
+});
+
+// Audit fixes: limits that keep every valid show on the wall, Lock, and refused outlines.
+import { attemptEdit } from '../src/map/editor';
+import { MAX_NAME_LENGTH, MAX_ID_LENGTH, MAX_POINTS } from '../src/map/show';
+
+test('the largest valid show still fits in one message, rounded or not', () => {
+  // 64 shapes of 32 corners, names and ids at their limits, corners at full precision.
+  const shapes = Array.from({ length: MAX_SHAPES }, (_, i) => ({
+    id: 'i'.repeat(MAX_ID_LENGTH - 3) + String(i).padStart(3, '0'), name: 'n'.repeat(MAX_NAME_LENGTH), colour: '#ff9f0a', visible: true, locked: false,
+    points: Array.from({ length: MAX_POINTS }, (_, k) => ({ x: 0.5 + 0.3 * Math.cos(k / MAX_POINTS * 2 * Math.PI) + i / 1e7 + 1 / 3e5, y: 0.5 + 0.3 * Math.sin(k / MAX_POINTS * 2 * Math.PI) + 1 / 7e5 })),
+  }));
+  const show: ShowDocument = { ...createShow(), shapes };
+  assert.ok(acceptMapMessage({ type: 'show', show }), `${JSON.stringify(show).length} bytes unrounded`);
+  assert.ok(acceptMapMessage({ type: 'show', show: toWire(show) }));
+});
+
+test('a locked shape cannot be deleted', () => {
+  const locked = applyEdit(withShape(), { type: 'setLocked', shapeId: 'a', locked: true });
+  assert.ok(locked.ok);
+  assert.deepEqual(applyEdit(locked.show, { type: 'delete', shapeId: 'a' }), { ok: false, reason: 'locked' });
+  const unlocked = applyEdit(locked.show, { type: 'setLocked', shapeId: 'a', locked: false });
+  assert.ok(unlocked.ok);
+  assert.ok(applyEdit(unlocked.show, { type: 'delete', shapeId: 'a' }).ok);
+});
+
+test('names are limited in length', () => {
+  const show = withShape();
+  assert.ok(applyEdit(show, { type: 'rename', shapeId: 'a', name: 'n'.repeat(MAX_NAME_LENGTH) }).ok);
+  assert.deepEqual(applyEdit(show, { type: 'rename', shapeId: 'a', name: 'n'.repeat(MAX_NAME_LENGTH + 1) }), { ok: false, reason: 'name-too-long' });
+});
+
+test('attemptEdit gives the refused outline, so the operator screen can draw it in red', () => {
+  const show = withShape(); // square 0.1..0.3
+  // Top-left corner pulled past the right side: its new edge from the bottom-left corner crosses the right edge.
+  const bowtie: EditAction = { type: 'movePoint', shapeId: 'a', index: 0, to: { x: 0.35, y: 0.2 } };
+  assert.deepEqual(applyEdit(show, bowtie), { ok: false, reason: 'crossing' });
+  const attempt = attemptEdit(show, bowtie);
+  assert.ok(attempt);
+  assert.equal(attempt.shapeId, 'a');
+  assert.deepEqual(attempt.show.shapes[0].points[0], { x: 0.35, y: 0.2 });
+  // The held show is untouched.
+  assert.deepEqual(show.shapes[0].points[0], { x: 0.1, y: 0.1 });
+  // Refusals that are not about the outline give nothing to draw.
+  const locked = applyEdit(show, { type: 'setLocked', shapeId: 'a', locked: true });
+  assert.ok(locked.ok);
+  assert.equal(attemptEdit(locked.show, bowtie), null);
+  assert.equal(attemptEdit(show, { type: 'movePoint', shapeId: 'zzz', index: 0, to: { x: 0.4, y: 0.4 } }), null);
+  // A valid edit gives its result too.
+  const fine = attemptEdit(show, { type: 'movePoint', shapeId: 'a', index: 0, to: { x: 0.05, y: 0.05 } });
+  assert.ok(fine);
+  assert.deepEqual(fine.show.shapes[0].points[0], { x: 0.05, y: 0.05 });
 });

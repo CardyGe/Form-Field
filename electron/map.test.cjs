@@ -160,7 +160,8 @@ test('acceptMapMessage checks the envelope and size', () => {
   assert.equal(acceptMapMessage({ type: 'identify', shapeId: null }), true);
   assert.equal(acceptMapMessage({ type: 'crosshair', shapeId: 'a', point: { x: 1, y: 2 } }), true);
   assert.equal(acceptMapMessage({ type: 'crosshair', shapeId: 'a', point: { x: 1 } }), false);
-  assert.equal(acceptMapMessage({ type: 'show', show: { big: 'x'.repeat(20000) } }), false);
+  assert.equal(acceptMapMessage({ type: 'show', show: { big: 'x'.repeat(300000) } }), false);
+  assert.equal(acceptMapMessage({ type: 'show', show: { big: 'x'.repeat(20000) } }), true); // Map's limit is 256 KB
   assert.equal(acceptMapMessage(null), false);
 });
 
@@ -237,4 +238,18 @@ test('loading the autosave waits for a save that is still being written', async 
       assert.deepEqual(await loading, { n: 2 });
     } finally { fs.rename = real; }
   });
+});
+
+test('the wall picture goes from the output window to the studio, and only from there', async () => {
+  const h = harness();
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  const pictures = () => h.sent.filter(([channel]) => channel === 'studio:map:preview');
+  const relay = h.listeners.get('studio:map:preview');
+  relay(h.fromStudio, new ArrayBuffer(100));
+  relay(stranger, new ArrayBuffer(100));
+  relay(h.fromOutput(), new ArrayBuffer(0));
+  relay(h.fromOutput(), new ArrayBuffer(600 * 1024)); // over Live's 512 KB picture limit
+  assert.equal(pictures().length, 0);
+  relay(h.fromOutput(), new ArrayBuffer(100));
+  assert.equal(pictures().length, 1);
 });

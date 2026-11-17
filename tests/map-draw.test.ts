@@ -88,3 +88,13 @@ test('stageCommands: identify highlight comes after all fills and labels, before
   assert.ok(id > lastGridOrText);
   assert.ok(id < firstCross);
 });
+
+test('stageCommands: a refused outline stays red even when its shape is selected', () => {
+  const cmds = stageCommands(show(shape('a')), opts({ selectedId: 'a', selectedIndex: 0, invalidIds: ['a'] }));
+  const strokes = cmds.filter(c => c.kind === 'stroke' && c.shapeId === 'a');
+  assert.deepEqual(strokes.map(c => c.colour), ['#ff0000']);
+  assert.equal(cmds.some(c => c.kind === 'fill'), false);
+  // Without the refusal the same selection draws its yellow outline.
+  const normal = stageCommands(show(shape('a')), opts({ selectedId: 'a' }));
+  assert.ok(normal.some(c => c.kind === 'stroke' && c.colour === '#ffd400'));
+});

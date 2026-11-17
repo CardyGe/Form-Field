@@ -33,9 +33,10 @@ async function saveShowFile(file, text) {
 }
 
 const { createOutputWindow } = require('./output-window.cjs');
+const { acceptPreview } = require('./live.cjs');
 
 // A copy of acceptMapMessage in src/map/messages.ts (the main process cannot load TypeScript). Keep the two in step.
-const MESSAGE_LIMIT = 16 * 1024;
+const MESSAGE_LIMIT = 256 * 1024; // the same as MAP_MESSAGE_LIMIT in src/map/messages.ts
 const SHOW_TEXT_LIMIT = 8 * 1024 * 1024;
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const small = value => { try { const text = JSON.stringify(value); return typeof text === 'string' && text.length < MESSAGE_LIMIT; } catch { return false; } };
@@ -133,6 +134,8 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
   // The output page says when it is ready; only then is the studio told the output is open (and sends the show).
   ipcMain.on('studio:map:ready', event => { if (fromOutput(event)) tellStudio('studio:map:output', true); });
   ipcMain.on('studio:map:close', event => { if (fromOutput(event)) closeOutput(); });
+  // A small picture of the wall, so the operator screen shows what the projector really has.
+  ipcMain.on('studio:map:preview', (event, bytes) => { if (fromOutput(event) && acceptPreview(bytes)) tellStudio('studio:map:preview', bytes); });
   ipcMain.on('studio:map:send', (event, message) => { if (fromStudio(event) && alive(output) && acceptMapMessage(message)) output.webContents.send('studio:map:message', message); });
   screen.on('display-removed', (_event, display) => { if (alive(output) && output.displayId === display.id) closeOutput(); });
   for (const change of ['display-added', 'display-removed', 'display-metrics-changed']) screen.on(change, () => tellStudio('studio:map:displays'));

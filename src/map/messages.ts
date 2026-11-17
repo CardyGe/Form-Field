@@ -7,14 +7,18 @@ export type MapMessage =
   | { type: 'identify'; shapeId: string | null }
   | { type: 'crosshair'; point: Point | null; shapeId: string | null };
 
-export const MAP_MESSAGE_LIMIT = 16 * 1024;
+/**
+ * Map's own limit, larger than Live's 16 KB settings cap: the largest valid show (64 shapes of 32 corners,
+ * names and ids at their limits) is about 110 KB, so a valid show is never refused. Tested.
+ */
+export const MAP_MESSAGE_LIMIT = 256 * 1024;
 
 /** Four decimal places of a stage fraction: 0.2 projector pixels at 1920 wide. */
 const WIRE_PLACES = 1e4;
 const roundForWire = (value: number) => Math.round(value * WIRE_PLACES) / WIRE_PLACES;
 
 /**
- * The show as sent to the wall: corners rounded to four decimal places, so 64 shapes fit in one message.
+ * The show as sent to the wall: corners rounded to four decimal places, which keeps each message small.
  * Used on the send path only; the show the editor holds and saves keeps full precision.
  */
 export function toWire(show: ShowDocument): ShowDocument {

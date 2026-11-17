@@ -204,4 +204,8 @@ export interface MapBridge {
   ready(): void;
   /** Called by the output window to close itself (Escape). */
   requestClose(): void;
+  /** Called by the output window: a small JPEG of what the wall shows. */
+  sendPreview(jpeg: ArrayBuffer): void;
+  /** The wall's picture, about ten times a second while it changes. */
+  onPreview(callback: (jpeg: ArrayBuffer) => void): () => void;
 }

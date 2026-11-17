@@ -1,4 +1,5 @@
-// Real Electron check of the Map section: draw, project, blackout, refusal, Escape.
+// Real Electron check of the Map section: draw, project, refusal (red on the operator screen), the wall's picture
+// on the operator screen, Lock, keys from buttons, blackout, Escape, and coming back to Map.
 // Run: npm run test:map   (builds first). Uses a throwaway user-data folder under work/map/.
 // Writes work/map/output-rectangle.png and work/map/output-blackout.png for review by eye.
 import fs from 'node:fs/promises';
@@ -36,6 +37,13 @@ const sample = (page, fractions) => page.evaluate(async fractions => {
   return { colours, grid, png: btoa(s), size: [canvas.width, canvas.height] };
 }, fractions);
 const near = (a, b, tol = 12) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
+// Pixels of the operator screen's refusal red (#ff0000), told apart from the shape colour #ff3b30 by green and blue.
+const refusalRed = stage => stage.evaluate(c => {
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i] > 220 && d[i + 1] < 25 && d[i + 2] < 25) n++;
+  return n;
+});
+const operatorAt = (stage, fx, fy) => stage.evaluate((c, [fx, fy]) => Array.from(c.getContext('2d').getImageData(Math.floor(fx * c.width), Math.floor(fy * c.height), 1, 1).data.slice(0, 3)), [fx, fy]);
 const RED = [0xff, 0x3b, 0x30], BLACK = [0, 0, 0];
 const BOX = { x0: .25, y0: .25, x1: .6, y1: .6 };
 const INSIDE = [[.3, .3], [.425, .425], [.55, .55], [.3, .55], [.55, .3]];
@@ -86,16 +94,49 @@ try {
     const at = (fx, fy) => [rect.left + fx * rect.width, rect.top + fy * rect.height];
     // Top-left corner dragged past the bottom-left edge's far side: the outline becomes a bowtie.
     await studio.mouse.move(...at(BOX.x0, BOX.y0)); await studio.mouse.down();
-    await studio.mouse.move(...at(.4, .3), { steps: 6 }); await studio.mouse.move(...at(.7, .4), { steps: 6 });
-    await studio.getByText(/Outline crosses itself/).first().waitFor({ timeout: 5000 });
-    await studio.mouse.up();
+    let redDuring;
+    try {
+      await studio.mouse.move(...at(.4, .3), { steps: 6 }); await studio.mouse.move(...at(.7, .4), { steps: 6 });
+      await studio.getByText(/Outline crosses itself/).first().waitFor({ timeout: 5000 });
+      // The operator screen draws the refused outline in red while the drag is held...
+      redDuring = await refusalRed(stage);
+    } finally { await studio.mouse.up(); } // a failed check must not leave the button held for the next one
+    assert.ok(redDuring > 300, `only ${redDuring} red pixels on the operator screen during the refused drag`);
     await studio.getByText(/Outline crosses itself/).first().waitFor({ timeout: 5000 });
     await sleep(400);
+    // ...and stops when it is let go.
+    const redAfter = await refusalRed(stage);
+    assert.ok(redAfter < redDuring / 4, `${redAfter} red pixels remain after release (${redDuring} during)`);
     const s = await sample(output, [...INSIDE, ...OUTSIDE]);
     s.colours.slice(0, INSIDE.length).forEach((c, i) => assert.ok(near(c, RED), `inside ${INSIDE[i]} is rgb(${c}) after refusal`));
     s.colours.slice(INSIDE.length).forEach((c, i) => assert.ok(near(c, BLACK), `outside ${OUTSIDE[i]} is rgb(${c}) after refusal`));
     // The refused spot (top right of the old box, where the bowtie would have painted) stays black.
     assert.ok(near((await sample(output, [[.68, .42]])).colours[0], BLACK));
+  });
+
+  await check("the operator screen shows the wall's own picture behind the outlines", async () => {
+    await studio.waitForFunction(() => document.querySelector('canvas[aria-label="Stage"]')?.dataset.wall === 'picture', null, { timeout: 10000 });
+    // Inside the rectangle the operator screen draws only an outline, so red there can only come from the wall's picture.
+    let inside;
+    for (let i = 0; i < 30; i++) { inside = await operatorAt(stage, .425, .425); if (near(inside, RED, 40)) break; await sleep(100); }
+    assert.ok(near(inside, RED, 40), `operator screen inside the shape is rgb(${inside})`);
+  });
+
+  await check('Lock stops Delete; Backspace from a button deletes nothing; names stop at 40 characters', async () => {
+    const shapes = () => studio.getByRole('list').locator('li').count();
+    assert.equal(await shapes(), 1);
+    assert.equal(await studio.getByLabel('Name', { exact: true }).getAttribute('maxlength'), '40');
+    await studio.getByRole('button', { name: 'Lock Shape 1' }).click();
+    const rect = await stage.evaluate(c => { const r = c.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
+    await studio.mouse.click(rect.left + .425 * rect.width, rect.top + .425 * rect.height); // focus the stage, keep the shape selected
+    await studio.keyboard.press('Delete');
+    await studio.getByText(/That shape is locked/).first().waitFor({ timeout: 5000 });
+    assert.equal(await shapes(), 1, 'a locked shape was deleted');
+    await studio.getByRole('button', { name: 'Unlock Shape 1' }).click();
+    // Focus is now on a button: Backspace must not delete the selected shape.
+    await studio.keyboard.press('Backspace');
+    await sleep(300);
+    assert.equal(await shapes(), 1, 'Backspace from a button deleted the shape');
   });
 
   await check('Blackout turns the whole output black', async () => {
@@ -123,6 +164,17 @@ try {
     await closed;
     await studio.getByRole('button', { name: 'Open output' }).waitFor({ timeout: 10000 });
     assert.ok(!app.windows().some(w => /#map-output/.test(w.url())));
+  });
+
+  await check('leaving Map and coming back keeps the shapes and the undo history', async () => {
+    // The hidden Studio header has its own mode switch, so the button is taken from the Map screen.
+    await studio.getByRole('region', { name: 'Map' }).getByRole('button', { name: 'Studio', exact: true }).click();
+    await studio.getByRole('region', { name: 'Map' }).waitFor({ state: 'detached', timeout: 5000 });
+    await studio.getByRole('button', { name: 'Map', exact: true }).click();
+    await studio.getByRole('region', { name: 'Map' }).waitFor();
+    assert.equal(await studio.getByRole('list').locator('li').count(), 1);
+    const undo = studio.getByRole('button', { name: 'Undo', exact: true });
+    assert.equal(await undo.isDisabled(), false, 'Undo is disabled after coming back to Map');
   });
 
   await check('no page errors', async () => { assert.deepEqual(errors, []); });

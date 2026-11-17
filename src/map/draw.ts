@@ -58,7 +58,8 @@ export function stageCommands(show: ShowDocument, options: DrawOptions): PathCom
     out.push({ kind: 'stroke', shapeId: identified.id, points: identified.points.map(px), colour: '#ffffff', width: 6 });
   }
 
-  const selected = show.shapes.find((s) => s.id === options.selectedId);
+  // A refused outline keeps its red: the selection outline is not drawn over it.
+  const selected = show.shapes.find((s) => s.id === options.selectedId && !invalid.has(s.id));
   if (selected && selected.visible) {
     out.push({ kind: 'stroke', shapeId: selected.id, points: selected.points.map(px), colour: '#ffd400', width: 2 });
     const p = options.selectedIndex === null ? undefined : selected.points[options.selectedIndex];
@@ -77,10 +78,12 @@ export function stageCommands(show: ShowDocument, options: DrawOptions): PathCom
   return out;
 }
 
-export function paint(ctx: CanvasRenderingContext2D, show: ShowDocument, options: DrawOptions): void {
+/** `background`, when given, is drawn first and stretched to the stage: the operator screen passes the wall's picture. */
+export function paint(ctx: CanvasRenderingContext2D, show: ShowDocument, options: DrawOptions, background?: CanvasImageSource): void {
   ctx.clearRect(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+  if (background) { try { ctx.drawImage(background, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height); } catch { /* a picture that cannot be drawn leaves the black stage */ } }
   const trace = (pts: Point[], close: boolean) => {
     ctx.beginPath();
     pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));

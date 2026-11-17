@@ -11,16 +11,57 @@ const TOO_LARGE = 'This show is too large to send to the wall. The wall keeps it
 export const SAVE_FAILED = 'Could not save — keep working, then use Save As';
 const DAMAGED = 'That file could not be read. Nothing was changed.';
 const fileName = (file: string) => file.split(/[\\/]/).pop() || file;
+/** How many shapes in a file did not survive validation. */
+const leftOut = (raw: unknown, show: ShowDocument): number => {
+  const shapes = raw && typeof raw === 'object' ? (raw as { shapes?: unknown }).shapes : undefined;
+  return Array.isArray(shapes) ? Math.max(0, shapes.length - show.shapes.length) : 0;
+};
 const isDamaged = (value: unknown) => !!value && typeof value === 'object' && (value as { damaged?: unknown }).damaged === true && !('shapes' in value);
+
+/**
+ * One Map session per window. It outlives the Map screen, so leaving Map and coming back keeps the shapes
+ * and the undo history, and a save that keeps failing still refuses the close after the screen has gone.
+ */
+interface Session {
+  state: MapState;
+  loaded: boolean;
+  saveFailed: boolean;
+  saver: ReturnType<typeof autosaveSchedule<string>>;
+  /** The screen showing the session, told when a save fails or recovers; null while Map is not shown. */
+  onSaveResult: ((failed: boolean) => void) | null;
+}
+let session: Session | null = null;
+function mapSession(): Session {
+  if (session) return session;
+  const bridge = window.studio?.map;
+  const created: Session = {
+    state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
+    saver: autosaveSchedule<string>(async text => {
+      if (!bridge) return;
+      // A failed write is reported, never swallowed: the operator keeps working and can Save As.
+      try { await bridge.saveAutosave(text); created.saveFailed = false; created.onSaveResult?.(false); }
+      catch (error) { created.saveFailed = true; created.onSaveResult?.(true); throw error; }
+    }, 500),
+  };
+  // Registered once for the window's life: closing must not lose an edit made in the last half second,
+  // and a save that fails refuses the close, with a message, even when Map is not on screen.
+  if (bridge) window.studio?.onBeforeClose(async () => {
+    try { await created.saver.flush(); }
+    catch { created.saveFailed = true; created.onSaveResult?.(true); throw new Error('The Map show could not be saved. Open Map and use Save As to keep it.'); }
+  });
+  session = created;
+  return created;
+}
 
 /** What the operator screen does with the show: hold it, save it, and keep the wall in step. */
 export function useMap(onError: (message: string) => void) {
   const bridge = window.studio?.map;
+  const kept = mapSession();
   // The state is advanced through the pure reducer; the ref lets callbacks read it without waiting for a render.
-  const stateRef = useRef<MapState>(initialMapState(createShow()));
+  const stateRef = useRef<MapState>(kept.state);
   const [state, setState] = useState<MapState>(stateRef.current);
   const show = state.show;
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(kept.loaded);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [tool, setTool] = useState<'select' | 'rectangle'>('select');
@@ -34,27 +75,26 @@ export function useMap(onError: (message: string) => void) {
   // While a drag is in progress this trial show is drawn and sent to the wall; the held show changes only on release.
   const [preview, setPreview] = useState<ShowDocument | null>(null);
   const shown = preview ?? show;
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(kept.saveFailed ? SAVE_FAILED : null);
+  const [wallPicture, setWallPicture] = useState<ImageBitmap | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const latest = useRef({ shown, blackout, testGrid });
   latest.current = { shown, blackout, testGrid };
-  const saver = useRef<ReturnType<typeof autosaveSchedule<string>> | null>(null);
-  if (!saver.current) saver.current = autosaveSchedule<string>(async text => {
-    if (!bridge) return;
-    // A failed write is reported, never swallowed: the operator keeps working and can Save As.
-    try { await bridge.saveAutosave(text); setSaveError(null); }
-    catch (error) { setSaveError(SAVE_FAILED); throw error; }
-  }, 500);
+  const saver = kept.saver;
 
-  // The saved working show, once. A damaged file was already moved aside by the main process, so an empty show is fine.
+  // The saved working show, once per window. A damaged file was already moved aside by the main process, so an empty show is fine.
   useEffect(() => {
+    if (kept.loaded) return;
     let cancelled = false;
     void (async () => {
       const saved = await bridge?.loadAutosave().catch(() => null) ?? null;
-      if (cancelled) return;
+      if (cancelled || kept.loaded) return;
       const next = validateShow(saved).show;
-      stateRef.current = mapReducer(stateRef.current, { type: 'load', show: next });
+      kept.state = stateRef.current = mapReducer(stateRef.current, { type: 'load', show: next });
+      kept.loaded = true;
       setState(stateRef.current); setLoaded(true);
+      const dropped = leftOut(saved, next);
+      if (dropped > 0) setNotice(`${dropped} shape${dropped === 1 ? '' : 's'} in the saved show could not be read and ${dropped === 1 ? 'was' : 'were'} left out.`);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -69,13 +109,16 @@ export function useMap(onError: (message: string) => void) {
     if (!bridge) return;
     const offOutput = bridge.onOutputChanged(setOutputOpen);
     const offDisplays = bridge.onDisplaysChanged(() => void refreshDisplays());
-    // Closing the window must not lose an edit made in the last half second. A failed save refuses the close, with a message.
-    const offClose = window.studio!.onBeforeClose(async () => {
-      try { await saver.current?.flush(); }
-      catch { setSaveError(SAVE_FAILED); throw new Error('The Map show could not be saved. Keep working, then use Save As.'); }
+    // The wall's own picture, for the operator screen. Old pictures are left to the garbage collector,
+    // so one still being drawn is never closed under it.
+    const offPreview = bridge.onPreview(bytes => {
+      void createImageBitmap(new Blob([bytes], { type: 'image/jpeg' })).then(setWallPicture).catch(() => {});
     });
-    return () => { offOutput(); offDisplays(); offClose(); saver.current?.flush().catch(() => {}); void bridge.closeOutput().catch(() => {}); };
+    kept.onSaveResult = failed => setSaveError(failed ? SAVE_FAILED : null);
+    // Leaving Map writes what is waiting. A failure stays recorded in the session and still refuses the close.
+    return () => { offOutput(); offDisplays(); offPreview(); kept.onSaveResult = null; saver.flush().catch(() => {}); void bridge.closeOutput().catch(() => {}); };
   }, []);
+  useEffect(() => { if (!outputOpen) setWallPicture(null); }, [outputOpen]);
 
   // Sends to the wall. During a drag, show and crosshair go at most once per animation frame (the latest wins);
   // anything sent at once replaces what is waiting for the frame, so an old preview never lands after a release.
@@ -125,9 +168,9 @@ export function useMap(onError: (message: string) => void) {
   const step = useCallback((action: Parameters<typeof mapReducer>[1]) => {
     const before = stateRef.current;
     const after = mapReducer(before, action);
-    stateRef.current = after;
+    kept.state = stateRef.current = after;
     setState(after);
-    if (after.show !== before.show) { saver.current?.save(JSON.stringify(after.show)); setNotice(null); }
+    if (after.show !== before.show) { saver.save(JSON.stringify(after.show)); setNotice(null); }
     return after;
   }, []);
   const dispatch = useCallback((action: EditAction) => {
@@ -160,14 +203,18 @@ export function useMap(onError: (message: string) => void) {
   // Open replaces the held show and its undo history through the normal load path. A cancel does nothing and says nothing.
   const openShow = async () => {
     if (!bridge || !canEdit(loadedRef.current)) return;
+    // Open replaces everything here, so it asks first when there is something to lose.
+    const count = stateRef.current.show.shapes.length;
+    if (count > 0 && !window.confirm(`Open a show file? It replaces the ${count} shape${count === 1 ? '' : 's'} here. Use Save As first to keep ${count === 1 ? 'it' : 'them'}.`)) return;
     let opened: unknown;
     try { opened = await bridge.openShow(); } catch { opened = { damaged: true }; }
     if (opened === null || opened === undefined) return;
     if (isDamaged(opened)) { setNotice(DAMAGED); return; }
-    const { show: next, repaired } = validateShow(opened);
+    const { show: next } = validateShow(opened);
     setSelection(null); setPreview(null); setLastRefusal(null);
     step({ type: 'load', show: next });
-    setNotice(repaired ? 'Show opened. Parts that could not be read were left out.' : 'Show opened');
+    const dropped = leftOut(opened, next);
+    setNotice(dropped > 0 ? `Show opened. ${dropped} shape${dropped === 1 ? '' : 's'} could not be read and ${dropped === 1 ? 'was' : 'were'} left out.` : 'Show opened');
   };
   // Save As always asks for a file name, and says which file it wrote.
   const saveShowAs = async () => {
@@ -195,6 +242,6 @@ export function useMap(onError: (message: string) => void) {
 
   const setSelection = (id: string | null, index: number | null = null) => { setSelectedId(id); setSelectedIndex(id === null ? null : index); };
 
-  return { show, shown, preview, setPreview, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIndex, setSelection, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
+  return { show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIndex, setSelection, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning, blackout, setBlackout, testGrid, setTestGrid, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

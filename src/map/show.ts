@@ -11,6 +11,9 @@ export interface ShowDocument { format: 'formshow'; version: 1; stage: { width: 
 export const MAX_SHAPES = 64;
 export const MAX_POINTS = 32;
 export const STAGE_SIZE = { width: 1920, height: 1080 };
+/** Names and ids are limited so the largest valid show always fits in one message to the wall. */
+export const MAX_NAME_LENGTH = 40;
+export const MAX_ID_LENGTH = 64;
 /** The smallest outline the Map accepts: one projector pixel of area, in stage fractions. */
 export const MIN_OUTLINE_AREA = 1 / (1920 * 1080);
 
@@ -40,10 +43,11 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
   const seen = new Set<string>();
   for (const raw of value.shapes.slice(0, MAX_SHAPES)) {
     if (!isRecord(raw) || !Array.isArray(raw.points)) { repaired = true; continue; }
-    if (raw.points.length > MAX_POINTS) repaired = true;
+    // Too many corners: left out whole. Cutting the list would silently change the outline.
+    if (raw.points.length > MAX_POINTS) { repaired = true; continue; }
     const points: Point[] = [];
     let bad = false;
-    for (const p of raw.points.slice(0, MAX_POINTS)) {
+    for (const p of raw.points) {
       const r = validatePoint(p);
       if (!r) { bad = true; break; }
       if (r.repaired) repaired = true;
@@ -53,11 +57,11 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
     // An outline the editor would refuse (crossing, collapsed) is left out rather than sent to the wall.
     if (!isValidOutline(points).ok) { repaired = true; continue; }
 
-    let id = typeof raw.id === 'string' && raw.id !== '' ? raw.id : '';
+    let id = typeof raw.id === 'string' && raw.id !== '' && raw.id.length <= MAX_ID_LENGTH ? raw.id : '';
     if (id === '' || seen.has(id)) { id = crypto.randomUUID(); repaired = true; }
     seen.add(id);
     const colourOk = typeof raw.colour === 'string' && /^#[0-9a-f]{6}$/i.test(raw.colour);
-    const name = typeof raw.name === 'string' ? raw.name : `Shape ${show.shapes.length + 1}`;
+    const name = typeof raw.name === 'string' ? raw.name.slice(0, MAX_NAME_LENGTH) : `Shape ${show.shapes.length + 1}`;
     const visible = typeof raw.visible === 'boolean' ? raw.visible : true;
     const locked = typeof raw.locked === 'boolean' ? raw.locked : false;
     if (!colourOk || name !== raw.name || visible !== raw.visible || locked !== raw.locked) repaired = true;

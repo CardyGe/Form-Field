@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import { useMap } from './useMap';
 import { paint } from '../map/draw';
-import { applyEdit, type EditAction } from '../map/editor';
+import { applyEdit, attemptEdit, type EditAction } from '../map/editor';
 import { parsePixelField, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel } from '../map/geometry';
 import { shortcutFor, shouldCommit } from '../map/keys';
-import { STAGE_SIZE, type Point } from '../map/show';
+import { MAX_NAME_LENGTH, STAGE_SIZE, type Point, type ShowDocument } from '../map/show';
 
 const REASONS: Record<string, string> = {
   crossing: 'Outline crosses itself', collapsed: 'Outline is too thin or flat', 'too-few': 'A shape needs at least three corners',
   'too-many': 'Too many corners', outside: 'Outline must stay on the stage', locked: 'That shape is locked',
   'not-found': 'That shape is gone', 'too-many-shapes': 'Too many shapes', 'duplicate-id': 'That shape already exists',
+  'name-too-long': `Names can be at most ${MAX_NAME_LENGTH} characters`,
 };
 const COLOURS = ['#ff3b30', '#34c759', '#0a84ff', '#ffcc00', '#bf5af2', '#ff9f0a'];
 const MIN_DRAG_PX = 4;       // a rectangle drag smaller than this (projector pixels) creates nothing
@@ -27,7 +28,7 @@ const newId = () => `shape-${Date.now().toString(36)}-${Math.random().toString(3
 const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
 /** A text box that keeps its own draft and hands it over on blur or Enter. */
-function CommitField({ label, value, onCommit, narrow }: { label: string; value: string; onCommit: (text: string) => void; narrow?: boolean }) {
+function CommitField({ label, value, onCommit, narrow, maxLength }: { label: string; value: string; onCommit: (text: string) => void; narrow?: boolean; maxLength?: number }) {
   const [draft, setDraft] = useState(value);
   const start = useRef(value); // the text shown when the box was focused
   useEffect(() => { setDraft(value); start.current = value; }, [value]);
@@ -36,7 +37,7 @@ function CommitField({ label, value, onCommit, narrow }: { label: string; value:
     if (changed) onCommit(draft);
     setDraft(value); start.current = value;
   };
-  return <label className="map-field">{label}<input aria-label={label} className={narrow ? 'narrow' : ''} value={draft} onFocus={() => { start.current = value; }} onChange={e => setDraft(e.target.value)} onBlur={commit}
+  return <label className="map-field">{label}<input aria-label={label} className={narrow ? 'narrow' : ''} maxLength={maxLength} value={draft} onFocus={() => { start.current = value; }} onChange={e => setDraft(e.target.value)} onBlur={commit}
     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }} /></label>;
 }
 
@@ -49,6 +50,8 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   // While a drag is in progress the canvas (and the wall) show map.preview; the real show changes only on release.
   const setPreview = map.setPreview;
   const [dragNote, setDragNote] = useState<string | null>(null);
+  // A drag position that would be refused: drawn in red on this screen only, while the wall keeps the last valid picture.
+  const [refused, setRefused] = useState<{ show: ShowDocument; id: string } | null>(null);
   const shown = map.shown;
   const [resizeTick, setResizeTick] = useState(0);
   useEffect(() => {
@@ -60,9 +63,14 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   useEffect(() => {
     const ctx = canvas.current?.getContext('2d');
     if (!ctx) return;
-    paint(ctx, shown, { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: map.selectedId, selectedIndex: null, outlinesOnly: false, invalidIds: [] });
+    // With the output open, the wall's own picture is drawn behind the outlines, so this screen shows what the projector
+    // really has; the outlines are drawn here at once, so dragging feels instant while the picture follows a moment later.
+    const background = map.outputOpen ? map.wallPicture ?? undefined : undefined;
+    const picture = refused?.show ?? shown;
+    paint(ctx, picture, { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: map.selectedId, selectedIndex: null,
+      outlinesOnly: !!background, invalidIds: refused ? [refused.id] : [] }, background);
     // Corner handles are for the operator only; the output never draws them.
-    const selected = shown.shapes.find(s => s.id === map.selectedId);
+    const selected = picture.shapes.find(s => s.id === map.selectedId);
     // Handles keep a fixed size on screen, whatever size the canvas is displayed at.
     const handle = HANDLE_SIZE_PX * stagePixelsPerScreenPixel(canvas.current?.getBoundingClientRect().width ?? 0);
     if (selected) selected.points.forEach((point, i) => {
@@ -72,7 +80,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
       ctx.strokeStyle = '#000000'; ctx.lineWidth = 2;
       ctx.strokeRect(c.x - handle / 2, c.y - handle / 2, handle, handle);
     });
-  }, [shown, map.selectedId, map.selectedIndex, resizeTick]);
+  }, [shown, refused, map.selectedId, map.selectedIndex, map.outputOpen, map.wallPicture, resizeTick]);
 
   const pointerAt = (e: PointerEvent<HTMLCanvasElement>): Point => stageFromPointer(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
   const reasonText = (reason: string) => REASONS[reason] ?? reason;
@@ -115,16 +123,20 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
     const d = drag.current;
     if (!d) return;
     const action = editFor(d, pointerAt(e));
-    if (!action) { setPreview(null); setDragNote(null); return; }
+    if (!action) { setPreview(null); setDragNote(null); setRefused(null); return; }
     const result = applyEdit(map.show, action);
-    // A refused position leaves the last valid picture on screen (and on the wall) and says why.
-    if (result.ok) { setPreview(result.show); setDragNote(null); }
-    else setDragNote(reasonText(result.reason));
+    // A refused position keeps the last valid picture on the wall, draws the refused outline in red here, and says why.
+    if (result.ok) { setPreview(result.show); setDragNote(null); setRefused(null); }
+    else {
+      setDragNote(reasonText(result.reason));
+      const attempt = attemptEdit(map.show, action);
+      setRefused(attempt ? { show: attempt.show, id: attempt.shapeId } : null);
+    }
   };
 
   const finishDrag = (e: PointerEvent<HTMLCanvasElement>, commit: boolean) => {
     const d = drag.current;
-    drag.current = null; setPreview(null); setDragNote(null);
+    drag.current = null; setPreview(null); setDragNote(null); setRefused(null);
     if (!d || !commit) return;
     const at = pointerAt(e);
     const moved = Math.hypot((at.x - d.start.x) * STAGE_SIZE.width, (at.y - d.start.y) * STAGE_SIZE.height) >= MIN_DRAG_PX / 2;
@@ -137,13 +149,23 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   // Arrow keys move the chosen corner, unless the key press belongs to a text box.
   // Shortcuts work from anywhere in Map, unless the key press belongs to a text box.
   const onKeyDown = (e: globalThis.KeyboardEvent) => {
-    const action = shortcutFor({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, target: e.target as HTMLElement | null });
+    const target = e.target as HTMLElement | null;
+    // Delete, Backspace and Tab act on shapes only while the stage has focus (or nothing does), never from a button.
+    const onStage = !target || target === document.body || !!target.closest?.('.map-stage');
+    const action = shortcutFor({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, onStage, target });
     if (!action) return;
     if (action === 'undo') { e.preventDefault(); map.undo(); }
     else if (action === 'redo') { e.preventDefault(); map.redo(); }
     else if (action === 'select') map.setTool('select');
     else if (action === 'rectangle') map.setTool('rectangle');
     else if (action === 'deselect') map.setSelection(null);
+    else if (action === 'next-corner' || action === 'previous-corner') {
+      if (!selectedShape) return;
+      e.preventDefault();
+      const n = selectedShape.points.length, i = map.selectedIndex;
+      const next = action === 'next-corner' ? (i === null ? 0 : (i + 1) % n) : (i === null ? n - 1 : (i - 1 + n) % n);
+      map.setSelection(selectedShape.id, next);
+    }
     else if (action === 'delete') {
       if (!selectedShape) return;
       e.preventDefault();
@@ -217,12 +239,12 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
           <button className="text-button" aria-pressed={shape.locked} aria-label={`${shape.locked ? 'Unlock' : 'Lock'} ${shape.name}`} onClick={() => map.dispatch({ type: 'setLocked', shapeId: shape.id, locked: !shape.locked })}>{shape.locked ? 'Locked' : 'Unlocked'}</button>
         </li>)}</ul>
       </aside>
-      <main className="map-stage" tabIndex={0} aria-label="Stage area"><canvas ref={canvas} aria-label="Stage" style={{ cursor: map.tool === 'rectangle' ? 'crosshair' : 'default', touchAction: 'none' }}
+      <main className="map-stage" tabIndex={0} aria-label="Stage area"><canvas ref={canvas} aria-label="Stage" data-wall={map.outputOpen && map.wallPicture ? 'picture' : 'local'} style={{ cursor: map.tool === 'rectangle' ? 'crosshair' : 'default', touchAction: 'none' }}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} width={STAGE_SIZE.width} height={STAGE_SIZE.height} /></main>
       <aside className="live-column map-inspector" aria-label="Details">
         <h2>Details</h2>
         {!selectedShape ? <p className="muted-text">Pick a shape to see its details.</p> : <>
-          <CommitField label="Name" value={selectedShape.name} onCommit={commitName} />
+          <CommitField label="Name" value={selectedShape.name} onCommit={commitName} maxLength={MAX_NAME_LENGTH} />
           <CommitField label="Colour" value={selectedShape.colour} onCommit={commitColour} narrow />
           <div className="map-toggles">
             <button className="text-button" aria-pressed={selectedShape.visible} onClick={() => map.dispatch({ type: 'setVisible', shapeId: selectedShape.id, visible: !selectedShape.visible })}>{selectedShape.visible ? 'Shown' : 'Hidden'}</button>
@@ -232,7 +254,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
             <h3>Corner {map.selectedIndex! + 1}</h3>
             <CommitField label="X" value={String(Math.round(selectedPoint.x * STAGE_SIZE.width))} onCommit={t => commitPosition('x', t)} narrow />
             <CommitField label="Y" value={String(Math.round(selectedPoint.y * STAGE_SIZE.height))} onCommit={t => commitPosition('y', t)} narrow />
-            <p className="muted-text">Positions are in pixels on the projector. Click the stage, then use the arrow keys to nudge (Shift for 10).</p>
+            <p className="muted-text">Positions are in pixels on the projector. Click the stage, then use the arrow keys to nudge (Shift for 10). Tab steps to the next corner.</p>
           </> : <p className="muted-text">Click a corner on the stage to set its exact position.</p>}
         </>}
       </aside>

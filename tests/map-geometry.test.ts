@@ -100,7 +100,7 @@ test('shouldCommit only when the text was changed', () => {
 
 test('shortcutFor maps keys to actions and ignores typing targets', async () => {
   const { shortcutFor } = await import('../src/map/keys');
-  const ev = (key: string, extra = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: { tagName: 'DIV' }, ...extra });
+  const ev = (key: string, extra = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: { tagName: 'DIV' }, onStage: true, ...extra });
   assert.equal(shortcutFor(ev('Delete')), 'delete');
   assert.equal(shortcutFor(ev('Backspace')), 'delete');
   assert.equal(shortcutFor(ev('z', { metaKey: true })), 'undo');
@@ -113,4 +113,20 @@ test('shortcutFor maps keys to actions and ignores typing targets', async () => 
   assert.equal(shortcutFor(ev('Backspace', { target: { tagName: 'INPUT' } })), null);
   assert.equal(shortcutFor(ev('z', { metaKey: true, target: { tagName: 'INPUT' } })), null);
   assert.equal(shortcutFor(ev('r', { metaKey: true })), null);
+});
+
+test('Delete, Backspace and Tab act only when the stage has focus', async () => {
+  const { shortcutFor } = await import('../src/map/keys');
+  const ev = (key: string, extra = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: { tagName: 'BUTTON' }, onStage: false, ...extra });
+  // Focus on a button (for example after clicking Identify): Backspace must not delete the selected shape.
+  assert.equal(shortcutFor(ev('Backspace')), null);
+  assert.equal(shortcutFor(ev('Delete')), null);
+  assert.equal(shortcutFor(ev('Tab')), null);
+  // Undo and the tool keys still work from anywhere outside a text box.
+  assert.equal(shortcutFor(ev('z', { metaKey: true })), 'undo');
+  assert.equal(shortcutFor(ev('v')), 'select');
+  // On the stage, Tab steps to the next corner and Shift-Tab to the one before.
+  assert.equal(shortcutFor(ev('Tab', { onStage: true })), 'next-corner');
+  assert.equal(shortcutFor(ev('Tab', { onStage: true, shiftKey: true })), 'previous-corner');
+  assert.equal(shortcutFor(ev('Backspace', { onStage: true })), 'delete');
 });

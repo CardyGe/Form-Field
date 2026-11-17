@@ -10,10 +10,14 @@ export function shouldCommit(startText: string, draft: string): boolean {
   return draft !== startText;
 }
 
-export type Shortcut = 'undo' | 'redo' | 'delete' | 'select' | 'rectangle' | 'deselect' | 'arrow';
+export type Shortcut = 'undo' | 'redo' | 'delete' | 'select' | 'rectangle' | 'deselect' | 'arrow' | 'next-corner' | 'previous-corner';
 
-/** What a key press asks the Map screen to do, or null when it asks nothing or belongs to a text box. */
-export function shortcutFor(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; target: { tagName?: string; isContentEditable?: boolean } | null }): Shortcut | null {
+/**
+ * What a key press asks the Map screen to do, or null when it asks nothing or belongs to a text box.
+ * `onStage` is true when focus is on the stage: Delete, Backspace and Tab act only then, so a key
+ * pressed while a button has focus never deletes a shape or steals Tab from moving between controls.
+ */
+export function shortcutFor(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; onStage?: boolean; target: { tagName?: string; isContentEditable?: boolean } | null }): Shortcut | null {
   if (isTypingTarget(e.target)) return null;
   const key = e.key.toLowerCase();
   if (e.metaKey || e.ctrlKey) return key === 'z' && !e.altKey ? (e.shiftKey ? 'redo' : 'undo') : null;
@@ -21,7 +25,8 @@ export function shortcutFor(e: { key: string; metaKey: boolean; ctrlKey: boolean
   if (key === 'v') return 'select';
   if (key === 'r') return 'rectangle';
   if (e.key === 'Escape') return 'deselect';
-  if (e.key === 'Delete' || e.key === 'Backspace') return 'delete';
+  if (e.key === 'Delete' || e.key === 'Backspace') return e.onStage ? 'delete' : null;
+  if (e.key === 'Tab') return e.onStage ? (e.shiftKey ? 'previous-corner' : 'next-corner') : null;
   if (e.key in { ArrowLeft: 1, ArrowRight: 1, ArrowUp: 1, ArrowDown: 1 }) return 'arrow';
   return null;
 }
