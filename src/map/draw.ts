@@ -81,18 +81,14 @@ export function stageCommands(show: Shapes, options: DrawOptions): PathCommand[]
   return out;
 }
 
-/** `background`, when given, is drawn first and stretched to the stage: the operator screen passes the wall's picture. */
-export function paint(ctx: CanvasRenderingContext2D, show: Shapes, options: DrawOptions, background?: CanvasImageSource): void {
-  ctx.clearRect(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
-  if (background) { try { ctx.drawImage(background, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height); } catch { /* a picture that cannot be drawn leaves the black stage */ } }
+/** Draws stage commands onto a 2D context, in order. */
+export function drawCommands(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, commands: PathCommand[]): void {
   const trace = (pts: Point[], close: boolean) => {
     ctx.beginPath();
     pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
     if (close) ctx.closePath();
   };
-  for (const c of stageCommands(show, options)) {
+  for (const c of commands) {
     const pts = c.points ?? [];
     switch (c.kind) {
       case 'fill': ctx.fillStyle = c.colour ?? '#fff'; trace(pts, true); ctx.fill(); break;
@@ -106,4 +102,13 @@ export function paint(ctx: CanvasRenderingContext2D, show: Shapes, options: Draw
         break;
     }
   }
+}
+
+/** `background`, when given, is drawn first and stretched to the stage: the operator screen passes the wall's picture. */
+export function paint(ctx: CanvasRenderingContext2D, show: Shapes, options: DrawOptions, background?: CanvasImageSource): void {
+  ctx.clearRect(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+  if (background) { try { ctx.drawImage(background, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height); } catch { /* a picture that cannot be drawn leaves the black stage */ } }
+  drawCommands(ctx, stageCommands(show, options));
 }

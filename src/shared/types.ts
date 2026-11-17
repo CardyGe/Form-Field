@@ -208,4 +208,7 @@ export interface MapBridge {
   sendPreview(jpeg: ArrayBuffer): void;
   /** The wall's picture, about ten times a second while it changes. */
   onPreview(callback: (jpeg: ArrayBuffer) => void): () => void;
+  /** Called by the output window once a second: frame rate, governor level, failing sources. */
+  sendState(state: import('../map/compositor').CompositorStats): void;
+  onState(callback: (state: import('../map/compositor').CompositorStats) => void): () => void;
 }

@@ -45,6 +45,12 @@ const within = (value, limit) => { try { const text = JSON.stringify(value); ret
 const idOrNull = value => value === null || typeof value === 'string';
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 
+/** What the output may report to the studio: its frame rate, the governor level, failing sources, prepare counts. */
+function acceptState(value) {
+  if (!plain(value) || !within(value, 16 * 1024)) return false;
+  return finite(value.fps) && Number.isInteger(value.level) && value.level >= 0 && value.level <= 3 && Array.isArray(value.failing) && (value.prepares === undefined || plain(value.prepares));
+}
+
 function acceptMapMessage(value) {
   if (!plain(value)) return false;
   if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MESSAGE_LIMIT)) return false;
@@ -147,6 +153,7 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
   // The output page says when it is ready; only then is the studio told the output is open (and sends the show).
   ipcMain.on('studio:map:ready', event => { if (fromOutput(event)) tellStudio('studio:map:output', true); });
   ipcMain.on('studio:map:close', event => { if (fromOutput(event)) closeOutput(); });
+  ipcMain.on('studio:map:state', (event, state) => { if (fromOutput(event) && acceptState(state)) tellStudio('studio:map:state', state); });
   // A small picture of the wall, so the operator screen shows what the projector really has.
   ipcMain.on('studio:map:preview', (event, bytes) => { if (fromOutput(event) && acceptPreview(bytes)) tellStudio('studio:map:preview', bytes); });
   ipcMain.on('studio:map:send', (event, message) => { if (fromStudio(event) && alive(output) && acceptMapMessage(message)) output.webContents.send('studio:map:message', message); });

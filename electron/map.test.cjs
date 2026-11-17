@@ -265,3 +265,20 @@ test('output on the studio\'s own screen opens as an ordinary window; on another
   assert.equal(h.windows.at(-1).options.frame, false);
   assert.equal(h.windows.at(-1).options.width, 1920);
 });
+
+test('the output reports its frame rate to the studio, and only small, well-formed reports pass', async () => {
+  const h = harness();
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  const reports = () => h.sent.filter(([channel]) => channel === 'studio:map:state');
+  const relay = h.listeners.get('studio:map:state');
+  const good = { fps: 60, level: 0, failing: [], prepares: { a: 1 } };
+  relay(h.fromStudio, good);
+  relay(stranger, good);
+  relay(h.fromOutput(), { fps: 'fast', level: 0, failing: [] });
+  relay(h.fromOutput(), { fps: 60, level: 9, failing: [] });
+  relay(h.fromOutput(), { fps: 60, level: 0, failing: 'x' });
+  relay(h.fromOutput(), { ...good, padding: 'x'.repeat(20000) });
+  assert.equal(reports().length, 0);
+  relay(h.fromOutput(), good);
+  assert.deepEqual(reports(), [['studio:map:state', good]]);
+});

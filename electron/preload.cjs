@@ -57,6 +57,8 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
     ready: () => ipcRenderer.send('studio:map:ready'),
     requestClose: () => ipcRenderer.send('studio:map:close'),
     sendPreview: jpeg => ipcRenderer.send('studio:map:preview', jpeg),
+    sendState: state => ipcRenderer.send('studio:map:state', state),
+    onState: callback => subscribe('studio:map:state', callback),
     onPreview: callback => subscribe('studio:map:preview', callback),
   }),
   live: Object.freeze({
