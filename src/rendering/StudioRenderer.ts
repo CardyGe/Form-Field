@@ -134,6 +134,8 @@ function number(layer: Layer, key: string, fallback: number): number {
  * The EXR cache deliberately contains no transfer function or display metadata guess.
  */
 export class StudioRenderer {
+  /** Reused by render() to read the canvas size without allocating. */
+  private readonly canvasSize = new THREE.Vector2();
   private readonly renderer: THREE.WebGLRenderer;
   private readonly maxTargetSize: number;
   private readonly quadScene = new THREE.Scene();
@@ -1091,7 +1093,10 @@ export class StudioRenderer {
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     this.renderFrame(project, phase, w, h);
-    this.renderer.setSize(w, h, false);
+    // Resizing a canvas, even to the size it already has, resets it and re-allocates its drawing buffer:
+    // only when the size changes.
+    const canvasSize = this.renderer.getSize(this.canvasSize);
+    if (canvasSize.x !== w || canvasSize.y !== h) this.renderer.setSize(w, h, false);
     this.display.uniforms.uImage.value = this.linearOutput.texture;
     this.draw(this.display, null);
   }

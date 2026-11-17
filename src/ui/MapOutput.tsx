@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { MapCompositor } from '../map/compositor';
 import { STAGE_SIZE } from '../map/show';
 import { applyMapMessage, initialWall } from '../map/wall';
+import PreviewWorker from '../map/preview-worker?worker&inline';
 
 const PREVIEW = [480, 270] as const;
-const PREVIEW_EVERY_MS = 100;
+/** At most five previews a second, and only after the wall has changed. */
+const PREVIEW_EVERY_MS = 200;
 const REPORT_EVERY_MS = 1000;
 
 /** The wall window: nothing but the picture. It is told what to show by the studio window, and plays the instruments itself. */
@@ -28,11 +30,13 @@ export default function MapOutput() {
     const off = bridge.onMessage(message => { state = applyMapMessage(state, message); apply(); });
 
     // The operator screen gets a small picture of the wall, and once a second how the wall is keeping up.
-    const small = new OffscreenCanvas(...PREVIEW), smallContext = small.getContext('2d')!;
-    let raf = 0, busy = false, sentPicture = 0, sentReport = 0;
+    // The picture is taken without waiting for the graphics card and encoded in a worker, so the wall never stalls for it.
+    const encoder = new PreviewWorker();
+    let raf = 0, busy = false, changed = true, sentPicture = 0, sentReport = 0;
+    encoder.onmessage = (event: MessageEvent<ArrayBuffer | null>) => { busy = false; if (event.data) bridge.sendPreview(event.data); };
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
-      compositor.frame(now);
+      if (compositor.frame(now)) changed = true;
       if (now - sentReport >= REPORT_EVERY_MS) {
         sentReport = now;
         const stats = compositor.stats();
@@ -40,17 +44,18 @@ export default function MapOutput() {
         (window as unknown as { __mapStats?: unknown }).__mapStats = stats;
         bridge.sendState(stats);
       }
-      if (busy || now - sentPicture < PREVIEW_EVERY_MS) return;
-      // Taken straight after the frame is drawn.
-      sentPicture = now; busy = true;
-      smallContext.drawImage(element, 0, 0, ...PREVIEW);
-      void small.convertToBlob({ type: 'image/jpeg', quality: 0.7 }).then(blob => blob.arrayBuffer()).then(bytes => bridge.sendPreview(bytes)).catch(() => {}).finally(() => { busy = false; });
+      if (busy || !changed || now - sentPicture < PREVIEW_EVERY_MS) return;
+      // Taken straight after a drawn frame.
+      sentPicture = now; busy = true; changed = false;
+      createImageBitmap(element, { resizeWidth: PREVIEW[0], resizeHeight: PREVIEW[1], resizeQuality: 'medium' })
+        .then(picture => encoder.postMessage(picture, [picture]))
+        .catch(() => { busy = false; });
     };
     raf = requestAnimationFrame(tick);
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };
     window.addEventListener('keydown', key);
     bridge.ready();
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', key); off(); compositor.dispose(); };
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('keydown', key); off(); encoder.terminate(); compositor.dispose(); };
   }, []);
   return <div className="live-output">{failure ? <p>{failure}</p> : <canvas ref={canvas} width={STAGE_SIZE.width} height={STAGE_SIZE.height} />}</div>;
 }

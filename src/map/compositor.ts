@@ -83,6 +83,9 @@ export class MapCompositor {
   private secondStarted = 0;
   private fps = 0;
   private disposed = false;
+  /** Something changed since the stage was last drawn: the show, the overlays, Freeze, or an instrument became ready. */
+  private dirty = true;
+  private optionsKey = '';
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
@@ -96,6 +99,7 @@ export class MapCompositor {
   setShow(show: PlayShow, projects: ReadonlyMap<string, Project>): void {
     this.show = show;
     this.projects = new Map(projects);
+    this.dirty = true;
     // Fades start when a shape changes source, or its source changes instrument. The old picture is taken before
     // the old source is let go, so the shape holds it while the new one starts.
     const now = performance.now();
@@ -116,12 +120,20 @@ export class MapCompositor {
     for (const id of [...this.restartAt.keys()]) if (!live.has(id)) this.restartAt.delete(id);
   }
 
-  setOptions(options: DrawOptions): void { this.options = options; }
-  setFrozen(frozen: boolean): void { this.frozen = frozen; }
+  /** Called every frame by the operator screen, so only a real change counts. */
+  setOptions(options: DrawOptions): void {
+    const key = JSON.stringify(options);
+    if (key === this.optionsKey) return;
+    this.options = options; this.optionsKey = key; this.dirty = true;
+  }
+  setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.dirty = true; } }
 
-  /** Advances the clock, draws every source that is due, and composites the stage. */
-  frame(now: number): void {
-    if (this.disposed) return;
+  /**
+   * Advances the clock, draws every source that is due, and composites the stage. Returns whether the stage was drawn:
+   * a still show (nothing playing, no fade, nothing changed) is not drawn again.
+   */
+  frame(now: number): boolean {
+    if (this.disposed) return false;
     const started = performance.now();
     const seconds = this.last === null ? 0 : (now - this.last) / 1000;
     this.last = now;
@@ -129,6 +141,7 @@ export class MapCompositor {
     const draw = !this.frozen && drawsThisFrame(this.governor.level, this.frameIndex);
 
     this.overLimit.clear();
+    let rendered = false;
     for (const source of this.show.sources) {
       const project = this.projects.get(source.id);
       if (!project) continue;
@@ -146,16 +159,20 @@ export class MapCompositor {
       try {
         slot.renderer.render(slot.project, slot.phase, size.width, size.height);
         slot.frame = copyFrame(slot.canvas, size.width, size.height, slot.frame);
+        rendered = true;
         if (slot.failedProject === null) slot.failed = null;
       } catch (error) { slot.failed = String((error as Error)?.message ?? error); }
     }
 
-    this.composite(now);
+    const drawn = this.dirty || rendered || this.fades.size > 0;
+    if (drawn) { this.composite(now); this.dirty = false; }
     this.frameIndex++;
     const work = performance.now() - started;
-    if (!this.frozen) this.governor = governorStep(this.governor, frameCost(work, seconds * 1000));
+    // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
+    if (!this.frozen && drawn) this.governor = governorStep(this.governor, frameCost(work, seconds * 1000));
     this.framesThisSecond++;
     if (now - this.secondStarted >= 1000) { this.fps = this.framesThisSecond * 1000 / (now - this.secondStarted); this.framesThisSecond = 0; this.secondStarted = now; }
+    return drawn;
   }
 
   stats(): CompositorStats {
@@ -179,6 +196,7 @@ export class MapCompositor {
   private release(id: string, slot: Slot): void {
     slot.renderer?.dispose();
     slot.renderer = null;
+    this.dirty = true; // its shape now plays its colour
     const gl = slot.canvas.getContext('webgl2') ?? slot.canvas.getContext('webgl');
     gl?.getExtension('WEBGL_lose_context')?.loseContext();
     this.slots.delete(id);
@@ -217,11 +235,13 @@ export class MapCompositor {
       // An evolving composition plays from its start; a looping one carries on where it was.
       if (isEvolving(project)) slot.phase = 0;
       slot.project = project; slot.pending = null; slot.failed = null; slot.failedProject = null;
+      this.dirty = true;
     }).catch(error => {
       if (slot.pending !== project) return;
       slot.pending = null;
       slot.failedProject = project;
       slot.failed = String((error as Error)?.message ?? error);
+      this.dirty = true;
     });
   }
 

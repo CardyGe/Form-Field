@@ -293,6 +293,8 @@ Measured 17 November 2026 on this Mac (Electron 45, display at 120 Hz) with `scr
 
 **Against the target** (60 fps with eight shapes and four instruments): met on average with room to spare. Not every frame: 6 to 10 % of frames took longer than a 60 Hz frame. They were scattered, not runs of 30, so the governor rightly did not step down.
 
+**After the performance audit** (docs/map-performance-audit-2026-11-17.md): both mixes run at the display's full 120 fps, with no frame over 16.7 ms in 30 s (worst 12.8 ms and 9.4 ms). The long frames were the wall preview's JPEG encode stalling the projector page; it now happens in a worker.
+
 **What these numbers do not show.**
 - A 60 Hz projector. This display refreshes at 120 Hz; on a 60 Hz output the scattered long frames would show as occasional repeated frames.
 - A long run. The two-hour record is stage 5's.

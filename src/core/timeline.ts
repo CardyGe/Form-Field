@@ -1,5 +1,5 @@
 import type { Layer, Modulation, Project } from '../shared/types';
-import { clampParameter, hashSeed, parameterDefinitions, seededRandom } from './project';
+import { clampParameter, hashSeed, readParameterDefinitions, seededRandom } from './project';
 
 const TAU = Math.PI * 2;
 const wrap = (value: number, period = TAU): number => ((value % period) + period) % period;
@@ -87,7 +87,8 @@ export function evaluateLayer(layer: Layer, phase: number): Layer {
   };
   if (layer.image) result.image = { ...layer.image };
   if (layer.surface) result.surface = structuredClone(layer.surface);
-  const definitions = parameterDefinitions(layer.kind);
+  // Read, not copied: this runs for every layer on every frame.
+  const definitions = readParameterDefinitions(layer.kind);
   const seed = layer.params.seed ?? hashSeed(layer.id);
   for (const [key, mod] of Object.entries(layer.modulations)) {
     const signal = sampleModulation(mod, phase, hashSeed(`${seed}:${key}`));

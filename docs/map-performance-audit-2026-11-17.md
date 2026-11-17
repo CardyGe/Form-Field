@@ -88,3 +88,37 @@ No growth was seen in the 12 s windows. Long runs are stage 5's two-hour test.
 3. Finding 4: idle cost and power.
 4. Finding 5: optional.
 5. Re-run `scripts/measure-map.mjs` and `scripts/profile-map.mjs`, and compare against the stage 2 results: 105 and 96 fps, with 6 % and 10 % of frames over 16.7 ms.
+
+## After the fixes
+
+Fixes 1 to 4 are in; 5 is not (see below). Measured again on the same machine with the same scripts.
+
+**Frame times** (`scripts/measure-map.mjs`, eight shapes, four instruments, 30 s):
+
+| Mix | Before | After |
+|---|---|---|
+| Medium | 105 fps; 193 frames over 16.7 ms; worst 47.9 ms | 120 fps (the display's rate); 0 frames over 16.7 ms; worst 12.8 ms |
+| Heavy | 96 fps; 276 frames over 16.7 ms; worst 69.9 ms | 120 fps; 0 frames over 16.7 ms; worst 9.4 ms |
+
+**Main thread busy** (`scripts/profile-map.mjs`):
+
+| Situation | Before | After |
+|---|---|---|
+| Projector window, heavy show | 71 % (44 % in the JPEG encode) | 16.5 % |
+| Operator screen, projector open | 4.5 % | 2.1 % |
+| Operator screen playing the heavy show | 20.4 % | 17.8 % |
+| Idle show, projector window | 7 % | 0.9 % |
+| Idle show, operator screen | 2.5 % | 1.2 % |
+
+**Memory:** no growth over 90 s with the heavy show. Both pages' JavaScript heaps were flat at 78 MB and 117 MB. Process memory rose and fell with garbage collection, ending lower than it started.
+
+**What changed:**
+
+1. The wall preview is captured with `createImageBitmap`, which does not wait for the graphics card. It is encoded in a worker (`src/map/preview-worker.ts`), sent only after the wall changed, and at most 5 times a second.
+2. `StudioRenderer.render` resizes the canvas only when the size changes. Studio's preview benefits too.
+3. `evaluateLayer` reads the parameter definitions through `readParameterDefinitions`, without copying.
+4. The compositor draws only when something changed: the show, the overlays, Freeze, an instrument playing or becoming ready, or a fade. The governor judges only frames that draw.
+
+**Not done: fix 5.** The extra copy of each instrument's picture stays. Studio's renderer does not keep its picture after it is shown, so the copy is what crossfades, Freeze and half-rate drawing draw from. With no long frames left, it is not worth the risk.
+
+**Studio check:** `npm run test:ui` stops at the same step ("Project saved." never appears) on this branch and on the commit before any Map work (0057891), after the same 12 passing checks. It is an existing failure, not caused by these changes.

@@ -307,6 +307,14 @@ export function parameterDefinitions(kind: LayerKind): ParameterDefinition[] {
   return DEFINITIONS[kind].map((definition) => ({ ...definition }));
 }
 
+/**
+ * The definitions themselves, not copies, for code that only reads them on every frame (evaluateLayer).
+ * Never change what this returns.
+ */
+export function readParameterDefinitions(kind: LayerKind): readonly Readonly<ParameterDefinition>[] {
+  return DEFINITIONS[kind];
+}
+
 const FRACTAL_ADDED_FIELDS = ['zoomFlight', 'approach', 'outside', 'variant', 'quality', 'density', 'juliaReal', 'juliaImag', 'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth'];
 const GRADING_FIELDS = ['saturation', 'hue', 'exposure'];
 const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
