@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import { useMap } from './useMap';
+import MapMenu, { type MenuEntry } from './MapMenu';
 import { paint } from '../map/draw';
 import { applyEdit, attemptEdit, type EditAction } from '../map/editor';
 import { parsePixelField, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel } from '../map/geometry';
@@ -50,6 +51,8 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   // While a drag is in progress the canvas (and the wall) show map.preview; the real show changes only on release.
   const setPreview = map.setPreview;
   const [dragNote, setDragNote] = useState<string | null>(null);
+  // The right-click menu: where it opened, and whether it is about a shape or the empty stage.
+  const [menu, setMenu] = useState<{ x: number; y: number; shapeId: string | null } | null>(null);
   // A drag position that would be refused: drawn in red on this screen only, while the wall keeps the last valid picture.
   const [refused, setRefused] = useState<{ show: ShowDocument; id: string } | null>(null);
   const shown = map.shown;
@@ -149,6 +152,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   // Arrow keys move the chosen corner, unless the key press belongs to a text box.
   // Shortcuts work from anywhere in Map, unless the key press belongs to a text box.
   const onKeyDown = (e: globalThis.KeyboardEvent) => {
+    if (menu) return; // the open menu handles its own keys
     const target = e.target as HTMLElement | null;
     // Delete, Backspace and Tab act on shapes only while the stage has focus (or nothing does), never from a button.
     const onStage = !target || target === document.body || !!target.closest?.('.map-stage');
@@ -159,6 +163,11 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
     else if (action === 'select') map.setTool('select');
     else if (action === 'rectangle') map.setTool('rectangle');
     else if (action === 'deselect') map.setSelection(null);
+    else if (action === 'duplicate') {
+      if (!selectedShape) return;
+      e.preventDefault();
+      duplicate(selectedShape.id);
+    }
     else if (action === 'next-corner' || action === 'previous-corner') {
       if (!selectedShape) return;
       e.preventDefault();
@@ -189,6 +198,60 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   const selectedPoint = selectedShape && map.selectedIndex !== null ? selectedShape.points[map.selectedIndex] ?? null : null;
   const [inspectorNote, setInspectorNote] = useState<string | null>(null);
   useEffect(() => setInspectorNote(null), [map.selectedId, map.selectedIndex]);
+  // Shape actions shared by the right-click menu, the keyboard and the Details panel.
+  const duplicate = (shapeId: string) => {
+    const id = newId();
+    if (map.dispatch({ type: 'duplicate', shapeId, id })) map.setSelection(id);
+  };
+  const remove = (shapeId: string) => { if (map.dispatch({ type: 'delete', shapeId })) map.setSelection(null); };
+  const focusName = () => requestAnimationFrame(() => {
+    const field = document.querySelector<HTMLInputElement>('.map-inspector input[aria-label="Name"]');
+    field?.focus(); field?.select();
+  });
+  const openMenu = (x: number, y: number, shapeId: string | null) => {
+    drag.current = null; setPreview(null); setDragNote(null); setRefused(null);
+    if (shapeId) map.setSelection(shapeId, shapeId === map.selectedId ? map.selectedIndex : null);
+    setMenu({ x, y, shapeId });
+  };
+  const onStageMenu = (e: MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!map.loaded) return;
+    const at = stageFromPointer(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
+    // The topmost visible shape under the pointer, as a left click would pick.
+    const hit = [...map.show.shapes].reverse().find(s => s.visible && pointInPolygon(at, s.points));
+    openMenu(e.clientX, e.clientY, hit?.id ?? null);
+  };
+  const menuEntries = (shapeId: string | null): MenuEntry[] => {
+    const index = shapeId ? map.show.shapes.findIndex(s => s.id === shapeId) : -1;
+    const shape = index >= 0 ? map.show.shapes[index] : null;
+    if (!shape) return [
+      { kind: 'item', label: 'Draw a rectangle', shortcut: 'R', checked: map.tool === 'rectangle', onSelect: () => map.setTool('rectangle') },
+      { kind: 'item', label: 'Select and move', shortcut: 'V', checked: map.tool === 'select', onSelect: () => map.setTool('select') },
+      { kind: 'separator' },
+      { kind: 'item', label: 'Test grid', checked: map.testGrid, onSelect: () => map.setTestGrid(!map.testGrid) },
+      { kind: 'item', label: 'Blackout', checked: map.blackout, onSelect: () => map.setBlackout(!map.blackout) },
+      ...(map.selectedId ? [{ kind: 'separator' } as const, { kind: 'item', label: 'Deselect', shortcut: 'Esc', onSelect: () => map.setSelection(null) } as const] : []),
+    ];
+    const last = map.show.shapes.length - 1, locked = shape.locked;
+    const reorder = (to: 'front' | 'back' | 'forward' | 'backward') => () => map.dispatch({ type: 'reorder', shapeId: shape.id, to });
+    return [
+      { kind: 'item', label: 'Duplicate', shortcut: '⌘D', onSelect: () => duplicate(shape.id) },
+      { kind: 'item', label: locked ? 'Delete (unlock first)' : 'Delete', shortcut: '⌫', danger: true, disabled: locked, onSelect: () => remove(shape.id) },
+      { kind: 'separator' },
+      { kind: 'item', label: 'Bring to front', disabled: locked || index === last, onSelect: reorder('front') },
+      { kind: 'item', label: 'Bring forward', disabled: locked || index === last, onSelect: reorder('forward') },
+      { kind: 'item', label: 'Send backward', disabled: locked || index === 0, onSelect: reorder('backward') },
+      { kind: 'item', label: 'Send to back', disabled: locked || index === 0, onSelect: reorder('back') },
+      { kind: 'separator' },
+      { kind: 'swatches', label: 'Colour', colours: COLOURS, current: shape.colour, disabled: locked, onPick: colour => map.dispatch({ type: 'setColour', shapeId: shape.id, colour }) },
+      { kind: 'item', label: 'Rename…', disabled: locked, onSelect: focusName },
+      { kind: 'separator' },
+      { kind: 'item', label: 'Locked', checked: shape.locked, onSelect: () => map.dispatch({ type: 'setLocked', shapeId: shape.id, locked: !shape.locked }) },
+      { kind: 'item', label: 'Shown', checked: shape.visible, onSelect: () => map.dispatch({ type: 'setVisible', shapeId: shape.id, visible: !shape.visible }) },
+      { kind: 'item', label: 'Identify on the projector', disabled: !map.outputOpen || !shape.visible, onSelect: map.identify },
+    ];
+  };
+
   const commitPosition = (axis: 'x' | 'y', text: string) => {
     if (!selectedShape || !selectedPoint || map.selectedIndex === null) return;
     const px = parsePixelField(text, { min: 0, max: axis === 'x' ? STAGE_SIZE.width : STAGE_SIZE.height });
@@ -232,7 +295,8 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
       <aside className="live-column map-shapes" aria-label="Shapes">
         <h2>Shapes</h2>
         {map.show.shapes.length === 0 && <p className="muted-text">No shapes yet.</p>}
-        <ul className="map-shape-list">{map.show.shapes.map(shape => <li key={shape.id} className={shape.id === map.selectedId ? 'selected' : ''}>
+        <ul className="map-shape-list">{map.show.shapes.map(shape => <li key={shape.id} className={shape.id === map.selectedId ? 'selected' : ''}
+          onContextMenu={e => { e.preventDefault(); if (map.loaded) openMenu(e.clientX, e.clientY, shape.id); }}>
           <button className="map-shape-name" aria-pressed={shape.id === map.selectedId} onClick={() => map.setSelectedId(shape.id)}>
             <span className="map-swatch" style={{ background: shape.colour }} />{shape.name}</button>
           <button className="text-button" aria-pressed={shape.visible} aria-label={`${shape.visible ? 'Hide' : 'Show'} ${shape.name}`} onClick={() => map.dispatch({ type: 'setVisible', shapeId: shape.id, visible: !shape.visible })}>{shape.visible ? 'Shown' : 'Hidden'}</button>
@@ -240,7 +304,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
         </li>)}</ul>
       </aside>
       <main className="map-stage" tabIndex={0} aria-label="Stage area"><canvas ref={canvas} aria-label="Stage" data-wall={map.outputOpen && map.wallPicture ? 'picture' : 'local'} style={{ cursor: map.tool === 'rectangle' ? 'crosshair' : 'default', touchAction: 'none' }}
-        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} width={STAGE_SIZE.width} height={STAGE_SIZE.height} /></main>
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} onContextMenu={onStageMenu} width={STAGE_SIZE.width} height={STAGE_SIZE.height} /></main>
       <aside className="live-column map-inspector" aria-label="Details">
         <h2>Details</h2>
         {!selectedShape ? <p className="muted-text">Pick a shape to see its details.</p> : <>
@@ -249,6 +313,11 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
           <div className="map-toggles">
             <button className="text-button" aria-pressed={selectedShape.visible} onClick={() => map.dispatch({ type: 'setVisible', shapeId: selectedShape.id, visible: !selectedShape.visible })}>{selectedShape.visible ? 'Shown' : 'Hidden'}</button>
             <button className="text-button" aria-pressed={selectedShape.locked} onClick={() => map.dispatch({ type: 'setLocked', shapeId: selectedShape.id, locked: !selectedShape.locked })}>{selectedShape.locked ? 'Locked' : 'Unlocked'}</button>
+          </div>
+          <div className="map-toggles">
+            <button className="text-button" title="Copy this shape · ⌘D" onClick={() => duplicate(selectedShape.id)}>Duplicate</button>
+            <button className="text-button danger-button" disabled={selectedShape.locked} title={selectedShape.locked ? 'Unlock the shape to delete it' : 'Delete this shape · ⌫'}
+              onClick={() => remove(selectedShape.id)}>Delete shape</button>
           </div>
           {selectedPoint ? <>
             <h3>Corner {map.selectedIndex! + 1}</h3>
@@ -260,5 +329,6 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
       </aside>
     </div>
     <footer className="map-status" role="status">{status}</footer>
+    {menu && <MapMenu x={menu.x} y={menu.y} label={menu.shapeId ? 'Shape' : 'Stage'} entries={menuEntries(menu.shapeId)} onClose={() => setMenu(null)} />}
   </section>;
 }

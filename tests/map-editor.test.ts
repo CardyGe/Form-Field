@@ -323,3 +323,71 @@ test('attemptEdit gives the refused outline, so the operator screen can draw it 
   assert.ok(fine);
   assert.deepEqual(fine.show.shapes[0].points[0], { x: 0.05, y: 0.05 });
 });
+
+// Context menu actions: duplicate and stacking order.
+test('duplicate copies a shape 20 projector pixels down and right, just above the original', () => {
+  let show = withShape();
+  const second = applyEdit(show, rect('b', { x: 0.6, y: 0.6 }, { x: 0.7, y: 0.7 }));
+  assert.ok(second.ok); show = second.show;
+  const r = applyEdit(show, { type: 'duplicate', shapeId: 'a', id: 'a2' });
+  assert.ok(r.ok);
+  assert.deepEqual(r.show.shapes.map(s => s.id), ['a', 'a2', 'b']);
+  const copy = r.show.shapes[1], original = r.show.shapes[0];
+  assert.equal(copy.name, `${original.name} copy`);
+  assert.equal(copy.locked, false);
+  assert.equal(copy.visible, true);
+  assert.equal(copy.colour, original.colour);
+  copy.points.forEach((p, i) => {
+    assert.ok(Math.abs((p.x - original.points[i].x) * 1920 - 20) < 1e-6);
+    assert.ok(Math.abs((p.y - original.points[i].y) * 1080 - 20) < 1e-6);
+  });
+});
+
+test('duplicate near the bottom-right corner goes up and left instead, so the copy stays on the stage', () => {
+  const r0 = applyEdit(createShow(), rect('a', { x: 0.9, y: 0.9 }, { x: 1, y: 1 }));
+  assert.ok(r0.ok);
+  const r = applyEdit(r0.show, { type: 'duplicate', shapeId: 'a', id: 'a2' });
+  assert.ok(r.ok);
+  const copy = r.show.shapes[1], original = r.show.shapes[0];
+  assert.ok(Math.abs((original.points[0].x - copy.points[0].x) * 1920 - 20) < 1e-6);
+  assert.ok(Math.abs((original.points[0].y - copy.points[0].y) * 1080 - 20) < 1e-6);
+  assert.ok(copy.points.every(p => p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1));
+});
+
+test('duplicate: a locked shape can be copied (the copy is unlocked); limits and ids are checked; long names stay within the limit', () => {
+  const locked = applyEdit(withShape(), { type: 'setLocked', shapeId: 'a', locked: true });
+  assert.ok(locked.ok);
+  const r = applyEdit(locked.show, { type: 'duplicate', shapeId: 'a', id: 'a2' });
+  assert.ok(r.ok);
+  assert.equal(r.show.shapes[1].locked, false);
+  assert.deepEqual(applyEdit(locked.show, { type: 'duplicate', shapeId: 'zzz', id: 'x' }), { ok: false, reason: 'not-found' });
+  assert.deepEqual(applyEdit(locked.show, { type: 'duplicate', shapeId: 'a', id: 'a' }), { ok: false, reason: 'duplicate-id' });
+  const named = applyEdit(withShape(), { type: 'rename', shapeId: 'a', name: 'n'.repeat(MAX_NAME_LENGTH) });
+  assert.ok(named.ok);
+  const longCopy = applyEdit(named.show, { type: 'duplicate', shapeId: 'a', id: 'a2' });
+  assert.ok(longCopy.ok);
+  assert.ok(longCopy.show.shapes[1].name.length <= MAX_NAME_LENGTH);
+  let full = createShow();
+  for (let i = 0; i < MAX_SHAPES; i++) { const step = applyEdit(full, rect(`s${i}`)); assert.ok(step.ok); full = step.show; }
+  assert.deepEqual(applyEdit(full, { type: 'duplicate', shapeId: 's0', id: 'x' }), { ok: false, reason: 'too-many-shapes' });
+});
+
+test('reorder moves a shape to the front, back, one forward or one back; a locked shape stays put', () => {
+  let show = createShow();
+  for (const id of ['a', 'b', 'c']) { const r = applyEdit(show, rect(id)); assert.ok(r.ok); show = r.show; }
+  const order = (to: 'front' | 'back' | 'forward' | 'backward', id = 'a') => {
+    const r = applyEdit(show, { type: 'reorder', shapeId: id, to });
+    assert.ok(r.ok, to);
+    return r.show.shapes.map(s => s.id).join('');
+  };
+  assert.equal(order('front'), 'bca');
+  assert.equal(order('forward'), 'bac');
+  assert.equal(order('back', 'c'), 'cab');
+  assert.equal(order('backward', 'c'), 'acb');
+  // Already at the edge: nothing moves, and nothing is refused.
+  assert.equal(order('back'), 'abc');
+  assert.equal(order('front', 'c'), 'abc');
+  const locked = applyEdit(show, { type: 'setLocked', shapeId: 'a', locked: true });
+  assert.ok(locked.ok);
+  assert.deepEqual(applyEdit(locked.show, { type: 'reorder', shapeId: 'a', to: 'front' }), { ok: false, reason: 'locked' });
+});

@@ -139,6 +139,48 @@ try {
     assert.equal(await shapes(), 1, 'Backspace from a button deleted the shape');
   });
 
+  await check('right-click menu: Duplicate, Send to back, Escape, Delete; ⌘D and the Delete shape button', async () => {
+    const items = () => studio.getByRole('list').locator('li');
+    const rect = await stage.evaluate(c => { const r = c.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
+    const inside = [rect.left + .425 * rect.width, rect.top + .425 * rect.height];
+    const menu = studio.getByRole('menu');
+    await studio.mouse.click(...inside, { button: 'right' });
+    await menu.waitFor();
+    assert.equal(await menu.getAttribute('aria-label'), 'Shape');
+    await studio.screenshot({ path: path.join(out, 'operator-menu.png') });
+    await menu.getByRole('menuitem', { name: /^Duplicate/ }).click();
+    await menu.waitFor({ state: 'detached' });
+    assert.equal(await items().count(), 2);
+    assert.match(await items().nth(1).textContent(), /Shape 1 copy/);
+    // From the Shapes list: the copy goes to the back.
+    await items().nth(1).click({ button: 'right' });
+    await menu.getByRole('menuitem', { name: 'Send to back' }).click();
+    assert.match(await items().nth(0).textContent(), /copy/);
+    // Escape closes the menu and does nothing else.
+    await studio.mouse.click(...inside, { button: 'right' });
+    await menu.waitFor();
+    await studio.keyboard.press('Escape');
+    await menu.waitFor({ state: 'detached' });
+    assert.equal(await items().count(), 2);
+    // Delete from the menu removes the copy; the original stays.
+    await items().nth(0).click({ button: 'right' });
+    await menu.getByRole('menuitem', { name: /^Delete/ }).click();
+    assert.equal(await items().count(), 1);
+    assert.doesNotMatch(await items().nth(0).textContent(), /copy/);
+    // ⌘D copies the selected shape; the Details panel's Delete shape button removes the copy.
+    await studio.getByRole('button', { name: 'Shape 1', exact: true }).click();
+    await studio.keyboard.press(process.platform === 'darwin' ? 'Meta+d' : 'Control+d');
+    await studio.waitForFunction(() => document.querySelectorAll('.map-shape-list li').length === 2);
+    await studio.getByRole('button', { name: 'Delete shape' }).click();
+    assert.equal(await items().count(), 1);
+    // Right-clicking empty stage gives the stage menu.
+    await studio.mouse.click(rect.left + .9 * rect.width, rect.top + .9 * rect.height, { button: 'right' });
+    await menu.waitFor();
+    assert.equal(await menu.getAttribute('aria-label'), 'Stage');
+    await studio.keyboard.press('Escape');
+    await menu.waitFor({ state: 'detached' });
+  });
+
   await check('Blackout turns the whole output black', async () => {
     await studio.getByRole('button', { name: 'Blackout', exact: true }).click();
     let s;

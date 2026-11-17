@@ -10,7 +10,7 @@ export function shouldCommit(startText: string, draft: string): boolean {
   return draft !== startText;
 }
 
-export type Shortcut = 'undo' | 'redo' | 'delete' | 'select' | 'rectangle' | 'deselect' | 'arrow' | 'next-corner' | 'previous-corner';
+export type Shortcut = 'undo' | 'redo' | 'delete' | 'duplicate' | 'select' | 'rectangle' | 'deselect' | 'arrow' | 'next-corner' | 'previous-corner';
 
 /**
  * What a key press asks the Map screen to do, or null when it asks nothing or belongs to a text box.
@@ -20,7 +20,12 @@ export type Shortcut = 'undo' | 'redo' | 'delete' | 'select' | 'rectangle' | 'de
 export function shortcutFor(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; onStage?: boolean; target: { tagName?: string; isContentEditable?: boolean } | null }): Shortcut | null {
   if (isTypingTarget(e.target)) return null;
   const key = e.key.toLowerCase();
-  if (e.metaKey || e.ctrlKey) return key === 'z' && !e.altKey ? (e.shiftKey ? 'redo' : 'undo') : null;
+  if (e.metaKey || e.ctrlKey) {
+    if (e.altKey) return null;
+    if (key === 'z') return e.shiftKey ? 'redo' : 'undo';
+    if (key === 'd' && !e.shiftKey) return 'duplicate';
+    return null;
+  }
   if (e.altKey) return null;
   if (key === 'v') return 'select';
   if (key === 'r') return 'rectangle';

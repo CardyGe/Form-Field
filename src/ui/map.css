@@ -16,3 +16,19 @@
 .map-field { display: grid; gap: 2px; font-size: 11px; color: var(--muted); }
 .map-field input { width: 100%; box-sizing: border-box; }
 .map-toggles { display: flex; gap: 4px; }
+
+/* Right-click menu */
+.map-menu { position: fixed; z-index: 50; min-width: 210px; display: grid; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); }
+.map-menu > button { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 26px; padding: 4px 10px; border: 0; border-radius: 4px; background: none; color: var(--ink); font-size: 12px; text-align: left; }
+.map-menu > button:hover:not(:disabled), .map-menu > button:focus-visible { background: var(--raised); outline: none; }
+.map-menu > button:disabled { color: #5d5d5d; }
+.map-menu > button.danger:not(:disabled) { color: #ff8a80; }
+.map-menu kbd { font: inherit; font-size: 11px; color: var(--muted); }
+.map-menu-check { display: inline-block; width: 16px; color: var(--accent); }
+.map-menu hr { margin: 4px 2px; border: 0; border-top: 1px solid var(--line); }
+.map-menu-swatches { display: flex; gap: 6px; padding: 6px 10px; }
+.map-menu-swatches button { width: 18px; height: 18px; padding: 0; border: 1px solid #484848; border-radius: 3px; }
+.map-menu-swatches button[aria-checked="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.map-menu-swatches button:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.map-menu-swatches button:disabled { opacity: 0.35; }
+.danger-button:not(:disabled) { color: #ff8a80; }

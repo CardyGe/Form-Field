@@ -130,3 +130,12 @@ test('Delete, Backspace and Tab act only when the stage has focus', async () => 
   assert.equal(shortcutFor(ev('Tab', { onStage: true, shiftKey: true })), 'previous-corner');
   assert.equal(shortcutFor(ev('Backspace', { onStage: true })), 'delete');
 });
+
+test('⌘D or Ctrl-D duplicates, but not from a text box', async () => {
+  const { shortcutFor } = await import('../src/map/keys');
+  const ev = (key: string, extra = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: { tagName: 'BUTTON' }, onStage: false, ...extra });
+  assert.equal(shortcutFor(ev('d', { metaKey: true })), 'duplicate');
+  assert.equal(shortcutFor(ev('d', { ctrlKey: true })), 'duplicate');
+  assert.equal(shortcutFor(ev('d', { metaKey: true, target: { tagName: 'INPUT' } })), null);
+  assert.equal(shortcutFor(ev('d')), null);
+});

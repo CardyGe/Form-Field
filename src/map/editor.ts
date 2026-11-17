@@ -1,4 +1,4 @@
-import { MAX_NAME_LENGTH, MAX_SHAPES, type Point, type Shape, type ShowDocument } from './show';
+import { MAX_NAME_LENGTH, MAX_SHAPES, STAGE_SIZE, type Point, type Shape, type ShowDocument } from './show';
 import { clampToStage, isValidOutline, nudge, rectangleFromDrag } from './geometry';
 
 export type EditAction =
@@ -10,7 +10,9 @@ export type EditAction =
   | { type: 'setColour'; shapeId: string; colour: string }
   | { type: 'setVisible'; shapeId: string; visible: boolean }
   | { type: 'setLocked'; shapeId: string; locked: boolean }
-  | { type: 'delete'; shapeId: string };
+  | { type: 'delete'; shapeId: string }
+  | { type: 'duplicate'; shapeId: string; id: string }
+  | { type: 'reorder'; shapeId: string; to: 'front' | 'back' | 'forward' | 'backward' };
 
 export type EditResult = { ok: true; show: ShowDocument } | { ok: false; reason: string };
 
@@ -21,6 +23,18 @@ function nextName(show: ShowDocument): string {
   let n = show.shapes.length + 1;
   while (names.has(`Shape ${n}`)) n++;
   return `Shape ${n}`;
+}
+
+const COPY_STEP = { x: 20 / STAGE_SIZE.width, y: 20 / STAGE_SIZE.height }; // 20 projector pixels
+
+/** "Name copy", shortened so it stays within the name limit. */
+const copyName = (name: string) => `${name.slice(0, MAX_NAME_LENGTH - ' copy'.length)} copy`;
+
+/** The corners moved 20 projector pixels down and right, or up and left on an axis where that would leave the stage. */
+function copyPoints(points: Point[]): Point[] {
+  const step = (values: number[], size: number) => Math.max(...values) + size <= 1 ? size : Math.min(...values) - size >= 0 ? -size : 0;
+  const dx = step(points.map(p => p.x), COPY_STEP.x), dy = step(points.map(p => p.y), COPY_STEP.y);
+  return points.map(p => clampToStage({ x: p.x + dx, y: p.y + dy }));
 }
 
 /** The edited copy and the shape whose outline must be checked, or why the edit cannot be made at all. */
@@ -43,6 +57,14 @@ function stage(show: ShowDocument, action: EditAction): Staged {
   const shape: Shape = next.shapes[at];
 
   if (action.type === 'setVisible') { shape.visible = action.visible; return { show: next, touched: null }; }
+  // A copy leaves the original untouched, so a locked shape can be copied; the copy starts unlocked, just above it.
+  if (action.type === 'duplicate') {
+    if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
+    if (next.shapes.some(s => s.id === action.id)) return { reason: 'duplicate-id' };
+    const copy: Shape = { ...structuredClone(shape), id: action.id, name: copyName(shape.name), visible: true, locked: false, points: copyPoints(shape.points) };
+    next.shapes.splice(at + 1, 0, copy);
+    return { show: next, touched: copy };
+  }
   if (action.type === 'setLocked') { shape.locked = action.locked; return { show: next, touched: null }; }
 
   // Lock protects everything else, deleting included.
@@ -54,6 +76,14 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (action.name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
       shape.name = action.name; return { show: next, touched: null };
     case 'setColour': shape.colour = action.colour; return { show: next, touched: null };
+    case 'reorder': {
+      // Later in the list is drawn on top. At the edge already, nothing moves.
+      next.shapes.splice(at, 1);
+      const to = action.to === 'front' ? next.shapes.length : action.to === 'back' ? 0
+        : action.to === 'forward' ? Math.min(next.shapes.length, at + 1) : Math.max(0, at - 1);
+      next.shapes.splice(to, 0, shape);
+      return { show: next, touched: null };
+    }
     case 'movePoint':
     case 'nudgePoint': {
       if (!Number.isInteger(action.index) || action.index < 0 || action.index >= shape.points.length) return { reason: 'not-found' };
