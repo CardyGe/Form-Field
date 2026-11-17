@@ -21,7 +21,7 @@ export const RELIEF_CONTROLS: LiveControl<ReliefKey>[] = [
   { key: 'edgeLight', label: 'Edge light', min: 0, max: 1, step: .01, default: 0 },
 ];
 export const RELIEF_SURFACES = { blades: 'Blades', scales: 'Hex scales', weave: 'Woven ribbons' } as const;
-export const RELIEF_SIZES = { fine: 'Fine', extraFine: 'Extra fine', micro: 'Micro' } as const;
+export const RELIEF_SIZES = { fine: 'Fine', extraFine: 'Extra fine', micro: 'Micro', nano: 'Nano' } as const;
 export const RELIEF_MOTIONS = { sweep: 'Directional sweep', ripple: 'Ripple tank', latch: 'Flip and hold', ricochet: 'Ricochet' } as const;
 export const RELIEF_FINISHES = { silver: 'Brushed silver', brass: 'Hammered brass', pearl: 'Pearlescent ceramic', foil: 'Dichroic foil' } as const;
 export type ReliefSettings = Record<ReliefKey, number> & {
@@ -33,7 +33,7 @@ export type ReliefSettings = Record<ReliefKey, number> & {
 
 export const RELIEF_PRESETS: { name: string; settings: ReliefSettings }[] = [
   { name: 'Silver tide', settings: { surface: 'blades', size: 'fine', motion: 'sweep', finish: 'silver', depth: 1, reach: .6, settle: 1, lightAngle: 0, edgeLight: 0 } },
-  { name: 'Chrome volley', settings: { surface: 'scales', size: 'micro', motion: 'ricochet', finish: 'silver', depth: .92, reach: .8, settle: 1.65, lightAngle: -38, edgeLight: .48 } },
+  { name: 'Chrome volley', settings: { surface: 'scales', size: 'nano', motion: 'ricochet', finish: 'silver', depth: .92, reach: .8, settle: 1.65, lightAngle: -38, edgeLight: .48 } },
   { name: 'Dragon skin', settings: { surface: 'scales', size: 'extraFine', motion: 'sweep', finish: 'foil', depth: 1.18, reach: .75, settle: 1.3, lightAngle: -20, edgeLight: .68 } },
   { name: 'Porcelain pool', settings: { surface: 'scales', size: 'fine', motion: 'ripple', finish: 'pearl', depth: .95, reach: .87, settle: 2.2, lightAngle: 32, edgeLight: .27 } },
   { name: 'Gold brocade', settings: { surface: 'weave', size: 'fine', motion: 'sweep', finish: 'brass', depth: 1.1, reach: .72, settle: 1.45, lightAngle: 25, edgeLight: .32 } },

@@ -144,7 +144,7 @@ try {
     assert.equal(await page.getByLabel('Colour scheme',{ exact:true }).inputValue(),'cyber');
     await imprint.uncheck();
     await page.getByLabel('Relief preset').selectOption('Chrome volley');
-    assert.equal(await page.getByLabel('Element size',{ exact:true }).inputValue(),'micro');
+    assert.equal(await page.getByLabel('Element size',{ exact:true }).inputValue(),'nano');
     assert.equal(await page.getByLabel('Motion',{ exact:true }).inputValue(),'ricochet');
   });
   await check('Smoke can be chosen, and its people status shows on the operator screen', async () => {

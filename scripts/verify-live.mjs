@@ -310,10 +310,10 @@ try {
     assert.ok(results.edges.every(e => e > .3), 'reflected crests: ' + results.edges);
     assert.ok(results.opposing.every(e => e > .45), 'opposing crests: ' + results.opposing);
   });
-  await check('Relief recolours existing motion across all three surfaces', async () => {
+  await check('Relief recolours existing motion across all three Nano surfaces', async () => {
     for (const [surface,motion] of [['blades','sweep'],['scales','ricochet'],['weave','ripple']]) {
       const result = await page.evaluate(([surface,motion]) => {
-        const { renderer } = window.live.make(s => { s.look = 'relief'; s.relief.surface = surface; s.relief.motion = motion; });
+        const { renderer } = window.live.make(s => { s.look = 'relief'; s.relief.surface = surface; s.relief.motion = motion; s.relief.size = 'nano'; });
         window.live.run(32);
         function capture(palette) {
           renderer.settings.reliefPalette = palette;

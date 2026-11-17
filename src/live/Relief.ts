@@ -3,7 +3,7 @@ import type { Look, TrackingFeed } from './look';
 import type { LiveSettings, ReliefSettings } from './settings';
 import { Passes, type Pair } from './passes';
 import { RELIEF_PALETTES, type ReliefPaletteName } from './relief-palettes';
-import { reliefGeometry, scaleDimensions } from './relief-geometry';
+import { reliefGeometries, scaleDimensions } from './relief-geometry';
 import { audienceFragment, latchFragment, reliefFragment, reliefVertex, ricochetFragment, rippleFragment, sweepFragment } from './relief-shaders';
 
 const surfaceIndex = { blades: 0, scales: 1, weave: 2 };
@@ -30,7 +30,7 @@ export class Relief implements Look {
       uPitch: { value: .5 }, uFinish: { value: 0 }, uEdgeLight: { value: 0 }, uLight: { value: new THREE.Vector2(1,0) },
     },
   });
-  private readonly wall = new THREE.Mesh(reliefGeometry('blades','fine'), this.material);
+  private wall: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>[] = [];
   private surface: ReliefSettings['surface'] = 'blades';
   private size: ReliefSettings['size'] = 'fine';
   private motion: ReliefSettings['motion'] = 'sweep';
@@ -56,8 +56,7 @@ export class Relief implements Look {
     this.target.samples = Math.min(4, passes.renderer.capabilities.maxSamples);
     this.scene.background = new THREE.Color(0x15202c);
     this.camera.position.z = 10;
-    this.wall.frustumCulled = false;
-    this.scene.add(this.wall);
+    this.setWall(this.surface, this.size);
     this.clear();
   }
 
@@ -66,11 +65,7 @@ export class Relief implements Look {
   step(seconds: number, _time: number, feed: TrackingFeed, settings: LiveSettings) {
     const style = settings.relief;
     if (this.surface !== style.surface || this.size !== style.size) {
-      const previous = this.wall.geometry;
-      this.wall.geometry = reliefGeometry(style.surface, style.size);
-      previous.dispose();
-      this.surface = style.surface;
-      this.size = style.size;
+      this.setWall(style.surface, style.size);
     }
     if (this.motion !== style.motion) {
       this.clear(); // Each simulation has its own field layout.
@@ -127,6 +122,27 @@ export class Relief implements Look {
     renderer.render(this.scene, this.camera);
   }
 
+  private setWall(surface: ReliefSettings['surface'], size: ReliefSettings['size']): void {
+    const meshes = reliefGeometries(surface, size).map(geometry => {
+      const mesh = new THREE.Mesh(geometry, this.material);
+      mesh.frustumCulled = false;
+      return mesh;
+    });
+    this.removeWall();
+    this.wall = meshes;
+    this.scene.add(...meshes);
+    this.surface = surface;
+    this.size = size;
+  }
+
+  private removeWall(): void {
+    for (const mesh of this.wall) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    this.wall = [];
+  }
+
   resize(width: number, height: number) { this.target.setSize(width, height); }
   clear() {
     this.passes.draw(this.zero, this.field.read);
@@ -140,6 +156,6 @@ export class Relief implements Look {
   dispose() {
     this.audience.dispose(); this.audiencePass.dispose();
     this.field.dispose(); this.sweep.dispose(); this.ricochet.dispose(); this.ripple.dispose(); this.latch.dispose(); this.zero.dispose();
-    this.material.dispose(); this.wall.geometry.dispose(); this.target.dispose();
+    this.removeWall(); this.material.dispose(); this.target.dispose();
   }
 }
