@@ -70,7 +70,7 @@ Left out on purpose because of Greg's answers: blending overlapping projectors, 
 
 - `StudioRenderer` draws one composition into its own shared buffers and keeps per-composition state: `instruments.prepare(project)`, one set of oil buffers, `releaseFeedback(project)` deletes history for any layer not in the project it was just given, and `prepare()` throws away images the current project does not use. Drawing several compositions through one renderer, as it stands, would make them destroy each other's state every frame.
 - `StudioRenderer` and `LiveRenderer` each create their own `WebGLRenderer` on a canvas they are given. Neither can draw into another renderer's texture today.
-- A composition holds at most four layers (`project.ts:859`, `StudioRenderer.renderFrame`).
+- A composition holds at most four layers (`project.ts:859`, `StudioRenderer.ts:763`).
 - Studio instruments are loops driven by a phase from 0 to 2π. Playing them live means advancing that phase from a clock; the Studio preview already does this.
 - The artwork window, display picker, blackout, operator preview and keep-awake already exist for Live (`electron/live.cjs`, `LiveOutput.tsx`). Messages between windows are capped at 16 KB, too small for a show with embedded images.
 - `Layer.surface` already gives instruments a polygon to flow around, emit inside or trace (up to 12 points, `surface-layout.ts`).
@@ -93,6 +93,8 @@ Greg handed me the how, so I am going with A.
 - *One shared renderer:* `StudioRenderer` learns to keep a separate bundle of state per composition and to draw into a buffer it is handed. No cap and no copy, but it changes the renderer export depends on.
 
 My expectation is that separate renderers are good enough for about twelve different sources and are the safer start. The spike decides.
+
+**Shared sources and renderer count.** A new shape gets its own source by default, so eight shapes with four instruments can mean eight renderers unless shapes share sources. "Vary each" adds more. The renderer count is therefore set by how many sources exist, not by how many instruments are chosen. Stage 0 measures up to twelve renderers, and stage 2 states the renderer limit it allows.
 
 ## Design
 
@@ -199,7 +201,7 @@ One setting with three choices. This is where the two-view model of the paid too
 
 ### Wild options (stage 7, each small and separate)
 
-- **Outline drives the instrument**: the shape's outline is handed to instruments that support "flow around", "emit inside" and "trace edges", so ink grows from the edges of the actual object.
+- **Outline drives the instrument**: the shape's outline is handed to instruments that support "flow around", "emit inside" and "trace edges", so ink grows from the edges of the actual object. This reuses `Layer.surface`, but it sends the outline at each shape's own size, so it needs its own review against Studio's output.
 - **Vary each**: one click gives every shape in a group its own variation of the same instrument.
 - **Palette shift across a group**: each shape a step further round the palette.
 - **Border runs**: a light travelling round the outline; in a group, chasing from shape to shape.
@@ -243,7 +245,7 @@ Each stage ends with something usable. Detailed step-by-step plans are written p
 | Stage | What gets built | Done when |
 |---|---|---|
 | **0. Measure** | A throwaway test: 4, 8 and 12 instruments at once, separate renderers against one shared renderer. | Numbers are written down and the route for instrument sources is chosen. |
-| **1. Stage and first shapes** | Map section, show file and autosave, output window, compositor, Colour sources, rectangle and four-corner shapes, select / move / points / nudge / exact positions, wall crosshair, Test grid, Identify, Blackout, undo. | Greg lines four-corner shapes up on real objects with a projector. |
+| **1. Stage and first shapes** | Map section, show file and autosave, output window, compositor, Colour sources, rectangle and four-corner shapes, select / move / points / nudge / exact positions, wall crosshair, Test grid, Identify, Blackout, undo. The fade-in rule for "output never blanks" is first exercised here with a Colour source swap, then again in stage 2 with instruments. | Greg lines four-corner shapes up on real objects with a projector. |
 | **2. Instruments in shapes** | Instrument sources, Library and presets on a shape, own settings per shape, Vary, palette, speed, Edit in Studio and back, Fit placement, sizing to the wall, the frame-rate governor, fade on change. | Eight shapes play four instruments at the measured rate, and editing one never disturbs the others. |
 | **3. The full drawing kit** | Pen with curves, triangle, ellipse, add / remove / convert points, holes, Snap, Photo, duplicate / flip / mirror, Make a grid, groups, lock / hide / solo, soft edge, border, Blockers. | A photographed scene of about 20 pieces is traced and aligned in one sitting. |
 | **4. Placement** | Pin, Across group, Across stage, Share with / Make separate, stage corners, brightness and tint. | A grid pinned to an angled box face looks square to the eye; nudging the projector is fixed with four handles. |
@@ -264,6 +266,7 @@ Each stage ends with something usable. Detailed step-by-step plans are written p
 
 - **Many instruments at once is unmeasured.** Stage 0 exists because of this. If neither route holds 60 with four heavy instruments, the answer is smaller sources or a lower target, said plainly.
 - **Fractals and Sculpture are heavy.** They may need to run reduced inside small shapes.
+- **Drawing a source smaller may change its picture.** Feedback and history buffers are kept at a resolution. Reducing a source to save work could alter the look, not just the cost. Stage 0 checks reduced output against full size before the governor is allowed to use it.
 - **Feedback and evolving-ink layers keep history.** They were built to be replayed for export; running forward for hours is a different use and needs the two-hour run to prove it.
 - **The laptop picture lags the wall slightly** when the output is open. Outlines are instant; the picture inside them is a few frames behind.
 - **Video formats.** The app's own HAP and ProRes exports will probably not play back as Video sources. Instruments play live in Map, so this may not matter; if it does, an MP4 delivery format is the fix.
