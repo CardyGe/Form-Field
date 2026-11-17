@@ -310,6 +310,27 @@ try {
     assert.ok(results.edges.every(e => e > .3), 'reflected crests: ' + results.edges);
     assert.ok(results.opposing.every(e => e > .45), 'opposing crests: ' + results.opposing);
   });
+  await check('Relief recolours existing motion across all three surfaces', async () => {
+    for (const [surface,motion] of [['blades','sweep'],['scales','ricochet'],['weave','ripple']]) {
+      const result = await page.evaluate(([surface,motion]) => {
+        const { renderer } = window.live.make(s => { s.look = 'relief'; s.relief.surface = surface; s.relief.motion = motion; });
+        window.live.run(32);
+        function capture(palette) {
+          renderer.settings.reliefPalette = palette;
+          renderer.frame(0);
+          const { data } = window.live.pixels();
+          const sample = [];
+          for (let i=0;i<data.length;i+=1012) sample.push(data[i],data[i+1],data[i+2]);
+          return sample;
+        }
+        const material = capture('material'), neon = capture('neon'), pastel = capture('pastel'), restored = capture('material');
+        const distance = (a,b) => a.reduce((sum,v,i)=>sum+Math.abs(v-b[i]),0)/a.length;
+        return { neon:distance(material,neon), pastel:distance(neon,pastel), restored:distance(material,restored) };
+      },[surface,motion]);
+      assert.ok(result.neon>12 && result.pastel>12, surface + ' lost its palette difference');
+      assert.ok(result.restored<.2, surface + ' reset movement when changing colour');
+    }
+  });
   await check('bare pipeline: the picture is not uniform', async () => {
     const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); const p = window.live.painted(0); return { p, frames: window.live.current.renderer.stats().frames }; });
     assert.ok(r.p.fraction > .01, `only ${r.p.fraction} of pixels lit`); assert.ok(r.frames >= 30, `${r.frames} frames`);

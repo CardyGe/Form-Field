@@ -168,3 +168,9 @@ test('saved Broad and Medium Relief sizes migrate to Fine', () => {
   }
   assert.equal(validateLiveSettings({ relief: { size: 'extraFine' } }).relief.size, 'extraFine');
 });
+
+test('Relief colour schemes persist and old settings use the finish colours', () => {
+  assert.equal(validateLiveSettings({ look: 'relief' }).reliefPalette, 'material');
+  assert.equal(validateLiveSettings({ reliefPalette: 'constructor' }).reliefPalette, 'material');
+  assert.equal(validateLiveSettings({ reliefPalette: 'cyber' }).reliefPalette, 'cyber');
+});

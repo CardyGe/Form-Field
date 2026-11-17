@@ -269,7 +269,8 @@ varying float vWeft, vCrimp;
 uniform int uFinish, uSurface, uMotion;
 uniform float uEdgeLight;
 uniform sampler2D uAudience, uState;
-uniform bool uBodyImprint;
+uniform bool uBodyImprint, uUsePalette;
+uniform vec3 uPalette[6];
 uniform vec2 uLight;
 float square(float x) { return x*x; }
 float filament(float phase) {
@@ -320,6 +321,21 @@ vec3 wovenFinish(vec3 n) {
   fabric += accent*uEdgeLight*lift*(.12+.21*selvedge+.29*glint);
   return fabric;
 }
+// Map the finish's luminance onto the palette so bevels and fibre detail follow
+// their original lighting. Two body hues make the wall change across its span.
+vec3 paletteSurface(vec3 surface, vec3 normal) {
+  if (!uUsePalette) return surface;
+  float luma = dot(max(surface,0.),vec3(.2126,.7152,.0722));
+  float flow = .5+.5*sin(.53*vWorld.x-.34*vWorld.y+.72*normal.x);
+  vec3 body = mix(uPalette[1],uPalette[2],smoothstep(.12,.88,flow));
+  vec3 colour = mix(uPalette[0],body,smoothstep(.012,.44,luma));
+  colour = mix(colour,uPalette[3],smoothstep(.23,1.05,luma));
+  if (uMotion != 3) {
+    float force = smoothstep(.055,.82,vEnergy);
+    colour = mix(colour,mix(uPalette[4],uPalette[5],smoothstep(-.45,.45,vTurn)),force*(.24+.40*uEdgeLight));
+  }
+  return colour;
+}
 vec3 crestLight(vec3 surface, vec3 normal) {
   if (uMotion != 3) return surface;
   vec4 wave = texture2D(uState,vAudiencePoint/vec2(16.,9.)+.5);
@@ -330,11 +346,18 @@ vec3 crestLight(vec3 surface, vec3 normal) {
   float grazing = .34+.40*abs(normal.x)+.26*uEdgeLight;
   // A soft shoulder below the main crest keeps a weaker wake visible.
   float leading = pow(max(max(wave.r,wave.g),max(wave.b,wave.a)),1.45);
+  if (uUsePalette) {
+    vec3 first = uPalette[4], second = uPalette[5];
+    tint = light.r*first + light.g*second + light.b*mix(first,second,.32) + light.a*mix(second,first,.32);
+    float amount = clamp(dot(light,vec4(1.)),0.,1.);
+    vec3 base = surface*(1.-.22*leading-.20*amount);
+    return mix(base, min(tint,vec3(1.)), amount*grazing*.78) + clash*uPalette[3]*.36;
+  }
   return surface*(1.-.24*leading) + tint*grazing
     + clash*vec3(.53,.48,.38)*(1.25-.35*abs(normal.z));
 }
 vec3 audienceLight(vec3 surface, vec3 normal) {
-  surface = crestLight(surface,normal);
+  surface = crestLight(paletteSurface(surface,normal),normal);
   if (!uBodyImprint) return surface;
   vec4 imprint = texture2D(uAudience,vAudiencePoint/vec2(16.,9.)+.5);
   float body = imprint.r;

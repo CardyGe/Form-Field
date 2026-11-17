@@ -1,6 +1,7 @@
 import { useRef, type ReactNode } from 'react';
 import { useLive } from './useLive';
 import { IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, usesPeople, type Box, type LiveSettings } from '../live/settings';
+import { RELIEF_PALETTES, validateReliefPalette } from '../live/relief-palettes';
 import { rampHex } from '../live/colour';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, SOLAR } from '../core/palettes';
@@ -134,6 +135,12 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
           <label className="stacked-label">Finish<select aria-label="Finish" value={s.relief.finish} onChange={e => setRelief({ finish: e.target.value as ReliefSettings['finish'] })}>
             {Object.entries(RELIEF_FINISHES).map(([v, name]) => <option key={v} value={v}>{name}</option>)}
           </select></label>
+          <label className="stacked-label">Colour scheme<select aria-label="Colour scheme" value={s.reliefPalette} onChange={e => set({ reliefPalette: validateReliefPalette(e.target.value) })}>
+            {Object.entries(RELIEF_PALETTES).map(([name, palette]) => <option key={name} value={name}>{palette.label}</option>)}
+          </select></label>
+          {s.reliefPalette !== 'material' && <div className="live-swatches" aria-hidden="true">
+            {RELIEF_PALETTES[s.reliefPalette].colours.map((colour, i) => <i key={i} style={{ background: colour }} />)}
+          </div>}
           {RELIEF_CONTROLS.map(c => <Slider key={c.key} label={c.label} value={s.relief[c.key]} min={c.min} max={c.max} step={c.step}
             unit={c.key === 'settle' ? ' s' : c.key === 'lightAngle' ? '°' : ''} onChange={value => setRelief({ [c.key]: value })} />)}
         </> : smoke ? <>

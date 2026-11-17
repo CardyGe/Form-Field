@@ -7,7 +7,7 @@ fs.mkdirSync(profile, { recursive: true });
 app.setPath('userData', profile);
 try {
   const rehearsal = {
-    look: 'relief', source: { kind: 'test' }, reliefPresence: false,
+    look: 'relief', source: { kind: 'test' }, reliefPresence: false, reliefPalette: 'neon',
     relief: { surface: 'scales', size: 'micro', motion: 'ricochet', finish: 'silver',
       depth: .92, reach: .8, settle: 1.65, lightAngle: -38, edgeLight: .48 },
   };

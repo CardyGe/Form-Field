@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Look, TrackingFeed } from './look';
 import type { LiveSettings, ReliefSettings } from './settings';
 import { Passes, type Pair } from './passes';
+import { RELIEF_PALETTES, type ReliefPaletteName } from './relief-palettes';
 import { reliefGeometry, scaleDimensions } from './relief-geometry';
 import { audienceFragment, latchFragment, reliefFragment, reliefVertex, ricochetFragment, rippleFragment, sweepFragment } from './relief-shaders';
 
@@ -25,6 +26,7 @@ export class Relief implements Look {
     vertexShader: reliefVertex, fragmentShader: reliefFragment,
     uniforms: {
       uState: { value: null }, uAudience: { value: null }, uBodyImprint: { value: false }, uDepth: { value: 1 }, uMotion: { value: 0 }, uSurface: { value: 0 },
+      uUsePalette: { value: false }, uPalette: { value: Array.from({ length: 6 }, () => new THREE.Color()) },
       uPitch: { value: .5 }, uFinish: { value: 0 }, uEdgeLight: { value: 0 }, uLight: { value: new THREE.Vector2(1,0) },
     },
   });
@@ -32,6 +34,7 @@ export class Relief implements Look {
   private surface: ReliefSettings['surface'] = 'blades';
   private size: ReliefSettings['size'] = 'fine';
   private motion: ReliefSettings['motion'] = 'sweep';
+  private palette: ReliefPaletteName = 'material';
   private readonly target: THREE.WebGLRenderTarget;
 
   constructor(private readonly passes: Passes, width: number, height: number) {
@@ -103,6 +106,11 @@ export class Relief implements Look {
     }
 
     const art = this.material.uniforms;
+    if (this.palette !== settings.reliefPalette) {
+      this.palette = settings.reliefPalette;
+      art.uUsePalette.value = this.palette !== 'material';
+      RELIEF_PALETTES[this.palette].colours.forEach((swatch, index) => art.uPalette.value[index].set(swatch));
+    }
     art.uBodyImprint.value = this.imprint;
     art.uAudience.value = this.audience.read.texture;
     art.uState.value = this.field.read.texture;

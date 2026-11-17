@@ -4,6 +4,7 @@
  * field by field, so Live always starts.
  */
 import { HOT_SIGNAL } from '../core/palettes';
+import { validateReliefPalette, type ReliefPaletteName } from './relief-palettes';
 
 /** The part of the camera view that paints. 0..1, origin bottom-left. */
 export interface Box { left: number; right: number; bottom: number; top: number }
@@ -59,6 +60,7 @@ export interface LiveSettings {
   look: LookKind;
   relief: ReliefSettings;
   reliefPresence: boolean;
+  reliefPalette: ReliefPaletteName;
   /** forever: smoke never fades, and stays in the picture. */
   smoke: Record<SmokeKey, number> & { palette: string[]; forever: boolean };
   people: PeopleSettings;
@@ -105,6 +107,7 @@ export function defaultLiveSettings(): LiveSettings {
     look: 'paint',
     relief: { ...RELIEF_PRESETS[0].settings },
     reliefPresence: false,
+    reliefPalette: 'material',
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
   };
@@ -138,6 +141,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     palette: [...palette],
     look: v.look === 'smoke' || v.look === 'relief' ? v.look : 'paint',
     reliefPresence: v.reliefPresence === true,
+    reliefPalette: validateReliefPalette(v.reliefPalette),
     relief: {
       ...Object.fromEntries(RELIEF_CONTROLS.map(c => [c.key, ranged(relief[c.key], c.min, c.max, c.default)])) as Record<ReliefKey, number>,
       surface: choice(relief.surface, RELIEF_SURFACES, d.relief.surface),
