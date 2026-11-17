@@ -149,3 +149,42 @@ test('History: limit 3 keeps the last 3', () => {
   assert.equal(h.present(), 3);
   assert.equal(h.undo(), false);
 });
+
+// Output messages
+import { acceptMapMessage } from '../src/map/messages';
+
+test('acceptMapMessage accepts each known message type', () => {
+  assert.ok(acceptMapMessage({ type: 'show', show: createShow() }));
+  assert.ok(acceptMapMessage({ type: 'blackout', on: true }));
+  assert.ok(acceptMapMessage({ type: 'testGrid', on: false }));
+  assert.ok(acceptMapMessage({ type: 'identify', shapeId: 'a' }));
+  assert.ok(acceptMapMessage({ type: 'identify', shapeId: null }));
+  assert.ok(acceptMapMessage({ type: 'crosshair', point: { x: 0.5, y: 0.5 }, shapeId: 'a' }));
+});
+
+test('acceptMapMessage accepts a crosshair with a null point', () => {
+  assert.ok(acceptMapMessage({ type: 'crosshair', point: null, shapeId: null }));
+});
+
+test('acceptMapMessage refuses unknown types, bad fields and non-objects', () => {
+  assert.equal(acceptMapMessage({ type: 'explode' }), false);
+  assert.equal(acceptMapMessage({ type: 'blackout', on: 'yes' }), false);
+  assert.equal(acceptMapMessage({ type: 'identify', shapeId: 3 }), false);
+  assert.equal(acceptMapMessage({ type: 'crosshair', point: { x: 1 }, shapeId: null }), false);
+  assert.equal(acceptMapMessage({ type: 'show' }), false);
+  assert.equal(acceptMapMessage(null), false);
+  assert.equal(acceptMapMessage([]), false);
+});
+
+test('acceptMapMessage refuses a message over the size limit and one that cannot be stringified', () => {
+  let show = createShow();
+  for (let i = 0; i < 64; i++) {
+    const r = applyEdit(show, rect(`s${i}`));
+    assert.ok(r.ok);
+    show = { ...r.show, shapes: r.show.shapes.map(s => ({ ...s, name: 'n'.repeat(400) })) };
+  }
+  assert.equal(acceptMapMessage({ type: 'show', show }), false);
+  const loop: Record<string, unknown> = { type: 'blackout', on: true };
+  loop.self = loop;
+  assert.equal(acceptMapMessage(loop), false);
+});
