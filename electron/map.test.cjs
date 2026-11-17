@@ -99,7 +99,7 @@ function harness(overrides = {}) {
   });
   const fromStudio = { sender: studio.webContents, senderFrame: studio.webContents.mainFrame };
   const fromOutput = () => ({ sender: windows.at(-1).webContents, senderFrame: windows.at(-1).webContents.mainFrame });
-  return { handlers, listeners, screen, sent, blocker, windows, control, fromStudio, fromOutput, displays, calls };
+  return { handlers, listeners, screen, sent, blocker, windows, control, fromStudio, fromOutput, displays, calls, studio };
 }
 const stranger = { sender: {}, senderFrame: {} };
 
@@ -252,4 +252,16 @@ test('the wall picture goes from the output window to the studio, and only from 
   assert.equal(pictures().length, 0);
   relay(h.fromOutput(), new ArrayBuffer(100));
   assert.equal(pictures().length, 1);
+});
+
+test('output on the studio\'s own screen opens as an ordinary window; on another display it fills the screen', async () => {
+  const h = harness();
+  h.studio.getBounds = () => ({ x: 100, y: 100, width: 1200, height: 800 });
+  h.screen.getDisplayMatching = () => h.displays[0]; // the studio is on the built-in screen
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 1);
+  assert.equal(h.windows.at(-1).options.frame, true);
+  assert.equal(h.windows.at(-1).options.resizable, true);
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  assert.equal(h.windows.at(-1).options.frame, false);
+  assert.equal(h.windows.at(-1).options.width, 1920);
 });

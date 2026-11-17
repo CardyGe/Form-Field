@@ -219,7 +219,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
       <label className="live-inline">Projector<select aria-label="Projector" value={map.display ?? ''} disabled={map.outputOpen || !map.displays.length} onChange={e => map.setDisplay(Number(e.target.value))}>
         {map.displays.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
       {map.outputOpen ? <button className="primary-button" onClick={map.closeOutput}>Close output</button>
-        : <button className="primary-button" disabled={!map.desktop || map.display === null} title="Show the stage full screen on the chosen projector · Esc closes it" onClick={() => void map.openOutput()}>Open output</button>}
+        : <button className="primary-button" disabled={!map.desktop || map.display === null} title="Show the stage on the chosen projector, full screen · On this screen it opens as a window you can move · Esc closes it" onClick={() => void map.openOutput()}>Open output</button>}
       <button className={`text-button live-toggle ${map.blackout ? 'on' : ''}`} aria-pressed={map.blackout} onClick={() => map.setBlackout(!map.blackout)}>Blackout</button>
       <button className="text-button" aria-pressed={map.testGrid} onClick={() => map.setTestGrid(!map.testGrid)}>Test grid</button>
       <button className="text-button" aria-pressed={map.tool === 'select'} title="Pick and move shapes and corners" onClick={() => map.setTool('select')}>Select</button>

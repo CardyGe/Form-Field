@@ -46,3 +46,33 @@ test('windowed mode uses a small ordinary size', () => {
   assert.equal(window.options.width, 960);
   assert.equal(window.options.height, 540);
 });
+
+test('on the studio\'s own screen the output is a movable, resizable window, never full screen', () => {
+  const { blocker, BrowserWindow } = fakes();
+  const own = { id: 1, bounds: { x: 0, y: 0, width: 1512, height: 982 }, workArea: { x: 0, y: 25, width: 1512, height: 957 } };
+  const { window } = createOutputWindow({ BrowserWindow, powerSaveBlocker: blocker, display: own, preload: '/p.js', title: 'Form & Field Map', windowed: false, framed: true });
+  assert.equal(window.options.frame, true);
+  assert.equal(window.options.resizable, true);
+  assert.equal(window.options.movable, true);
+  assert.equal(window.options.fullscreenable, false);
+  assert.equal(window.options.skipTaskbar, false);
+  // 16:9, centred in the screen's work area.
+  assert.equal(window.options.width, 960);
+  assert.equal(window.options.height, 540);
+  assert.equal(window.options.x, 276);
+  assert.equal(window.options.y, 25 + Math.round((957 - 540) / 2));
+  let fullScreen = false;
+  Object.assign(window, { show() {}, setSimpleFullScreen() { fullScreen = true; }, setFullScreen() { fullScreen = true; } });
+  window.handlers['once:ready-to-show']();
+  assert.equal(fullScreen, false);
+});
+
+test('on a separate display the output still goes full screen', () => {
+  const { blocker, BrowserWindow } = fakes();
+  const { window } = createOutputWindow({ BrowserWindow, powerSaveBlocker: blocker, display, preload: '/p.js', windowed: false });
+  let fullScreen = false;
+  Object.assign(window, { show() {}, setSimpleFullScreen() { fullScreen = true; }, setFullScreen() { fullScreen = true; } });
+  window.handlers['once:ready-to-show']();
+  assert.equal(fullScreen, true);
+  assert.equal(window.options.frame, false);
+});

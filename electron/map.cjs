@@ -82,6 +82,11 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     return operation(...args);
   });
   const closeOutput = () => { if (alive(output)) output.close(); };
+  const sameScreenAsStudio = display => {
+    const window = studio();
+    if (!alive(window) || typeof window.getBounds !== 'function' || typeof screen.getDisplayMatching !== 'function') return false;
+    return screen.getDisplayMatching(window.getBounds())?.id === display.id;
+  };
   const checkText = text => { if (typeof text !== 'string' || text.length > SHOW_TEXT_LIMIT) throw new Error('This show cannot be saved.'); };
 
   handle('loadAutosave', () => queued(() => loadShowFile(autosavePath)));
@@ -121,7 +126,9 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     if (closeLiveOutput) closeLiveOutput();
     closeOutput();
     const windowed = process.env.STUDIO_LIVE_TEST_WINDOW === '1';
-    const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, title: 'Form & Field Map', windowed });
+    // On the screen the controls are on, full screen would hide them: open an ordinary window there instead.
+    const framed = !windowed && sameScreenAsStudio(display);
+    const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, title: 'Form & Field Map', windowed, framed });
     output = window;
     window.on('closed', () => {
       release();
