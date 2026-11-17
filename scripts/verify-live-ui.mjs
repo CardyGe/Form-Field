@@ -116,6 +116,24 @@ try {
     await page.getByText(/^Camera running/).waitFor();
     assert.equal(await page.getByLabel('Fade time', { exact: true }).inputValue(), '30');
   });
+  await check('Relief controls persist and its artwork reaches the output', async () => {
+    const look = page.getByLabel('Look', { exact: true });
+    await look.selectOption('relief');
+    await page.getByLabel('Settle', { exact: true }).fill('1.5');
+    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'relief' && v.relief.settle === 1.5, 'Relief settings were not saved');
+    const opened = app.waitForEvent('window');
+    await page.getByRole('button', { name: 'Open output', exact: true }).click();
+    const output = await opened;
+    await until(() => lit(output, output.locator('canvas')), v => v > .5, 'wall did not reach the output');
+    await page.getByRole('button', { name: 'Blackout', exact: true }).click();
+    await until(() => lit(output, output.locator('canvas'), 2), v => v === 0, 'Relief blackout failed');
+    await page.getByRole('button', { name: 'Blackout', exact: true }).click();
+    await page.getByRole('button', { name: 'Close output', exact: true }).click();
+    await page.getByRole('button', { name: 'Open output', exact: true }).waitFor();
+    await look.selectOption('paint');
+    await look.selectOption('relief');
+    assert.equal(await page.getByLabel('Settle', { exact: true }).inputValue(), '1.5');
+  });
   await check('Smoke can be chosen, and its people status shows on the operator screen', async () => {
     await page.getByLabel('Look', { exact: true }).selectOption('smoke');
     await page.getByText(/^People finding running/).waitFor({ timeout: 30000 });

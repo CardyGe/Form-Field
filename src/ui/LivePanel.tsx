@@ -1,6 +1,6 @@
 import { useRef, type ReactNode } from 'react';
 import { useLive } from './useLive';
-import { IGNORE_STILL, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, type Box, type LiveSettings } from '../live/settings';
+import { IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, type Box, type LiveSettings } from '../live/settings';
 import { rampHex } from '../live/colour';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, SOLAR } from '../core/palettes';
@@ -80,7 +80,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         <label className="live-check"><input aria-label="Mirror" type="checkbox" checked={s.mirror} onChange={e => set({ mirror: e.target.checked })} />Mirror<small>On when the camera faces the people</small></label>
         <Slider label="Sensitivity" value={s.sensitivity} min={SENSITIVITY.min} max={SENSITIVITY.max} step={.05} onChange={sensitivity => set({ sensitivity })} />
         <Slider label="Camera noise floor" value={s.noiseFloor} min={NOISE_FLOOR.min} max={NOISE_FLOOR.max} step={.005} onChange={noiseFloor => set({ noiseFloor })} />
-        <h3>Area that paints</h3>
+        <h3>Interaction area</h3>
         <Slider label="Area left" value={s.box.left} min={0} max={1} step={.01} onChange={v => setBox('left', v)} />
         <Slider label="Area right" value={s.box.right} min={0} max={1} step={.01} onChange={v => setBox('right', v)} />
         <Slider label="Area bottom" value={s.box.bottom} min={0} max={1} step={.01} onChange={v => setBox('bottom', v)} />
@@ -106,9 +106,13 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         {live.outputOpen ? (live.preview ? <img alt="Output preview" src={live.preview} /> : <p className="live-status">Waiting for the output…</p>)
           : <canvas aria-label="Live preview" ref={live.setCanvas} />}
       </div>
-      <aside className="live-column" aria-label={smoke ? 'Smoke' : 'Paint'}>
-        <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value === 'smoke' ? 'smoke' : 'paint' }); }}><option value="paint">Paint</option><option value="smoke">Smoke</option></select></label>
-        {smoke ? <>
+      <aside className="live-column" aria-label={LOOK_LABELS[s.look]}>
+        <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value as LookKind }); }}>{Object.entries(LOOK_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        {s.look === 'relief' ? <>
+          <p className="live-note">Sweep a hand across the wall to turn the metal blades.</p>
+          {RELIEF_CONTROLS.map(c => <Slider key={c.key} label={c.label} value={s.relief[c.key]} min={c.min} max={c.max} step={c.step}
+            unit={c.key === 'settle' ? ' s' : ''} onChange={value => live.update(v => ({ ...v, relief: { ...v.relief, [c.key]: value } }))} />)}
+        </> : smoke ? <>
           <p className="live-note">People are made of smoke. Moving tears it off them.</p>
           <div className="live-starts" role="group" aria-label="Start from">{SMOKE_STARTS.map(start =>
             <button key={start.id} className={`text-button ${Object.entries(start.values).every(([k, v]) => s.smoke[k as keyof typeof start.values] === v) ? 'on' : ''}`} onClick={() => setSmoke({ ...start.values })}>{start.label}</button>)}</div>

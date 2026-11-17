@@ -1,5 +1,5 @@
 // Real Electron/WebGL checks for Live mode.
-// Run: node scripts/verify-live.mjs [--performance]
+// Run: node scripts/verify-live.mjs [--performance [--relief]]
 // Drives LiveRenderer frame by frame with the synthetic TestSource and reads the canvas back.
 // Writes work/live/*.png for review by eye.
 import fs from 'node:fs/promises';
@@ -10,6 +10,7 @@ import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const reliefPerf = process.argv.includes('--relief');
 const performanceRun = process.argv.includes('--performance');
 const out = path.join(root, 'work/live');
 await fs.mkdir(out, { recursive: true });
@@ -90,9 +91,9 @@ try {
   });
 
   if (performanceRun) {
-    // Real display frames, Paint at defaults, 1920 × 1080, the synthetic source. Not a substitute for a real camera and projector.
-    const measure = (seconds, relay) => page.evaluate(async ([seconds, relay]) => {
-      const { source, renderer, canvas } = window.live.make(s => { s.quality = 1080; });
+    // Drive real display frames with the synthetic source and optionally encode the operator preview.
+    const measure = (seconds, relay, quality = 1080) => page.evaluate(async ([seconds, relay, quality, relief]) => {
+      const { source, renderer, canvas } = window.live.make(s => { s.quality = quality; if (relief) s.look = 'relief'; });
       let last = performance.now(), sent = 0, busy = false, running = true; const gaps = [];
       const small = new OffscreenCanvas(480, 270), context = small.getContext('2d');
       renderer.start();
@@ -103,15 +104,53 @@ try {
       await new Promise(r => setTimeout(r, 2000)); gaps.length = 0; renderer.stats();
       await new Promise(r => setTimeout(r, seconds * 1000)); running = false;
       const stats = renderer.stats(); renderer.stop(); renderer.frame(0); const painted = window.live.painted(0).fraction; gaps.sort((a, b) => a - b);
-      return { seconds, relay, fps: stats.fps, worstMs: stats.worstMs, medianMs: gaps[gaps.length >> 1], p99Ms: gaps[Math.floor(gaps.length * .99)], over25ms: gaps.filter(g => g > 25).length, frames: stats.frames, painted };
-    }, [seconds, relay]);
+      return { seconds, relay, quality, fps: stats.fps, worstMs: stats.worstMs, medianMs: gaps[gaps.length >> 1], p99Ms: gaps[Math.floor(gaps.length * .99)], over25ms: gaps.filter(g => g > 25).length, frames: stats.frames, painted };
+    }, [seconds, relay, quality, reliefPerf]);
     const length = Number(process.env.LIVE_PERF_SECONDS) || 120;
-    const runs = [await measure(length, false), await measure(Math.ceil(length / 2), true)];
-    await fs.writeFile(path.join(out, 'performance.json'), JSON.stringify(runs, null, 2));
+    const runs = reliefPerf ? [await measure(length, true, 720), await measure(length, true, 1080)] : [await measure(length, false), await measure(Math.ceil(length / 2), true)];
+    await fs.writeFile(path.join(out, reliefPerf ? 'relief-performance.json' : 'performance.json'), JSON.stringify(runs, null, 2));
     console.log(JSON.stringify(runs, null, 2));
     await app.close();
     process.exit(0);
   }
+  await check('Relief responds at both tracked positions, mirrors, settles and clears', async () => {
+    for (const mirror of [true, false]) {
+      const result = await page.evaluate(async mirror => {
+        const { renderer, made } = window.live.make(s => { s.look = 'relief'; s.mirror = mirror; });
+        renderer.frame(0);
+        const idle = window.live.pixels();
+        function difference() {
+          const { data, width, height } = window.live.pixels();
+          const bands = [{ sum: 0, moment: 0 }, { sum: 0, moment: 0 }];
+          for (let y = 0; y < height; y += 3) for (let x = 0; x < width; x += 3) {
+            const i = 4*(y*width+x), diff = Math.abs(data[i] - idle.data[i]);
+            const band = bands[Number(y >= height/2)];
+            band.sum += diff; band.moment += diff*x/width;
+          }
+          return bands.map(b => ({ energy: b.sum, x: b.moment / Math.max(1,b.sum) }));
+        }
+        window.live.run(40);
+        const moving = difference(), picture = await window.live.png();
+        for (let i=0; i<180; i++) renderer.frame(1/60); // source stopped sending frames
+        const settled = difference();
+        window.live.run(10);
+        renderer.clear(); renderer.frame(0);
+        const cleared = difference();
+        window.live.make(s => { s.look = 'relief'; s.box = { left: 0, right: 1, bottom: 0, top: .12 }; });
+        window.live.run(40);
+        const boxed = difference();
+        return { moving, settled, cleared, boxed, providers: made.providers, picture };
+      }, mirror);
+      if (!mirror) await save('relief', result.picture);
+      const [upper, lower] = result.moving;
+      assert.ok(upper.energy > 10000 && lower.energy > 10000, 'both moving patches should bend the wall');
+      assert.ok((upper.x - lower.x) * (mirror ? -1 : 1) > .16, 'folds should follow the mirrored camera');
+      assert.ok(result.settled.every((b,i) => b.energy < result.moving[i].energy * .02), 'stale input kept driving the wall');
+      assert.ok(result.cleared.every(b => b.energy === 0), 'clear left part of a wake');
+      assert.ok(result.boxed.every(b => b.energy === 0), 'movement outside the interaction box bent the wall');
+      assert.equal(result.providers, 0);
+    }
+  });
   await check('bare pipeline: the picture is not uniform', async () => {
     const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); const p = window.live.painted(0); return { p, frames: window.live.current.renderer.stats().frames }; });
     assert.ok(r.p.fraction > .01, `only ${r.p.fraction} of pixels lit`); assert.ok(r.frames >= 30, `${r.frames} frames`);

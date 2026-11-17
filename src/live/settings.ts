@@ -9,7 +9,14 @@ import { HOT_SIGNAL } from '../core/palettes';
 export interface Box { left: number; right: number; bottom: number; top: number }
 export type PaintKey = 'response' | 'strokeLength' | 'bristle' | 'spread' | 'fadeSeconds' | 'colourChange' | 'ground';
 export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number }
-export type LookKind = 'paint' | 'smoke';
+export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief' } as const;
+export type LookKind = keyof typeof LOOK_LABELS;
+export type ReliefKey = 'depth' | 'reach' | 'settle';
+export const RELIEF_CONTROLS: LiveControl<ReliefKey>[] = [
+  { key: 'depth', label: 'Depth', min: 0, max: 1.25, step: .01, default: 1 },
+  { key: 'reach', label: 'Reach', min: 0, max: 1, step: .01, default: .6 },
+  { key: 'settle', label: 'Settle', min: .25, max: 3, step: .05, default: 1 },
+];
 export type SmokeKey = 'density' | 'emit' | 'smoulder' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange' | 'vividness';
 /** Where people are found. ignoreStillSeconds null means Off. */
 export interface PeopleSettings { ignoreStillSeconds: number | null; useEmptyRoom: boolean }
@@ -27,6 +34,7 @@ export interface LiveSettings {
   /** Paint's palette. Smoke keeps its own in `smoke.palette`. */
   palette: string[];
   look: LookKind;
+  relief: Record<ReliefKey, number>;
   /** forever: smoke never fades, and stays in the picture. */
   smoke: Record<SmokeKey, number> & { palette: string[]; forever: boolean };
   people: PeopleSettings;
@@ -71,6 +79,7 @@ export function defaultLiveSettings(): LiveSettings {
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, c.default])) as Record<PaintKey, number>,
     palette: [...HOT_SIGNAL],
     look: 'paint',
+    relief: Object.fromEntries(RELIEF_CONTROLS.map(c => [c.key, c.default])) as Record<ReliefKey, number>,
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
   };
@@ -86,7 +95,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
   const b: Box = { left: ranged(box.left, 0, 1, 0), right: ranged(box.right, 0, 1, 1), bottom: ranged(box.bottom, 0, 1, 0), top: ranged(box.top, 0, 1, 1) };
   const isPalette = (p: unknown): p is string[] => Array.isArray(p) && p.length === 6 && p.every(c => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c));
   const palette = isPalette(v.palette) ? v.palette : d.palette;
-  const smoke = record(v.smoke), people = record(v.people);
+  const relief = record(v.relief), smoke = record(v.smoke), people = record(v.people);
   const still = people.ignoreStillSeconds === null ? null : ranged(people.ignoreStillSeconds, IGNORE_STILL.min, IGNORE_STILL.max, IGNORE_STILL.default);
   return {
     version: 1,
@@ -99,7 +108,8 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     quality: v.quality === 720 ? 720 : 1080,
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, ranged(paint[c.key], c.min, c.max, c.default)])) as Record<PaintKey, number>,
     palette: [...palette],
-    look: v.look === 'smoke' ? 'smoke' : 'paint',
+    look: v.look === 'smoke' || v.look === 'relief' ? v.look : 'paint',
+    relief: Object.fromEntries(RELIEF_CONTROLS.map(c => [c.key, ranged(relief[c.key], c.min, c.max, c.default)])) as Record<ReliefKey, number>,
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, ranged(smoke[c.key], c.min, c.max, c.default)])) as Record<SmokeKey, number>,
       palette: [...(isPalette(smoke.palette) ? smoke.palette : d.smoke.palette)], forever: smoke.forever === true },
     people: { ignoreStillSeconds: still, useEmptyRoom: typeof people.useEmptyRoom === 'boolean' ? people.useEmptyRoom : false },

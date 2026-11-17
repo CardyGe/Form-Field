@@ -142,3 +142,12 @@ test('Vividness runs 0 to 1, defaults high, and the starting points leave it alo
   assert.deepEqual([vivid.label, vivid.min, vivid.max, vivid.default], ['Vividness', 0, 1, .8]);
   for (const start of SMOKE_STARTS) assert.equal('vividness' in start.values, false, start.label);
 });
+
+test('Relief loads old settings and validates each control independently', () => {
+  const d = defaultLiveSettings();
+  assert.deepEqual(validateLiveSettings({ look: 'smoke' }).relief, d.relief);
+  const saved = validateLiveSettings({ look: 'relief', relief: { depth: 99, reach: -.1, settle: 2 } });
+  assert.equal(saved.look, 'relief');
+  assert.deepEqual(saved.relief, { depth: 1.25, reach: 0, settle: 2 });
+  assert.equal(validateLiveSettings({ relief: { settle: null } }).relief.settle, d.relief.settle);
+});
