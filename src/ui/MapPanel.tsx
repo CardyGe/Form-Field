@@ -136,8 +136,16 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
 
   // Arrow keys move the chosen corner, unless the key press belongs to a text box.
   const onStageKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    if (isTypingTarget(e.target as HTMLElement)) return;
+    const key = e.key.toLowerCase();
+    if ((e.metaKey || e.ctrlKey) && key === 'z') { e.preventDefault(); if (e.shiftKey) map.redo(); else map.undo(); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (key === 'v') { map.setTool('select'); return; }
+    if (key === 'r') { map.setTool('rectangle'); return; }
+    if (e.key === 'Escape') { map.setSelection(null); return; }
+    if (e.key === 'Delete') { if (selectedShape) { e.preventDefault(); if (map.dispatch({ type: 'delete', shapeId: selectedShape.id })) map.setSelection(null); } return; }
     const step = ARROWS[e.key];
-    if (!step || isTypingTarget(e.target as HTMLElement) || !selectedShape || map.selectedIndex === null) return;
+    if (!step || !selectedShape || map.selectedIndex === null) return;
     e.preventDefault();
     const size = e.shiftKey ? 10 : 1;
     map.dispatch({ type: 'nudgePoint', shapeId: selectedShape.id, index: map.selectedIndex, dxPx: step[0] * size, dyPx: step[1] * size });
@@ -179,7 +187,9 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
       <button className="text-button" aria-pressed={map.testGrid} onClick={() => map.setTestGrid(!map.testGrid)}>Test grid</button>
       <button className="text-button" aria-pressed={map.tool === 'select'} title="Pick and move shapes and corners" onClick={() => map.setTool('select')}>Select</button>
       <button className="text-button" aria-pressed={map.tool === 'rectangle'} title="Drag on the stage to draw a rectangle" onClick={() => map.setTool('rectangle')}>Rectangle</button>
-      <button className="text-button" disabled title="Flash the selected shape on the output">Identify</button>
+      <button className="text-button" disabled={!map.selectedId || !map.desktop} title="Flash the selected shape on the output" onClick={map.identify}>Identify</button>
+      <button className="text-button" disabled={!map.canUndo} title="Undo · ⌘Z" onClick={map.undo}>Undo</button>
+      <button className="text-button" disabled={!map.canRedo} title="Redo · ⇧⌘Z" onClick={map.redo}>Redo</button>
     </div></header>
     <div className="map-body">
       <aside className="live-column map-shapes" aria-label="Shapes">

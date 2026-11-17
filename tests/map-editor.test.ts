@@ -228,3 +228,23 @@ test('canEdit: edits are refused until the saved show has loaded', () => {
   assert.equal(canEdit(false), false);
   assert.equal(canEdit(true), true);
 });
+
+test('mapReducer: an edit followed by undo returns the original show, and redo brings it back', async () => {
+  const { mapReducer, initialMapState } = await import('../src/map/state');
+  const start = createShow();
+  let state = initialMapState(start);
+  state = mapReducer(state, { type: 'edit', action: rect('a') });
+  assert.equal(state.show.shapes.length, 1);
+  assert.equal(state.refusal, null);
+  state = mapReducer(state, { type: 'undo' });
+  assert.deepEqual(state.show, start);
+  state = mapReducer(state, { type: 'redo' });
+  assert.equal(state.show.shapes.length, 1);
+  // a refused edit changes nothing but records why; a new edit clears redo
+  const refused = mapReducer(state, { type: 'edit', action: { type: 'delete', shapeId: 'nope' } });
+  assert.equal(refused.show, state.show);
+  assert.equal(refused.refusal, 'not-found');
+  state = mapReducer(mapReducer(state, { type: 'undo' }), { type: 'edit', action: rect('b') });
+  assert.equal(state.future.length, 0);
+  assert.equal(mapReducer(initialMapState(start), { type: 'undo' }).show, start);
+});

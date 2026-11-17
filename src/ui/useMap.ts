@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { applyEdit, type EditAction } from '../map/editor';
-import { History } from '../map/history';
+import type { EditAction } from '../map/editor';
+import { initialMapState, mapReducer, type MapState } from '../map/state';
 import { autosaveSchedule, canEdit } from '../map/autosave';
 import { acceptMapMessage } from '../map/messages';
 import { createShow, validateShow, type ShowDocument } from '../map/show';
@@ -12,8 +12,10 @@ const TOO_LARGE = 'This show is too large to send to the wall. The wall keeps it
 /** What the operator screen does with the show: hold it, save it, and keep the wall in step. */
 export function useMap(onError: (message: string) => void) {
   const bridge = window.studio?.map;
-  const history = useRef(new History<ShowDocument>(createShow()));
-  const [show, setShow] = useState<ShowDocument>(() => history.current.present());
+  // The state is advanced through the pure reducer; the ref lets callbacks read it without waiting for a render.
+  const stateRef = useRef<MapState>(initialMapState(createShow()));
+  const [state, setState] = useState<MapState>(stateRef.current);
+  const show = state.show;
   const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -37,8 +39,8 @@ export function useMap(onError: (message: string) => void) {
       const saved = await bridge?.loadAutosave().catch(() => null) ?? null;
       if (cancelled) return;
       const next = validateShow(saved).show;
-      history.current = new History<ShowDocument>(next);
-      setShow(next); setLoaded(true);
+      stateRef.current = mapReducer(stateRef.current, { type: 'load', show: next });
+      setState(stateRef.current); setLoaded(true);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -72,23 +74,24 @@ export function useMap(onError: (message: string) => void) {
     bridge.send({ type: 'testGrid', on: latest.current.testGrid });
   }, [outputOpen]);
 
-  const present = (next: ShowDocument) => {
-    setShow(next);
-    saver.current?.save(JSON.stringify(next));
-  };
   const loadedRef = useRef(false);
   loadedRef.current = loaded;
+  const step = useCallback((action: Parameters<typeof mapReducer>[1]) => {
+    const before = stateRef.current;
+    const after = mapReducer(before, action);
+    stateRef.current = after;
+    setState(after);
+    if (after.show !== before.show) saver.current?.save(JSON.stringify(after.show));
+    return after;
+  }, []);
   const dispatch = useCallback((action: EditAction) => {
     if (!canEdit(loadedRef.current)) { setLastRefusal('Loading the show…'); return false; }
-    const result = applyEdit(history.current.present(), action);
-    if (!result.ok) { setLastRefusal(result.reason); return false; }
-    setLastRefusal(null);
-    history.current.commit(result.show);
-    present(result.show);
-    return true;
-  }, []);
-  const undo = () => { if (canEdit(loaded) && history.current.undo()) present(history.current.present()); };
-  const redo = () => { if (canEdit(loaded) && history.current.redo()) present(history.current.present()); };
+    const after = step({ type: 'edit', action });
+    setLastRefusal(after.refusal);
+    return after.refusal === null;
+  }, [step]);
+  const undo = useCallback(() => { if (canEdit(loadedRef.current)) step({ type: 'undo' }); }, [step]);
+  const redo = useCallback(() => { if (canEdit(loadedRef.current)) step({ type: 'redo' }); }, [step]);
 
   const setBlackout = (on: boolean) => { setBlackoutState(on); if (outputOpen) bridge?.send({ type: 'blackout', on }); };
   const setTestGrid = (on: boolean) => { setTestGridState(on); if (outputOpen) bridge?.send({ type: 'testGrid', on }); };
@@ -99,8 +102,27 @@ export function useMap(onError: (message: string) => void) {
   };
   const closeOutput = () => { void bridge?.closeOutput(); };
 
+  // The wall's crosshair follows the selected corner.
+  const crossPoint = selectedId !== null && selectedIndex !== null ? show.shapes.find(s => s.id === selectedId)?.points[selectedIndex] ?? null : null;
+  const crossX = crossPoint?.x ?? null, crossY = crossPoint?.y ?? null;
+  useEffect(() => {
+    if (!outputOpen || !bridge) return;
+    bridge.send(crossX === null || crossY === null ? { type: 'crosshair', point: null, shapeId: null } : { type: 'crosshair', point: { x: crossX, y: crossY }, shapeId: selectedId });
+  }, [crossX, crossY, selectedId, outputOpen]);
+
+  // Identify flashes the selected shape on the wall for three seconds; pressing again restarts the timer.
+  const identifyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopIdentify = () => { if (identifyTimer.current) clearTimeout(identifyTimer.current); identifyTimer.current = null; };
+  useEffect(() => stopIdentify, []);
+  const identify = () => {
+    if (!selectedId || !bridge) return;
+    stopIdentify();
+    bridge.send({ type: 'identify', shapeId: selectedId });
+    identifyTimer.current = setTimeout(() => { identifyTimer.current = null; bridge.send({ type: 'identify', shapeId: null }); }, 3000);
+  };
+
   const setSelection = (id: string | null, index: number | null = null) => { setSelectedId(id); setSelectedIndex(id === null ? null : index); };
 
-  return { show, loaded, selectedId, selectedIndex, setSelection, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: history.current.canUndo(), canRedo: history.current.canRedo(),
+  return { show, loaded, selectedId, selectedIndex, setSelection, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning, blackout, setBlackout, testGrid, setTestGrid, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }
