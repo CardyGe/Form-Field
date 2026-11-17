@@ -391,3 +391,125 @@ test('reorder moves a shape to the front, back, one forward or one back; a locke
   assert.ok(locked.ok);
   assert.deepEqual(applyEdit(locked.show, { type: 'reorder', shapeId: 'a', to: 'front' }), { ok: false, reason: 'locked' });
 });
+
+// Stage 2: what plays in a shape.
+import { MAX_SOURCES, SPEED_RANGE, validateShow } from '../src/map/show';
+
+const playing = (presetId = 'porcelain-shutters', sourceId = 'src-1', seed = 7): EditAction =>
+  ({ type: 'setContent', shapeId: 'a', content: { kind: 'preset', presetId, sourceId, seed } });
+function withInstrument(): ShowDocument {
+  const r = applyEdit(withShape(), playing());
+  assert.ok(r.ok);
+  return r.show;
+}
+
+test('setContent: a preset gives the shape its own one-layer composition', () => {
+  const show = withInstrument();
+  assert.equal(show.shapes[0].sourceId, 'src-1');
+  assert.equal(show.sources.length, 1);
+  const source = show.sources[0];
+  assert.equal(source.kind, 'instrument');
+  assert.equal(source.speed, 1);
+  assert.equal(source.revision, 0);
+  assert.equal(source.project.layers.length, 1);
+  assert.equal(source.project.layers[0].kind, 'relief');
+  assert.equal(source.project.seed, 7);
+  // What the editor builds is what a file would load.
+  assert.deepEqual(validateShow(JSON.parse(JSON.stringify(show))).show, show);
+});
+
+test('setContent: changing preset replaces the shape\'s source; colour drops it', () => {
+  const show = withInstrument();
+  const other = applyEdit(show, playing('salt-mandala', 'src-2'));
+  assert.ok(other.ok);
+  assert.equal(other.show.shapes[0].sourceId, 'src-2');
+  assert.deepEqual(other.show.sources.map(s => s.id), ['src-2']);
+  assert.equal(other.show.sources[0].project.layers[0].kind, 'resonance');
+  const colour = applyEdit(show, { type: 'setContent', shapeId: 'a', content: { kind: 'colour' } });
+  assert.ok(colour.ok);
+  assert.equal(colour.show.shapes[0].sourceId, null);
+  assert.deepEqual(colour.show.sources, []);
+});
+
+test('setContent: refused for a locked shape, an unknown preset, or a source id in use', () => {
+  const locked = applyEdit(withShape(), { type: 'setLocked', shapeId: 'a', locked: true });
+  assert.ok(locked.ok);
+  assert.deepEqual(applyEdit(locked.show, playing()), { ok: false, reason: 'locked' });
+  assert.deepEqual(applyEdit(withShape(), playing('no-such-look')), { ok: false, reason: 'unknown-preset' });
+  const show = withInstrument();
+  const second = applyEdit(show, rect('b', { x: 0.5, y: 0.5 }, { x: 0.7, y: 0.7 }));
+  assert.ok(second.ok);
+  assert.deepEqual(applyEdit(second.show, { type: 'setContent', shapeId: 'b', content: { kind: 'preset', presetId: 'porcelain-shutters', sourceId: 'src-1', seed: 1 } }),
+    { ok: false, reason: 'duplicate-id' });
+});
+
+test('varySource changes the composition and its revision; palette and composition edits too; speed is clamped', () => {
+  const show = withInstrument();
+  const before = show.sources[0].project.layers[0];
+  const varied = applyEdit(show, { type: 'varySource', sourceId: 'src-1', entropy: 12345 });
+  assert.ok(varied.ok);
+  assert.equal(varied.show.sources[0].revision, 1);
+  assert.notDeepEqual(varied.show.sources[0].project.layers[0].params, before.params);
+  const palette = ['#ff0000', '#00ff00', '#0000ff', '#ffffff', '#000000', '#123456'];
+  const coloured = applyEdit(show, { type: 'setSourcePalette', sourceId: 'src-1', palette });
+  assert.ok(coloured.ok);
+  assert.deepEqual(coloured.show.sources[0].project.layers[0].palette, palette);
+  assert.equal(coloured.show.sources[0].revision, 1);
+  assert.deepEqual(applyEdit(show, { type: 'setSourcePalette', sourceId: 'src-1', palette: ['red', '#00ff00'] }), { ok: false, reason: 'bad-palette' });
+  assert.deepEqual(applyEdit(show, { type: 'setSourcePalette', sourceId: 'src-1', palette: ['#00ff00'] }), { ok: false, reason: 'bad-palette' });
+  const fast = applyEdit(show, { type: 'setSourceSpeed', sourceId: 'src-1', speed: 50 });
+  assert.ok(fast.ok);
+  assert.equal(fast.show.sources[0].speed, SPEED_RANGE.max);
+  // Speed travels with the show; it does not change the composition, so the revision stays.
+  assert.equal(fast.show.sources[0].revision, 0);
+  const project = structuredClone(show.sources[0].project);
+  project.layers[0].opacity = 0.5;
+  const edited = applyEdit(show, { type: 'setSourceProject', sourceId: 'src-1', project });
+  assert.ok(edited.ok);
+  assert.equal(edited.show.sources[0].project.layers[0].opacity, 0.5);
+  assert.equal(edited.show.sources[0].revision, 1);
+  const tooBig = structuredClone(project);
+  tooBig.layers = [0, 1, 2, 3, 4].map(i => ({ ...project.layers[0], id: `l${i}` }));
+  assert.equal(applyEdit(show, { type: 'setSourceProject', sourceId: 'src-1', project: tooBig }).ok, false);
+  assert.deepEqual(applyEdit(show, { type: 'setSourceProject', sourceId: 'src-1', project: { nonsense: true } as never }), { ok: false, reason: 'bad-composition' });
+  assert.deepEqual(applyEdit(show, { type: 'varySource', sourceId: 'nope', entropy: 1 }), { ok: false, reason: 'not-found' });
+});
+
+test('a source played by a locked shape cannot be changed', () => {
+  const locked = applyEdit(withInstrument(), { type: 'setLocked', shapeId: 'a', locked: true });
+  assert.ok(locked.ok);
+  assert.deepEqual(applyEdit(locked.show, { type: 'varySource', sourceId: 'src-1', entropy: 1 }), { ok: false, reason: 'locked' });
+  assert.deepEqual(applyEdit(locked.show, { type: 'setSourceSpeed', sourceId: 'src-1', speed: 2 }), { ok: false, reason: 'locked' });
+});
+
+test('duplicate gives the copy its own source; delete drops a source only when no shape plays it', () => {
+  const show = withInstrument();
+  const copy = applyEdit(show, { type: 'duplicate', shapeId: 'a', id: 'a2', sourceId: 'src-2' });
+  assert.ok(copy.ok);
+  assert.equal(copy.show.shapes[1].sourceId, 'src-2');
+  assert.deepEqual(copy.show.sources.map(s => s.id), ['src-1', 'src-2']);
+  assert.deepEqual(copy.show.sources[1].project, show.sources[0].project);
+  assert.equal(copy.show.sources[1].revision, 0);
+  // A copy of an instrument shape needs its own source id.
+  assert.deepEqual(applyEdit(show, { type: 'duplicate', shapeId: 'a', id: 'a2' }), { ok: false, reason: 'needs-source-id' });
+  const deleted = applyEdit(copy.show, { type: 'delete', shapeId: 'a2' });
+  assert.ok(deleted.ok);
+  assert.deepEqual(deleted.show.sources.map(s => s.id), ['src-1']);
+  // Two shapes sharing one source (possible in a file): deleting one keeps the source.
+  const shared = { ...copy.show, shapes: copy.show.shapes.map(s => ({ ...s, sourceId: 'src-1' })), sources: [copy.show.sources[0]] };
+  const kept = applyEdit(shared, { type: 'delete', shapeId: 'a2' });
+  assert.ok(kept.ok);
+  assert.deepEqual(kept.show.sources.map(s => s.id), ['src-1']);
+});
+
+test('at most 64 sources', () => {
+  let show = createShow();
+  for (let i = 0; i < MAX_SOURCES; i++) {
+    const shape = applyEdit(show, rect(`s${i}`)); assert.ok(shape.ok);
+    const content = applyEdit(shape.show, { type: 'setContent', shapeId: `s${i}`, content: { kind: 'preset', presetId: 'porcelain-shutters', sourceId: `src${i}`, seed: i } });
+    assert.ok(content.ok); show = content.show;
+  }
+  assert.equal(show.sources.length, MAX_SOURCES);
+  // Replacing a shape's own source is allowed at the limit, since the old one goes.
+  assert.ok(applyEdit(show, { type: 'setContent', shapeId: 's0', content: { kind: 'preset', presetId: 'salt-mandala', sourceId: 'new', seed: 1 } }).ok);
+});
