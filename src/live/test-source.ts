@@ -18,6 +18,8 @@ export class TestSource implements FrameSource {
   figure = false;
   /** Two performers for the Relief rehearsal pattern. */
   audience = false;
+  /** Opposing sweeps on one row for the Ricochet rehearsal. */
+  volley = false;
   /** Holds the figure in place with a slight sway, like a person standing still. */
   standing = false;
   /** For checks: bright stripes scrolling across the whole frame, so everything moves. */
@@ -40,6 +42,14 @@ export class TestSource implements FrameSource {
   /** The discs in uv, origin bottom-left, x not mirrored. vx is uv per second. */
   discs(): Disc[] {
     const t = this.time;
+    if (this.volley) {
+      const advance = .19*(1-Math.cos(1.9*t))*.5;
+      const velocity = .19*.95*Math.sin(1.9*t);
+      return [
+        { x: .21+advance, y: .54, radius: .085, vx: velocity },
+        { x: .79-advance, y: .54, radius: .085, vx: -velocity },
+      ];
+    }
     return [
       { x: .5 + .32 * Math.sin(t * 1.7), y: .7, radius: .11, vx: .32 * 1.7 * Math.cos(t * 1.7) },
       { x: .5 - .32 * Math.sin(t * 1.3), y: .3, radius: .11, vx: -.32 * 1.3 * Math.cos(t * 1.3) },

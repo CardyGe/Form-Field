@@ -6,6 +6,7 @@ type GeometryData = { positions: number[]; normals: number[]; finishes: number[]
 export const scaleDimensions = {
   fine: { blades: 64, pitch: 1/3, radius: .21 },
   extraFine: { blades: 88, pitch: .25, radius: .14 },
+  micro: { blades: 112, pitch: .20, radius: .085 },
 };
 
 function ribbons(data: GeometryData, woven: boolean, size: ReliefSettings['size']) {

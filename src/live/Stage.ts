@@ -47,12 +47,14 @@ export class Stage {
     this.renderer.settings = settings;
     const { kind, deviceId } = settings.source;
     const key = kind === 'camera' ? `camera:${deviceId ?? ''}` : kind === 'file' ? `file:${file ? `${file.name}:${file.size}:${file.lastModified}` : ''}` : 'test';
-    if (this.pattern) this.pattern.audience = settings.look === 'relief';
+    if (this.pattern) this.setTestPattern(this.pattern, settings);
     if (key === this.key) return;
     this.key = key;
     if (kind === 'test') {
       this.camera.close();
-      this.pattern = new TestSource(); this.pattern.audience = settings.look === 'relief'; this.active = this.pattern;
+      this.pattern = new TestSource();
+      this.setTestPattern(this.pattern, settings);
+      this.active = this.pattern;
       this.onState({ status: 'running', label: 'Test pattern', width: 640, height: 360 });
       return;
     }
@@ -60,6 +62,12 @@ export class Stage {
     if (kind === 'camera') void this.camera.openCamera(deviceId);
     else if (file) void this.camera.openFile(file);
     else { this.camera.close(); this.onState({ status: 'error', message: 'Choose a video file to play.' }); }
+  }
+
+  private setTestPattern(pattern: TestSource, settings: LiveSettings): void {
+    const relief = settings.look === 'relief';
+    pattern.volley = relief && settings.relief.motion === 'ricochet' && !settings.reliefPresence;
+    pattern.audience = relief && !pattern.volley;
   }
 
   /** Opens the current source again, for example after a camera was reconnected. */

@@ -19,7 +19,7 @@ export {TestSource, TestMaskProvider} from './src/live/test-source';
 export {defaultLiveSettings, RELIEF_PRESETS} from './src/live/settings';
 export {recolourGLSL, setRamp} from './src/live/recolour';
 export {Passes} from './src/live/passes';
-export {audienceFragment} from './src/live/relief-shaders';
+export {audienceFragment, ricochetFragment} from './src/live/relief-shaders';
 export * as THREE from 'three';
 export {HOT_SIGNAL, POUR, NEON_STRATA} from './src/core/palettes';
 export const fromHalf = v => { const s = v >> 15, e = (v >> 10) & 31, f = v & 1023; return (s ? -1 : 1) * (e ? Math.pow(2, e - 15) * (1 + f / 1024) : Math.pow(2, -14) * f / 1024); };`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'live.js'), logLevel: 'silent' });
@@ -265,6 +265,50 @@ try {
     });
     assert.equal(result.solo,0);
     assert.ok(result.pair > .2, 'overlapping wakes did not light up');
+  });
+  await check('Ricochet reflects a crest at each edge and preserves opposing crests', async () => {
+    const results = await page.evaluate(() => {
+      const { THREE, Passes, ricochetFragment } = window.live.m;
+      const width = 160, height = 90;
+      const gpu = new THREE.WebGLRenderer({ canvas: new OffscreenCanvas(width,height) });
+      const passes = new Passes(gpu), field = passes.pair(width,height);
+      const cells = new Float32Array(width*height*4);
+      const seed = new THREE.DataTexture(cells,width,height,THREE.RGBAFormat,THREE.FloatType);
+      const uniforms = { uState: { value: seed }, uFlow: { value: seed }, uStep: { value:1/60 },
+        uReach: { value: .8 }, uSettle: { value: 1.65 }, uFresh: { value: 0 } };
+      const pass = passes.material(ricochetFragment,uniforms);
+      const pixel = new Uint16Array(4);
+      function advance(frames) {
+        seed.needsUpdate = true;
+        uniforms.uState.value = seed;
+        for (let i=0; i<frames; i++) {
+          passes.draw(pass,field.write); field.swap();
+          uniforms.uState.value = field.read.texture;
+        }
+      }
+      function stamp(x,y,channel) {
+        for (let j=y-3; j<=y+3; j++) for (let i=x-4; i<=x+4; i++)
+          cells[4*(j*width+i)+channel] = 1;
+      }
+      function at(x,y,channel) {
+        gpu.readRenderTargetPixels(field.read,x,y,1,1,pixel);
+        return THREE.DataUtils.fromHalfFloat(pixel[channel]);
+      }
+      try {
+        // The pulse travels just under 40 cells in 15 frames on either axis.
+        const edges = [[136,45,0,144,45,1],[24,45,1,16,45,0],
+          [80,74,2,80,66,3],[80,16,3,80,24,2]].map(([x,y,d,rx,ry,reflected]) => {
+          cells.fill(0); stamp(x,y,d); advance(15);
+          return at(rx,ry,reflected);
+        });
+        cells.fill(0); stamp(40,45,0); stamp(120,45,1); advance(15);
+        return { edges, opposing: [at(80,45,0),at(80,45,1)] };
+      } finally {
+        seed.dispose(); pass.dispose(); field.dispose(); passes.dispose(); gpu.dispose();
+      }
+    });
+    assert.ok(results.edges.every(e => e > .3), 'reflected crests: ' + results.edges);
+    assert.ok(results.opposing.every(e => e > .45), 'opposing crests: ' + results.opposing);
   });
   await check('bare pipeline: the picture is not uniform', async () => {
     const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); const p = window.live.painted(0); return { p, frames: window.live.current.renderer.stats().frames }; });

@@ -3,10 +3,10 @@ import type { Look, TrackingFeed } from './look';
 import type { LiveSettings, ReliefSettings } from './settings';
 import { Passes, type Pair } from './passes';
 import { reliefGeometry, scaleDimensions } from './relief-geometry';
-import { audienceFragment, latchFragment, reliefFragment, reliefVertex, rippleFragment, sweepFragment } from './relief-shaders';
+import { audienceFragment, latchFragment, reliefFragment, reliefVertex, ricochetFragment, rippleFragment, sweepFragment } from './relief-shaders';
 
 const surfaceIndex = { blades: 0, scales: 1, weave: 2 };
-const motionIndex = { sweep: 0, ripple: 1, latch: 2 };
+const motionIndex = { sweep: 0, ripple: 1, latch: 2, ricochet: 3 };
 const finishIndex = { silver: 0, brass: 1, pearl: 2, foil: 3 };
 
 export class Relief implements Look {
@@ -16,6 +16,7 @@ export class Relief implements Look {
   private imprint = false;
   private readonly sweep: THREE.ShaderMaterial;
   private readonly ripple: THREE.ShaderMaterial;
+  private readonly ricochet: THREE.ShaderMaterial;
   private readonly latch: THREE.ShaderMaterial;
   private readonly zero: THREE.ShaderMaterial;
   private readonly scene = new THREE.Scene();
@@ -43,6 +44,7 @@ export class Relief implements Look {
     const simUniforms = { uState: { value: null }, uFlow: { value: null }, uStep: { value: 0 },
       uReach: { value: 0 }, uSettle: { value: 1 }, uFresh: { value: 0 } };
     this.sweep = passes.material(sweepFragment, simUniforms);
+    this.ricochet = passes.material(ricochetFragment, simUniforms);
     this.ripple = passes.material(rippleFragment, simUniforms);
     this.latch = passes.material(latchFragment, simUniforms);
     this.zero = passes.material('void main(){gl_FragColor = vec4(0.);}', {});
@@ -72,7 +74,7 @@ export class Relief implements Look {
       this.motion = style.motion;
     }
     const pass = this[this.motion];
-    const steps = this.motion === 'sweep' ? 1 : Math.max(1, Math.ceil(seconds*90));
+    const steps = this.motion === 'ripple' || this.motion === 'latch' ? Math.max(1, Math.ceil(seconds*90)) : 1;
     const u = pass.uniforms;
     u.uFlow.value = feed.flow;
     u.uReach.value = style.reach;
@@ -129,7 +131,7 @@ export class Relief implements Look {
   }
   dispose() {
     this.audience.dispose(); this.audiencePass.dispose();
-    this.field.dispose(); this.sweep.dispose(); this.ripple.dispose(); this.latch.dispose(); this.zero.dispose();
+    this.field.dispose(); this.sweep.dispose(); this.ricochet.dispose(); this.ripple.dispose(); this.latch.dispose(); this.zero.dispose();
     this.material.dispose(); this.wall.geometry.dispose(); this.target.dispose();
   }
 }

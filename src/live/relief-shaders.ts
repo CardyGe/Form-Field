@@ -22,6 +22,39 @@ void main() {
   gl_FragColor = wave;
 }`;
 
+// Cardinal crests bounce at the boundary. Each backward lookup follows
+// exactly one ray, exchanging directions once if it crosses an edge.
+export const ricochetFragment = /* glsl */`
+uniform sampler2D uState, uFlow;
+uniform float uStep, uReach, uSettle, uFresh;
+
+float bounce(vec2 p, int axis, bool positive, float distance) {
+  p[axis] += positive ? -distance : distance;
+  bool crossed = p[axis] < 0. || p[axis] > 1.;
+  p[axis] = 1.-abs(1.-abs(p[axis]));
+  vec4 old = texture2D(uState,p);
+  int channel = 2*axis + ((positive != crossed) ? 0 : 1);
+  return old[channel]*(crossed ? .78 : 1.);
+}
+
+void main() {
+  vec2 travel = uStep*1.24*uReach*vec2(1.,16./9.);
+  vec4 wave = vec4(
+    bounce(vUv,0,true,travel.x), bounce(vUv,0,false,travel.x),
+    bounce(vUv,1,true,travel.y), bounce(vUv,1,false,travel.y)
+  )*exp(-1.52*uStep/uSettle);
+  if (uFresh > .5) {
+    vec3 movement = texture2D(uFlow,vUv).rgb;
+    vec2 speed = movement.xy*vec2(160.,90.);
+    float strength = smoothstep(.025,.40,movement.b)*smoothstep(.075,.85,length(speed));
+    vec4 heading = max(vec4(speed.x,-speed.x,speed.y,-speed.y),0.);
+    heading *= heading;
+    heading /= max(.0001,dot(heading,vec4(1.)));
+    wave += (1.-wave)*heading*strength*.86;
+  }
+  gl_FragColor = wave;
+}`;
+
 // A damped membrane. R carries height and G carries velocity in units per second.
 // The renderer splits long frames so a wave travels less than .65 cells per step.
 export const rippleFragment = /* glsl */`
@@ -118,6 +151,9 @@ varying vec2 vTape;
 varying vec2 vAudiencePoint;
 varying float vWeft, vCrimp;
 
+float collision(vec4 wave) {
+  return max(min(wave.r,wave.g),min(wave.b,wave.a));
+}
 vec3 gesture(vec2 panel) {
   vec2 st = panel / vec2(16.,9.) + .5, blur = vec2(.012,.023);
   vec4 f = .4*texture2D(uState,st) + .15*(
@@ -127,6 +163,12 @@ vec3 gesture(vec2 panel) {
   if (uMotion == 1) {
     float crest = tanh(f.x*2.8)*uDepth;
     return vec3(crest, crest, abs(crest));
+  }
+  if (uMotion == 3) {
+    float crest = max(max(f.r,f.g),max(f.b,f.a));
+    float clash = smoothstep(.055,.38,collision(f));
+    float roll = tanh(2.3*(f.r-f.g) + 1.75*(f.b-f.a));
+    return vec3(roll+.24*clash, min(1.35,.85*crest+.68*clash), min(1.,crest+.4*clash))*uDepth;
   }
   float turn = tanh(1.8*(f.r-f.g) + 1.5*(f.b-f.a))*uDepth;
   float lift = min(1.,dot(f,vec4(1.)))*uDepth;
@@ -224,9 +266,9 @@ varying float vFinish, vTurn, vEnergy;
 varying vec2 vTape;
 varying vec2 vAudiencePoint;
 varying float vWeft, vCrimp;
-uniform int uFinish, uSurface;
+uniform int uFinish, uSurface, uMotion;
 uniform float uEdgeLight;
-uniform sampler2D uAudience;
+uniform sampler2D uAudience, uState;
 uniform bool uBodyImprint;
 uniform vec2 uLight;
 float square(float x) { return x*x; }
@@ -278,7 +320,21 @@ vec3 wovenFinish(vec3 n) {
   fabric += accent*uEdgeLight*lift*(.12+.21*selvedge+.29*glint);
   return fabric;
 }
+vec3 crestLight(vec3 surface, vec3 normal) {
+  if (uMotion != 3) return surface;
+  vec4 wave = texture2D(uState,vAudiencePoint/vec2(16.,9.)+.5);
+  vec4 light = smoothstep(vec4(.05),vec4(.63),wave);
+  float clash = smoothstep(.075,.42,max(min(wave.r,wave.g),min(wave.b,wave.a)));
+  vec3 tint = light.r*vec3(.022,.40,.72) + light.g*vec3(.68,.12,.028)
+    + light.b*vec3(.31,.085,.66) + light.a*vec3(.055,.46,.33);
+  float grazing = .34+.40*abs(normal.x)+.26*uEdgeLight;
+  // A soft shoulder below the main crest keeps a weaker wake visible.
+  float leading = pow(max(max(wave.r,wave.g),max(wave.b,wave.a)),1.45);
+  return surface*(1.-.24*leading) + tint*grazing
+    + clash*vec3(.53,.48,.38)*(1.25-.35*abs(normal.z));
+}
 vec3 audienceLight(vec3 surface, vec3 normal) {
+  surface = crestLight(surface,normal);
   if (!uBodyImprint) return surface;
   vec4 imprint = texture2D(uAudience,vAudiencePoint/vec2(16.,9.)+.5);
   float body = imprint.r;

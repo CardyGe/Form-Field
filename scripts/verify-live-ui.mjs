@@ -140,6 +140,10 @@ try {
     await look.selectOption('relief');
     assert.equal(await page.getByLabel('Settle', { exact: true }).inputValue(), '1.5');
     assert.equal(await imprint.isChecked(),true);
+    await imprint.uncheck();
+    await page.getByLabel('Relief preset').selectOption('Chrome volley');
+    assert.equal(await page.getByLabel('Element size',{ exact:true }).inputValue(),'micro');
+    assert.equal(await page.getByLabel('Motion',{ exact:true }).inputValue(),'ricochet');
   });
   await check('Smoke can be chosen, and its people status shows on the operator screen', async () => {
     await page.getByLabel('Look', { exact: true }).selectOption('smoke');
