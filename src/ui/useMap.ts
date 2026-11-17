@@ -70,6 +70,9 @@ export function useMap(onError: (message: string) => void) {
   const [sendWarning, setSendWarning] = useState<string | null>(null);
   const [blackout, setBlackoutState] = useState(false);
   const [testGrid, setTestGridState] = useState(false);
+  const [freeze, setFreezeState] = useState(false);
+  /** How the wall is keeping up, as it reports once a second while the output is open. */
+  const [wallState, setWallState] = useState<import('../map/compositor').CompositorStats | null>(null);
   const [displays, setDisplays] = useState<Display[]>([]);
   const [display, setDisplay] = useState<number | null>(null);
   const [outputOpen, setOutputOpen] = useState(false);
@@ -79,8 +82,8 @@ export function useMap(onError: (message: string) => void) {
   const [saveError, setSaveError] = useState<string | null>(kept.saveFailed ? SAVE_FAILED : null);
   const [wallPicture, setWallPicture] = useState<ImageBitmap | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const latest = useRef({ shown, blackout, testGrid });
-  latest.current = { shown, blackout, testGrid };
+  const latest = useRef({ shown, blackout, testGrid, freeze });
+  latest.current = { shown, blackout, testGrid, freeze };
   const saver = kept.saver;
 
   // The saved working show, once per window. A damaged file was already moved aside by the main process, so an empty show is fine.
@@ -115,11 +118,12 @@ export function useMap(onError: (message: string) => void) {
     const offPreview = bridge.onPreview(bytes => {
       void createImageBitmap(new Blob([bytes], { type: 'image/jpeg' })).then(setWallPicture).catch(() => {});
     });
+    const offState = bridge.onState(setWallState);
     kept.onSaveResult = failed => setSaveError(failed ? SAVE_FAILED : null);
     // Leaving Map writes what is waiting. A failure stays recorded in the session and still refuses the close.
-    return () => { offOutput(); offDisplays(); offPreview(); kept.onSaveResult = null; saver.flush().catch(() => {}); void bridge.closeOutput().catch(() => {}); };
+    return () => { offOutput(); offDisplays(); offPreview(); offState(); kept.onSaveResult = null; saver.flush().catch(() => {}); void bridge.closeOutput().catch(() => {}); };
   }, []);
-  useEffect(() => { if (!outputOpen) setWallPicture(null); }, [outputOpen]);
+  useEffect(() => { if (!outputOpen) { setWallPicture(null); setWallState(null); } }, [outputOpen]);
 
   // Sends to the wall. During a drag, show and crosshair go at most once per animation frame (the latest wins);
   // anything sent at once replaces what is waiting for the frame, so an old preview never lands after a release.
@@ -166,6 +170,7 @@ export function useMap(onError: (message: string) => void) {
     if (!outputOpen || !bridge) return;
     sendNow({ type: 'blackout', on: latest.current.blackout });
     sendNow({ type: 'testGrid', on: latest.current.testGrid });
+    sendNow({ type: 'freeze', on: latest.current.freeze });
     sendSources(latest.current.shown);
     sendNow(showMessage(latest.current.shown));
   }, [outputOpen]);
@@ -199,6 +204,8 @@ export function useMap(onError: (message: string) => void) {
 
   const setBlackout = (on: boolean) => { setBlackoutState(on); if (outputOpen) bridge?.send({ type: 'blackout', on }); };
   const setTestGrid = (on: boolean) => { setTestGridState(on); if (outputOpen) bridge?.send({ type: 'testGrid', on }); };
+  /** Freeze holds the wall's picture: the instruments stop where they are. */
+  const setFreeze = (on: boolean) => { setFreezeState(on); if (outputOpen) bridge?.send({ type: 'freeze', on }); };
   const openOutput = async () => {
     if (display === null) return;
     try { await bridge?.openOutput(display); }
@@ -258,5 +265,5 @@ export function useMap(onError: (message: string) => void) {
   const setSelection = (id: string | null, index: number | null = null) => { setSelectedId(id); setSelectedIndex(id === null ? null : index); };
 
   return { show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIndex, setSelection, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
-    lastRefusal, sendWarning, blackout, setBlackout, testGrid, setTestGrid, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
+    lastRefusal, sendWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

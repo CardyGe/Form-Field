@@ -8,13 +8,22 @@
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
 import { drawCommands, stageCommands, type DrawOptions } from './draw';
-import { advancePhase, drawsThisFrame, fadeAlpha, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize, type Governor, type Playing } from './playout';
+import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize, type Governor, type Playing } from './playout';
+import { isEvolving } from '../core/playback';
 import { STAGE_SIZE, type Shape } from './show';
 
 /** What the compositor needs of a show: its shapes, and each source's speed. Works for a stored show or the wall's. */
 export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number }[] }
 
 type Frame = OffscreenCanvas;
+
+/**
+ * Most instruments that play at once. Chromium caps live WebGL contexts per page; past the cap it silently kills the
+ * oldest, so Map stays well under it. A source over the limit plays its shape's colour, and the operator is told why.
+ */
+export const MAX_LIVE_INSTRUMENTS = 24;
+/** After its graphics context is lost, a source waits this long before it is started again. */
+const RESTART_AFTER_MS = 5000;
 
 /** One instrument source on this stage. */
 interface Slot {
@@ -27,6 +36,8 @@ interface Slot {
   /** The last drawn picture, kept in 2D: a WebGL canvas is cleared after it is shown, and frames are sometimes skipped. */
   frame: Frame | null;
   failed: string | null;
+  /** A composition that could not be prepared is not tried again every frame; a new composition is. */
+  failedProject: Project | null;
   prepares: number;
 }
 
@@ -61,6 +72,10 @@ export class MapCompositor {
   private readonly slots = new Map<string, Slot>();
   private readonly playing = new Map<string, Playing>();
   private readonly fades = new Map<string, Fade>();
+  /** Sources whose graphics context was lost, and when they may start again. */
+  private readonly restartAt = new Map<string, number>();
+  /** Sources over MAX_LIVE_INSTRUMENTS this frame: they play their colour. */
+  private readonly overLimit = new Set<string>();
   private governor: Governor = initialGovernor();
   private last: number | null = null;
   private frameIndex = 0;
@@ -81,9 +96,8 @@ export class MapCompositor {
   setShow(show: PlayShow, projects: ReadonlyMap<string, Project>): void {
     this.show = show;
     this.projects = new Map(projects);
-    const live = new Set(show.sources.map(s => s.id));
-    for (const [id, slot] of this.slots) if (!live.has(id)) { slot.renderer?.dispose(); this.slots.delete(id); }
-    // Fades start when a shape changes source, or its source changes instrument.
+    // Fades start when a shape changes source, or its source changes instrument. The old picture is taken before
+    // the old source is let go, so the shape holds it while the new one starts.
     const now = performance.now();
     for (const shape of show.shapes) {
       const next: Playing = { sourceId: shape.sourceId, kinds: kindsOf(shape.sourceId ? this.projects.get(shape.sourceId) : null) };
@@ -96,6 +110,9 @@ export class MapCompositor {
       this.playing.set(shape.id, next);
     }
     for (const id of [...this.playing.keys()]) if (!show.shapes.some(s => s.id === id)) { this.playing.delete(id); this.fades.delete(id); }
+    const live = new Set(show.sources.map(s => s.id));
+    for (const [id, slot] of this.slots) if (!live.has(id)) this.release(id, slot);
+    for (const id of [...this.restartAt.keys()]) if (!live.has(id)) this.restartAt.delete(id);
   }
 
   setOptions(options: DrawOptions): void { this.options = options; }
@@ -110,28 +127,32 @@ export class MapCompositor {
     const scale = GOVERNOR_SCALES[this.governor.level];
     const draw = !this.frozen && drawsThisFrame(this.governor.level, this.frameIndex);
 
+    this.overLimit.clear();
     for (const source of this.show.sources) {
       const project = this.projects.get(source.id);
       if (!project) continue;
-      const slot = this.slot(source.id);
-      if (project !== slot.project && project !== slot.pending) this.prepare(slot, project);
+      // Only sources some visible shape plays are started.
+      const users = this.show.shapes.filter(s => s.sourceId === source.id && s.visible);
+      if (!users.length) continue;
+      const slot = this.slot(source.id, now);
+      if (!slot) continue;
+      if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) this.prepare(slot, project);
       if (!slot.project || !slot.renderer) continue;
       if (!this.frozen) slot.phase = advancePhase(slot.phase, seconds, slot.project, source.speed);
       if (!draw) continue;
       // Drawn at the size of the largest shape playing it on the stage.
-      const users = this.show.shapes.filter(s => s.sourceId === source.id && s.visible);
-      if (!users.length) continue;
       const size = users.map(s => sourceSize(s.points, scale)).reduce((a, b) => ({ width: Math.max(a.width, b.width), height: Math.max(a.height, b.height) }));
       try {
         slot.renderer.render(slot.project, slot.phase, size.width, size.height);
         slot.frame = copyFrame(slot.canvas, size.width, size.height, slot.frame);
+        if (slot.failedProject === null) slot.failed = null;
       } catch (error) { slot.failed = String((error as Error)?.message ?? error); }
     }
 
     this.composite(now);
     this.frameIndex++;
     const work = performance.now() - started;
-    if (!this.frozen) this.governor = governorStep(this.governor, work);
+    if (!this.frozen) this.governor = governorStep(this.governor, frameCost(work, seconds * 1000));
     this.framesThisSecond++;
     if (now - this.secondStarted >= 1000) { this.fps = this.framesThisSecond * 1000 / (now - this.secondStarted); this.framesThisSecond = 0; this.secondStarted = now; }
   }
@@ -139,22 +160,46 @@ export class MapCompositor {
   stats(): CompositorStats {
     return {
       fps: Math.round(this.fps), level: this.governor.level,
-      failing: [...this.slots].filter(([, s]) => s.failed).map(([id, s]) => ({ id, reason: s.failed! })),
+      failing: [
+        ...[...this.slots].filter(([, s]) => s.failed).map(([id, s]) => ({ id, reason: s.failed! })),
+        ...[...this.overLimit].map(id => ({ id, reason: `more than ${MAX_LIVE_INSTRUMENTS} instruments are playing at once` })),
+        ...[...this.restartAt.keys()].filter(id => !this.slots.has(id)).map(id => ({ id, reason: 'the graphics card stopped this instrument; it will start again' })),
+      ],
       prepares: Object.fromEntries([...this.slots].map(([id, s]) => [id, s.prepares])),
     };
   }
 
   dispose(): void {
     this.disposed = true;
-    for (const slot of this.slots.values()) slot.renderer?.dispose();
-    this.slots.clear();
+    for (const [id, slot] of this.slots) this.release(id, slot);
   }
 
-  private slot(id: string): Slot {
-    let slot = this.slots.get(id);
-    if (slot) return slot;
+  /** Lets a source go, and gives its graphics context back now rather than whenever it is garbage collected. */
+  private release(id: string, slot: Slot): void {
+    slot.renderer?.dispose();
+    slot.renderer = null;
+    const gl = slot.canvas.getContext('webgl2') ?? slot.canvas.getContext('webgl');
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    this.slots.delete(id);
+  }
+
+  /** The source's slot, started if need be. Null while over the limit or waiting to restart after a lost context. */
+  private slot(id: string, now: number): Slot | null {
+    const existing = this.slots.get(id);
+    if (existing) return existing;
+    if ((this.restartAt.get(id) ?? 0) > now) return null;
+    if (this.slots.size >= MAX_LIVE_INSTRUMENTS) { this.overLimit.add(id); return null; }
+    this.restartAt.delete(id);
     const canvas = document.createElement('canvas');
-    slot = { canvas, renderer: null, project: null, pending: null, phase: 0, frame: null, failed: null, prepares: 0 };
+    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, frame: null, failed: null, failedProject: null, prepares: 0 };
+    // A lost context (the graphics card reset, or too many contexts) drops the source: its shape plays its colour
+    // rather than freezing on its last picture, and the source starts again after a pause.
+    canvas.addEventListener('webglcontextlost', event => {
+      event.preventDefault();
+      if (this.slots.get(id) !== slot) return;
+      this.release(id, slot);
+      this.restartAt.set(id, performance.now() + RESTART_AFTER_MS);
+    });
     try { slot.renderer = new StudioRenderer(canvas); }
     catch (error) { slot.failed = `This computer could not start an instrument: ${String((error as Error)?.message ?? error)}`; }
     this.slots.set(id, slot);
@@ -168,10 +213,13 @@ export class MapCompositor {
     slot.prepares++;
     slot.renderer.prepare(project).then(() => {
       if (slot.pending !== project) return; // a newer composition arrived meanwhile
-      slot.project = project; slot.pending = null; slot.failed = null;
+      // An evolving composition plays from its start; a looping one carries on where it was.
+      if (isEvolving(project)) slot.phase = 0;
+      slot.project = project; slot.pending = null; slot.failed = null; slot.failedProject = null;
     }).catch(error => {
       if (slot.pending !== project) return;
       slot.pending = null;
+      slot.failedProject = project;
       slot.failed = String((error as Error)?.message ?? error);
     });
   }
@@ -204,7 +252,12 @@ export class MapCompositor {
     ctx.clip();
 
     const slot = shape.sourceId ? this.slots.get(shape.sourceId) : undefined;
-    const ready = shape.sourceId === null ? shape.colour : slot?.project && slot.frame ? slot.frame : null;
+    const wanted = shape.sourceId ? this.projects.get(shape.sourceId) : undefined;
+    // A source that will not play (failing, over the limit, restarting, or with no composition) plays the shape's colour.
+    const cannotPlay = shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === wanted) || !wanted);
+    const picture = shape.sourceId === null || cannotPlay ? shape.colour : slot?.project && slot.frame ? slot.frame : null;
+    // A fade waits for the composition the shape should now play, not one still drawing from before.
+    const ready = cannotPlay || shape.sourceId === null ? shape.colour : slot?.project === wanted && slot?.frame ? slot.frame : null;
     const fade = this.fades.get(shape.id);
     const paintWith = (content: Frame | string, alpha: number) => {
       ctx.globalAlpha = alpha;
@@ -218,8 +271,8 @@ export class MapCompositor {
       paintWith(fade.from, 1);
       if (ready && a > 0) paintWith(ready, a);
       if (a >= 1) this.fades.delete(shape.id);
-    } else if (ready) paintWith(ready, 1);
-    else paintWith(shape.colour, 1); // a source not ready yet (or failing) plays the shape's colour, never black
+    } else if (picture) paintWith(picture, 1);
+    else paintWith(shape.colour, 1); // a source not ready yet plays the shape's colour, never black
     ctx.restore();
   }
 }

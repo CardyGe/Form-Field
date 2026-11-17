@@ -24,6 +24,7 @@ import { Preview } from './Preview';
 import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
 import LivePanel from './LivePanel';
+import { KIND_LABELS } from '../core/library';
 import MapPanel from './MapPanel';
 import { sameCanvasValues } from '../core/canvas-interaction';
 
@@ -33,7 +34,7 @@ const uid = () => crypto.randomUUID();
 const resolutions = ['3840x2160', '4096x2160', '3840x2400', '2160x3840', '2160x2160', '1920x1200', '1920x1080', '960x540'];
 const rates = ['24/1', '25/1', '30/1', '50/1', '60/1', '30000/1001', '60000/1001'];
 const actualDuration = (p: Project) => frameCount(p) * p.fps.den / p.fps.num;
-const kindLabels: Record<LayerKind, string> = { ...Object.fromEntries(INSTRUMENTS.map(i=>[i.kind,i.name])) as Record<LayerKind,string>, surface: 'Surface', sculpture: 'Sculpture', fractal: 'Fractal', oil: 'Oil Slides', liquid: 'Liquid Light', scope: 'Oscilloscope', super8: 'Super 8 Paint', graphic: 'Graphic Patterns', image: 'Image' };
+const kindLabels = KIND_LABELS;
 const patterns: Partial<Record<LayerKind, string[]>> = {
   surface: ['Bands', 'Contours', 'Drips', 'Fusion'],
   fractal: ['Kaleidoscope', 'Julia Bloom', 'Mandelbox'],

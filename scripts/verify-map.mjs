@@ -45,6 +45,8 @@ const refusalRed = stage => stage.evaluate(c => {
 });
 const operatorAt = (stage, fx, fy) => stage.evaluate((c, [fx, fy]) => Array.from(c.getContext('2d').getImageData(Math.floor(fx * c.width), Math.floor(fy * c.height), 1, 1).data.slice(0, 3)), [fx, fy]);
 const RED = [0xff, 0x3b, 0x30], BLACK = [0, 0, 0];
+/** How many of the 24 x 14 grid samples differ between two pictures: the wall is moving when this is above zero. */
+const changed = (a, b, tol = 3) => a.grid.filter((c, i) => !near(c, b.grid[i], tol)).length;
 const BOX = { x0: .25, y0: .25, x1: .6, y1: .6 };
 const INSIDE = [[.3, .3], [.425, .425], [.55, .55], [.3, .55], [.55, .3]];
 const OUTSIDE = [[.1, .1], [.15, .5], [.8, .8], [.425, .1], [.425, .85], [.9, .4], [.425, .7]];
@@ -196,6 +198,57 @@ try {
     assert.ok(near(back.colours[0], RED), `after Blackout off the inside is rgb(${back.colours[0]})`);
   });
 
+  const wallStats = () => output.evaluate(() => window.__mapStats);
+  const insideFirst = [.425, .425];
+  await check('a shape plays an instrument on the wall: moving inside, black outside, never a black frame while it starts', async () => {
+    await studio.getByRole('button', { name: 'Shape 1', exact: true }).click();
+    await studio.getByLabel('Plays').selectOption('preset:porcelain-shutters');
+    // From the moment of the change, the inside of the shape is never black: red until the instrument is ready, then the instrument.
+    const seen = [];
+    for (let i = 0; i < 40; i++) { seen.push((await sample(output, [insideFirst])).colours[0]); await sleep(40); }
+    const black = seen.filter(c => near(c, BLACK, 6));
+    assert.equal(black.length, 0, `${black.length} of ${seen.length} samples were black while the instrument started`);
+    // Now it plays: the picture inside changes over time and is not the shape's flat red; outside stays black.
+    const a = await sample(output, [insideFirst, [.3, .3], [.55, .5], ...OUTSIDE]);
+    await sleep(1500);
+    const b = await sample(output, [insideFirst, [.3, .3], [.55, .5]]);
+    assert.ok(changed(a, b) > 0, `the wall did not change in 1.5 s: ${JSON.stringify(a.colours.slice(0, 3))}`);
+    assert.ok(a.colours.slice(0, 3).some(c => !near(c, RED, 30)), 'inside is still the flat shape colour');
+    a.colours.slice(3).forEach((c, i) => assert.ok(near(c, BLACK), `outside ${OUTSIDE[i]} is rgb(${c})`));
+    const stats = await wallStats();
+    assert.equal(Object.keys(stats.prepares).length, 1);
+    assert.deepEqual(stats.failing, []);
+    await fs.writeFile(path.join(out, 'output-instrument.png'), Buffer.from(a.png, 'base64'));
+  });
+
+  await check('a second instrument; varying it never re-prepares the first, and Freeze holds the picture', async () => {
+    await studio.getByRole('button', { name: 'Rectangle', exact: true }).click();
+    const rect = await stage.evaluate(c => { const r = c.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
+    const at = (fx, fy) => [rect.left + fx * rect.width, rect.top + fy * rect.height];
+    await studio.mouse.move(...at(.68, .1)); await studio.mouse.down(); await studio.mouse.move(...at(.9, .22), { steps: 6 }); await studio.mouse.up();
+    await studio.getByRole('button', { name: 'Select', exact: true }).click();
+    await studio.getByLabel('Plays').selectOption('preset:salt-mandala');
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 2, null, { timeout: 10000 });
+    const before = (await wallStats()).prepares;
+    await studio.getByRole('button', { name: 'Vary', exact: true }).click();
+    await output.waitForFunction(n => Object.values(window.__mapStats.prepares).reduce((a, b) => a + b, 0) > n, Object.values(before).reduce((a, b) => a + b, 0), { timeout: 10000 });
+    const after = (await wallStats()).prepares;
+    const firstId = Object.keys(before).find(id => before[id] === after[id]);
+    assert.ok(firstId, `every source was prepared again: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+    assert.equal(Object.keys(after).filter(id => after[id] !== before[id]).length, 1, 'more than one source was prepared again');
+    // Freeze: the picture holds; unfreeze: it moves again.
+    await studio.getByRole('button', { name: 'Freeze', exact: true }).click();
+    await sleep(300);
+    const f1 = await sample(output, []);
+    await sleep(1000);
+    const f2 = await sample(output, []);
+    assert.equal(changed(f1, f2, 2), 0, 'the frozen picture changed');
+    await studio.getByRole('button', { name: 'Freeze', exact: true }).click();
+    await sleep(1500);
+    const f3 = await sample(output, []);
+    assert.ok(changed(f2, f3) > 0, 'the picture did not move again after Freeze was turned off');
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
@@ -210,11 +263,12 @@ try {
 
   await check('leaving Map and coming back keeps the shapes and the undo history', async () => {
     // The hidden Studio header has its own mode switch, so the button is taken from the Map screen.
+    const shapesBefore = await studio.getByRole('list').locator('li').count();
     await studio.getByRole('region', { name: 'Map' }).getByRole('button', { name: 'Studio', exact: true }).click();
     await studio.getByRole('region', { name: 'Map' }).waitFor({ state: 'detached', timeout: 5000 });
     await studio.getByRole('button', { name: 'Map', exact: true }).click();
     await studio.getByRole('region', { name: 'Map' }).waitFor();
-    assert.equal(await studio.getByRole('list').locator('li').count(), 1);
+    assert.equal(await studio.getByRole('list').locator('li').count(), shapesBefore);
     const undo = studio.getByRole('button', { name: 'Undo', exact: true });
     assert.equal(await undo.isDisabled(), false, 'Undo is disabled after coming back to Map');
   });

@@ -33,9 +33,13 @@ export default function MapOutput() {
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
       compositor.frame(now);
-      // For scripted checks: what the compositor reports, read from the page.
-      (window as unknown as { __mapStats?: unknown }).__mapStats = compositor.stats();
-      if (now - sentReport >= REPORT_EVERY_MS) { sentReport = now; bridge.sendState(compositor.stats()); }
+      if (now - sentReport >= REPORT_EVERY_MS) {
+        sentReport = now;
+        const stats = compositor.stats();
+        // For scripted checks: what the compositor reports, read from the page.
+        (window as unknown as { __mapStats?: unknown }).__mapStats = stats;
+        bridge.sendState(stats);
+      }
       if (busy || now - sentPicture < PREVIEW_EVERY_MS) return;
       // Taken straight after the frame is drawn.
       sentPicture = now; busy = true;

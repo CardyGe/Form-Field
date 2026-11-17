@@ -13,10 +13,13 @@ const MIN_SOURCE_SIDE = 64;
 /** A frame that took longer than this (a hidden window, a stall) moves the clock only this far. */
 const MAX_STEP_SECONDS = 0.1;
 
+/** Sizes go up in steps, so a shape being dragged does not resize its instrument (and reset its history) on every move. */
+const SIZE_STEP = 16;
+
 /** The pixel size to draw a source at for one shape: its bounding box on the stage, times the governor's scale. */
 export function sourceSize(points: Point[], scale: number): { width: number; height: number } {
   const xs = points.map(p => p.x), ys = points.map(p => p.y);
-  const side = (span: number, stage: number) => Math.min(stage, Math.max(MIN_SOURCE_SIDE, Math.ceil(span * stage * scale)));
+  const side = (span: number, stage: number) => Math.min(stage, Math.max(MIN_SOURCE_SIDE, Math.ceil(span * stage * scale / SIZE_STEP) * SIZE_STEP));
   return { width: side(Math.max(...xs) - Math.min(...xs), STAGE_SIZE.width), height: side(Math.max(...ys) - Math.min(...ys), STAGE_SIZE.height) };
 }
 
@@ -44,6 +47,18 @@ const STEP_DOWN_AFTER = 30;
 const STEP_UP_AFTER = 120;
 
 export const initialGovernor = (): Governor => ({ level: 0, slow: 0, fast: 0 });
+
+/** A frame interval this long means the screen missed a refresh (two at 120 Hz, one and a half at 60 Hz). */
+const MISSED_REFRESH_MS = 24;
+/** Longer than this is a stall (a hidden window, a dialog), not a slow frame. */
+const STALL_MS = 250;
+/**
+ * What a frame cost, for the governor. Usually the work the compositor did; but when the GPU is the bottleneck the
+ * CPU work looks small while frames arrive late, so a missed refresh counts as its full interval.
+ */
+export function frameCost(workMs: number, intervalMs: number): number {
+  return intervalMs > MISSED_REFRESH_MS && intervalMs < STALL_MS ? Math.max(workMs, intervalMs) : workMs;
+}
 
 export function governorStep(g: Governor, frameMs: number): Governor {
   if (frameMs > LATE_MS) {

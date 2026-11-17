@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import { useMap } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
 import { paint } from '../map/draw';
 import { applyEdit, attemptEdit, type EditAction } from '../map/editor';
 import { parsePixelField, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel } from '../map/geometry';
 import { shortcutFor, shouldCommit } from '../map/keys';
-import { MAX_NAME_LENGTH, STAGE_SIZE, type Point, type ShowDocument } from '../map/show';
+import { MAX_NAME_LENGTH, SPEED_RANGE, STAGE_SIZE, type Point, type ShowDocument } from '../map/show';
+import { MapCompositor } from '../map/compositor';
+import { GOVERNOR_SCALES } from '../map/playout';
+import { PRESETS } from '../core/project';
+import { KIND_LABELS } from '../core/library';
+import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, POUR, SOLAR } from '../core/palettes';
 
 const REASONS: Record<string, string> = {
   crossing: 'Outline crosses itself', collapsed: 'Outline is too thin or flat', 'too-few': 'A shape needs at least three corners',
@@ -25,6 +30,19 @@ type Drag =
 
 const stagePx = (p: Point) => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height });
 const newId = () => `shape-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const newSourceId = () => `source-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const randomSeed = () => Math.floor(Math.random() * 1e6);
+
+/** The Library, grouped as Studio groups it. */
+const LIBRARY = Object.entries(PRESETS.reduce<Record<string, typeof PRESETS>>((groups, preset) => {
+  (groups[preset.kind] ??= []).push(preset);
+  return groups;
+}, {})).map(([kind, presets]) => ({ label: KIND_LABELS[kind as keyof typeof KIND_LABELS] ?? kind, presets }));
+const PALETTES: [string, string[]][] = [
+  ['Neon strata', NEON_STRATA], ['Acid drip', ACID_DRIP], ['Pop portal', POP_PORTAL], ['Hot signal', HOT_SIGNAL], ['Lime violet', LIME_VIOLET],
+  ['Electric', ELECTRIC], ['Candy', CANDY], ['Solar', SOLAR], ['Cyan yellow', CYAN_YELLOW], ['Pour', POUR],
+];
+const paletteName = (palette: string[]) => PALETTES.find(([, colours]) => colours.join() === palette.join())?.[0] ?? '';
 
 const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
@@ -63,27 +81,53 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
     return () => window.removeEventListener('resize', bump);
   }, []);
 
+  // With the output closed, this screen plays the instruments itself, with the same compositor as the wall.
+  const compositor = useRef<MapCompositor | null>(null);
   useEffect(() => {
+    if (!canvas.current) return;
+    try { compositor.current = new MapCompositor(canvas.current); } catch { compositor.current = null; }
+    return () => { compositor.current?.dispose(); compositor.current = null; };
+  }, []);
+  const drawInputs = { shown, refused, selectedId: map.selectedId, selectedIndex: map.selectedIndex, outputOpen: map.outputOpen, wallPicture: map.wallPicture };
+  const inputs = useRef(drawInputs);
+  inputs.current = drawInputs;
+  const playedShow = useRef<ShowDocument | null>(null);
+  const drawStage = useCallback((now: number) => {
     const ctx = canvas.current?.getContext('2d');
     if (!ctx) return;
+    const { shown, refused, selectedId, selectedIndex, outputOpen, wallPicture } = inputs.current;
     // With the output open, the wall's own picture is drawn behind the outlines, so this screen shows what the projector
     // really has; the outlines are drawn here at once, so dragging feels instant while the picture follows a moment later.
-    const background = map.outputOpen ? map.wallPicture ?? undefined : undefined;
+    const background = outputOpen ? wallPicture ?? undefined : undefined;
     const picture = refused?.show ?? shown;
-    paint(ctx, picture, { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: map.selectedId, selectedIndex: null,
-      outlinesOnly: !!background, invalidIds: refused ? [refused.id] : [] }, background);
+    const options = { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId, selectedIndex: null,
+      outlinesOnly: !!background, invalidIds: refused ? [refused.id] : [] };
+    const local = compositor.current && !outputOpen && picture.sources.length > 0 ? compositor.current : null;
+    if (local) {
+      if (playedShow.current !== picture) { local.setShow(picture, new Map(picture.sources.map(s => [s.id, s.project]))); playedShow.current = picture; }
+      local.setOptions(options);
+      local.frame(now);
+    } else paint(ctx, picture, options, background);
     // Corner handles are for the operator only; the output never draws them.
-    const selected = picture.shapes.find(s => s.id === map.selectedId);
+    const selected = picture.shapes.find(s => s.id === selectedId);
     // Handles keep a fixed size on screen, whatever size the canvas is displayed at.
     const handle = HANDLE_SIZE_PX * stagePixelsPerScreenPixel(canvas.current?.getBoundingClientRect().width ?? 0);
     if (selected) selected.points.forEach((point, i) => {
       const c = stagePx(point);
-      ctx.fillStyle = i === map.selectedIndex ? '#ffd400' : '#ffffff';
+      ctx.fillStyle = i === selectedIndex ? '#ffd400' : '#ffffff';
       ctx.fillRect(c.x - handle / 2, c.y - handle / 2, handle, handle);
       ctx.strokeStyle = '#000000'; ctx.lineWidth = 2;
       ctx.strokeRect(c.x - handle / 2, c.y - handle / 2, handle, handle);
     });
-  }, [shown, refused, map.selectedId, map.selectedIndex, map.outputOpen, map.wallPicture, resizeTick]);
+  }, []);
+  useEffect(() => { drawStage(performance.now()); }, [shown, refused, map.selectedId, map.selectedIndex, map.outputOpen, map.wallPicture, resizeTick, drawStage]);
+  // Instruments move, so while they play here the stage is drawn every frame.
+  const playsHere = !map.outputOpen && (refused?.show ?? shown).sources.length > 0;
+  useEffect(() => {
+    if (!playsHere) return;
+    let raf = requestAnimationFrame(function loop(now) { drawStage(now); raf = requestAnimationFrame(loop); });
+    return () => cancelAnimationFrame(raf);
+  }, [playsHere, drawStage]);
 
   const pointerAt = (e: PointerEvent<HTMLCanvasElement>): Point => stageFromPointer(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
   const reasonText = (reason: string) => REASONS[reason] ?? reason;
@@ -197,11 +241,26 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   const selectedShape = map.show.shapes.find(s => s.id === map.selectedId) ?? null;
   const selectedPoint = selectedShape && map.selectedIndex !== null ? selectedShape.points[map.selectedIndex] ?? null : null;
   const [inspectorNote, setInspectorNote] = useState<string | null>(null);
+  // What the selected shape plays.
+  const selectedSource = selectedShape?.sourceId ? map.show.sources.find(s => s.id === selectedShape.sourceId) ?? null : null;
+  const [speedDraft, setSpeedDraft] = useState<number | null>(null);
+  useEffect(() => setSpeedDraft(null), [selectedSource?.id]);
+  const choosePlays = (value: string) => {
+    if (!selectedShape) return;
+    if (value === 'colour') map.dispatch({ type: 'setContent', shapeId: selectedShape.id, content: { kind: 'colour' } });
+    else if (value.startsWith('preset:')) map.dispatch({ type: 'setContent', shapeId: selectedShape.id, content: { kind: 'preset', presetId: value.slice('preset:'.length), sourceId: newSourceId(), seed: randomSeed() } });
+  };
+  const vary = (sourceId: string) => map.dispatch({ type: 'varySource', sourceId, entropy: randomSeed() });
+  const commitSpeed = () => {
+    if (selectedSource && speedDraft !== null && speedDraft !== selectedSource.speed) map.dispatch({ type: 'setSourceSpeed', sourceId: selectedSource.id, speed: speedDraft });
+    setSpeedDraft(null);
+  };
   useEffect(() => setInspectorNote(null), [map.selectedId, map.selectedIndex]);
   // Shape actions shared by the right-click menu, the keyboard and the Details panel.
   const duplicate = (shapeId: string) => {
     const id = newId();
-    if (map.dispatch({ type: 'duplicate', shapeId, id })) map.setSelection(id);
+    // A copy of an instrument shape gets a source of its own, so its settings are its own from then on.
+    if (map.dispatch({ type: 'duplicate', shapeId, id, sourceId: newSourceId() })) map.setSelection(id);
   };
   const remove = (shapeId: string) => { if (map.dispatch({ type: 'delete', shapeId })) map.setSelection(null); };
   const focusName = () => requestAnimationFrame(() => {
@@ -236,6 +295,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
     const reorder = (to: 'front' | 'back' | 'forward' | 'backward') => () => map.dispatch({ type: 'reorder', shapeId: shape.id, to });
     return [
       { kind: 'item', label: 'Duplicate', shortcut: '⌘D', onSelect: () => duplicate(shape.id) },
+      ...(shape.sourceId ? [{ kind: 'item', label: 'Vary', disabled: locked, onSelect: () => vary(shape.sourceId!) } as const] : []),
       { kind: 'item', label: locked ? 'Delete (unlock first)' : 'Delete', shortcut: '⌫', danger: true, disabled: locked, onSelect: () => remove(shape.id) },
       { kind: 'separator' },
       { kind: 'item', label: 'Bring to front', disabled: locked || index === last, onSelect: reorder('front') },
@@ -273,7 +333,11 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   };
 
   const reason = dragNote ?? (map.lastRefusal ? (map.lastRefusal.endsWith('…') ? map.lastRefusal : `Not applied: ${reasonText(map.lastRefusal)}`) : null);
-  const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? map.notice ?? (map.outputOpen ? 'Showing on the projector' : map.loaded ? 'Ready' : 'Loading…');
+  // How the wall is keeping up, from its report once a second.
+  const wall = map.wallState;
+  const wallText = wall ? `Showing on the projector · ${wall.fps} fps${wall.level ? ` · instruments drawn at ${Math.round(GOVERNOR_SCALES[wall.level] * 100)} %${wall.level === 3 ? ', every other frame' : ''}` : ''}` : 'Showing on the projector';
+  const failing = wall?.failing[0] ? `An instrument could not start, so its shape plays its colour: ${wall.failing[0].reason}` : null;
+  const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
 
   return <section className="live-shell map-shell" role="region" aria-label="Map">
     <header className="app-header">{header}<div className="live-actions">
@@ -284,6 +348,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
       {map.outputOpen ? <button className="primary-button" onClick={map.closeOutput}>Close output</button>
         : <button className="primary-button" disabled={!map.desktop || map.display === null} title="Show the stage on the chosen projector, full screen · On this screen it opens as a window you can move · Esc closes it" onClick={() => void map.openOutput()}>Open output</button>}
       <button className={`text-button live-toggle ${map.blackout ? 'on' : ''}`} aria-pressed={map.blackout} onClick={() => map.setBlackout(!map.blackout)}>Blackout</button>
+      <button className={`text-button live-toggle ${map.freeze ? 'on' : ''}`} aria-pressed={map.freeze} title="Hold the picture: the instruments stop where they are" onClick={() => map.setFreeze(!map.freeze)}>Freeze</button>
       <button className="text-button" aria-pressed={map.testGrid} onClick={() => map.setTestGrid(!map.testGrid)}>Test grid</button>
       <button className="text-button" aria-pressed={map.tool === 'select'} title="Pick and move shapes and corners" onClick={() => map.setTool('select')}>Select</button>
       <button className="text-button" aria-pressed={map.tool === 'rectangle'} title="Drag on the stage to draw a rectangle" onClick={() => map.setTool('rectangle')}>Rectangle</button>
@@ -310,6 +375,25 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
         {!selectedShape ? <p className="muted-text">Pick a shape to see its details.</p> : <>
           <CommitField label="Name" value={selectedShape.name} onCommit={commitName} maxLength={MAX_NAME_LENGTH} />
           <CommitField label="Colour" value={selectedShape.colour} onCommit={commitColour} narrow />
+          <h3>Content</h3>
+          <label className="map-field">Plays<select aria-label="Plays" value={selectedSource ? 'current' : 'colour'} disabled={selectedShape.locked} onChange={e => choosePlays(e.target.value)}>
+            <option value="colour">Its colour</option>
+            {selectedSource && <option value="current">{selectedSource.project.name}</option>}
+            {LIBRARY.map(group => <optgroup key={group.label} label={group.label}>{group.presets.map(p => <option key={p.id} value={`preset:${p.id}`}>{p.name}</option>)}</optgroup>)}
+          </select></label>
+          {selectedSource && <>
+            <div className="map-toggles">
+              <button className="text-button" disabled={selectedShape.locked} title="A new variation of this instrument" onClick={() => vary(selectedSource.id)}>Vary</button>
+            </div>
+            <label className="map-field">Palette<select aria-label="Palette" value={paletteName(selectedSource.project.layers[0]?.palette ?? [])} disabled={selectedShape.locked}
+              onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) map.dispatch({ type: 'setSourcePalette', sourceId: selectedSource.id, palette: found[1] }); }}>
+              <option value="" disabled>As made</option>
+              {PALETTES.map(([name]) => <option key={name} value={name}>{name}</option>)}
+            </select></label>
+            <label className="map-field">Speed · {(speedDraft ?? selectedSource.speed).toFixed(2)}×
+              <input aria-label="Speed" type="range" min={SPEED_RANGE.min} max={SPEED_RANGE.max} step={0.05} value={speedDraft ?? selectedSource.speed} disabled={selectedShape.locked}
+                onChange={e => setSpeedDraft(Number(e.target.value))} onPointerUp={commitSpeed} onKeyUp={commitSpeed} onBlur={commitSpeed} /></label>
+          </>}
           <div className="map-toggles">
             <button className="text-button" aria-pressed={selectedShape.visible} onClick={() => map.dispatch({ type: 'setVisible', shapeId: selectedShape.id, visible: !selectedShape.visible })}>{selectedShape.visible ? 'Shown' : 'Hidden'}</button>
             <button className="text-button" aria-pressed={selectedShape.locked} onClick={() => map.dispatch({ type: 'setLocked', shapeId: selectedShape.id, locked: !selectedShape.locked })}>{selectedShape.locked ? 'Locked' : 'Unlocked'}</button>
