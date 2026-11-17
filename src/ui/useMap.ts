@@ -113,7 +113,11 @@ export function useMap(onError: (message: string) => void) {
   // Identify flashes the selected shape on the wall for three seconds; pressing again restarts the timer.
   const identifyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stopIdentify = () => { if (identifyTimer.current) clearTimeout(identifyTimer.current); identifyTimer.current = null; };
-  useEffect(() => stopIdentify, []);
+  // Leaving the screen mid-flash must not leave the wall flashing.
+  useEffect(() => () => {
+    if (identifyTimer.current) bridge?.send({ type: 'identify', shapeId: null });
+    stopIdentify();
+  }, []);
   const identify = () => {
     if (!selectedId || !bridge) return;
     stopIdentify();

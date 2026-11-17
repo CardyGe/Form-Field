@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import { useMap } from './useMap';
 import { paint } from '../map/draw';
 import { applyEdit, type EditAction } from '../map/editor';
 import { parsePixelField, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel } from '../map/geometry';
-import { isTypingTarget, shouldCommit } from '../map/keys';
+import { shortcutFor, shouldCommit } from '../map/keys';
 import { STAGE_SIZE, type Point, type ShowDocument } from '../map/show';
 
 const REASONS: Record<string, string> = {
@@ -135,21 +135,34 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   };
 
   // Arrow keys move the chosen corner, unless the key press belongs to a text box.
-  const onStageKeyDown = (e: KeyboardEvent<HTMLElement>) => {
-    if (isTypingTarget(e.target as HTMLElement)) return;
-    const key = e.key.toLowerCase();
-    if ((e.metaKey || e.ctrlKey) && key === 'z') { e.preventDefault(); if (e.shiftKey) map.redo(); else map.undo(); return; }
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (key === 'v') { map.setTool('select'); return; }
-    if (key === 'r') { map.setTool('rectangle'); return; }
-    if (e.key === 'Escape') { map.setSelection(null); return; }
-    if (e.key === 'Delete') { if (selectedShape) { e.preventDefault(); if (map.dispatch({ type: 'delete', shapeId: selectedShape.id })) map.setSelection(null); } return; }
-    const step = ARROWS[e.key];
-    if (!step || !selectedShape || map.selectedIndex === null) return;
-    e.preventDefault();
-    const size = e.shiftKey ? 10 : 1;
-    map.dispatch({ type: 'nudgePoint', shapeId: selectedShape.id, index: map.selectedIndex, dxPx: step[0] * size, dyPx: step[1] * size });
+  // Shortcuts work from anywhere in Map, unless the key press belongs to a text box.
+  const onKeyDown = (e: globalThis.KeyboardEvent) => {
+    const action = shortcutFor({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, target: e.target as HTMLElement | null });
+    if (!action) return;
+    if (action === 'undo') { e.preventDefault(); map.undo(); }
+    else if (action === 'redo') { e.preventDefault(); map.redo(); }
+    else if (action === 'select') map.setTool('select');
+    else if (action === 'rectangle') map.setTool('rectangle');
+    else if (action === 'deselect') map.setSelection(null);
+    else if (action === 'delete') {
+      if (!selectedShape) return;
+      e.preventDefault();
+      if (map.dispatch({ type: 'delete', shapeId: selectedShape.id })) map.setSelection(null);
+    } else {
+      const step = ARROWS[e.key];
+      if (!step || !selectedShape || map.selectedIndex === null) return;
+      e.preventDefault();
+      const size = e.shiftKey ? 10 : 1;
+      map.dispatch({ type: 'nudgePoint', shapeId: selectedShape.id, index: map.selectedIndex, dxPx: step[0] * size, dyPx: step[1] * size });
+    }
   };
+  const keyHandler = useRef(onKeyDown);
+  keyHandler.current = onKeyDown;
+  useEffect(() => {
+    const listener = (e: globalThis.KeyboardEvent) => keyHandler.current(e);
+    window.addEventListener('keydown', listener);
+    return () => window.removeEventListener('keydown', listener);
+  }, []);
   const selectedShape = map.show.shapes.find(s => s.id === map.selectedId) ?? null;
   const selectedPoint = selectedShape && map.selectedIndex !== null ? selectedShape.points[map.selectedIndex] ?? null : null;
   const [inspectorNote, setInspectorNote] = useState<string | null>(null);
@@ -202,7 +215,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
           <button className="text-button" aria-pressed={shape.locked} aria-label={`${shape.locked ? 'Unlock' : 'Lock'} ${shape.name}`} onClick={() => map.dispatch({ type: 'setLocked', shapeId: shape.id, locked: !shape.locked })}>{shape.locked ? 'Locked' : 'Unlocked'}</button>
         </li>)}</ul>
       </aside>
-      <main className="map-stage" tabIndex={0} aria-label="Stage area" onKeyDown={onStageKeyDown}><canvas ref={canvas} aria-label="Stage" style={{ cursor: map.tool === 'rectangle' ? 'crosshair' : 'default', touchAction: 'none' }}
+      <main className="map-stage" tabIndex={0} aria-label="Stage area"><canvas ref={canvas} aria-label="Stage" style={{ cursor: map.tool === 'rectangle' ? 'crosshair' : 'default', touchAction: 'none' }}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} width={STAGE_SIZE.width} height={STAGE_SIZE.height} /></main>
       <aside className="live-column map-inspector" aria-label="Details">
         <h2>Details</h2>

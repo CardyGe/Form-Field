@@ -71,3 +71,20 @@ test('shouldCommit only when the text was changed', () => {
   assert.equal(shouldCommit('641', '642'), true);
   assert.equal(shouldCommit('641', ''), true);
 });
+
+test('shortcutFor maps keys to actions and ignores typing targets', async () => {
+  const { shortcutFor } = await import('../src/map/keys');
+  const ev = (key: string, extra = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: { tagName: 'DIV' }, ...extra });
+  assert.equal(shortcutFor(ev('Delete')), 'delete');
+  assert.equal(shortcutFor(ev('Backspace')), 'delete');
+  assert.equal(shortcutFor(ev('z', { metaKey: true })), 'undo');
+  assert.equal(shortcutFor(ev('Z', { metaKey: true, shiftKey: true })), 'redo');
+  assert.equal(shortcutFor(ev('z', { ctrlKey: true })), 'undo');
+  assert.equal(shortcutFor(ev('v')), 'select');
+  assert.equal(shortcutFor(ev('r')), 'rectangle');
+  assert.equal(shortcutFor(ev('Escape')), 'deselect');
+  assert.equal(shortcutFor(ev('ArrowLeft')), 'arrow');
+  assert.equal(shortcutFor(ev('Backspace', { target: { tagName: 'INPUT' } })), null);
+  assert.equal(shortcutFor(ev('z', { metaKey: true, target: { tagName: 'INPUT' } })), null);
+  assert.equal(shortcutFor(ev('r', { metaKey: true })), null);
+});
