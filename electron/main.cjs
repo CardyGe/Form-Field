@@ -208,8 +208,8 @@ function createWindow() {
   const devURL = process.env.STUDIO_DEV_URL;
   if (devURL && (!/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(devURL))) throw new Error('STUDIO_DEV_URL must be a local development server.');
   const session = window.webContents.session;
-  // Everything is refused except camera video for this app's own windows (Live mode).
-  const ours = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents || !!liveControl?.isOutput(contents) || !!mapControl?.isOutput(contents);
+  // Everything is refused except camera video for this app's own windows (Live mode). Map's output window never uses the camera, so it is not one of them.
+  const ours = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents || !!liveControl?.isOutput(contents);
   session.setPermissionRequestHandler((contents, permission, callback, details) => callback(live.allowPermission(permission, details, ours(contents))));
   session.setPermissionCheckHandler((contents, permission, _origin, details) => live.allowPermissionCheck(permission, details, ours(contents)));
   const csp = ["default-src 'self'", `script-src 'self' 'wasm-unsafe-eval'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "media-src 'self' blob:", "font-src 'self' data:", `connect-src 'self'${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');

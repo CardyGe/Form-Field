@@ -229,7 +229,7 @@ Nothing here is combined into ready-made "shows". Each is a separate control.
 - **Windows.** As in Live, when the output is open the renderer runs there and the laptop gets a small picture ten times a second; outlines on the laptop are drawn locally so dragging feels instant. The output window, display list, keep-awake and Escape-to-close are Live's, generalised. Shape edits travel as small messages; images travel once, separately.
 - **Stage size** follows the chosen display by default, or is fixed at 1280 × 720, 1920 × 1080, 1920 × 1200 or 3840 × 2160. Shape positions are stored as fractions of the stage, so changing the size keeps the layout. *(My call.)*
 - **One output at a time.** Map and Live share the single output window; opening one closes the other. Live's own full-screen mode stays as it is. *(My call.)*
-- **Swapping content** keeps the old source drawing until the new one reports ready, then fades.
+- **Swapping content** keeps the old source drawing until the new one reports ready, then fades (stage 2).
 
 ### Checks
 
@@ -245,7 +245,7 @@ Each stage ends with something usable. Detailed step-by-step plans are written p
 | Stage | What gets built | Done when |
 |---|---|---|
 | **0. Measure** | A throwaway test: 4, 8 and 12 instruments at once, separate renderers against one shared renderer. | Numbers are written down and the route for instrument sources is chosen. |
-| **1. Stage and first shapes** | Map section, show file and autosave, output window, compositor, Colour sources, rectangle and four-corner shapes, select / move / points / nudge / exact positions, wall crosshair, Test grid, Identify, Blackout, undo. The fade-in rule for "output never blanks" is first exercised here with a Colour source swap, then again in stage 2 with instruments. | Greg lines four-corner shapes up on real objects with a projector. |
+| **1. Stage and first shapes** | Map section, show file and autosave, output window, compositor, Colour sources, rectangle and four-corner shapes, select / move / points / nudge / exact positions, wall crosshair, Test grid, Identify, Blackout, undo. The fade-in rule for "output never blanks" moves to stage 2: a solid colour has no not-ready state, so in stage 1 the output cannot blank either way. | Greg lines four-corner shapes up on real objects with a projector. |
 | **2. Instruments in shapes** | Instrument sources, Library and presets on a shape, own settings per shape, Vary, palette, speed, Edit in Studio and back, Fit placement, sizing to the wall, the frame-rate governor, fade on change. | Eight shapes play four instruments at the measured rate, and editing one never disturbs the others. |
 | **3. The full drawing kit** | Pen with curves, triangle, ellipse, add / remove / convert points, holes, Snap, Photo, duplicate / flip / mirror, Make a grid, groups, lock / hide / solo, soft edge, border, Blockers. | A photographed scene of about 20 pieces is traced and aligned in one sitting. |
 | **4. Placement** | Pin, Across group, Across stage, Share with / Make separate, stage corners, brightness and tint. | A grid pinned to an angled box face looks square to the eye; nudging the projector is fixed with four handles. |
@@ -253,6 +253,14 @@ Each stage ends with something usable. Detailed step-by-step plans are written p
 | **6. More content** | Image, Video and Live look sources. | Smoke plays inside one shape while instruments play in the others, with the camera rule intact. |
 | **7. Wild options** | Outline drives the instrument, Stagger, Vary each, palette shift, border runs, scene auto-advance. | Each works alone and is switched off by default. |
 | **Later, own designs** | Sound and MIDI control. Curved objects. More projectors. | — |
+
+**Known limits, stage 1**
+
+- At most 64 shapes.
+- Corners are sent to the output rounded to 4 decimal places (0.2 projector pixels at 1920 wide), so 64 shapes fit in one message. The show file keeps full precision.
+- Undo history is not kept when leaving Map. To fix later.
+- The output draws an outline on the selected shape, to show which shape is being lined up.
+- The test grid draws numbered grid lines and each shape's outline, name and colour, with no fills.
 
 ## Stage 0 results
 

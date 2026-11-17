@@ -27,12 +27,18 @@ test('stageCommands: visible shape fills in stage pixels; hidden shape draws not
     assert.deepEqual(cmds[0].points![0], { x: 0.1 * STAGE_SIZE.width, y: 0.2 * STAGE_SIZE.height });
 });
 
-test('stageCommands: test grid adds lines every 10% and a name at each first point', () => {
-    const cmds = stageCommands(show(shape('a')), opts({ testGrid: true }));
+test('stageCommands: test grid adds numbered lines every 10%, and each shape as an outline in its colour with its name, no fills', () => {
+    const cmds = stageCommands(show(shape('a'), shape('b', { visible: false })), opts({ testGrid: true }));
     assert.equal(cmds.filter((c) => c.kind === 'line').length, 18);
-    const t = cmds.find((c) => c.kind === 'text')!;
-    assert.equal(t.text, 'Name a');
-    assert.deepEqual(t.at, { x: 0.1 * STAGE_SIZE.width, y: 0.2 * STAGE_SIZE.height });
+    const numbers = cmds.filter((c) => c.kind === 'text' && /^\d+$/.test(c.text ?? '')).map((c) => c.text);
+    assert.equal(numbers.length, 18);
+    assert.ok(numbers.includes('192') && numbers.includes('1728') && numbers.includes('108') && numbers.includes('972'));
+    assert.equal(cmds.some((c) => c.kind === 'fill'), false);
+    assert.partialDeepStrictEqual(cmds.find((c) => c.kind === 'stroke'), { shapeId: 'a', colour: '#336699' });
+    const names = cmds.filter((c) => c.kind === 'text' && c.text?.startsWith('Name'));
+    assert.deepEqual(names.map((c) => c.text), ['Name a']);
+    assert.deepEqual(names[0].at, { x: 0.1 * STAGE_SIZE.width, y: 0.2 * STAGE_SIZE.height });
+    assert.equal(cmds.some((c) => c.shapeId === 'b'), false);
 });
 
 test('stageCommands: identify strokes the shape in white on top of its fill', () => {
