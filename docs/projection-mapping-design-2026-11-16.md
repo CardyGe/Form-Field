@@ -268,6 +268,20 @@ Each stage ends with something usable. Detailed step-by-step plans are written p
 - The output draws an outline on the selected shape, to show which shape is being lined up.
 - The test grid draws numbered grid lines and each shape's outline, name and colour, with no fills.
 
+## Stage 2 decisions
+
+Made 17 November 2026, before building stage 2. Each can be changed; the cost of changing it is noted.
+
+- **Compositor.** The output keeps its Canvas 2D compositor. Each instrument source runs its own `StudioRenderer` on a hidden canvas (the route stage 0 measured), and each shape draws its source clipped to its outline. A GPU compositor is only needed for Pin (stage 4); changing then means replacing the drawing step, not the sources.
+- **Show format, version 2.** A show holds `sources` (instrument sources: a Studio composition, a speed and a revision number) and each shape has a `sourceId`, or none, meaning it plays its own colour. Version 1 files open as all-colour shows. A new shape, and a duplicated one, gets its own source, so settings are per shape by default.
+- **Messages.** The show message carries shapes and source references only. Each instrument source's composition travels in its own message, sent once per revision, with a 24 MB limit (a composition can hold images up to 20 MB). The output keeps the compositions it has been sent.
+- **Clock and Freeze.** One clock in the output advances every source by its own speed. Freeze stops the clock and the drawing; the wall holds its last frame.
+- **Sizing to the wall.** A source is drawn at the pixel size of its shape's bounding box on the stage (never above 1920 × 1080, never below 64 px), times the frame-rate governor's scale.
+- **Frame-rate governor.** The output measures each frame. When frames run late it lowers every instrument's drawing size in steps (100, 75, 50 %), then draws instruments at half rate. It raises them again when frames are well inside budget. The operator screen shows the current level.
+- **Fade on change.** When a shape changes to another source, or a source changes preset, the old picture keeps drawing until the new one is ready, then crossfades over 0.4 s. Smaller changes (Vary, palette, speed) take effect as soon as they are ready, without a fade. The wall never shows black in between.
+- **Operator screen.** With the output open, the laptop shows the wall's picture behind the outlines (as in stage 1). With it closed, the laptop runs the same compositor itself.
+- **Edit in Studio.** Studio's own project, its undo history and its file are set aside while a shape's composition is edited, and Studio's autosave and close-save keep writing the set-aside project, never the shape's. "Back to Map" puts them back. Export is not offered while editing a shape.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
