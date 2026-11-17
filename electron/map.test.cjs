@@ -198,3 +198,43 @@ test('Open Show loads the chosen file', async () => {
     assert.deepEqual(await h.handlers.get('studio:map:openShow')(h.fromStudio), { version: 1 });
   });
 });
+
+test('Open Show tells a damaged file apart from a cancel, and a damaged file does not become the save target', async () => {
+  await inTempDir(async dir => {
+    const chosen = path.join(dir, 'show.formshow');
+    await fs.writeFile(chosen, 'not json');
+    let pick = [chosen];
+    const target = path.join(dir, 'other.formshow');
+    const h = harness({ autosavePath: path.join(dir, 'auto.formshow'), dialog: {
+      showOpenDialog: async () => (pick ? { canceled: false, filePaths: pick } : { canceled: true, filePaths: [] }),
+      showSaveDialog: async () => ({ canceled: false, filePath: target }) } });
+    assert.deepEqual(await h.handlers.get('studio:map:openShow')(h.fromStudio), { damaged: true });
+    pick = [path.join(dir, 'missing.formshow')];
+    assert.deepEqual(await h.handlers.get('studio:map:openShow')(h.fromStudio), { damaged: true });
+    pick = null;
+    assert.equal(await h.handlers.get('studio:map:openShow')(h.fromStudio), null);
+    // Save (not Save As) still asks for a file, because no show file was opened.
+    assert.equal(await h.handlers.get('studio:map:saveShow')(h.fromStudio, '{"a":1}', false), target);
+    assert.equal(await fs.readFile(chosen, 'utf8'), 'not json');
+  });
+});
+
+test('loading the autosave waits for a save that is still being written', async () => {
+  await inTempDir(async dir => {
+    const file = path.join(dir, 'auto.formshow');
+    const h = harness({ autosavePath: file });
+    await h.handlers.get('studio:map:saveAutosave')(h.fromStudio, '{"n":1}');
+    const real = fs.rename;
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    fs.rename = async (from, to) => { await gate; return real(from, to); };
+    try {
+      const saving = h.handlers.get('studio:map:saveAutosave')(h.fromStudio, '{"n":2}');
+      const loading = h.handlers.get('studio:map:loadAutosave')(h.fromStudio);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      release();
+      await saving;
+      assert.deepEqual(await loading, { n: 2 });
+    } finally { fs.rename = real; }
+  });
+});

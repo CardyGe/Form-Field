@@ -4,7 +4,7 @@ import { paint } from '../map/draw';
 import { applyEdit, type EditAction } from '../map/editor';
 import { parsePixelField, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel } from '../map/geometry';
 import { shortcutFor, shouldCommit } from '../map/keys';
-import { STAGE_SIZE, type Point, type ShowDocument } from '../map/show';
+import { STAGE_SIZE, type Point } from '../map/show';
 
 const REASONS: Record<string, string> = {
   crossing: 'Outline crosses itself', collapsed: 'Outline is too thin or flat', 'too-few': 'A shape needs at least three corners',
@@ -46,10 +46,10 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   const canvas = useRef<HTMLCanvasElement>(null);
 
   const drag = useRef<Drag | null>(null);
-  // While a drag is in progress the canvas shows this trial show; the real show changes only on release.
-  const [preview, setPreview] = useState<ShowDocument | null>(null);
+  // While a drag is in progress the canvas (and the wall) show map.preview; the real show changes only on release.
+  const setPreview = map.setPreview;
   const [dragNote, setDragNote] = useState<string | null>(null);
-  const shown = preview ?? map.show;
+  const shown = map.shown;
   const [resizeTick, setResizeTick] = useState(0);
   useEffect(() => {
     const bump = () => setResizeTick(n => n + 1);
@@ -117,9 +117,9 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
     const action = editFor(d, pointerAt(e));
     if (!action) { setPreview(null); setDragNote(null); return; }
     const result = applyEdit(map.show, action);
-    // A refused position leaves the last valid picture on screen and says why.
+    // A refused position leaves the last valid picture on screen (and on the wall) and says why.
     if (result.ok) { setPreview(result.show); setDragNote(null); }
-    else { setPreview(null); setDragNote(reasonText(result.reason)); }
+    else setDragNote(reasonText(result.reason));
   };
 
   const finishDrag = (e: PointerEvent<HTMLCanvasElement>, commit: boolean) => {
@@ -188,10 +188,12 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   };
 
   const reason = dragNote ?? (map.lastRefusal ? (map.lastRefusal.endsWith('…') ? map.lastRefusal : `Not applied: ${reasonText(map.lastRefusal)}`) : null);
-  const status = reason ?? inspectorNote ?? map.sendWarning ?? (map.outputOpen ? 'Showing on the output' : map.loaded ? 'Ready' : 'Loading…');
+  const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? map.notice ?? (map.outputOpen ? 'Showing on the projector' : map.loaded ? 'Ready' : 'Loading…');
 
   return <section className="live-shell map-shell" role="region" aria-label="Map">
     <header className="app-header">{header}<div className="live-actions">
+      <button className="text-button" disabled={!map.desktop || !map.loaded} title="Open a show file; it replaces the shapes here" onClick={() => void map.openShow()}>Open</button>
+      <button className="text-button" disabled={!map.desktop || !map.loaded} title="Save the show to a file you name" onClick={() => void map.saveShowAs()}>Save As</button>
       <label className="live-inline">Projector<select aria-label="Projector" value={map.display ?? ''} disabled={map.outputOpen || !map.displays.length} onChange={e => map.setDisplay(Number(e.target.value))}>
         {map.displays.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
       {map.outputOpen ? <button className="primary-button" onClick={map.closeOutput}>Close output</button>
@@ -200,7 +202,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
       <button className="text-button" aria-pressed={map.testGrid} onClick={() => map.setTestGrid(!map.testGrid)}>Test grid</button>
       <button className="text-button" aria-pressed={map.tool === 'select'} title="Pick and move shapes and corners" onClick={() => map.setTool('select')}>Select</button>
       <button className="text-button" aria-pressed={map.tool === 'rectangle'} title="Drag on the stage to draw a rectangle" onClick={() => map.setTool('rectangle')}>Rectangle</button>
-      <button className="text-button" disabled={!map.selectedId || !map.desktop} title="Flash the selected shape on the output" onClick={map.identify}>Identify</button>
+      <button className="text-button" disabled={!map.selectedId || !map.desktop} title="Flash the selected shape on the projector" onClick={map.identify}>Identify</button>
       <button className="text-button" disabled={!map.canUndo} title="Undo · ⌘Z" onClick={map.undo}>Undo</button>
       <button className="text-button" disabled={!map.canRedo} title="Redo · ⇧⌘Z" onClick={map.redo}>Redo</button>
     </div></header>

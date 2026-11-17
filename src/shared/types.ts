@@ -188,7 +188,7 @@ export interface MapBridge {
   /** The saved working show as parsed JSON, or null. Pass the result through validateShow. */
   loadAutosave(): Promise<unknown>;
   saveAutosave(text: string): Promise<void>;
-  /** The chosen show file as parsed JSON, or null when cancelled or unreadable. */
+  /** The chosen show file as parsed JSON; null when cancelled; { damaged: true } when the file cannot be read. */
   openShow(): Promise<unknown>;
   /** The file written, or null when the person cancelled. */
   saveShow(text: string, saveAs: boolean): Promise<string | null>;

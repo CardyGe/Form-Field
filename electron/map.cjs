@@ -63,13 +63,15 @@ const FILTERS = [{ name: 'Form & Field Map show', extensions: ['formshow'] }];
 function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath, preload, studio, open, closeLiveOutput }) {
   let output = null;
   let showPath = null;
-  // Every write goes through one queue, so two saves can never overlap (the same pattern as the studio autosave).
+  // Every write, and the autosave read, goes through one queue, so two saves never overlap
+  // and a read never sees a half-finished write (the same pattern as the studio autosave).
   let saveQueue = Promise.resolve();
-  const queuedSave = (file, text) => {
-    const operation = saveQueue.then(() => saveShowFile(file, text));
+  const queued = work => {
+    const operation = saveQueue.then(work);
     saveQueue = operation.catch(() => {});
     return operation;
   };
+  const queuedSave = (file, text) => queued(() => saveShowFile(file, text));
   const alive = window => !!window && !window.isDestroyed();
   const fromStudio = event => alive(studio()) && event.sender === studio().webContents && event.senderFrame === studio().webContents.mainFrame;
   const fromOutput = event => alive(output) && event.sender === output.webContents && event.senderFrame === output.webContents.mainFrame;
@@ -81,13 +83,17 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
   const closeOutput = () => { if (alive(output)) output.close(); };
   const checkText = text => { if (typeof text !== 'string' || text.length > SHOW_TEXT_LIMIT) throw new Error('This show cannot be saved.'); };
 
-  handle('loadAutosave', () => loadShowFile(autosavePath));
+  handle('loadAutosave', () => queued(() => loadShowFile(autosavePath)));
   handle('saveAutosave', text => { checkText(text); return queuedSave(autosavePath, text); });
+  // The parsed show; null when the person cancelled; { damaged: true } when the chosen file cannot be read.
   handle('openShow', async () => {
     const result = await dialog.showOpenDialog(studio(), { properties: ['openFile'], filters: FILTERS });
     if (result.canceled || !result.filePaths?.length) return null;
-    const show = await loadShowFile(result.filePaths[0]);
-    if (show) showPath = result.filePaths[0];
+    const file = result.filePaths[0];
+    let show = null;
+    try { show = await queued(() => loadShowFile(file)); } catch { show = null; }
+    if (!show) return { damaged: true };
+    showPath = file;
     return show;
   });
   // Returns the file written, or null when the person cancelled the dialog.

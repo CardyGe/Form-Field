@@ -2,12 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EditAction } from '../map/editor';
 import { initialMapState, mapReducer, type MapState } from '../map/state';
 import { autosaveSchedule, canEdit } from '../map/autosave';
-import { acceptMapMessage } from '../map/messages';
+import { acceptMapMessage, toWire, type MapMessage } from '../map/messages';
 import { createShow, validateShow, type ShowDocument } from '../map/show';
 
 export interface Display { id: number; label: string; primary: boolean }
 
 const TOO_LARGE = 'This show is too large to send to the wall. The wall keeps its last show.';
+export const SAVE_FAILED = 'Could not save — keep working, then use Save As';
+const DAMAGED = 'That file could not be read. Nothing was changed.';
+const fileName = (file: string) => file.split(/[\\/]/).pop() || file;
+const isDamaged = (value: unknown) => !!value && typeof value === 'object' && (value as { damaged?: unknown }).damaged === true && !('shapes' in value);
 
 /** What the operator screen does with the show: hold it, save it, and keep the wall in step. */
 export function useMap(onError: (message: string) => void) {
@@ -27,10 +31,20 @@ export function useMap(onError: (message: string) => void) {
   const [displays, setDisplays] = useState<Display[]>([]);
   const [display, setDisplay] = useState<number | null>(null);
   const [outputOpen, setOutputOpen] = useState(false);
-  const latest = useRef({ show, blackout, testGrid });
-  latest.current = { show, blackout, testGrid };
+  // While a drag is in progress this trial show is drawn and sent to the wall; the held show changes only on release.
+  const [preview, setPreview] = useState<ShowDocument | null>(null);
+  const shown = preview ?? show;
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const latest = useRef({ shown, blackout, testGrid });
+  latest.current = { shown, blackout, testGrid };
   const saver = useRef<ReturnType<typeof autosaveSchedule<string>> | null>(null);
-  if (!saver.current) saver.current = autosaveSchedule<string>(async text => { await bridge?.saveAutosave(text).catch(() => {}); }, 500);
+  if (!saver.current) saver.current = autosaveSchedule<string>(async text => {
+    if (!bridge) return;
+    // A failed write is reported, never swallowed: the operator keeps working and can Save As.
+    try { await bridge.saveAutosave(text); setSaveError(null); }
+    catch (error) { setSaveError(SAVE_FAILED); throw error; }
+  }, 500);
 
   // The saved working show, once. A damaged file was already moved aside by the main process, so an empty show is fine.
   useEffect(() => {
@@ -55,24 +69,56 @@ export function useMap(onError: (message: string) => void) {
     if (!bridge) return;
     const offOutput = bridge.onOutputChanged(setOutputOpen);
     const offDisplays = bridge.onDisplaysChanged(() => void refreshDisplays());
-    // Closing the window must not lose an edit made in the last half second.
-    const offClose = window.studio!.onBeforeClose(async () => { await saver.current?.flush(); });
-    return () => { offOutput(); offDisplays(); offClose(); saver.current?.flush(); void bridge.closeOutput().catch(() => {}); };
+    // Closing the window must not lose an edit made in the last half second. A failed save refuses the close, with a message.
+    const offClose = window.studio!.onBeforeClose(async () => {
+      try { await saver.current?.flush(); }
+      catch { setSaveError(SAVE_FAILED); throw new Error('The Map show could not be saved. Keep working, then use Save As.'); }
+    });
+    return () => { offOutput(); offDisplays(); offClose(); saver.current?.flush().catch(() => {}); void bridge.closeOutput().catch(() => {}); };
   }, []);
 
-  // The wall gets the whole show when it reports ready, and again after every edit.
+  // Sends to the wall. During a drag, show and crosshair go at most once per animation frame (the latest wins);
+  // anything sent at once replaces what is waiting for the frame, so an old preview never lands after a release.
+  const waiting = useRef<{ show?: MapMessage; crosshair?: MapMessage }>({});
+  const frame = useRef<number | null>(null);
+  const deliver = (message: MapMessage) => {
+    if (!acceptMapMessage(message as unknown)) { if (message.type === 'show') setSendWarning(TOO_LARGE); return; } // the wall keeps its last show
+    if (message.type === 'show') setSendWarning(null);
+    bridge?.send(message);
+  };
+  const sendNow = (message: MapMessage) => {
+    if (message.type === 'show' || message.type === 'crosshair') delete waiting.current[message.type];
+    deliver(message);
+  };
+  const sendNextFrame = (message: MapMessage & { type: 'show' | 'crosshair' }) => {
+    waiting.current[message.type] = message;
+    if (frame.current !== null) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null;
+      const { show: nextShow, crosshair } = waiting.current;
+      waiting.current = {};
+      if (nextShow) deliver(nextShow);
+      if (crosshair) deliver(crosshair);
+    });
+  };
+  useEffect(() => () => { if (frame.current !== null) cancelAnimationFrame(frame.current); }, []);
+  const showMessage = (s: ShowDocument): MapMessage => ({ type: 'show', show: toWire(s) });
+
+  // When the wall reports ready: blackout and test grid first, so the wall never paints shapes while Blackout is on.
+  // This effect is declared before the show effect, so it runs first when the output opens.
   useEffect(() => {
     if (!outputOpen || !bridge) return;
-    const message = { type: 'show' as const, show };
-    if (!acceptMapMessage(message)) { setSendWarning(TOO_LARGE); return; }
-    setSendWarning(null);
-    bridge.send(message);
-  }, [show, outputOpen]);
-  useEffect(() => {
-    if (!outputOpen || !bridge) return;
-    bridge.send({ type: 'blackout', on: latest.current.blackout });
-    bridge.send({ type: 'testGrid', on: latest.current.testGrid });
+    sendNow({ type: 'blackout', on: latest.current.blackout });
+    sendNow({ type: 'testGrid', on: latest.current.testGrid });
+    sendNow(showMessage(latest.current.shown));
   }, [outputOpen]);
+  // Then the whole show again after every edit, and the trial show while a drag is in progress.
+  const dragging = preview !== null;
+  useEffect(() => {
+    if (!outputOpen || !bridge) return;
+    if (dragging) sendNextFrame(showMessage(shown) as MapMessage & { type: 'show' });
+    else sendNow(showMessage(shown));
+  }, [shown, outputOpen]);
 
   const loadedRef = useRef(false);
   loadedRef.current = loaded;
@@ -81,7 +127,7 @@ export function useMap(onError: (message: string) => void) {
     const after = mapReducer(before, action);
     stateRef.current = after;
     setState(after);
-    if (after.show !== before.show) saver.current?.save(JSON.stringify(after.show));
+    if (after.show !== before.show) { saver.current?.save(JSON.stringify(after.show)); setNotice(null); }
     return after;
   }, []);
   const dispatch = useCallback((action: EditAction) => {
@@ -102,13 +148,35 @@ export function useMap(onError: (message: string) => void) {
   };
   const closeOutput = () => { void bridge?.closeOutput(); };
 
-  // The wall's crosshair follows the selected corner.
-  const crossPoint = selectedId !== null && selectedIndex !== null ? show.shapes.find(s => s.id === selectedId)?.points[selectedIndex] ?? null : null;
+  // The wall's crosshair follows the selected corner, including while it is being dragged.
+  const crossPoint = selectedId !== null && selectedIndex !== null ? shown.shapes.find(s => s.id === selectedId)?.points[selectedIndex] ?? null : null;
   const crossX = crossPoint?.x ?? null, crossY = crossPoint?.y ?? null;
   useEffect(() => {
     if (!outputOpen || !bridge) return;
-    bridge.send(crossX === null || crossY === null ? { type: 'crosshair', point: null, shapeId: null } : { type: 'crosshair', point: { x: crossX, y: crossY }, shapeId: selectedId });
+    const message: MapMessage & { type: 'crosshair' } = crossX === null || crossY === null ? { type: 'crosshair', point: null, shapeId: null } : { type: 'crosshair', point: { x: crossX, y: crossY }, shapeId: selectedId };
+    if (dragging) sendNextFrame(message); else sendNow(message);
   }, [crossX, crossY, selectedId, outputOpen]);
+
+  // Open replaces the held show and its undo history through the normal load path. A cancel does nothing and says nothing.
+  const openShow = async () => {
+    if (!bridge || !canEdit(loadedRef.current)) return;
+    let opened: unknown;
+    try { opened = await bridge.openShow(); } catch { opened = { damaged: true }; }
+    if (opened === null || opened === undefined) return;
+    if (isDamaged(opened)) { setNotice(DAMAGED); return; }
+    const { show: next, repaired } = validateShow(opened);
+    setSelection(null); setPreview(null); setLastRefusal(null);
+    step({ type: 'load', show: next });
+    setNotice(repaired ? 'Show opened. Parts that could not be read were left out.' : 'Show opened');
+  };
+  // Save As always asks for a file name, and says which file it wrote.
+  const saveShowAs = async () => {
+    if (!bridge || !canEdit(loadedRef.current)) return;
+    try {
+      const file = await bridge.saveShow(JSON.stringify(stateRef.current.show), true);
+      if (file) setNotice(`Saved as ${fileName(file)}`);
+    } catch { setNotice('Could not save the show file. Nothing was changed on disk.'); }
+  };
 
   // Identify flashes the selected shape on the wall for three seconds; pressing again restarts the timer.
   const identifyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -127,6 +195,6 @@ export function useMap(onError: (message: string) => void) {
 
   const setSelection = (id: string | null, index: number | null = null) => { setSelectedId(id); setSelectedIndex(id === null ? null : index); };
 
-  return { show, loaded, selectedId, selectedIndex, setSelection, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
+  return { show, shown, preview, setPreview, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIndex, setSelection, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning, blackout, setBlackout, testGrid, setTestGrid, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

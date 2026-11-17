@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyEdit, type EditAction } from '../src/map/editor';
-import { History } from '../src/map/history';
 import { createShow, MAX_SHAPES, type ShowDocument } from '../src/map/show';
 
 const rect = (id: string, a = { x: 0.1, y: 0.1 }, b = { x: 0.3, y: 0.3 }): EditAction => ({ type: 'addRectangle', id, a, b, colour: '#ff0000' });
@@ -119,39 +118,8 @@ test('applyEdit never mutates its input', () => {
   assert.deepEqual(show, before);
 });
 
-test('History: commit, undo, redo', () => {
-  const h = new History<number>(1);
-  assert.equal(h.canUndo(), false);
-  h.commit(2); h.commit(3);
-  assert.equal(h.present(), 3);
-  assert.ok(h.undo()); assert.equal(h.present(), 2);
-  assert.ok(h.canRedo());
-  assert.ok(h.redo()); assert.equal(h.present(), 3);
-  assert.equal(h.redo(), false);
-});
-
-test('History: a commit after undo drops the redo branch', () => {
-  const h = new History<number>(1);
-  h.commit(2); h.commit(3);
-  h.undo();
-  h.commit(9);
-  assert.equal(h.canRedo(), false);
-  assert.equal(h.present(), 9);
-  h.undo();
-  assert.equal(h.present(), 2);
-});
-
-test('History: limit 3 keeps the last 3', () => {
-  const h = new History<number>(0, 3);
-  for (let i = 1; i <= 5; i++) h.commit(i);
-  assert.equal(h.present(), 5);
-  assert.ok(h.undo()); assert.ok(h.undo());
-  assert.equal(h.present(), 3);
-  assert.equal(h.undo(), false);
-});
-
 // Output messages
-import { acceptMapMessage } from '../src/map/messages';
+import { acceptMapMessage, toWire, MAP_MESSAGE_LIMIT } from '../src/map/messages';
 
 test('acceptMapMessage accepts each known message type', () => {
   assert.ok(acceptMapMessage({ type: 'show', show: createShow() }));
@@ -247,4 +215,64 @@ test('mapReducer: an edit followed by undo returns the original show, and redo b
   state = mapReducer(mapReducer(state, { type: 'undo' }), { type: 'edit', action: rect('b') });
   assert.equal(state.future.length, 0);
   assert.equal(mapReducer(initialMapState(start), { type: 'undo' }).show, start);
+});
+
+test('autosaveSchedule: a flush while a write is in flight resolves only after that write finishes', async () => {
+  let release!: () => void;
+  const written: string[] = [];
+  const schedule = autosaveSchedule<string>(value => new Promise<void>(resolve => { release = () => { written.push(value); resolve(); }; }), 10);
+  schedule.save('slow');
+  await new Promise(r => setTimeout(r, 30)); // the timer has started the write; it has not finished
+  let flushed = false;
+  const flushing = schedule.flush().then(() => { flushed = true; });
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(flushed, false);
+  release();
+  await flushing;
+  assert.equal(flushed, true);
+  assert.deepEqual(written, ['slow']);
+});
+
+test('autosaveSchedule: flush rejects when the write fails, and the next flush writes the value again', async () => {
+  const attempts: string[] = [];
+  let fail = true;
+  const schedule = autosaveSchedule<string>(async value => { attempts.push(value); if (fail) throw new Error('disk full'); }, 10);
+  schedule.save('a');
+  await assert.rejects(schedule.flush(), /disk full/);
+  fail = false;
+  await schedule.flush();
+  assert.deepEqual(attempts, ['a', 'a']);
+});
+
+test('autosaveSchedule: a failed timer write makes the next flush reject until it succeeds', async () => {
+  let fail = true;
+  const schedule = autosaveSchedule<string>(async () => { if (fail) throw new Error('disk full'); }, 10);
+  schedule.save('a');
+  await new Promise(r => setTimeout(r, 40));
+  await assert.rejects(schedule.flush(), /disk full/);
+  fail = false;
+  await schedule.flush();
+  await schedule.flush(); // nothing waiting and the last write succeeded
+});
+
+test('toWire: a 64-shape show with full-precision corners fits in one message after rounding', () => {
+  const colours = ['#ff3b30', '#34c759', '#0a84ff', '#ffcc00', '#bf5af2', '#ff9f0a'];
+  const shapes = Array.from({ length: 64 }, (_, i) => {
+    // Corners as a drag leaves them: long fractions such as 0.31770833333333337.
+    const x0 = (37 + i * 23.3) / 1920 + 1 / 3e5, y0 = (41 + i * 13.7) / 1080 + 1 / 7e5;
+    const x1 = x0 + 211.7 / 1920, y1 = y0 + 97.3 / 1080;
+    return { id: `shape-m3k9x2a${(i % 36).toString(36)}-${(1e6 + i * 7919).toString(36)}`, name: `Stage left panel ${i + 1}`, colour: colours[i % colours.length], visible: true, locked: false,
+      points: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] };
+  });
+  const show: ShowDocument = { ...createShow(), shapes };
+  // The unrounded show is over the limit, so the rounding is what makes it fit.
+  assert.ok(JSON.stringify({ type: 'show', show }).length >= MAP_MESSAGE_LIMIT);
+  const wire = { type: 'show' as const, show: toWire(show) };
+  assert.ok(JSON.stringify(wire).length < MAP_MESSAGE_LIMIT, `${JSON.stringify(wire).length} bytes`);
+  assert.ok(acceptMapMessage(wire));
+  // Rounded to four places, so within 0.2 projector pixels; the held show is untouched.
+  const p = wire.show.shapes[5].points[2], q = show.shapes[5].points[2];
+  assert.ok(Math.abs(p.x - q.x) * 1920 <= 0.0961 && Math.abs(p.y - q.y) * 1080 <= 0.0541);
+  assert.equal(String(p.x).split('.')[1].length <= 4, true);
+  assert.equal(show.shapes[5].points[2], q);
 });
