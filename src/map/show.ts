@@ -109,6 +109,8 @@ const clampNumber = (value: unknown, max: number, fallback = 0): { value: number
   return { value: n, repaired: n !== value };
 };
 const HEX = /^#[0-9a-f]{6}$/i;
+/** Names never carry control characters: they would only make messages to the wall larger. */
+export const cleanName = (name: string) => name.replace(/[\u0000-\u001f\u007f]/g, '');
 
 function readBorder(value: unknown): { border: Border; repaired: boolean } {
   if (value === undefined) return { border: { ...DEFAULT_BORDER }, repaired: false };
@@ -125,7 +127,7 @@ function readGroups(value: unknown): { groups: Group[]; repaired: boolean } {
   let repaired = value.length > MAX_GROUPS;
   for (const raw of value.slice(0, MAX_GROUPS)) {
     if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH || groups.some(g => g.id === raw.id)) { repaired = true; continue; }
-    const name = typeof raw.name === 'string' ? raw.name.slice(0, MAX_NAME_LENGTH) : `Group ${groups.length + 1}`;
+    const name = typeof raw.name === 'string' ? cleanName(raw.name).slice(0, MAX_NAME_LENGTH) : `Group ${groups.length + 1}`;
     const visible = typeof raw.visible === 'boolean' ? raw.visible : true;
     const locked = typeof raw.locked === 'boolean' ? raw.locked : false;
     if (name !== raw.name || visible !== raw.visible || locked !== raw.locked) repaired = true;
@@ -208,7 +210,7 @@ function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaire
     if (id === '' || seen.has(id)) { id = crypto.randomUUID(); repaired = true; }
     seen.add(id);
     const colourOk = typeof raw.colour === 'string' && HEX.test(raw.colour);
-    const name = typeof raw.name === 'string' ? raw.name.slice(0, MAX_NAME_LENGTH) : `Shape ${shapes.length + 1}`;
+    const name = typeof raw.name === 'string' ? cleanName(raw.name).slice(0, MAX_NAME_LENGTH) : `Shape ${shapes.length + 1}`;
     const visible = typeof raw.visible === 'boolean' ? raw.visible : true;
     const locked = typeof raw.locked === 'boolean' ? raw.locked : false;
     if (!colourOk || name !== raw.name || visible !== raw.visible || locked !== raw.locked) repaired = true;

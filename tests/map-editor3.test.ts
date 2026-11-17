@@ -203,3 +203,25 @@ test('photo: set, fade and take away; anything but a JPEG or PNG picture is refu
   refused(show, { type: 'setPhoto', photo: { data: 'file:///etc/passwd', opacity: .5 } }, 'bad-photo');
   assert.equal(ok(show, { type: 'setPhoto', photo: null }).photo, null);
 });
+
+// Review fixes.
+test('a turn that would stretch a handle past the stage is refused, so the file reopens as it was', () => {
+  let show = add(createShow(), 'a', sq(.1, .45, .15, .55));
+  show = ok(show, { type: 'moveHandle', shapeId: 'a', index: 1, which: 'out', to: { x: 1, y: .45 }, mirror: false });
+  refused(show, { type: 'transformShapes', shapeIds: ['a'], matrix: rotateAbout({ x: 240, y: 540 }, Math.PI / 2) }, 'outside');
+});
+
+test('a copy of a shape in a locked group goes just after the group, on its own', () => {
+  let show = ok(add(two(), 'c', sq(.8, .1, .9, .2)), { type: 'group', shapeIds: ['a', 'b'], groupId: 'g', name: 'G' });
+  show = ok(show, { type: 'setGroupLocked', groupId: 'g', locked: true });
+  const copy = ok(show, { type: 'duplicate', shapeId: 'a', id: 'a2' });
+  assert.deepEqual(copy.shapes.map(s => [s.id, s.groupId]), [['a', 'g'], ['b', 'g'], ['a2', null], ['c', null]]);
+});
+
+test('new shapes keep their own copy of the handles; names lose control characters', () => {
+  const points: CurvePoint[] = [{ x: .1, y: .1, out: { x: .05, y: 0 } }, { x: .5, y: .1 }, { x: .3, y: .5 }];
+  const show = ok(createShow(), { type: 'addShape', id: 'a', points, colour: '#ff0000', name: 'Door\u0001' });
+  points[0].out!.x = .9;
+  assert.equal(show.shapes[0].points[0].out!.x, .05);
+  assert.equal(show.shapes[0].name, 'Door');
+});

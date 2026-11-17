@@ -1,6 +1,6 @@
 import {
   BORDER_MAX, GLOW_MAX, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, PHOTO_TEXT_LIMIT, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE,
-  isShapeLocked, normaliseGroups, shapeExtras,
+  cleanName, isShapeLocked, normaliseGroups, shapeExtras,
   type Border, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source,
 } from './show';
 import { clampToStage, nudge, rectangleFromDrag } from './geometry';
@@ -83,6 +83,13 @@ const COPY_STEP = { x: 20 / STAGE_SIZE.width, y: 20 / STAGE_SIZE.height }; // 20
 const copyName = (name: string) => `${name.slice(0, MAX_NAME_LENGTH - ' copy'.length)} copy`;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/** A ring copied point by point, handles included, so nothing is shared with the caller. */
+const copyRing = (ring: CurvePoint[]): Ring => ring.map(p => {
+  const q: CurvePoint = { ...clampToStage(p) };
+  if (p.in) q.in = { x: p.in.x, y: p.in.y };
+  if (p.out) q.out = { x: p.out.x, y: p.out.y };
+  return q;
+});
 /** Every anchor of a shape, its holes included. */
 const anchors = (shape: Shape): Point[] => [...shape.points, ...shape.holes.flat()];
 /** A ring moved by a fraction of the stage; handles move with their points. */
@@ -184,7 +191,14 @@ function addCopies(next: ShowDocument, originals: Shape[], ids: string[], source
       if (original) { next.sources.push({ ...original, id: sourceId, revision: 0 }); copy.sourceId = sourceId; }
       else copy.sourceId = null;
     }
-    next.shapes.splice(next.shapes.indexOf(shape) + 1, 0, copy);
+    // A locked group takes no new members: the copy goes just after the group, on its own.
+    const group = shape.groupId === null ? undefined : next.groups.find(g => g.id === shape.groupId);
+    if (group?.locked) {
+      copy.groupId = null;
+      let end = next.shapes.indexOf(shape);
+      while (end + 1 < next.shapes.length && next.shapes[end + 1].groupId === group.id) end++;
+      next.shapes.splice(end + 1, 0, copy);
+    } else next.shapes.splice(next.shapes.indexOf(shape) + 1, 0, copy);
     copies.push(copy);
   }
   return { show: next, touched: copies };
@@ -237,8 +251,8 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     case 'addShape': {
       if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
       if (find(action.id)) return { reason: 'duplicate-id' };
-      const name = action.name?.slice(0, MAX_NAME_LENGTH) || nextName(next);
-      const shape: Shape = { id: action.id, name, points: action.points.map(p => ({ ...p, ...clampToStage(p) })), colour: action.colour, visible: true, locked: false, sourceId: null, ...shapeExtras() };
+      const name = cleanName(action.name ?? '').slice(0, MAX_NAME_LENGTH) || nextName(next);
+      const shape: Shape = { id: action.id, name, points: copyRing(action.points), colour: action.colour, visible: true, locked: false, sourceId: null, ...shapeExtras() };
       next.shapes.push(shape);
       return done([shape]);
     }
@@ -302,7 +316,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (next.groups.some(g => g.id === action.groupId)) return { reason: 'duplicate-id' };
       if (next.groups.length >= MAX_GROUPS) return { reason: 'too-many-groups' };
       if (action.name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
-      next.groups.push({ id: action.groupId, name: action.name.trim() || nextGroupName(next), visible: true, locked: false });
+      next.groups.push({ id: action.groupId, name: cleanName(action.name).trim() || nextGroupName(next), visible: true, locked: false });
       // Members come together at the place of the first of them; a shape leaves any group it was in.
       shapes.forEach(s => { s.groupId = action.groupId; });
       return { show: normaliseGroups(next), touched: [] };
@@ -315,7 +329,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (group.locked) return { reason: 'locked' };
       if (action.type === 'renameGroup') {
         if (action.name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
-        group.name = action.name; return done();
+        group.name = cleanName(action.name); return done();
       }
       if (action.type === 'ungroup') {
         next.shapes.forEach(s => { if (s.groupId === group.id) s.groupId = null; });
@@ -358,7 +372,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     }
     case 'rename':
       if (action.name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
-      shape.name = action.name; return done();
+      shape.name = cleanName(action.name); return done();
     case 'setColour': shape.colour = action.colour; return done();
     case 'setBlocker':
       shape.blocker = action.blocker;
@@ -382,7 +396,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       return done();
     }
     case 'addHole':
-      shape.holes.push(action.points.map(p => ({ ...p, ...clampToStage(p) })));
+      shape.holes.push(copyRing(action.points));
       return done([shape]);
     case 'moveShape': {
       const { dx, dy } = limitMove([shape], action.dx, action.dy);

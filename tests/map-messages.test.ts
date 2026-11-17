@@ -165,3 +165,15 @@ test('the photo never goes to the wall, and handles and holes are rounded for th
   assert.equal(wire.shapes[0].points[0].out!.x, 0.3333);
   assert.equal(wire.shapes[0].holes[0][1].y, 0.2);
 });
+
+test('a shape that rounding would make touch itself goes to the wall at full precision', () => {
+  // A hole a twentieth of a pixel inside the outline's top side: rounded, it would touch it.
+  const top = .2 + 1 / 3e5;
+  const show: Show3 = { ...createShow3(), shapes: [{
+    id: 'a', name: 'A', colour: '#ffffff', visible: true, locked: false, sourceId: null, ...shapeExtras(),
+    points: [{ x: .1, y: .2 }, { x: .6, y: .2 }, { x: .6, y: .6 }, { x: .1, y: .6 }],
+    holes: [[{ x: .3, y: top }, { x: .4, y: top }, { x: .35, y: .4 }]],
+  }] };
+  const wire = toWire(show);
+  assert.equal(wire.shapes[0].holes[0][0].y, top);
+});

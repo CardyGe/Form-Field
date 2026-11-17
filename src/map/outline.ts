@@ -108,11 +108,13 @@ export function pointInPolygon(point: Point, points: Point[]): boolean {
   return inside;
 }
 const finitePoint = (p: Point | undefined) => !p || (Number.isFinite(p.x) && Number.isFinite(p.y));
+/** A handle reaches at most one stage width or height from its point, as the show file stores it. */
+const handleFits = (h: Handle | undefined) => !h || (Math.abs(h.x) <= 1 && Math.abs(h.y) <= 1);
 
 /** One ring on its own: the same rules for every point count, checked on the flattened curve. */
 function ringValidity(ring: Ring): Validity {
   if (ring.length < 3) return { ok: false, reason: 'too-few' };
-  if (ring.some(p => !finitePoint(p) || !finitePoint(p.in) || !finitePoint(p.out) || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1)) return { ok: false, reason: 'outside' };
+  if (ring.some(p => !finitePoint(p) || !finitePoint(p.in) || !finitePoint(p.out) || !handleFits(p.in) || !handleFits(p.out) || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1)) return { ok: false, reason: 'outside' };
   if (ring.some((a, i) => { const b = ring[(i + 1) % ring.length]; return Math.hypot(a.x - b.x, a.y - b.y) < SAME_POINT; })) return { ok: false, reason: 'collapsed' };
   const flat = flatten(ring);
   if (selfCrossing(flat)) return { ok: false, reason: 'crossing' };

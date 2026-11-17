@@ -76,15 +76,18 @@ export function snapMove(points: Point[], dx: number, dy: number, show: Shapes, 
     }
   }
   if (best) return { dx: dx + best.cx / STAGE_SIZE.width, dy: dy + best.cy / STAGE_SIZE.height, target: { kind: best.kind, at: fromPx(best.at) } };
-  let bx: { c: number; kind: 'edge' | 'centre' } | null = null, by: { c: number; kind: 'edge' | 'centre' } | null = null;
+  let bx: { c: number; to: number; kind: 'edge' | 'centre'; y: number } | null = null, by: { c: number; to: number; kind: 'edge' | 'centre'; x: number } | null = null;
   for (const raw of points) {
     const p = toPx({ x: raw.x + dx, y: raw.y + dy });
     const x = nearestLine(p.x, STAGE_SIZE.width, reachPx), y = nearestLine(p.y, STAGE_SIZE.height, reachPx);
-    if (x && (!bx || Math.abs(x.to - p.x) < Math.abs(bx.c))) bx = { c: x.to - p.x, kind: x.kind };
-    if (y && (!by || Math.abs(y.to - p.y) < Math.abs(by.c))) by = { c: y.to - p.y, kind: y.kind };
+    if (x && (!bx || Math.abs(x.to - p.x) < Math.abs(bx.c))) bx = { c: x.to - p.x, to: x.to, kind: x.kind, y: p.y };
+    if (y && (!by || Math.abs(y.to - p.y) < Math.abs(by.c))) by = { c: y.to - p.y, to: y.to, kind: y.kind, x: p.x };
   }
   if (!bx && !by) return { dx, dy, target: null };
-  return { dx: dx + (bx?.c ?? 0) / STAGE_SIZE.width, dy: dy + (by?.c ?? 0) / STAGE_SIZE.height, target: { kind: bx?.kind ?? by!.kind, at: { x: 0, y: 0 } } };
+  // The target is where the snapped corner lands: on the line it snapped to, in each direction that snapped.
+  const at = fromPx({ x: bx ? bx.to : by!.x, y: by ? by.to : bx!.y });
+  const kind = bx?.kind === 'edge' || by?.kind === 'edge' ? 'edge' : 'centre';
+  return { dx: dx + (bx?.c ?? 0) / STAGE_SIZE.width, dy: dy + (by?.c ?? 0) / STAGE_SIZE.height, target: { kind, at } };
 }
 
 /** Other shapes' corners on the same spot as `at` (within JOIN_PX). ring -1 is a shape's outline; 0 and up its holes. */

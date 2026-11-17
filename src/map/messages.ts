@@ -1,5 +1,6 @@
 import type { Project } from '../shared/types';
 import type { CurvePoint, Point, ShowDocument, WireShow } from './show';
+import { shapeValidity } from './outline';
 
 export type MapMessage =
   | { type: 'show'; show: WireShow }
@@ -43,7 +44,11 @@ const roundPoint = (p: CurvePoint): CurvePoint => {
 export function toWire(show: ShowDocument): WireShow {
   return {
     format: show.format, version: show.version, stage: show.stage,
-    shapes: show.shapes.map(shape => ({ ...shape, points: shape.points.map(roundPoint), holes: shape.holes.map(h => h.map(roundPoint)) })),
+    shapes: show.shapes.map(shape => {
+      const rounded = { ...shape, points: shape.points.map(roundPoint), holes: shape.holes.map(h => h.map(roundPoint)) };
+      // Rounding moves points by up to 0.1 projector pixels; a shape that would then touch itself goes as it is.
+      return shapeValidity(rounded.points, rounded.holes).ok ? rounded : shape;
+    }),
     sources: show.sources.map(({ id, kind, speed, revision }) => ({ id, kind, speed, revision })),
     groups: show.groups,
   };
