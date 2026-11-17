@@ -1,6 +1,6 @@
 # Map: projection mapping design
 
-16 November 2026 · Form & Field 0.16.0 · Approved 17 November. Stage 0 is measured (see Stage 0 results). Stage 1 is built and waits for its projector session (see Known limits, stage 1).
+16 November 2026 · Form & Field 0.16.0 · Approved 17 November. Stage 0 is measured (see Stage 0 results). Stages 1, 2 and 3 are built and reviewed; stage 1's projector session, and stage 3's tracing session, are still to happen (see Known limits and Stage 3 results).
 
 ## Intent
 
@@ -257,7 +257,7 @@ Each stage ends with something usable. Detailed step-by-step plans are written p
 **Known limits, stage 1**
 
 - At most 64 shapes, 32 corners a shape, names up to 40 characters. A show file with more is opened without the extra shapes, and says how many were left out; a shape is never cut down to fit.
-- Map has its own message limit of 256 KB, well above the largest valid show, so a valid show always reaches the wall. Corners are sent rounded to 4 decimal places (0.2 projector pixels at 1920 wide) to keep messages small; the show file keeps full precision.
+- Map has its own message limit of 512 KB (256 KB until stage 3), well above the largest valid show, so a valid show always reaches the wall. Corners are sent rounded to 4 decimal places (0.2 projector pixels at 1920 wide) to keep messages small; the show file keeps full precision.
 - The operator screen shows the wall's own picture, about ten times a second, behind outlines drawn at once. With the output closed it draws the stage itself.
 - A drag that would be refused draws the refused outline in red on the operator screen only; the wall keeps the last valid picture.
 - Undo history lasts while the app is open, including leaving Map and coming back. It is not saved with the show.
@@ -377,6 +377,75 @@ Made 17 November 2026, before building stage 3. Greg chose the first four; the r
 - **Photo.**
   - Chosen from a file on this screen and stored in the show, shrunk to fit 1920 × 1080 as a JPEG, so it travels with Save As.
   - It is drawn under the outlines on the operator screen only, with its own opacity. It is never sent to the wall.
+
+**Known limits, stage 3**
+
+- **Points.**
+  - At most 32 points a shape, its holes included, and at most 8 holes.
+  - A hole is part of its shape. It moves, turns and is deleted with it, and it cannot be selected on its own (its points can).
+- **Curves.**
+  - Curves are checked as 16 straight pieces a side. A curve that only grazes another side between those pieces can be accepted.
+  - Snapping to a curved side lands on those pieces, at most a pixel or two off the true curve on large shapes.
+- **Selecting points.** Points are chosen one at a time; there is no box for picking several points. Shapes can be picked with a box.
+- **Joined corners.**
+  - Corners on the same spot move together only while Snap is on, and hidden shapes' corners move too.
+  - A locked shape's corner stays where it is, which opens a gap.
+- **Mirror** copies across the stage's centre lines only.
+- **Flip** turns the outline over. It does not flip the picture playing inside: placement is stage 4.
+- **Make a grid** works on four-cornered shapes without curves or holes.
+  - Each cell gets its own copy of the instrument, as Greg chose.
+  - Past 24 instrument cells, the extra cells play their colour. The operator is told why.
+- **Solo, Snap, Photo shown and closed folders** are not saved and are not undo steps. Solo is cleared by "Solo on · Clear" in the header.
+- **Soft edge.**
+  - The fade picture is made at half the projector's resolution and stretched, which is smooth at any soft edge from 1 px.
+  - It is made again only when the outline, holes or soft edge change; a counter in the scripted check confirms this.
+- **Border.**
+  - Drawn inside the outline, at its full width.
+  - Its glow also stays inside the outline.
+- **Photo.**
+  - Fitted to the stage without stretching. It is not pinned or warped to match the projector's view: it is a guide to trace by eye.
+  - Stored in the show as a JPEG, so a show with a photo is a few hundred kilobytes larger.
+- **Names** lose control characters, which only made messages to the wall larger.
+
+## Stage 3 results
+
+Measured 17 November 2026 on this Mac with `scripts/measure-map.mjs` (eight shapes, four instruments, 30 s). Other programs were busy on this Mac at the time: a packaged Form & Field app used about 54 % of a core, and another Electron app and the window server were busy too. So the commit before stage 3 (62eb379) was built and measured in alternate runs, under the same conditions.
+
+| Build | Mix | Median frame | 95th percentile | Frames over 16.7 ms in 30 s |
+|---|---|---|---|---|
+| Before stage 3, run 1 | Medium · Heavy | 8.7 · 8.6 ms | 12.3 · 12.3 ms | 16 · 22 |
+| Stage 3, run 1 | Medium · Heavy | 8.8 · 8.5 ms | 12.5 · 13.0 ms | 19 · 29 |
+| Before stage 3, run 2 | Medium · Heavy | 8.8 · 8.7 ms | 13.1 · 12.5 ms | 18 · 22 |
+| Stage 3, run 2 | Medium · Heavy | 8.9 · 8.5 ms | 12.8 · 12.3 ms | 19 · 17 |
+| Stage 3, every shape with a 40 px soft edge and a 6 px border with glow | Medium · Heavy | 9.0 · 9.2 ms | 11.8 · 11.5 ms | 10 · 10 |
+
+- The governor stayed at full size throughout, and no instrument failed.
+- No soft-edge picture was remade during any run.
+
+**Main thread busy** (`scripts/profile-map.mjs`; after the audit in brackets):
+
+| Window | Busy |
+|---|---|
+| Projector window, heavy show | 15.2 % (16.5 %) |
+| Operator screen, projector open | 2.0 % (2.1 %) |
+| Operator screen playing the show itself | 16.6 % (17.8 %) |
+| Idle show, projector window | 0.9 % (0.9 %) |
+| Idle show, operator screen | 1.4 % (1.2 %) |
+
+**Against the bar.** Stage 3 costs no more than stage 2 did: the before and after runs cannot be told apart, and soft edges and borders add about 0.5 ms to the median. The long frames in these runs come from the other programs, since the commit before stage 3 showed as many. A run on a quiet Mac is still needed to confirm the audit's result again: 120 fps with no frame over 16.7 ms.
+
+**Checked in the app** (`npm run test:map`, 21 checks, 8 of them new):
+- An ellipse is round on the wall.
+- A hole is black on the wall, and Undo takes it away.
+- A Pen curve bulges past the straight line.
+- A Blocker blacks out what is beneath it.
+- A soft edge darkens the outline, and a border brings it back.
+- Solo, and hiding a group, take shapes off the wall.
+- A corner snapped onto a neighbour's corner moves with it.
+- A 2 × 2 grid projects four cells with gaps.
+- The Photo shows on the operator screen and never on the wall.
+
+**Not shown.** Whether tracing about 20 pieces from a photo, and lining them up with a projector, really works in one sitting. That needs Greg, a projector and a real scene.
 
 ## Stage 0 results
 

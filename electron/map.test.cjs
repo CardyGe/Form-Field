@@ -160,8 +160,8 @@ test('acceptMapMessage checks the envelope and size', () => {
   assert.equal(acceptMapMessage({ type: 'identify', shapeId: null }), true);
   assert.equal(acceptMapMessage({ type: 'crosshair', shapeId: 'a', point: { x: 1, y: 2 } }), true);
   assert.equal(acceptMapMessage({ type: 'crosshair', shapeId: 'a', point: { x: 1 } }), false);
-  assert.equal(acceptMapMessage({ type: 'show', show: { big: 'x'.repeat(300000) } }), false);
-  assert.equal(acceptMapMessage({ type: 'show', show: { big: 'x'.repeat(20000) } }), true); // Map's limit is 256 KB
+  assert.equal(acceptMapMessage({ type: 'show', show: { big: 'x'.repeat(600000) } }), false);
+  assert.equal(acceptMapMessage({ type: 'show', show: { big: 'x'.repeat(400000) } }), true); // Map's limit is 512 KB (the largest stage 3 show is about 360 KB)
   assert.equal(acceptMapMessage(null), false);
 });
 
