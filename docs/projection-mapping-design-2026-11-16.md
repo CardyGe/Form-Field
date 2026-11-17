@@ -282,6 +282,23 @@ Made 17 November 2026, before building stage 2. Each can be changed; the cost of
 - **Operator screen.** With the output open, the laptop shows the wall's picture behind the outlines (as in stage 1). With it closed, the laptop runs the same compositor itself.
 - **Edit in Studio.** Studio's own project, its undo history and its file are set aside while a shape's composition is edited, and Studio's autosave and close-save keep writing the set-aside project, never the shape's. "Back to Map" puts them back. Export is not offered while editing a shape.
 
+## Stage 2 results
+
+Measured 17 November 2026 on this Mac (Electron 45, display at 120 Hz) with `scripts/measure-map.mjs`. Eight shapes in a 4 × 2 grid covering most of a 1920 × 1080 stage, two shapes per instrument, each shape with its own source (eight renderers). The output window was open; the operator screen showed the wall's picture. 30 s after a 4 s warm-up.
+
+| Mix | Instruments | Frames in 30 s | Median frame | 95th percentile | Frames over 16.7 ms | Governor |
+|---|---|---|---|---|---|---|
+| Medium | Living Ink, Relief, Resonance, Texture Cuts | 3,142 (105 fps) | 8.4 ms | 17.8 ms | 193 (6 %) | stayed at full size |
+| Heavy | Fractal, Sculpture, Living Ink, Oil Slides | 2,882 (96 fps) | 8.4 ms | 25 ms | 276 (10 %) | stayed at full size |
+
+**Against the target** (60 fps with eight shapes and four instruments): met on average with room to spare. Not every frame: 6 to 10 % of frames took longer than a 60 Hz frame. They were scattered, not runs of 30, so the governor rightly did not step down.
+
+**What these numbers do not show.**
+- A 60 Hz projector. This display refreshes at 120 Hz; on a 60 Hz output the scattered long frames would show as occasional repeated frames.
+- A long run. The two-hour record is stage 5's.
+- Shapes larger than a quarter of the stage each, or more than eight sources.
+- The operator screen playing instruments itself (output closed): that doubles the work only when no wall is open.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
