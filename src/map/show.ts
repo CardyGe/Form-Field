@@ -2,6 +2,8 @@
  * Map show document: the shapes drawn on the stage. validateShow repairs a
  * damaged or outdated file field by field, so the Map always opens.
  */
+import { isValidOutline } from './geometry';
+
 export interface Point { x: number; y: number }
 export interface Shape { id: string; name: string; points: Point[]; colour: string; visible: boolean; locked: boolean }
 export interface ShowDocument { format: 'formshow'; version: 1; stage: { width: number; height: number }; shapes: Shape[] }
@@ -9,6 +11,8 @@ export interface ShowDocument { format: 'formshow'; version: 1; stage: { width: 
 export const MAX_SHAPES = 64;
 export const MAX_POINTS = 32;
 export const STAGE_SIZE = { width: 1920, height: 1080 };
+/** The smallest outline the Map accepts: one projector pixel of area, in stage fractions. */
+export const MIN_OUTLINE_AREA = 1 / (1920 * 1080);
 
 export function createShow(): ShowDocument {
   return { format: 'formshow', version: 1, stage: { ...STAGE_SIZE }, shapes: [] };
@@ -46,6 +50,8 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
       points.push(r.point);
     }
     if (bad || points.length < 3) { repaired = true; continue; }
+    // An outline the editor would refuse (crossing, collapsed) is left out rather than sent to the wall.
+    if (!isValidOutline(points).ok) { repaired = true; continue; }
 
     let id = typeof raw.id === 'string' && raw.id !== '' ? raw.id : '';
     if (id === '' || seen.has(id)) { id = crypto.randomUUID(); repaired = true; }

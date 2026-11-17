@@ -41,7 +41,8 @@ test('out-of-range point is clamped; NaN drops the shape', () => {
 test('limits: 64 shapes, 32 points', () => {
   const many = Array.from({ length: 70 }, (_, i) => shape({ id: `s${i}` }));
   assert.equal(validateShow(doc(many)).show.shapes.length, MAX_SHAPES);
-  const pts = Array.from({ length: 40 }, (_, i) => ({ x: i / 40, y: 0.5 }));
+  // A 40-corner ring; its first 32 corners still make a valid outline.
+  const pts = Array.from({ length: 40 }, (_, i) => ({ x: 0.5 + 0.3 * Math.cos(i / 40 * 2 * Math.PI), y: 0.5 + 0.3 * Math.sin(i / 40 * 2 * Math.PI) }));
   assert.equal(validateShow(doc([shape({ points: pts })])).show.shapes[0].points.length, MAX_POINTS);
 });
 
@@ -64,4 +65,19 @@ test('shapes with fewer than three points are dropped', () => {
   assert.equal(r.show.shapes.length, 1);
   assert.equal(r.show.shapes[0].id, 'a');
   assert.equal(r.repaired, true);
+});
+
+test('a loaded shape whose outline crosses itself is dropped and the show is marked repaired', () => {
+  const bowtie = [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.9 }, { x: 0.9, y: 0.1 }, { x: 0.1, y: 0.9 }];
+  const r = validateShow(doc([shape({ id: 'bad', points: bowtie }), shape({ id: 'good' })]));
+  assert.deepEqual(r.show.shapes.map(s => s.id), ['good']);
+  assert.equal(r.repaired, true);
+});
+
+test('a loaded shape with no area is dropped; valid shapes load unrepaired', () => {
+  const flat = [{ x: 0.1, y: 0.5 }, { x: 0.3, y: 0.5 }, { x: 0.6, y: 0.5 }];
+  assert.deepEqual(validateShow(doc([shape({ id: 'flat', points: flat })])).show.shapes, []);
+  const ok = validateShow(doc([shape({ id: 'a' }), shape({ id: 'b' })]));
+  assert.deepEqual(ok.show.shapes.map(s => s.id), ['a', 'b']);
+  assert.equal(ok.repaired, false);
 });

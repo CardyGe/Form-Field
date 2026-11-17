@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isValidOutline, rectangleFromDrag, nudge, clampToStage, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel, parsePixelField } from '../src/map/geometry';
+import { isValidOutline, rectangleFromDrag, nudge, clampToStage, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel, parsePixelField, MIN_OUTLINE_AREA } from '../src/map/geometry';
+import { STAGE_SIZE } from '../src/map/show';
 import { isTypingTarget, shouldCommit } from '../src/map/keys';
 
 const square = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
@@ -18,6 +19,31 @@ test('a simple 20-point polygon is valid', () => {
   const pts = Array.from({length:20}, (_, i) => ({x:.5+.4*Math.cos(i/20*2*Math.PI), y:.5+.4*Math.sin(i/20*2*Math.PI)}));
   assert.deepEqual(isValidOutline(pts), {ok:true});
 });
+const ring = (n: number) => Array.from({length:n}, (_, i) => ({x:.5+.3*Math.cos(i/n*2*Math.PI), y:.5+.3*Math.sin(i/n*2*Math.PI)}));
+test('a 12-point and a 13-point outline of the same shape are both valid', () => {
+  const twelve = ring(12);
+  // The same twelve corners with one more halfway along the last edge: the same shape, one more point.
+  const a = twelve[11], b = twelve[0];
+  const thirteen = [...twelve, {x:(a.x+b.x)/2, y:(a.y+b.y)/2}];
+  assert.deepEqual(isValidOutline(twelve), {ok:true});
+  assert.deepEqual(isValidOutline(thirteen), {ok:true});
+});
+test('a 13-point outline that crosses itself is crossing', () => {
+  const pts = ring(13);
+  [pts[2], pts[7]] = [pts[7], pts[2]];
+  assert.deepEqual(isValidOutline(pts), {ok:false, reason:'crossing'});
+});
+test('a small 40 x 40 projector-pixel rectangle is valid', () => {
+  const w = 40 / STAGE_SIZE.width, h = 40 / STAGE_SIZE.height;
+  assert.deepEqual(isValidOutline([{x:.5,y:.5},{x:.5+w,y:.5},{x:.5+w,y:.5+h},{x:.5,y:.5+h}]), {ok:true});
+});
+test('an outline with no area, or less than one projector pixel of area, is collapsed', () => {
+  assert.deepEqual(isValidOutline([{x:.1,y:.5},{x:.3,y:.5},{x:.6,y:.5}]), {ok:false, reason:'collapsed'});
+  const w = .5 / STAGE_SIZE.width, h = .5 / STAGE_SIZE.height;
+  assert.deepEqual(isValidOutline([{x:.5,y:.5},{x:.5+w,y:.5},{x:.5+w,y:.5+h},{x:.5,y:.5+h}]), {ok:false, reason:'collapsed'});
+  assert.equal(MIN_OUTLINE_AREA, 1 / (1920 * 1080));
+});
+test('a repeated corner is collapsed', () => assert.deepEqual(isValidOutline([{x:0,y:0},{x:1,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}]), {ok:false, reason:'collapsed'}));
 test('rectangleFromDrag is clockwise from top-left whatever the direction', () => {
   const expected = [{x:.2,y:.2},{x:.8,y:.2},{x:.8,y:.6},{x:.2,y:.6}];
   assert.deepEqual(rectangleFromDrag({x:.8,y:.2},{x:.2,y:.6}), expected);

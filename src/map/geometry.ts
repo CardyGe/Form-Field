@@ -1,10 +1,8 @@
-import { isSimplePolygon } from '../core/surface-layout';
-import { STAGE_SIZE, MAX_POINTS, type Point } from './show';
-
-const MIN_AREA = 0.002;
-const MIN_EDGE = 0.001;
-// isSimplePolygon only accepts up to 12 points; the Map format allows more.
-const SIMPLE_POLYGON_LIMIT = 12;
+// show.ts imports isValidOutline too, so nothing from show.ts is read while this module loads, only inside functions.
+import { STAGE_SIZE, MAX_POINTS, MIN_OUTLINE_AREA, type Point } from './show';
+export { MIN_OUTLINE_AREA };
+// Two corners closer than this are the same corner; the outline has collapsed there.
+const SAME_POINT = 1e-9;
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const cross = (a: Point, b: Point, c: Point) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
@@ -27,23 +25,28 @@ function hasCrossing(points: Point[]): boolean {
   return false;
 }
 
-function isSimple(points: Point[]): boolean {
-  if (points.length <= SIMPLE_POLYGON_LIMIT) return isSimplePolygon(points);
-  let area = 0;
+/** Enclosed area in stage fractions squared (always positive). */
+function outlineArea(points: Point[]): number {
+  let twice = 0;
   for (let i = 0; i < points.length; i++) {
     const a = points[i], b = points[(i + 1) % points.length];
-    if (Math.hypot(a.x - b.x, a.y - b.y) < MIN_EDGE) return false;
-    area += a.x * b.y - b.x * a.y;
+    twice += a.x * b.y - b.x * a.y;
   }
-  return !hasCrossing(points) && Math.abs(area) >= MIN_AREA;
+  return Math.abs(twice) / 2;
 }
+
+const hasRepeatedCorner = (points: Point[]) =>
+  points.some((a, i) => { const b = points[(i + 1) % points.length]; return Math.hypot(a.x - b.x, a.y - b.y) < SAME_POINT; });
 
 export function isValidOutline(points: Point[]): { ok: true } | { ok: false; reason: 'crossing' | 'collapsed' | 'too-few' | 'too-many' | 'outside' } {
   if (points.length < 3) return { ok: false, reason: 'too-few' };
   if (points.length > MAX_POINTS) return { ok: false, reason: 'too-many' };
   if (points.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1)) return { ok: false, reason: 'outside' };
-  if (isSimple(points)) return { ok: true };
-  return { ok: false, reason: hasCrossing(points) ? 'crossing' : 'collapsed' };
+  // The same rules for every corner count, from 3 to MAX_POINTS.
+  if (hasRepeatedCorner(points)) return { ok: false, reason: 'collapsed' };
+  if (hasCrossing(points)) return { ok: false, reason: 'crossing' };
+  if (outlineArea(points) < MIN_OUTLINE_AREA) return { ok: false, reason: 'collapsed' };
+  return { ok: true };
 }
 
 /** Four corners, clockwise from the top-left of the drag box. */
