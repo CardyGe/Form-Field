@@ -1,8 +1,9 @@
 import * as T from 'three';
+import {pinball} from './pinball.mjs';
 
 // A fixed-camera lighting study. Each blade has a closed section with two
 // chamfers, a brushed face and a contrasting enamel return.
-export function createStudy(canvas, width, height) {
+export function createStudy(canvas, width, height, {arcade = false} = {}) {
   const renderer = new T.WebGLRenderer({canvas, antialias:true, preserveDrawingBuffer:true});
   renderer.setSize(width,height,false);
   renderer.toneMapping=T.ACESFilmicToneMapping;
@@ -84,7 +85,9 @@ export function createStudy(canvas, width, height) {
   geometry.setIndex(indices);
   const blades=new T.Mesh(geometry,materials);blades.castShadow=true;blades.receiveShadow=true;blades.frustumCulled=false;scene.add(blades);
 
-  function render(phase){
+  const machine=arcade ? pinball(scene,materials[0]) : null;
+  function render(phase, bonusAge){
+    machine?.update(phase-Math.floor(phase),bonusAge);
     const a=(phase-Math.floor(phase))*Math.PI*2;
     for(let j=0;j<count;j++){
       const x=(j-(count-1)/2)*pitch;
@@ -95,8 +98,9 @@ export function createStudy(canvas, width, height) {
         const d=y-spine;
         const crest=Math.exp(-d*d*.89);
         const shoulder=Math.exp(-((d+.87)**2)*1.5);
-        const twist=edge*(1.43*crest-.77*shoulder+.25*Math.sin(.82*x-a)*crest);
-        const z=edge*(.90*crest-.21*shoulder);
+        const hit=machine?.ripple(x,y) ?? 0;
+        const twist=hit*.97+edge*(1.43*crest-.77*shoulder+.25*Math.sin(.82*x-a)*crest);
+        const z=machine ? edge*(.18*crest+.46*hit) : edge*(.90*crest-.21*shoulder);
         const cx=x+edge*.27*Math.sin(1.3*d+.5)*crest;
         const cos=Math.cos(twist),sin=Math.sin(twist);
         for(let side=0;side<sides;side++)for(let end=0;end<2;end++){
