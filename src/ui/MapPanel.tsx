@@ -14,7 +14,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
     paint(ctx, map.show, { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: map.selectedId, selectedIndex: null, outlinesOnly: false, invalidIds: [] });
   }, [map.show, map.selectedId]);
 
-  const status = map.lastRefusal ? `Not applied: ${map.lastRefusal}` : map.sendWarning ?? (map.outputOpen ? 'Showing on the output' : map.loaded ? 'Ready' : 'Loading…');
+  const status = map.lastRefusal ? (map.lastRefusal.endsWith('…') ? map.lastRefusal : `Not applied: ${map.lastRefusal}`) : map.sendWarning ?? (map.outputOpen ? 'Showing on the output' : map.loaded ? 'Ready' : 'Loading…');
 
   return <section className="live-shell map-shell" role="region" aria-label="Map">
     <header className="app-header">{header}<div className="live-actions">

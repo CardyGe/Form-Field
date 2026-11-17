@@ -212,3 +212,19 @@ test('autosaveSchedule: flush writes a pending value at once and cancel drops it
   await new Promise(r => setTimeout(r, 100));
   assert.deepEqual(written, ['a']);
 });
+
+import { canEdit } from '../src/map/autosave';
+
+test('autosaveSchedule: a flush before the delay writes once and the timer does not write again', async () => {
+  const written: string[] = [];
+  const schedule = autosaveSchedule<string>(value => { written.push(value); }, 50);
+  schedule.save('x');
+  schedule.flush();
+  await new Promise(r => setTimeout(r, 100));
+  assert.deepEqual(written, ['x']);
+});
+
+test('canEdit: edits are refused until the saved show has loaded', () => {
+  assert.equal(canEdit(false), false);
+  assert.equal(canEdit(true), true);
+});

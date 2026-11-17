@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { applyEdit, type EditAction } from '../map/editor';
 import { History } from '../map/history';
-import { autosaveSchedule } from '../map/autosave';
+import { autosaveSchedule, canEdit } from '../map/autosave';
 import { acceptMapMessage } from '../map/messages';
 import { createShow, validateShow, type ShowDocument } from '../map/show';
 
@@ -26,7 +26,7 @@ export function useMap(onError: (message: string) => void) {
   const latest = useRef({ show, blackout, testGrid });
   latest.current = { show, blackout, testGrid };
   const saver = useRef<ReturnType<typeof autosaveSchedule<string>> | null>(null);
-  if (!saver.current) saver.current = autosaveSchedule<string>(text => { void bridge?.saveAutosave(text).catch(() => {}); }, 500);
+  if (!saver.current) saver.current = autosaveSchedule<string>(async text => { await bridge?.saveAutosave(text).catch(() => {}); }, 500);
 
   // The saved working show, once. A damaged file was already moved aside by the main process, so an empty show is fine.
   useEffect(() => {
@@ -51,7 +51,9 @@ export function useMap(onError: (message: string) => void) {
     if (!bridge) return;
     const offOutput = bridge.onOutputChanged(setOutputOpen);
     const offDisplays = bridge.onDisplaysChanged(() => void refreshDisplays());
-    return () => { offOutput(); offDisplays(); saver.current?.flush(); void bridge.closeOutput().catch(() => {}); };
+    // Closing the window must not lose an edit made in the last half second.
+    const offClose = window.studio!.onBeforeClose(async () => { await saver.current?.flush(); });
+    return () => { offOutput(); offDisplays(); offClose(); saver.current?.flush(); void bridge.closeOutput().catch(() => {}); };
   }, []);
 
   // The wall gets the whole show when it reports ready, and again after every edit.
@@ -72,7 +74,10 @@ export function useMap(onError: (message: string) => void) {
     setShow(next);
     saver.current?.save(JSON.stringify(next));
   };
+  const loadedRef = useRef(false);
+  loadedRef.current = loaded;
   const dispatch = useCallback((action: EditAction) => {
+    if (!canEdit(loadedRef.current)) { setLastRefusal('Loading the show…'); return false; }
     const result = applyEdit(history.current.present(), action);
     if (!result.ok) { setLastRefusal(result.reason); return false; }
     setLastRefusal(null);
@@ -80,8 +85,8 @@ export function useMap(onError: (message: string) => void) {
     present(result.show);
     return true;
   }, []);
-  const undo = () => { if (history.current.undo()) present(history.current.present()); };
-  const redo = () => { if (history.current.redo()) present(history.current.present()); };
+  const undo = () => { if (canEdit(loaded) && history.current.undo()) present(history.current.present()); };
+  const redo = () => { if (canEdit(loaded) && history.current.redo()) present(history.current.present()); };
 
   const setBlackout = (on: boolean) => { setBlackoutState(on); if (outputOpen) bridge?.send({ type: 'blackout', on }); };
   const setTestGrid = (on: boolean) => { setTestGridState(on); if (outputOpen) bridge?.send({ type: 'testGrid', on }); };
