@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isValidOutline, rectangleFromDrag, nudge, clampToStage, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel, parsePixelField } from '../src/map/geometry';
-import { isTypingTarget } from '../src/map/keys';
+import { isTypingTarget, shouldCommit } from '../src/map/keys';
 
 const square = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
 
@@ -65,4 +65,9 @@ test('isTypingTarget is true for text boxes only', () => {
   assert.equal(isTypingTarget({ tagName: 'DIV', isContentEditable: true }), true);
   assert.equal(isTypingTarget({ tagName: 'CANVAS' }), false);
   assert.equal(isTypingTarget(null), false);
+});
+test('shouldCommit only when the text was changed', () => {
+  assert.equal(shouldCommit('641', '641'), false);
+  assert.equal(shouldCommit('641', '642'), true);
+  assert.equal(shouldCommit('641', ''), true);
 });

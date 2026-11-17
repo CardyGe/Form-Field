@@ -3,7 +3,7 @@ import { useMap } from './useMap';
 import { paint } from '../map/draw';
 import { applyEdit, type EditAction } from '../map/editor';
 import { parsePixelField, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel } from '../map/geometry';
-import { isTypingTarget } from '../map/keys';
+import { isTypingTarget, shouldCommit } from '../map/keys';
 import { STAGE_SIZE, type Point, type ShowDocument } from '../map/show';
 
 const REASONS: Record<string, string> = {
@@ -29,9 +29,14 @@ const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRigh
 /** A text box that keeps its own draft and hands it over on blur or Enter. */
 function CommitField({ label, value, onCommit, narrow }: { label: string; value: string; onCommit: (text: string) => void; narrow?: boolean }) {
   const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const commit = () => { onCommit(draft); setDraft(value); };
-  return <label className="map-field">{label}<input aria-label={label} className={narrow ? 'narrow' : ''} value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit}
+  const start = useRef(value); // the text shown when the box was focused
+  useEffect(() => { setDraft(value); start.current = value; }, [value]);
+  const commit = () => {
+    const changed = shouldCommit(start.current, draft);
+    if (changed) onCommit(draft);
+    setDraft(value); start.current = value;
+  };
+  return <label className="map-field">{label}<input aria-label={label} className={narrow ? 'narrow' : ''} value={draft} onFocus={() => { start.current = value; }} onChange={e => setDraft(e.target.value)} onBlur={commit}
     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }} /></label>;
 }
 
