@@ -57,3 +57,7 @@
 .map-grid-tool summary { cursor: pointer; font-size: 12px; margin-top: 4px; }
 .map-grid-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 6px 0; }
 .map-group-line { display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 6px; }
+.map-shapes { overflow-x: hidden; }
+.map-shape-list li { min-width: 0; }
+.map-shape-list li.map-member { padding-left: 14px; }
+.map-shape-list .text-button { padding: 2px 4px; }

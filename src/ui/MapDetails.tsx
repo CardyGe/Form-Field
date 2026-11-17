@@ -176,7 +176,7 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
     </details>
 
     {point && map.selectedIndex !== null ? <>
-      <h3>{map.selectedRing >= 0 ? `Hole ${map.selectedRing + 1}, ` : ''}{isCurved(point) ? 'curve point' : 'corner'} {map.selectedIndex + 1}</h3>
+      <h3>{map.selectedRing >= 0 ? `Hole ${map.selectedRing + 1}, ${isCurved(point) ? 'curve point' : 'corner'}` : isCurved(point) ? 'Curve point' : 'Corner'} {map.selectedIndex + 1}</h3>
       <CommitField label="X" value={String(Math.round(point.x * STAGE_SIZE.width))} onCommit={t => commitPosition('x', t)} narrow disabled={locked} />
       <CommitField label="Y" value={String(Math.round(point.y * STAGE_SIZE.height))} onCommit={t => commitPosition('y', t)} narrow disabled={locked} />
       <div className="map-toggles">

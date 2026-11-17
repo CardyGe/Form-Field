@@ -1,8 +1,20 @@
 /** The pure parts of a shape's edge: when its fade picture must be made again, at what size, and its border colour. */
 import type { Shape } from './show';
 
-/** The fade picture depends only on the outline, the holes and the soft edge. */
-export const fadeKey = (shape: Shape): string => JSON.stringify([shape.points, shape.holes, shape.softEdge]);
+/**
+ * The fade picture depends only on the outline's form, the holes and the soft edge: not on where the shape is,
+ * so moving a soft-edged shape reuses its picture.
+ */
+export function fadeKey(shape: Shape): string {
+  const all = [...shape.points, ...shape.holes.flat()];
+  const x0 = Math.min(...all.map(p => p.x)), y0 = Math.min(...all.map(p => p.y));
+  const r = (v: number) => Math.round(v * 1e6) / 1e6;
+  const rel = (ring: Shape['points']) => ring.map(p => [r(p.x - x0), r(p.y - y0), p.in?.x, p.in?.y, p.out?.x, p.out?.y]);
+  return JSON.stringify([rel(shape.points), shape.holes.map(rel), shape.softEdge]);
+}
+
+/** The soft edge actually drawn: never more than a shape's narrower side allows, so a thin shape fades but never vanishes. */
+export const effectiveSoftEdge = (softEdge: number, box: { w: number; h: number }) => Math.min(softEdge, Math.min(box.w, box.h) / 1.5);
 
 /** Fades are smooth, so half the projector's resolution is plenty; the picture is stretched when drawn. */
 const FADE_SCALE = 0.5;

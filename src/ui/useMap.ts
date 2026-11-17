@@ -287,6 +287,8 @@ export function useMap(onError: (message: string) => void) {
     sendNow({ type: 'blackout', on: latest.current.blackout });
     sendNow({ type: 'testGrid', on: latest.current.testGrid });
     sendNow({ type: 'freeze', on: latest.current.freeze });
+    // Solo before the show, so the wall never paints one frame of the shapes solo hides.
+    sendNow({ type: 'solo', ids: soloIds(latest.current.shown, kept.solo) });
     sendSources(latest.current.shown);
     sendNow(showMessage(latest.current.shown));
   }, [outputOpen, outputEpoch]);
@@ -305,7 +307,19 @@ export function useMap(onError: (message: string) => void) {
   useEffect(() => {
     if (!outputOpen || !bridge) return;
     sendNow({ type: 'solo', ids: soloed });
-  }, [soloKey, outputOpen, outputEpoch]);
+  }, [soloKey]);
+  // Solo and the selection forget shapes and groups that have left the show (deleted, or undone).
+  useEffect(() => {
+    const s = kept.solo;
+    const shapes = s.shapes.filter(id => show.shapes.some(sh => sh.id === id)), groups = s.groups.filter(id => show.groups.some(g => g.id === id));
+    if (shapes.length !== s.shapes.length || groups.length !== s.groups.length) { kept.solo = { shapes, groups }; setSoloState(kept.solo); }
+    setSelectedIds(ids => {
+      const live = ids.filter(id => show.shapes.some(sh => sh.id === id));
+      if (live.length === ids.length) return ids;
+      if (live[0] !== ids[0]) { setSelectedIndex(null); setSelectedRing(-1); }
+      return live;
+    });
+  }, [show]);
 
   const loadedRef = useRef(false);
   loadedRef.current = loaded;

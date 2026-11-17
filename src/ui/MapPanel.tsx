@@ -146,6 +146,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       if (playedShow.current !== picture) { local.setShow(picture, new Map(picture.sources.map(s => [s.id, s.project]))); playedShow.current = picture; }
       local.setOptions(options);
       local.setFrozen(d.freeze);
+      // This screen draws its marks over the stage, so the stage is drawn again under them every time.
+      local.invalidate();
       local.frame(now);
     } else {
       // Not playing here (the wall plays them, or nothing does): the instruments here give their graphics contexts back.
@@ -314,6 +316,11 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         const first = stagePx(p.points[0]), here = stagePx(raw);
         if (Math.hypot(first.x - here.x, first.y - here.y) <= REACH_PX * screenScale()) { closePen(); return; }
       }
+      // A second click on the last point (a double-click, say) adds nothing: two points on one spot would be refused.
+      if (p) {
+        const prev = stagePx(p.points[p.points.length - 1]), here = stagePx(at);
+        if (Math.hypot(prev.x - here.x, prev.y - here.y) <= REACH_PX * screenScale()) return;
+      }
       const next: Pen = p ? { ...p, points: [...p.points, at] } : { points: [at], hole: holeTarget(raw, e.altKey) };
       setPen(next);
       drag.current = { kind: 'pen-handle' };
@@ -386,8 +393,9 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       map.selectMany(d.additive ? [...map.selectedIds, ...inside.filter(id => !map.selectedIds.includes(id))] : inside);
       return;
     }
-    const start = d.kind === 'box' ? null : 'start' in d ? d.start : null;
-    const moved = start ? Math.hypot((raw.x - start.x) * STAGE_SIZE.width, (raw.y - start.y) * STAGE_SIZE.height) >= MIN_DRAG_PX / 2 : true;
+    const startPx = d.kind === 'box' ? d.start : 'start' in d ? stagePx(d.start) : null;
+    const nowPx = stagePx(raw);
+    const moved = startPx ? Math.hypot(nowPx.x - startPx.x, nowPx.y - startPx.y) >= MIN_DRAG_PX / 2 : true;
     // Alt-click on a point switches it between corner and curve.
     if (d.kind === 'point' && !moved && d.alt) {
       const shape = map.show.shapes.find(s => s.id === d.shapeId);
@@ -395,7 +403,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       if (point) map.dispatch({ type: 'setCurve', shapeId: d.shapeId, ring: d.ring, index: d.index, curved: !isCurved(point) });
       return;
     }
-    if ((d.kind === 'point' || d.kind === 'move') && !moved) return; // a plain click only selects
+    if ((d.kind === 'point' || d.kind === 'move' || d.kind === 'box') && !moved) return; // a plain click only selects
     const action = editFor(d, raw, e);
     if (!action) return;
     if (!map.dispatch(action)) return;
@@ -415,7 +423,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     }
   };
 
-  const chooseTool = (tool: MapTool) => { setPen(null); setHover(null); map.setTool(tool); };
+  /** Changing tool abandons an open Pen outline; choosing the Pen again keeps it. */
+  const chooseTool = (tool: MapTool) => { if (tool === 'pen' && penRef.current) return; setPen(null); setHover(null); map.setTool(tool); };
 
   // Shortcuts work from anywhere in Map, unless the key press belongs to a text box.
   const onKeyDown = (e: globalThis.KeyboardEvent) => {
@@ -546,6 +555,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     ];
   };
 
+  /** Only a real change is an undo step (and a save). */
+  const setPhotoOpacity = (opacity: number) => { if (map.show.photo && opacity !== map.show.photo.opacity) map.dispatch({ type: 'setPhotoOpacity', opacity }); };
   const choosePhoto = async (file: File | undefined) => {
     if (!file) return;
     try {
@@ -594,7 +605,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
           <span className="muted-text map-tool-hint">{map.tool === 'select' ? 'Alt-drag copies · double-click a side to add a point' : map.tool === 'pen' ? 'Alt on the first click inside the selected shape cuts a hole' : 'Alt-drag inside the selected shape cuts a hole'}</span>
         </div>
         <main className="map-stage" tabIndex={0} aria-label="Stage area"><canvas ref={canvas} aria-label="Stage" data-wall={map.outputOpen && map.wallPicture ? 'picture' : 'local'} style={{ cursor: map.tool === 'select' ? 'default' : 'crosshair', touchAction: 'none' }}
-          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} onPointerLeave={() => setHover(null)}
+          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} onLostPointerCapture={e => { if (drag.current) finishDrag(e, false); }} onPointerLeave={() => setHover(null)}
           onDoubleClick={onDoubleClick} onContextMenu={onStageMenu} width={STAGE_SIZE.width} height={STAGE_SIZE.height} /></main>
         <div className="map-stage-bar">
           <label className="map-check" title="Points join other shapes' points and sides, and the stage's edges and centre. Corners on the same spot move together. Hold Ctrl to switch it off for a moment.">
@@ -606,8 +617,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
           {map.show.photo && <>
             <label className="map-check"><input type="checkbox" aria-label="Show photo" checked={map.photoShown} onChange={e => map.setPhotoShown(e.target.checked)} />Shown</label>
             <label className="map-inline-range">Opacity<input aria-label="Photo opacity" type="range" min={0.1} max={1} step={0.05} defaultValue={map.show.photo.opacity} key={map.show.photo.opacity}
-              onPointerUp={e => map.dispatch({ type: 'setPhotoOpacity', opacity: Number(e.currentTarget.value) })}
-              onKeyUp={e => map.dispatch({ type: 'setPhotoOpacity', opacity: Number(e.currentTarget.value) })} /></label>
+              onPointerUp={e => setPhotoOpacity(Number(e.currentTarget.value))} onKeyUp={e => setPhotoOpacity(Number(e.currentTarget.value))} /></label>
             <button className="text-button" onClick={() => map.dispatch({ type: 'setPhoto', photo: null })}>Remove photo</button>
           </>}
         </div>

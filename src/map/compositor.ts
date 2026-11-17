@@ -8,7 +8,7 @@
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
 import { drawCommands, ringPx, shownOnWall, stageCommands, traceRing, type DrawOptions } from './draw';
-import { borderColour, fadeKey, fadeSize } from './edge';
+import { borderColour, effectiveSoftEdge, fadeKey, fadeSize } from './edge';
 import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
 import { STAGE_SIZE, type Group, type Shape } from './show';
@@ -18,9 +18,9 @@ import { ringBounds } from './outline';
 export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number }[]; groups: Group[] }
 
 /** A shape's outline and holes as one path in stage pixels, with its box; kept until the shape's geometry changes. */
-interface Outline { key: string; path: Path2D; box: { x: number; y: number; w: number; h: number } }
+interface Outline { shape: Shape; key: string; path: Path2D; box: { x: number; y: number; w: number; h: number } }
 /** A shape's soft edge: white where the content shows, fading to nothing at the outline. */
-interface Fader { key: string; picture: OffscreenCanvas }
+interface Fader { shape: Shape; key: string; picture: OffscreenCanvas }
 
 type Frame = OffscreenCanvas;
 
@@ -142,6 +142,8 @@ export class MapCompositor {
     this.options = options; this.optionsKey = key; this.dirty = true;
   }
   setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.dirty = true; } }
+  /** Draw the stage again on the next frame even if nothing changed: the operator screen draws its own marks over it. */
+  invalidate(): void { this.dirty = true; }
 
   /**
    * Advances the clock, draws every source that is due, and composites the stage. Returns whether the stage was drawn:
@@ -278,41 +280,46 @@ export class MapCompositor {
 
   /** The shape's outline and holes as one path, made again only when its geometry changes. */
   private outline(shape: Shape): Outline {
-    const key = JSON.stringify([shape.points, shape.holes]);
     const held = this.outlines.get(shape.id);
-    if (held && held.key === key) return held;
+    // An unchanged show hands over the same shape objects, so most frames need no comparison at all.
+    if (held && held.shape === shape) return held;
+    const key = JSON.stringify([shape.points, shape.holes]);
+    if (held && held.key === key) { held.shape = shape; return held; }
     const path = new Path2D();
     for (const ring of [shape.points, ...shape.holes]) traceRing(path, ringPx(ring));
     const b = ringBounds([shape.points]);
     const box = { x: b.x0 * STAGE_SIZE.width, y: b.y0 * STAGE_SIZE.height, w: (b.x1 - b.x0) * STAGE_SIZE.width, h: (b.y1 - b.y0) * STAGE_SIZE.height };
-    const made = { key, path, box };
+    const made = { shape, key, path, box };
     this.outlines.set(shape.id, made);
     return made;
   }
 
   /**
    * The shape's fade picture, at half resolution over its box: the outline filled, worn back by half the soft edge,
-   * blurred by a third of it, and cut by the outline again, so the content fades to nothing at the outline.
+   * blurred, and cut by the outline again, so the content fades to nothing at the outline.
    */
   private fader(shape: Shape, outline: Outline): OffscreenCanvas {
-    const key = fadeKey(shape);
     const held = this.faders.get(shape.id);
-    if (held && held.key === key) return held.picture;
+    if (held && held.shape === shape) return held.picture;
+    const key = fadeKey(shape);
+    if (held && held.key === key) { held.shape = shape; return held.picture; }
     const { width, height, scale } = fadeSize(outline.box);
     const draw = (canvas: OffscreenCanvas) => {
       const c = canvas.getContext('2d')!;
       c.setTransform(scale, 0, 0, scale, -outline.box.x * scale, -outline.box.y * scale);
       return c;
     };
+    // Worn back by 0.6 of the edge and blurred by a quarter of it, the outline sits 2.4 blur widths out: under 1 % is left there.
+    const soft = effectiveSoftEdge(shape.softEdge, outline.box);
     const worn = new OffscreenCanvas(width, height), w = draw(worn);
     w.fillStyle = '#ffffff'; w.fill(outline.path, 'evenodd');
-    w.globalCompositeOperation = 'destination-out'; w.lineWidth = shape.softEdge; w.lineJoin = 'round'; w.stroke(outline.path);
+    w.globalCompositeOperation = 'destination-out'; w.lineWidth = soft * 1.2; w.lineJoin = 'round'; w.stroke(outline.path);
     const picture = held?.picture.width === width && held.picture.height === height ? held.picture : new OffscreenCanvas(width, height);
     const p = picture.getContext('2d')!;
     p.setTransform(1, 0, 0, 1, 0, 0);
     p.globalCompositeOperation = 'source-over';
     p.clearRect(0, 0, width, height);
-    p.filter = `blur(${Math.max(0.5, shape.softEdge / 3 * scale)}px)`;
+    p.filter = `blur(${Math.max(0.5, soft / 4 * scale)}px)`;
     p.drawImage(worn, 0, 0);
     p.filter = 'none';
     p.globalCompositeOperation = 'destination-in';
@@ -320,7 +327,7 @@ export class MapCompositor {
     p.fillStyle = '#ffffff'; p.fill(outline.path, 'evenodd');
     p.setTransform(1, 0, 0, 1, 0, 0);
     p.globalCompositeOperation = 'source-over';
-    this.faders.set(shape.id, { key, picture });
+    this.faders.set(shape.id, { shape, key, picture });
     this.edgeBuilds++;
     return picture;
   }
@@ -332,8 +339,12 @@ export class MapCompositor {
   private drawShape(shape: Shape, now: number): void {
     const ctx = this.ctx;
     const outline = this.outline(shape), box = outline.box;
-    const soft = shape.softEdge > 0 && box.w >= 1 && box.h >= 1;
-    // With a soft edge the content is drawn at the scratch canvas's origin; otherwise straight onto the stage, clipped.
+    // The part of the box on the stage: a curve may bulge past the edge, and nothing there is seen.
+    const vx0 = Math.max(0, box.x), vy0 = Math.max(0, box.y);
+    const vw = Math.min(STAGE_SIZE.width, box.x + box.w) - vx0, vh = Math.min(STAGE_SIZE.height, box.y + box.h) - vy0;
+    const soft = shape.softEdge > 0 && vw >= 1 && vh >= 1;
+    // With a soft edge the content is put together on the scratch canvas, whose origin is the visible box's corner;
+    // otherwise it is drawn straight onto the stage, clipped.
     let target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D = ctx;
     let at = { x: box.x, y: box.y };
     if (soft) {
@@ -341,8 +352,8 @@ export class MapCompositor {
       target = this.scratch.getContext('2d')!;
       target.globalCompositeOperation = 'source-over';
       target.globalAlpha = 1;
-      target.clearRect(0, 0, Math.ceil(box.w) + 1, Math.ceil(box.h) + 1);
-      at = { x: 0, y: 0 };
+      target.clearRect(0, 0, Math.ceil(vw) + 1, Math.ceil(vh) + 1);
+      at = { x: box.x - vx0, y: box.y - vy0 };
     } else {
       ctx.save();
       ctx.clip(outline.path, 'evenodd');
@@ -358,13 +369,14 @@ export class MapCompositor {
 
     if (soft) {
       const t = target as OffscreenCanvasRenderingContext2D;
+      const fader = this.fader(shape, outline), { scale } = fadeSize(box);
       t.globalAlpha = 1;
       t.globalCompositeOperation = 'destination-in';
-      t.drawImage(this.fader(shape, outline), 0, 0, box.w, box.h);
+      t.drawImage(fader, at.x, at.y, fader.width / scale, fader.height / scale);
       t.globalCompositeOperation = 'source-over';
       ctx.save();
       ctx.globalAlpha = 1;
-      ctx.drawImage(this.scratch!, 0, 0, box.w, box.h, box.x, box.y, box.w, box.h);
+      ctx.drawImage(this.scratch!, 0, 0, vw, vh, vx0, vy0, vw, vh);
       ctx.restore();
     } else ctx.restore();
 

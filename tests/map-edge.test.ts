@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fadeKey, fadeSize, borderColour } from '../src/map/edge';
+import { fadeKey, fadeSize, borderColour, effectiveSoftEdge } from '../src/map/edge';
 import { shapeExtras, type Shape } from '../src/map/show';
 
 const shape = (over: Partial<Shape> = {}): Shape => ({ id: 'a', name: 'A', colour: '#112233', visible: true, locked: false, sourceId: null,
@@ -25,4 +25,11 @@ test('a border is the shape colour, the instrument palette’s first colour, or 
   assert.equal(borderColour(palette, ['#abcdef', '#000000']), '#abcdef');
   assert.equal(borderColour(palette, null), '#112233');
   assert.equal(borderColour(shape({ border: { width: 4, colour: '#00ff00', glow: 0 } }), ['#abcdef']), '#00ff00');
+});
+
+test('moving a shape keeps its fade picture; a thin shape keeps some of itself', () => {
+  const moved = shape({ points: [{ x: .3, y: .2 }, { x: .7, y: .2 }, { x: .7, y: .6 }] });
+  assert.equal(fadeKey(moved), fadeKey(shape()));
+  assert.equal(effectiveSoftEdge(200, { w: 60, h: 400 }), 40);
+  assert.equal(effectiveSoftEdge(20, { w: 600, h: 400 }), 20);
 });
