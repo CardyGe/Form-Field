@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isValidOutline, rectangleFromDrag, nudge, clampToStage, pointInPolygon, stageFromPointer, parsePixelField } from '../src/map/geometry';
+import { isValidOutline, rectangleFromDrag, nudge, clampToStage, pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel, parsePixelField } from '../src/map/geometry';
 
 const square = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
 
@@ -42,6 +42,11 @@ test('stageFromPointer maps and clamps', () => {
 test('stageFromPointer returns the origin for a zero-size rect', () => {
   assert.deepEqual(stageFromPointer({left:10, top:10, width:0, height:0}, 50, 50), {x:0, y:0});
   assert.deepEqual(stageFromPointer({left:10, top:10, width:0, height:100}, 50, 60), {x:0, y:.5});
+});
+test('stagePixelsPerScreenPixel scales stage pixels to the displayed canvas', () => {
+  assert.equal(stagePixelsPerScreenPixel(960), 2);
+  assert.equal(stagePixelsPerScreenPixel(1920), 1);
+  assert.equal(stagePixelsPerScreenPixel(0), 1);
 });
 test('parsePixelField', () => {
   const r = {min:0, max:1920};

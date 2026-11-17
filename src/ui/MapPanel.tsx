@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from '
 import { useMap } from './useMap';
 import { paint } from '../map/draw';
 import { applyEdit, type EditAction } from '../map/editor';
-import { pointInPolygon, stageFromPointer } from '../map/geometry';
+import { pointInPolygon, stageFromPointer, stagePixelsPerScreenPixel } from '../map/geometry';
 import { STAGE_SIZE, type Point, type ShowDocument } from '../map/show';
 
 const REASONS: Record<string, string> = {
@@ -12,8 +12,8 @@ const REASONS: Record<string, string> = {
 };
 const COLOURS = ['#ff3b30', '#34c759', '#0a84ff', '#ffcc00', '#bf5af2', '#ff9f0a'];
 const MIN_DRAG_PX = 4;       // a rectangle drag smaller than this (projector pixels) creates nothing
-const HANDLE_REACH_PX = 14;  // how close to a corner counts as grabbing it (projector pixels)
-const HANDLE_SIZE_PX = 14;
+const HANDLE_REACH_PX = 14;  // how close to a corner counts as grabbing it (pixels on screen)
+const HANDLE_SIZE_PX = 14;   // corner handle size (pixels on screen)
 
 type Drag =
   | { kind: 'rectangle'; start: Point; id: string }
@@ -33,6 +33,12 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
   const [preview, setPreview] = useState<ShowDocument | null>(null);
   const [dragNote, setDragNote] = useState<string | null>(null);
   const shown = preview ?? map.show;
+  const [resizeTick, setResizeTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setResizeTick(n => n + 1);
+    window.addEventListener('resize', bump);
+    return () => window.removeEventListener('resize', bump);
+  }, []);
 
   useEffect(() => {
     const ctx = canvas.current?.getContext('2d');
@@ -40,14 +46,16 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
     paint(ctx, shown, { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: map.selectedId, selectedIndex: null, outlinesOnly: false, invalidIds: [] });
     // Corner handles are for the operator only; the output never draws them.
     const selected = shown.shapes.find(s => s.id === map.selectedId);
+    // Handles keep a fixed size on screen, whatever size the canvas is displayed at.
+    const handle = HANDLE_SIZE_PX * stagePixelsPerScreenPixel(canvas.current?.getBoundingClientRect().width ?? 0);
     if (selected) selected.points.forEach((point, i) => {
       const c = stagePx(point);
       ctx.fillStyle = i === map.selectedIndex ? '#ffd400' : '#ffffff';
-      ctx.fillRect(c.x - HANDLE_SIZE_PX / 2, c.y - HANDLE_SIZE_PX / 2, HANDLE_SIZE_PX, HANDLE_SIZE_PX);
+      ctx.fillRect(c.x - handle / 2, c.y - handle / 2, handle, handle);
       ctx.strokeStyle = '#000000'; ctx.lineWidth = 2;
-      ctx.strokeRect(c.x - HANDLE_SIZE_PX / 2, c.y - HANDLE_SIZE_PX / 2, HANDLE_SIZE_PX, HANDLE_SIZE_PX);
+      ctx.strokeRect(c.x - handle / 2, c.y - handle / 2, handle, handle);
     });
-  }, [shown, map.selectedId, map.selectedIndex]);
+  }, [shown, map.selectedId, map.selectedIndex, resizeTick]);
 
   const pointerAt = (e: PointerEvent<HTMLCanvasElement>): Point => stageFromPointer(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
   const reasonText = (reason: string) => REASONS[reason] ?? reason;
@@ -68,9 +76,10 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
       drag.current = { kind: 'rectangle', start: at, id: newId() };
     } else {
       const selected = map.show.shapes.find(s => s.id === map.selectedId);
+      const reach = HANDLE_REACH_PX * stagePixelsPerScreenPixel(e.currentTarget.getBoundingClientRect().width);
       const corner = selected && selected.visible ? selected.points.findIndex(p => {
         const a = stagePx(p), b = stagePx(at);
-        return Math.hypot(a.x - b.x, a.y - b.y) <= HANDLE_REACH_PX;
+        return Math.hypot(a.x - b.x, a.y - b.y) <= reach;
       }) : -1;
       if (selected && corner >= 0) {
         map.setSelection(selected.id, corner);

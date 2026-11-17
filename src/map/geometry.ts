@@ -77,6 +77,11 @@ export function stageFromPointer(rect: { left: number; top: number; width: numbe
   return clampToStage({ x: fraction(clientX - rect.left, rect.width), y: fraction(clientY - rect.top, rect.height) });
 }
 
+/** How many stage pixels one pixel of the displayed canvas covers. An unlaid-out canvas counts as 1. */
+export function stagePixelsPerScreenPixel(displayedWidth: number): number {
+  return displayedWidth > 0 ? STAGE_SIZE.width / displayedWidth : 1;
+}
+
 export function parsePixelField(text: string, range: { min: number; max: number }): number | null {
   const trimmed = text.trim();
   if (trimmed === '') return null;
