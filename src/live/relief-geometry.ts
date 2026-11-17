@@ -4,14 +4,13 @@ import type { ReliefSettings } from './settings';
 type GeometryData = { positions: number[]; normals: number[]; finishes: number[]; indices: number[]; instances: number[] };
 
 export const scaleDimensions = {
-  broad: { blades: 24, pitch: 1, radius: .47 },
-  medium: { blades: 44, pitch: .5, radius: .30 },
   fine: { blades: 64, pitch: 1/3, radius: .21 },
+  extraFine: { blades: 88, pitch: .25, radius: .14 },
 };
 
 function ribbons(data: GeometryData, woven: boolean, size: ReliefSettings['size']) {
   const pitch = woven ? scaleDimensions[size].pitch : 16 / scaleDimensions[size].blades;
-  const rows = woven ? Math.ceil(16/pitch) * 6 : 72;
+  const rows = woven ? Math.ceil(16/pitch) * 5 : 72;
   // Woven tape has a continuous, flattened crown and a narrow rolled selvedge.
   const section = woven ? [[-.44,-.035],[-.44,.015],[-.416,.045],[-.32,.063],[-.16,.070],
     [0,.073],[.16,.070],[.32,.063],[.416,.045],[.44,.015],[.44,-.035]]
@@ -53,10 +52,10 @@ function scales(data: GeometryData, radius: number) {
     }
   }
   for (let i=0; i<6; i++) {
-    const a = point(i, radius*.90, radius*.117), b = point(i+1, radius*.90, radius*.117);
+    const a = point(i, radius*.93, radius*.086), b = point(i+1, radius*.93, radius*.086);
     const c = point(i, radius*.986, 0), d = point(i+1, radius*.986, 0);
     const e = point(i, radius*.986, -radius/3), f = point(i+1, radius*.986, -radius/3);
-    triangle(new THREE.Vector3(0,0,radius*.157), a,b,0);
+    triangle(new THREE.Vector3(0,0,radius*.112), a,b,0);
     triangle(a,c,b,1); triangle(c,d,b,1);
     triangle(c,e,d,2); triangle(e,f,d,2);
   }

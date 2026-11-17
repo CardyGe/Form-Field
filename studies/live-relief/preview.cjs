@@ -8,8 +8,8 @@ app.setPath('userData', profile);
 try {
   const rehearsal = {
     look: 'relief', source: { kind: 'test' }, reliefPresence: true,
-    relief: { surface: 'scales', size: 'broad', motion: 'latch', finish: 'brass',
-      depth: .85, reach: .4, settle: 1.05, lightAngle: -34, edgeLight: .65 },
+    relief: { surface: 'scales', size: 'extraFine', motion: 'latch', finish: 'brass',
+      depth: .85, reach: .4, settle: 1.05, lightAngle: -34, edgeLight: .52 },
   };
   fs.writeFileSync(path.join(profile, 'live-settings.json'), JSON.stringify(rehearsal), { flag: 'wx' });
 } catch (error) {

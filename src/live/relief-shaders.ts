@@ -324,6 +324,9 @@ void main() {
     edge = vec3(.11,.15,.21)+.70*film;
     accent = mix(vec3(.92,.12,.25), vec3(.03,.72,.59), petrol);
   }
+  // Keep the hex bevels close to the face tone so the projected grid
+  // stays subordinate to the wider reflections and movement.
+  if (uSurface == 1) edge = mix(metal, edge, .42);
   vec3 enamel = accent*(.55+.45*abs(n.x))+strip*.16;
   vec3 surface = vFinish < .5 ? metal : (vFinish < 1.5 ? edge : enamel);
   if (vFinish < .5) surface += smoothstep(.18,.82,abs(vTurn))*accent*.56*(.35+warm);

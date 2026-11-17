@@ -159,3 +159,12 @@ test('Relief presets round-trip and invalid materials fall back independently', 
   const style = validateLiveSettings({ relief: { surface: 'weave', motion: 'toString', finish: null, edgeLight: 2 } }).relief;
   assert.deepEqual([style.surface, style.motion, style.finish, style.edgeLight], ['weave', 'sweep', 'silver', 1]);
 });
+
+test('saved Broad and Medium Relief sizes migrate to Fine', () => {
+  for (const size of ['broad', 'medium']) {
+    const saved = validateLiveSettings({ look: 'relief', relief: { surface: 'scales', size, depth: .65 } });
+    assert.equal(saved.relief.size, 'fine');
+    assert.equal(saved.relief.depth, .65);
+  }
+  assert.equal(validateLiveSettings({ relief: { size: 'extraFine' } }).relief.size, 'extraFine');
+});

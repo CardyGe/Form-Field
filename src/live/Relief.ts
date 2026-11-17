@@ -27,9 +27,9 @@ export class Relief implements Look {
       uPitch: { value: .5 }, uFinish: { value: 0 }, uEdgeLight: { value: 0 }, uLight: { value: new THREE.Vector2(1,0) },
     },
   });
-  private readonly wall = new THREE.Mesh(reliefGeometry('blades','medium'), this.material);
+  private readonly wall = new THREE.Mesh(reliefGeometry('blades','fine'), this.material);
   private surface: ReliefSettings['surface'] = 'blades';
-  private size: ReliefSettings['size'] = 'medium';
+  private size: ReliefSettings['size'] = 'fine';
   private motion: ReliefSettings['motion'] = 'sweep';
   private readonly target: THREE.WebGLRenderTarget;
 

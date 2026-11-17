@@ -196,7 +196,7 @@ try {
     for (const surface of ['blades','scales','weave']) {
       const result = await page.evaluate(async surface => {
         const { source, renderer, made } = window.live.make(s => {
-          s.look = 'relief'; s.relief.surface = surface; s.relief.size = 'broad';
+          s.look = 'relief'; s.relief.surface = surface; s.relief.size = 'extraFine';
         });
         source.audience = true; source.moving = false;
         source.advance(1/30); // Prime with the performers already in place.
