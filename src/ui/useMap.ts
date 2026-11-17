@@ -16,6 +16,8 @@ export function useMap(onError: (message: string) => void) {
   const [show, setShow] = useState<ShowDocument>(() => history.current.present());
   const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [tool, setTool] = useState<'select' | 'rectangle'>('select');
   const [lastRefusal, setLastRefusal] = useState<string | null>(null);
   const [sendWarning, setSendWarning] = useState<string | null>(null);
   const [blackout, setBlackoutState] = useState(false);
@@ -97,6 +99,8 @@ export function useMap(onError: (message: string) => void) {
   };
   const closeOutput = () => { void bridge?.closeOutput(); };
 
-  return { show, loaded, selectedId, setSelectedId, dispatch, undo, redo, canUndo: history.current.canUndo(), canRedo: history.current.canRedo(),
+  const setSelection = (id: string | null, index: number | null = null) => { setSelectedId(id); setSelectedIndex(id === null ? null : index); };
+
+  return { show, loaded, selectedId, selectedIndex, setSelection, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: history.current.canUndo(), canRedo: history.current.canRedo(),
     lastRefusal, sendWarning, blackout, setBlackout, testGrid, setTestGrid, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

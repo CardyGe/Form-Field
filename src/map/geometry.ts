@@ -72,7 +72,9 @@ export function pointInPolygon(point: Point, points: Point[]): boolean {
 }
 
 export function stageFromPointer(rect: { left: number; top: number; width: number; height: number }, clientX: number, clientY: number): Point {
-  return clampToStage({ x: (clientX - rect.left) / rect.width, y: (clientY - rect.top) / rect.height });
+  // A canvas that is not laid out yet has no size; answer the origin rather than NaN.
+  const fraction = (offset: number, size: number) => (size > 0 ? offset / size : 0);
+  return clampToStage({ x: fraction(clientX - rect.left, rect.width), y: fraction(clientY - rect.top, rect.height) });
 }
 
 export function parsePixelField(text: string, range: { min: number; max: number }): number | null {

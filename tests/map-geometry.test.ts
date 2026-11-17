@@ -39,6 +39,10 @@ test('stageFromPointer maps and clamps', () => {
   assert.deepEqual(stageFromPointer(rect, 200, 100), {x:.5, y:.5});
   assert.deepEqual(stageFromPointer(rect, 0, 500), {x:0, y:1});
 });
+test('stageFromPointer returns the origin for a zero-size rect', () => {
+  assert.deepEqual(stageFromPointer({left:10, top:10, width:0, height:0}, 50, 50), {x:0, y:0});
+  assert.deepEqual(stageFromPointer({left:10, top:10, width:0, height:100}, 50, 60), {x:0, y:.5});
+});
 test('parsePixelField', () => {
   const r = {min:0, max:1920};
   assert.equal(parsePixelField('-5', r), 0);
