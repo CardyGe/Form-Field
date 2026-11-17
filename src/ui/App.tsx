@@ -365,7 +365,7 @@ export default function App() {
     if (record && !gesture.current) { history.current.push(projectRef.current); history.current = history.current.slice(-80); future.current = []; }
     projectRef.current = next; setProject(next); setHistoryRevision(n => n + 1);
     // Editing a Map shape: every change goes to the shape (and the wall) at once.
-    if (shapeEditRef.current) { const refused = studioEdit(next); if (refused) notify(`Map could not take that change (${refused}). The shape keeps its last composition.`); }
+    if (shapeEditRef.current) { const refused = studioEdit(next); if (refused) notify(`Map could not take that change: ${refused}.`); }
   }, [notify]);
   const edit = (fn: (p: Project) => Project) => replace(fn(projectRef.current));
   const editLayer = (fn: (l: Layer) => Layer, id = selected?.id) => { if (id) edit(p => { const layers=p.layers.map(l=>{if(l.id!==id)return l;const next=fn(l);if(next.surface?.source==='mask'&&next.mask.kind!=='image')delete next.surface;return next;}); return {...p,schemaVersion:layers.some(l=>l.surface||Object.values(l.modulations).some(m=>m.range))?2:p.schemaVersion,layers}; }); };
@@ -401,7 +401,8 @@ export default function App() {
         if (info.status === 'fulfilled') { setStatus(info.value); setOutputDir(info.value.defaultExportDir); } else issues.push(`Export engine: ${String(info.reason)}`);
         if (existing.status === 'fulfilled') setJobs(existing.value); else issues.push(`Export recovery: ${String(existing.reason)}`);
         if (restored.status === 'fulfilled') {
-          if (restored.value && history.current.length === 0) {
+          // Not while a Map shape is being edited: the restored project is Studio's own, not the shape's.
+          if (restored.value && history.current.length === 0 && !shapeEditRef.current) {
             try { const next = validateProject(restored.value); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); }
             catch (error) { issues.push(`Project recovery: ${String(error)}. The previous autosave is retained in the application recovery folder.`); }
           }
@@ -469,12 +470,15 @@ export default function App() {
   /** Opens a Map shape's composition in Studio, setting Studio's own project, history and file aside. */
   const editShapeInStudio = (sourceId: string, shapeId: string) => {
     if (shapeEditRef.current) return;
-    const begun = beginStudioEdit(sourceId, shapeId);
-    if (!begun) return;
+    // Studio must have restored its own project first, or the restore could land on the shape's composition.
+    if (!ready) { notify('Studio is still opening. Try again in a moment.'); return; }
     // Studio's own latest change is saved before it is set aside.
     if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
     const own = validateProject(projectRef.current);
-    void (window.studio ? window.studio.saveAutosave(own) : Promise.resolve(localStorage.setItem('formfield-autosave', JSON.stringify(own)))).catch(() => setSaved('Save project to keep changes'));
+    const begun = beginStudioEdit(sourceId, shapeId);
+    if (!begun) return;
+    void (window.studio ? window.studio.saveAutosave(own) : Promise.resolve(localStorage.setItem('formfield-autosave', JSON.stringify(own))))
+      .then(() => setSaved('Autosaved')).catch(() => setSaved('Save project to keep changes'));
     const edit: ShapeEdit = { sourceId, shapeName: begun.shapeName, stash: stashStudio({ project: projectRef.current, history: history.current, future: future.current, filePath, selectedId, phase: phase.current }) };
     shapeEditRef.current = edit; setShapeEdit(edit);
     history.current = []; future.current = [];
@@ -492,6 +496,8 @@ export default function App() {
     history.current = edit.stash.history; future.current = edit.stash.future;
     projectRef.current = edit.stash.project; setProject(edit.stash.project); setHistoryRevision(n => n + 1);
     setSelectedId(edit.stash.selectedId); phase.current = edit.stash.phase; setFilePath(edit.stash.filePath);
+    // Going to Live instead of Map: the Map wall that stayed open for the edit closes, as leaving Map does.
+    if (to !== 'map') void window.studio?.map?.closeOutput().catch(() => {});
     setMode(to);
   };
   useEffect(() => window.studio?.onExportProgress(p => { if (p.jobId === activeJob.current) setProgress(p); }), []);

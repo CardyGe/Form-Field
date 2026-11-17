@@ -40,6 +40,8 @@ interface Session {
   freeze: boolean;
   /** A shape's composition being edited in Studio: the wall stays open and follows the edits. */
   studioEdit: { sourceId: string; shapeId: string; first: boolean } | null;
+  /** How many Map screens are mounted (React may mount one twice in development). */
+  mounted: number;
 }
 let session: Session | null = null;
 function mapSession(): Session {
@@ -47,7 +49,7 @@ function mapSession(): Session {
   const bridge = window.studio?.map;
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
-    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null,
+    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, mounted: 0,
     saver: autosaveSchedule<string>(async text => {
       if (!bridge) return;
       // A failed write is reported, never swallowed: the operator keeps working and can Save As.
@@ -90,19 +92,30 @@ export function beginStudioEdit(sourceId: string, shapeId: string): { project: P
   const shape = s.state.show.shapes.find(sh => sh.id === shapeId);
   if (!source || !shape) return null;
   s.studioEdit = { sourceId, shapeId, first: true };
+  // The Map screen's crosshair and flash belong to Map: they leave the wall while Studio has it.
+  if (s.outputOpen) { window.studio?.map.send({ type: 'crosshair', point: null, shapeId: null }); window.studio?.map.send({ type: 'identify', shapeId: null }); }
   return { project: source.project, shapeName: shape.name };
 }
 
-/** A change made in Studio to the shape's composition. Returns why it was refused, or null. */
+/** Why Map could not take a change made in Studio, in words. */
+const STUDIO_REFUSALS: Record<string, string> = {
+  'too-many-layers': 'a shape\'s composition can have at most four layers',
+  'bad-composition': 'the composition could not be read',
+  locked: 'the shape is locked in Map',
+  'not-found': 'the shape is no longer in the show',
+};
+
+/** A change made in Studio to the shape's composition. Returns why it was refused or did not reach the wall, or null. */
 export function studioEdit(project: Project): string | null {
   const s = mapSession(), edit = s.studioEdit;
   if (!edit) return null;
   const before = s.state;
   s.state = applyStudioEdit(before, edit.sourceId, project, edit.first);
-  if (s.state.show === before.show) return s.state.refusal;
+  if (s.state.show === before.show) return STUDIO_REFUSALS[s.state.refusal ?? ''] ?? s.state.refusal;
   edit.first = false;
   s.saver.save(JSON.stringify(s.state.show));
-  pushToWall(s, s.state.show);
+  const sent = pushToWall(s, s.state.show);
+  if (!sent.sources) return 'the composition is over 24 MB, too large to send to the projector, so the projector keeps the last one (the show keeps the change)';
   return null;
 }
 
@@ -178,11 +191,14 @@ export function useMap(onError: (message: string) => void) {
     });
     const offState = bridge.onState(setWallState);
     kept.onSaveResult = failed => setSaveError(failed ? SAVE_FAILED : null);
+    kept.mounted++;
     // Leaving Map writes what is waiting. A failure stays recorded in the session and still refuses the close.
     // The wall closes too, unless a shape is being edited in Studio: then it stays open and follows the edits.
+    // Decided a moment later: React's development double mount remounts at once, and must not close the wall.
     return () => {
       offOutput(); offDisplays(); offPreview(); offState(); kept.onSaveResult = null; saver.flush().catch(() => {});
-      if (!kept.studioEdit) void bridge.closeOutput().catch(() => {});
+      kept.mounted--;
+      setTimeout(() => { if (kept.mounted === 0 && !kept.studioEdit) void bridge.closeOutput().catch(() => {}); }, 0);
     };
   }, []);
   useEffect(() => { if (!outputOpen) { setWallPicture(null); setWallState(null); } }, [outputOpen]);
