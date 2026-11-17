@@ -2,6 +2,7 @@ import type { InstrumentKind } from '../core/instruments';
 import type { LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
+import type { MapMessage } from '../map/messages';
 export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | InstrumentKind;
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'add' | 'source';
 export type ModulationKind = 'sine' | 'pulse' | 'noise' | 'keyframes';
@@ -151,6 +152,7 @@ export interface StudioBridge {
   onBeforeClose(callback: () => Promise<void>): () => void;
   onExportProgress(callback: (progress: ExportProgress) => void): () => void;
   live: LiveBridge;
+  map: MapBridge;
 }
 /** Sent from the studio window to the artwork window. */
 export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' };
@@ -180,4 +182,26 @@ export interface LiveBridge {
   /** A small picture of the artwork and its frame rate, for the operator. */
   sendPreview(jpeg: ArrayBuffer, fps: number): void;
   onPreview(callback: (jpeg: ArrayBuffer, fps: number) => void): () => void;
+}
+
+export interface MapBridge {
+  /** The saved working show as parsed JSON, or null. Pass the result through validateShow. */
+  loadAutosave(): Promise<unknown>;
+  saveAutosave(text: string): Promise<void>;
+  /** The chosen show file as parsed JSON, or null when cancelled or unreadable. */
+  openShow(): Promise<unknown>;
+  /** The file written, or null when the person cancelled. */
+  saveShow(text: string, saveAs: boolean): Promise<string | null>;
+  displays(): Promise<{ id: number; label: string; primary: boolean }[]>;
+  openOutput(displayId: number): Promise<void>;
+  closeOutput(): Promise<void>;
+  send(message: MapMessage): void;
+  onMessage(callback: (message: unknown) => void): () => void;
+  /** True once the output window is ready to receive the show; false when it closes. */
+  onOutputChanged(callback: (open: boolean) => void): () => void;
+  onDisplaysChanged(callback: () => void): () => void;
+  /** Called by the output window when it can receive messages. */
+  ready(): void;
+  /** Called by the output window to close itself (Escape). */
+  requestClose(): void;
 }
