@@ -74,9 +74,10 @@ function pickDisplay(displays, id) {
 
 /**
  * Registers Live in the main process. `studio()` returns the studio window (or undefined);
+ * `closeOtherOutput()` closes Map's artwork window before Live opens its own.
  * `open(window)` loads the app page into the artwork window with the hash #live-output.
  */
-function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSaveBlocker, settingsFile, preload, studio, open }) {
+function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSaveBlocker, settingsFile, preload, studio, open, closeOtherOutput }) {
   let output = null;
   const alive = window => !!window && !window.isDestroyed();
   const fromStudio = event => alive(studio()) && event.sender === studio().webContents && event.senderFrame === studio().webContents.mainFrame;
@@ -99,10 +100,12 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSav
   handle('openOutput', displayId => {
     const display = pickDisplay(screen.getAllDisplays(), displayId);
     if (!display) throw new Error('That display is no longer connected.');
+    // Only one artwork window at a time: Live and Map never share the screen.
+    if (closeOtherOutput) closeOtherOutput();
     closeOutput();
     // The scripted checks open the artwork as an ordinary window so they do not take over the screen.
     const windowed = process.env.STUDIO_LIVE_TEST_WINDOW === '1';
-    const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, windowed });
+    const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, title: 'Form & Field Live', windowed });
     output = window;
     window.on('closed', () => {
       release();

@@ -25,11 +25,12 @@ const display = { id: 3, bounds: { x: 10, y: 20, width: 1920, height: 1080 } };
 
 test('the artwork window is sandboxed, refuses new windows, and keeps the display awake', () => {
   const { blocker, created, BrowserWindow } = fakes();
-  const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker: blocker, display, preload: '/p.js', windowed: false });
+  const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker: blocker, display, preload: '/p.js', title: 'Form & Field Map', windowed: false });
   assert.equal(window, created[0]);
   assert.equal(window.options.webPreferences.sandbox, true);
   assert.equal(window.options.webPreferences.preload, '/p.js');
   assert.equal(window.options.x, 10);
+  assert.equal(window.options.title, 'Form & Field Map');
   assert.equal(window.displayId, 3);
   assert.deepEqual(window.openHandler(), { action: 'deny' });
   assert.deepEqual(blocker.started, ['prevent-display-sleep']);

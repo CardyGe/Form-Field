@@ -82,7 +82,7 @@ test('camera states from the artwork window are small plain objects with a known
 });
 
 // A stand-in main process: enough of Electron to open the artwork window and unplug its display.
-function harness() {
+function harness(extra = {}) {
   const handlers = new Map(), listeners = new Map(), screen = new EventEmitter(), sent = [], blocker = { started: [], stopped: [] };
   const displays = [{ id: 1, label: 'Built-in', size: { width: 1512, height: 982 }, bounds: { x: 0, y: 0, width: 1512, height: 982 } }, { id: 7, label: 'Projector', size: { width: 1920, height: 1080 }, bounds: { x: 1512, y: 0, width: 1920, height: 1080 } }];
   screen.getAllDisplays = () => displays; screen.getPrimaryDisplay = () => displays[0];
@@ -95,7 +95,7 @@ function harness() {
     close() { if (this.destroyed) return; this.destroyed = true; this.emit('closed'); }
   }
   const control = live.setupLive({
-    BrowserWindow, screen, systemPreferences: {}, settingsFile: '/nonexistent/live-settings.json', preload: '/preload.cjs', studio: () => studio, open() {},
+    BrowserWindow, screen, systemPreferences: {}, settingsFile: '/nonexistent/live-settings.json', preload: '/preload.cjs', studio: () => studio, open() {}, ...extra,
     ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => listeners.set(name, fn) },
     powerSaveBlocker: { start: kind => { blocker.started.push(kind); return 42; }, stop: id => blocker.stopped.push(id), isStarted: () => true },
   });
@@ -109,6 +109,17 @@ test('the display stays awake while the artwork window is open', async () => {
   assert.deepEqual(h.blocker.started, ['prevent-display-sleep']);
   h.windows[0].close();
   assert.deepEqual(h.blocker.stopped, [42]);
+});
+test('the artwork window keeps the Live title', async () => {
+  const h = harness();
+  await h.handlers.get('studio:live:openOutput')(h.fromStudio, 7);
+  assert.equal(h.windows[0].options.title, 'Form & Field Live');
+});
+test('opening the Live output first closes the other output', async () => {
+  let closed = 0;
+  const h = harness({ closeOtherOutput: () => { closed += 1; } });
+  await h.handlers.get('studio:live:openOutput')(h.fromStudio, 7);
+  assert.equal(closed, 1);
 });
 test('unplugging the projector closes the artwork window and tells the studio', async () => {
   const h = harness();

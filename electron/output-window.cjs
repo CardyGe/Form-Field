@@ -5,11 +5,11 @@
 
 /**
  * Creates the artwork window for a display. `windowed` (a small ordinary window, for scripted checks)
- * is decided by the caller. Returns the window and `release()`, which stops the power blocker if it is running.
+ * is decided by the caller, as is the window `title`. Returns the window and `release()`, which stops the power blocker if it is running.
  */
-function createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, windowed }) {
+function createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, title, windowed }) {
   const window = new BrowserWindow({
-    ...(windowed ? { width: 960, height: 540 } : display.bounds), frame: false, show: false, backgroundColor: '#000000', title: 'Form & Field Live', resizable: false, movable: false,
+    ...(windowed ? { width: 960, height: 540 } : display.bounds), frame: false, show: false, backgroundColor: '#000000', title, resizable: false, movable: false,
     minimizable: false, fullscreenable: true, skipTaskbar: true, autoHideMenuBar: true,
     webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: false, spellcheck: false },
   });
