@@ -254,9 +254,36 @@ Each stage ends with something usable. Detailed step-by-step plans are written p
 | **7. Wild options** | Outline drives the instrument, Stagger, Vary each, palette shift, border runs, scene auto-advance. | Each works alone and is switched off by default. |
 | **Later, own designs** | Sound and MIDI control. Curved objects. More projectors. | — |
 
+## Stage 0 results
+
+Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
+
+| Route and sources | Instruments | Frame median (ms) | Frame p95 (ms) | Stage not blank |
+|---|---|---|---|---|
+| Separate renderers, 4 | Living Ink, Relief, Resonance, Texture Cuts | 3.9 | 5.3 | yes |
+| Separate renderers, 8 | same | 5.0 | 6.5 | yes |
+| Separate renderers, 12 | same | 5.7 | 7.0 | yes |
+| Separate renderers, 4 | Fractal, Sculpture, Living Ink, Oil | 4.8 | 6.6 | yes |
+| Separate renderers, 8 | same | 5.5 | 6.9 | yes |
+| Separate renderers, 12 | same | 6.0 | 7.1 | yes |
+| One shared renderer, 8 (cost floor, not correct) | same as the first row | 5.8 | 7.3 | yes |
+| One full 1920 × 1080 source | Living Ink | 6.5 | 7.8 | yes |
+
+A 16.7 ms frame is the budget for 60 frames per second. Every run stayed under 8 ms at p95.
+
+**Context limit.** Thirty-two WebGL renderers were created and drawn once each, with no context lost. The "about 16" limit in Chromium is therefore not reproduced here. This was tested only in Electron, with small canvases, so the figure stays *unverified* for the laptop's browser build.
+
+**Route chosen: separate renderers.** At 8 sources they cost 5.0 ms against 5.8 ms for the shared route, which is the best case the shared route could reach. The shared route would also need `StudioRenderer` changes that the design wants to avoid. Stage 2 can use one renderer per source.
+
+**What these numbers do not show.**
+- Sources were drawn at 640 × 360, one shape's worth. Twelve of them cover about 1.3 stage areas, and one full 1080p source costs more than twelve shape-sized ones, so cost follows area. The stage 2 governor is still needed for larger sources.
+- Only one heavy mix was run, at 4, 8 and 12 sources. Fractal and Sculpture at full stage size were not tried.
+- Runs were 20 seconds. The two-hour record is still to do, in stage 5.
+- The copy into the stage is a 2D `drawImage` in the same frame, and the timing includes a GPU sync. The real compositor may differ.
+
 ## Left to the builder
 
-- Which route instrument sources take, from stage 0's numbers.
+- ~~Which route instrument sources take, from stage 0's numbers.~~ Chosen in Stage 0 results: separate renderers.
 - Buffer formats, coverage picture size, how the soft edge is computed.
 - The message format between the windows and how images are sent.
 - File layout inside `src/map/`.
