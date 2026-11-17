@@ -12,16 +12,22 @@ export const scaleDimensions = {
 function ribbons(data: GeometryData, woven: boolean, size: ReliefSettings['size']) {
   const pitch = woven ? scaleDimensions[size].pitch : 16 / scaleDimensions[size].blades;
   const rows = woven ? Math.ceil(16/pitch) * 6 : 72;
-  const width = woven ? .69 : 1;
-  const section = [[-.49,-.20],[-.49,.015],[-.45,.065],[0,.088],[.45,.065],[.49,.015],[.49,-.20]];
-  const surfaces = [2, 1, 0, 0, 1, 2];
+  // Woven tape has a continuous, flattened crown and a narrow rolled selvedge.
+  const section = woven ? [[-.44,-.035],[-.44,.015],[-.416,.045],[-.32,.063],[-.16,.070],
+    [0,.073],[.16,.070],[.32,.063],[.416,.045],[.44,.015],[.44,-.035]]
+    : [[-.49,-.20],[-.49,.015],[-.45,.065],[0,.088],[.45,.065],[.49,.015],[.49,-.20]];
+  const surfaces = woven ? [2,1,0,0,0,0,0,0,1,2] : [2,1,0,0,1,2];
   for (const [face, finish] of surfaces.entries()) {
     const start = data.positions.length / 3;
     const [x0,z0] = section[face], [x1,z1] = section[face+1];
     for (let row = 0; row <= rows; row++) {
-      for (const [x,z] of [section[face], section[face+1]]) {
-        data.positions.push(x * width * pitch, row / rows - .5, z * pitch);
-        data.normals.push(finish === 0 && x === 0 ? 0 : z0-z1, 0, (x1-x0)*width);
+      for (const point of [face,face+1]) {
+        const [x,z] = section[point];
+        data.positions.push(x*pitch, row/rows-.5, z*pitch);
+        if (woven && finish === 0) {
+          const [leftX,leftZ] = section[point-1], [rightX,rightZ] = section[point+1];
+          data.normals.push(leftZ-rightZ, 0, rightX-leftX);
+        } else data.normals.push(finish === 0 && x === 0 ? 0 : z0-z1, 0, x1-x0);
         data.finishes.push(finish);
       }
       if (row < rows) {

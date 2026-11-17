@@ -79,6 +79,8 @@ uniform float uDepth, uPitch;
 uniform int uSurface, uMotion;
 varying vec3 vWorld, vNormal;
 varying float vFinish, vTurn, vEnergy;
+varying vec2 vTape;
+varying float vWeft, vCrimp;
 
 vec3 movement(vec2 panel) {
   vec2 st = panel / vec2(16.,9.) + .5, blur = vec2(.012,.023);
@@ -109,12 +111,38 @@ vec3 ribbon(float along, out float angle, out vec3 motion) {
   float c=cos(angle), s=sin(angle);
   vec2 face = panel + orient(vec2(position.x*c + position.z*s + .20*motion.x,0.));
   float rise = -position.x*s + position.z*c + .80*motion.y + rest*.5;
-  if (uSurface == 2) {
-    vec2 crossingPhase = 3.14159265*((panel+vec2(8.,4.5))/uPitch-.5);
-    float crossings = cos(crossingPhase.x)*cos(crossingPhase.y);
-    rise += uPitch*mix(.16,-.16,aInstance.z)*crossings;
-  }
   return vec3(face,rise);
+}
+// A 2/2 twill. Crossing phase is measured on the strand centreline and
+// held across its width. Opposite directions share the same sheet deformation.
+float crimp(float along) {
+  vec2 centreline = aInstance.xy + orient(vec2(0.,along));
+  vec2 crossing = (centreline + vec2(8.,4.5))/uPitch-.5;
+  float level = cos(1.5707963*(crossing.x-crossing.y)+.7853982);
+  return mix(1.,-1.,aInstance.z)*(2.*smoothstep(-.64,.64,level)-1.);
+}
+vec3 sheet(vec2 p, vec3 motion) {
+  float fold = .14*sin(.43*p.x+.39*p.y) + .09*sin(.85*p.y-.29*p.x);
+  return vec3(p+vec2(.18*motion.x,.09*motion.y), fold+.98*motion.y);
+}
+void weave(float along, out vec3 motion) {
+  vec2 p = aInstance.xy + orient(vec2(position.x,along));
+  const float d = .055;
+  vec2 acrossStep = orient(vec2(d,0.)), alongStep = orient(vec2(0.,d));
+  motion = movement(p);
+  vec3 sheetOrigin = sheet(p,motion);
+  vec3 across = sheet(p+acrossStep,movement(p+acrossStep))-sheetOrigin;
+  vec3 tangent = sheet(p+alongStep,movement(p+alongStep))-sheetOrigin;
+  float level = crimp(along);
+  float crimpHeight = .089*uPitch;
+  tangent.z += crimpHeight*(crimp(along+d)-level);
+  // Convert the tape profile's normal to a tangent across the deformed face.
+  across = across*normal.z - vec3(0.,0.,d*normal.x);
+  vNormal = normalize(cross(across,tangent));
+  vWorld = sheetOrigin+vec3(0.,0.,crimpHeight*level+position.z);
+  vTape = vec2(position.x/uPitch,along/uPitch);
+  vWeft = aInstance.z;
+  vCrimp = level;
 }
 vec3 hinge(vec3 p, float tilt, float yaw) {
   vec3 q = vec3(p.x, cos(tilt)*p.y-sin(tilt)*p.z, sin(tilt)*p.y+cos(tilt)*p.z);
@@ -122,7 +150,10 @@ vec3 hinge(vec3 p, float tilt, float yaw) {
 }
 void main() {
   vec3 motion;
-  if (uSurface == 1) {
+  vTape = vec2(0.); vWeft = 0.; vCrimp = 0.;
+  if (uSurface == 2) {
+    weave(position.y*mix(9.,16.,aInstance.z),motion);
+  } else if (uSurface == 1) {
     vec2 centre = aInstance.xy;
     motion = movement(centre);
     float yaw = restAngle(centre) + .14*sin(1.2*centre.x+.65*centre.y) + .82*motion.x;
@@ -146,12 +177,66 @@ void main() {
 export const reliefFragment = /* glsl */`
 varying vec3 vWorld, vNormal;
 varying float vFinish, vTurn, vEnergy;
-uniform int uFinish;
+varying vec2 vTape;
+varying float vWeft, vCrimp;
+uniform int uFinish, uSurface;
 uniform float uEdgeLight;
 uniform vec2 uLight;
 float square(float x) { return x*x; }
+float filament(float phase) {
+  return cos(phase*6.2831853)*(1.-smoothstep(.24,.62,fwidth(phase)));
+}
+vec3 wovenFinish(vec3 n) {
+  vec2 across = mix(vec2(1.,0.),vec2(0.,-1.),vWeft);
+  vec2 along = vec2(-across.y,across.x);
+  vec2 lightXY = uLight*.37 + vec2(-.12,.19);
+  float crossSlope = dot(n.xy-lightXY,across);
+  float lengthSlope = dot(n.xy-lightXY,along);
+  // A long satin highlight stretches with the filaments and widens over a fold.
+  float sheen = exp(-10.*square(crossSlope)-1.5*square(lengthSlope));
+  float glint = exp(-58.*square(crossSlope+.06)-4.*square(lengthSlope));
+  float cord = filament(vTape.x*10.+.19*sin(vTape.x*34.)+.08*sin(vTape.y*2.4));
+  float thread = filament(vTape.x*31.+.12*sin(vTape.y*3.4));
+  float ply = filament(vTape.x*19.+.13*sin(vTape.y*2.8));
+  float fleck = filament(vTape.y*46.+vTape.x*9.);
+  float selvedge = smoothstep(.342,.411,abs(vTape.x));
+  float seam = smoothstep(-.93,.27,vCrimp);
+  float lift = smoothstep(.035,.87,vEnergy);
+  float broadLight = .72+.28*sin(.41*vWorld.x-.34*vWorld.y+.9);
+  float keyLight = .66+.34*cos(.25*vWorld.x+.48*vWorld.y-.55);
+  float under = 1.-seam;
+  vec3 base = mix(vec3(.10,.15,.19),vec3(.14,.19,.24),vWeft);
+  vec3 lustre = vec3(.70,.79,.86);
+  vec3 accent = vec3(.64,.32,.14);
+  if (uFinish == 1) {
+    base = mix(vec3(.24,.099,.019),vec3(.14,.055,.013),vWeft);
+    lustre = vec3(.96,.71,.32);
+    accent = vec3(.87,.58,.24);
+  } else if (uFinish == 2) {
+    base = mix(vec3(.41,.44,.49),vec3(.39,.34,.38),vWeft);
+    lustre = vec3(.64,.72,.77);
+    accent = vec3(.61,.70,.84);
+  } else if (uFinish == 3) {
+    float shift = .5+.5*sin(5.1*crossSlope+.45*lengthSlope+.36*vWorld.y);
+    vec3 indigo = vec3(.11,.038,.32), teal = vec3(.017,.28,.25);
+    base = mix(mix(teal,indigo,shift*.64), mix(indigo,teal,shift*.37), vWeft);
+    lustre = mix(vec3(.68,.32,.77),vec3(.25,.84,.73),shift);
+    accent = mix(vec3(.76,.31,.55),vec3(.16,.75,.67),shift);
+  }
+  float fibre = 1.+.10*thread+.055*ply+.027*fleck+.085*cord;
+  vec3 fabric = base*(.42+broadLight*.58)*(1.-.23*selvedge);
+  fabric += lustre*keyLight*(.28*sheen+.24*glint)*fibre;
+  fabric *= (1.-.48*under)*fibre;
+  fabric += lustre*selvedge*(.014+.072*sheen);
+  fabric += accent*uEdgeLight*lift*(.12+.21*selvedge+.29*glint);
+  return fabric;
+}
 void main() {
   vec3 n = normalize(vNormal);
+  if (uSurface == 2) {
+    gl_FragColor = vec4(wovenFinish(n),1.);
+    return;
+  }
   vec3 r = reflect(vec3(0.,0.,-1.),n);
   float card = dot(r.xy + vWorld.xy*vec2(.06,.045),uLight) - .033*vWorld.y;
   float softbox = exp(-6.*square(card-.28+.22*r.y));
