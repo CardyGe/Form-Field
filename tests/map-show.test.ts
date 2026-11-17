@@ -58,3 +58,10 @@ test('duplicate ids: the later shape gets a fresh id', () => {
   assert.notEqual(r.show.shapes[1].id, 'a');
   assert.equal(r.repaired, true);
 });
+
+test('shapes with fewer than three points are dropped', () => {
+  const r = validateShow(doc([shape({ id: 'e', points: [] }), shape({ id: 'two', points: tri.slice(0, 2) }), shape()]));
+  assert.equal(r.show.shapes.length, 1);
+  assert.equal(r.show.shapes[0].id, 'a');
+  assert.equal(r.repaired, true);
+});

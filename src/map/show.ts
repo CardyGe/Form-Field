@@ -45,7 +45,7 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
       if (r.repaired) repaired = true;
       points.push(r.point);
     }
-    if (bad) { repaired = true; continue; }
+    if (bad || points.length < 3) { repaired = true; continue; }
 
     let id = typeof raw.id === 'string' && raw.id !== '' ? raw.id : '';
     if (id === '' || seen.has(id)) { id = crypto.randomUUID(); repaired = true; }
