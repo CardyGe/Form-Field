@@ -4,9 +4,9 @@ import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions,
 const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
-test('the curated library keeps 90 distinct presets on saturated palettes with a dark or light ground', () => {
-  assert.equal(PRESETS.length,90);
-  assert.equal(new Set(PRESETS.map(p=>p.id)).size,90);
+test('the curated library keeps 91 distinct presets on saturated palettes with a dark or light ground', () => {
+  assert.equal(PRESETS.length,91);
+  assert.equal(new Set(PRESETS.map(p=>p.id)).size,91);
   for (const preset of PRESETS) {
     const layer=applyPreset(createLayer(preset.kind),preset.id);
     const project={...createProject(),layers:[layer]};

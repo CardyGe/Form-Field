@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ConcertinaSheet } from './ConcertinaSheet';
 import type { Layer } from '../shared/types';
 import { sourceViewMatrix } from './source-view';
 import { flowHash, phraseTime, smooth, TAU } from './flow-field';
@@ -24,6 +25,12 @@ export class ReliefRenderer {
   private readonly inverse={value:new THREE.Matrix3()};
   private readonly surfaceUniforms={uReliefView:{value:new THREE.Matrix3()},uReliefResolution:{value:new THREE.Vector2()},uSurface:{value:null as THREE.Texture|null},uSurfaceRole:{value:0},uSurfaceInfluence:{value:0}};
   private readonly audienceProjection={value:new THREE.Matrix4()};
+  private readonly sheetGeometry = new ConcertinaSheet();
+  private readonly copper = new THREE.MeshPhysicalMaterial({
+    vertexColors: true, side: THREE.DoubleSide, metalness: .32, clearcoatRoughness: .27,
+  });
+  private readonly sheet = new THREE.Mesh(this.sheetGeometry, this.copper);
+  private readonly rim = {value: new THREE.Color()};
   constructor(){
     this.camera.position.set(0,0,7);this.camera.lookAt(0,0,0);
     this.pieces.frustumCulled=false;this.pieces.castShadow=true;this.pieces.receiveShadow=true;
@@ -44,7 +51,7 @@ export class ReliefRenderer {
     this.board.position.z=-.12;this.board.receiveShadow=true;this.board.frustumCulled=false;
     this.key.castShadow=true;this.key.shadow.mapSize.set(1024,1024);this.key.shadow.camera.left=-4;this.key.shadow.camera.right=4;this.key.shadow.camera.top=4;this.key.shadow.camera.bottom=-4;
     this.key.shadow.bias=-.0003;this.key.shadow.normalBias=.015;
-    for(const mat of [this.material,this.boardMaterial]){
+    for(const mat of [this.material,this.boardMaterial,this.copper]){
       mat.toneMapped=false;mat.transparent=true;mat.premultipliedAlpha=true;mat.onBeforeCompile=shader=>{
         shader.uniforms.uReliefInverse=this.inverse;
         Object.assign(shader.uniforms,this.surfaceUniforms);
@@ -56,7 +63,31 @@ export class ReliefRenderer {
         shader.fragmentShader=shader.fragmentShader.replace('#include <opaque_fragment>',`diffuseColor.a*=surfaceCoverage((uReliefView*vec3(gl_FragCoord.xy/uReliefResolution,1.)).xy);if(diffuseColor.a<.001)discard;\n#include <opaque_fragment>`);
       };
     }
-    this.scene.add(this.pieces,this.board,this.key,this.key.target,this.fill);
+    const sharedCompile = this.copper.onBeforeCompile;
+    this.copper.onBeforeCompile = (shader, renderer) => {
+      sharedCompile.call(this.copper, shader, renderer);
+      shader.uniforms.uCopperRim = this.rim;
+      shader.vertexShader = 'varying vec2 vFoldUv;\n' + shader.vertexShader.replace('#include <uv_vertex>',
+        '#include <uv_vertex>\nvFoldUv=uv;');
+      shader.fragmentShader = 'varying vec2 vFoldUv; uniform vec3 uCopperRim;\n' + shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+        float edge = min(vFoldUv.x, 1.0 - vFoldUv.x);
+        float rim = 1.0 - smoothstep(0.0, max(.012, fwidth(edge)), edge);
+        float brush = sin(vFoldUv.y*1700.0 + 1.7*sin(vFoldUv.x*5.0));
+        diffuseColor.rgb *= 1.0 + brush*.055*(1.0-smoothstep(.001,.003,fwidth(vFoldUv.y)));
+        diffuseColor.rgb = mix(diffuseColor.rgb,uCopperRim,.62*rim);
+      `).replace('#include <opaque_fragment>', `
+        // Reflection of a broad studio strip across the brushed metal.
+        vec3 reflected = reflect(-normalize(vViewPosition), normal);
+        float band = reflected.x*.68 + reflected.y*.54 + reflected.z*.32;
+        float softbox = exp(-14.0 * pow(band-.36, 2.0));
+        outgoingLight += uCopperRim * softbox * (.08 + .25 * (1.0 - roughnessFactor));
+        #include <opaque_fragment>
+      `);
+    };
+    this.sheet.frustumCulled = false;
+    this.sheet.receiveShadow = this.sheet.castShadow = true;
+    this.sheet.customDepthMaterial = this.depthMaterial;
+    this.scene.add(this.sheet,this.pieces,this.board,this.key,this.key.target,this.fill);
   }
   draw(renderer:THREE.WebGLRenderer,layer:Layer,phase:number,width:number,height:number,target:THREE.WebGLRenderTarget,surface?:PreparedSurface){
     const p=layer.params,aspect=width/height,scale=p.scale,spacing=1/p.columns;
@@ -65,6 +96,25 @@ export class ReliefRenderer {
     // Match the source field at z=0. Perspective then supplies consistent depth foreshortening.
     this.camera.aspect=aspect;this.camera.fov=2*Math.atan(scale/14)*180/Math.PI;this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();this.audienceProjection.value.multiplyMatrices(this.camera.projectionMatrix,this.camera.matrixWorldInverse);
+    this.sheet.visible = p.reliefMode === 2;
+    this.pieces.visible = !this.sheet.visible;
+    if (this.sheet.visible) {
+      this.sheetGeometry.pose(layer, phase);
+      this.copper.roughness = p.roughness;
+      this.copper.clearcoat = p.clearcoat;
+      this.rim.value.set(layer.palette[4]);
+    } else {
+      this.posePanels(layer, phase, aspect, scale, spacing, view);
+    }
+    const colors = layer.palette.map(c => new THREE.Color(c));
+    this.material.roughness=p.roughness;this.material.clearcoat=p.clearcoat;
+    this.board.visible=p.backgroundOpacity>0;this.boardMaterial.opacity=p.backgroundOpacity;this.boardMaterial.color.copy(colors[5]);this.board.scale.set(100,100,1);
+    this.key.position.set(Math.cos(p.lightAngle)*4,Math.sin(p.lightAngle)*4,2+p.lightHeight*3);this.key.intensity=3;this.key.castShadow=p.shadow>0;this.key.shadow.intensity=p.shadow;this.fill.intensity=.2+p.fillLight*2;
+    const clear=renderer.autoClear;renderer.autoClear=false;
+    try{renderer.setRenderTarget(target);renderer.render(this.scene,this.camera);}finally{renderer.autoClear=clear;}
+  }
+  private posePanels(layer: Layer, phase: number, aspect: number, scale: number, spacing: number, view: THREE.Matrix3) {
+    const p = layer.params;
     const bounds=[[0,0],[1,0],[0,1],[1,1]].map(([x,y])=>new THREE.Vector3(x,y,1).applyMatrix3(view));
     const x0=Math.floor(Math.min(...bounds.map(v=>(v.x-.5)*aspect*scale))/spacing)-2,x1=Math.ceil(Math.max(...bounds.map(v=>(v.x-.5)*aspect*scale))/spacing)+2;
     const y0=Math.floor(Math.min(...bounds.map(v=>(v.y-.5)*scale))/spacing)-2,y1=Math.ceil(Math.max(...bounds.map(v=>(v.y-.5)*scale))/spacing)+2;
@@ -101,11 +151,6 @@ export class ReliefRenderer {
       color.copy(colors[0]).lerp(colors[2],.15+id*.32).multiplyScalar(.85+group*.2);this.pieces.setColorAt(count,color);count++;
     }
     this.pieces.count=count;this.pieces.instanceMatrix.needsUpdate=true;if(this.pieces.instanceColor)this.pieces.instanceColor.needsUpdate=true;
-    this.material.roughness=p.roughness;this.material.clearcoat=p.clearcoat;
-    this.board.visible=p.backgroundOpacity>0;this.boardMaterial.opacity=p.backgroundOpacity;this.boardMaterial.color.copy(colors[5]);this.board.scale.set(100,100,1);
-    this.key.position.set(Math.cos(p.lightAngle)*4,Math.sin(p.lightAngle)*4,2+p.lightHeight*3);this.key.intensity=3;this.key.castShadow=p.shadow>0;this.key.shadow.intensity=p.shadow;this.fill.intensity=.2+p.fillLight*2;
-    const clear=renderer.autoClear;renderer.autoClear=false;
-    try{renderer.setRenderTarget(target);renderer.render(this.scene,this.camera);}finally{renderer.autoClear=clear;}
   }
-  dispose(){this.geometry.dispose();this.boardGeometry.dispose();this.material.dispose();this.depthMaterial.dispose();this.boardMaterial.dispose();this.key.shadow.dispose();this.pieces.dispose();}
+  dispose(){this.copper.dispose();this.sheetGeometry.dispose();this.geometry.dispose();this.boardGeometry.dispose();this.material.dispose();this.depthMaterial.dispose();this.boardMaterial.dispose();this.key.shadow.dispose();this.pieces.dispose();}
 }

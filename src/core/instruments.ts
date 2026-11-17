@@ -31,7 +31,7 @@ const specific:Record<InstrumentKind,ParameterDefinition[]>={
  glitchtunnel:[],
 };
 export const INSTRUMENT_UPGRADE_KEYS:Record<InstrumentKind,string[]>=Object.fromEntries(INSTRUMENT_KINDS.map(kind=>{
- const mode=kind==='livingink'?[p('inkMode','Pigment motion',0,2,1,0,'Motion'),{...p('simulationQuality','Chemical resolution',0,2,1,1),preparation:true},{...p('loopReturn','Loop return',0,.5,.01,.3,'Motion'),description:'Evolving chemistry: the share of the loop over which grown ink recedes back into its starting seeds, so the last frame flows into the first. At 0 the clip grows once and stops.'}]:kind==='relief'?[p('reliefMode','Relief construction',0,1,1,0)]:[];
+ const mode=kind==='livingink'?[p('inkMode','Pigment motion',0,2,1,0,'Motion'),{...p('simulationQuality','Chemical resolution',0,2,1,1),preparation:true},{...p('loopReturn','Loop return',0,.5,.01,.3,'Motion'),description:'Evolving chemistry: the share of the loop over which grown ink recedes back into its starting seeds, so the last frame flows into the first. At 0 the clip grows once and stops.'}]:kind==='relief'?[p('reliefMode','Relief construction',0,2,1,0)]:[];
  const obstacle=kind==='livingink'?[{...a('surfaceHole','Central obstacle',0,.8,.01,0,'Shape','A source-space circular void that redirects evolving pigment.'),preparation:kind==='livingink'}]:[];
  const added=[...field,...directed.map(d=>({...d,preparation:kind==='livingink'&&['travel','flowDirection','eddyScale'].includes(d.key)||d.preparation})),...mode,...obstacle,...material,...specific[kind]];
  INSTRUMENT_PARAMETERS[kind].push(...added.map(d=>({...d})));
@@ -70,6 +70,11 @@ const studies:Partial<Record<InstrumentKind,InstrumentInfo['looks']>>={
  ],
  relief:[
   {id:'breathing-facade',name:'Breathing Facade',params:{reliefMode:1,scale:1,columns:7,motion:1,opening:.85,phaseSpread:.8,organic:.6,phrase:1,shadow:.7,backgroundOpacity:0}},
+  {id:'copper-concertina',name:'Copper Concertina',
+   palette:['#c46738','#781d27','#ffbf80','#d97849','#ffcf97','#241523'],
+   params:{reliefMode:2,scale:1.35,columns:6,motion:1,opening:1,delaySpread:.94,pause:.7,
+     lightAngle:2.6,lightHeight:.24,fillLight:.42,roughness:.38,clearcoat:.34,shadow:.85,
+     backgroundOpacity:1,toonMix:0}},
   {id:'folding-copper',name:'Folding Copper',palette:warm,params:{reliefMode:1,scale:1,columns:5,axis:1,motion:1,opening:.95,phaseSpread:1,organic:.8,phrase:2,shadow:.85,depth:.8,lightAngle:-.9,backgroundOpacity:0}},
   {id:'quiet-monument',name:'Quiet Monument',palette:cool,params:{reliefMode:1,scale:1.2,columns:9,axis:2,motion:.6,opening:.8,phaseSpread:.45,organic:.3,phrase:1,shadow:.9,roughness:.6,gap:.12,backgroundOpacity:0}},
  ],
