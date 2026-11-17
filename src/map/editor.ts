@@ -89,6 +89,9 @@ function stageSource(next: ShowDocument, action: Extract<EditAction, { sourceId:
       return replace({ project, revision: source.revision + 1 });
     }
     case 'setSourceProject': {
+      // Said plainly before the full check, which would only call it unreadable.
+      const layers = (action.project as { layers?: unknown }).layers;
+      if (Array.isArray(layers) && layers.length > MAX_SOURCE_LAYERS) return { reason: 'too-many-layers' };
       let project: Project;
       try { project = validateProject(action.project); } catch { return { reason: 'bad-composition' }; }
       if (project.layers.length > MAX_SOURCE_LAYERS) return { reason: 'too-many-layers' };

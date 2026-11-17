@@ -61,7 +61,7 @@ function CommitField({ label, value, onCommit, narrow, maxLength }: { label: str
 }
 
 /** The Map screen. `header` is the app's own mode switch, so all screens share it. */
-export default function MapPanel({ header, onError }: { header: ReactNode; onError: (message: string) => void }) {
+export default function MapPanel({ header, onError, onEditInStudio }: { header: ReactNode; onError: (message: string) => void; onEditInStudio?: (sourceId: string, shapeId: string) => void }) {
   const map = useMap(onError);
   const canvas = useRef<HTMLCanvasElement>(null);
 
@@ -295,7 +295,10 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
     const reorder = (to: 'front' | 'back' | 'forward' | 'backward') => () => map.dispatch({ type: 'reorder', shapeId: shape.id, to });
     return [
       { kind: 'item', label: 'Duplicate', shortcut: '⌘D', onSelect: () => duplicate(shape.id) },
-      ...(shape.sourceId ? [{ kind: 'item', label: 'Vary', disabled: locked, onSelect: () => vary(shape.sourceId!) } as const] : []),
+      ...(shape.sourceId ? [
+        { kind: 'item', label: 'Vary', disabled: locked, onSelect: () => vary(shape.sourceId!) } as const,
+        ...(onEditInStudio ? [{ kind: 'item', label: 'Edit in Studio', disabled: locked, onSelect: () => onEditInStudio(shape.sourceId!, shape.id) } as const] : []),
+      ] : []),
       { kind: 'item', label: locked ? 'Delete (unlock first)' : 'Delete', shortcut: '⌫', danger: true, disabled: locked, onSelect: () => remove(shape.id) },
       { kind: 'separator' },
       { kind: 'item', label: 'Bring to front', disabled: locked || index === last, onSelect: reorder('front') },
@@ -384,6 +387,7 @@ export default function MapPanel({ header, onError }: { header: ReactNode; onErr
           {selectedSource && <>
             <div className="map-toggles">
               <button className="text-button" disabled={selectedShape.locked} title="A new variation of this instrument" onClick={() => vary(selectedSource.id)}>Vary</button>
+              {onEditInStudio && <button className="text-button" disabled={selectedShape.locked} title="Every control, in Studio; changes show on the projector as you make them" onClick={() => onEditInStudio(selectedSource.id, selectedShape.id)}>Edit in Studio</button>}
             </div>
             <label className="map-field">Palette<select aria-label="Palette" value={paletteName(selectedSource.project.layers[0]?.palette ?? [])} disabled={selectedShape.locked}
               onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) map.dispatch({ type: 'setSourcePalette', sourceId: selectedSource.id, palette: found[1] }); }}>

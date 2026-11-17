@@ -55,6 +55,11 @@ try {
   const studio = await app.firstWindow();
   studio.on('pageerror', e => errors.push(String(e)));
   await studio.setViewportSize({ width: 1500, height: 900 }).catch(() => {});
+  // Studio's own composition, to check later that editing a shape in Studio never replaces it.
+  const projectName = () => studio.getByLabel('Project name', { exact: true }).inputValue();
+  await studio.getByLabel('Project name', { exact: true }).waitFor();
+  await sleep(1500);
+  const ownTitle = await projectName();
   await studio.getByRole('button', { name: 'Map', exact: true }).click();
   await studio.getByRole('region', { name: 'Map' }).waitFor();
   const stage = studio.getByLabel('Stage', { exact: true });
@@ -210,9 +215,10 @@ try {
     assert.equal(black.length, 0, `${black.length} of ${seen.length} samples were black while the instrument started`);
     // Now it plays: the picture inside changes over time and is not the shape's flat red; outside stays black.
     const a = await sample(output, [insideFirst, [.3, .3], [.55, .5], ...OUTSIDE]);
-    await sleep(1500);
-    const b = await sample(output, [insideFirst, [.3, .3], [.55, .5]]);
-    assert.ok(changed(a, b) > 0, `the wall did not change in 1.5 s: ${JSON.stringify(a.colours.slice(0, 3))}`);
+    // Some instruments rest between moves, so the wall is watched for up to 6 s.
+    let moved = 0;
+    for (let i = 0; i < 12 && !moved; i++) { await sleep(500); moved = changed(a, await sample(output, [])); }
+    assert.ok(moved > 0, `the wall did not change in 6 s: ${JSON.stringify(a.colours.slice(0, 3))}`);
     assert.ok(a.colours.slice(0, 3).some(c => !near(c, RED, 30)), 'inside is still the flat shape colour');
     a.colours.slice(3).forEach((c, i) => assert.ok(near(c, BLACK), `outside ${OUTSIDE[i]} is rgb(${c})`));
     const stats = await wallStats();
@@ -249,6 +255,30 @@ try {
     assert.ok(changed(f2, f3) > 0, 'the picture did not move again after Freeze was turned off');
   });
 
+  await check('Edit in Studio: the shape\'s composition opens in Studio, changes reach the wall, Studio\'s own project is kept', async () => {
+    await studio.getByRole('button', { name: 'Shape 1', exact: true }).click();
+    await studio.getByRole('button', { name: 'Edit in Studio', exact: true }).click();
+    await studio.locator('.shape-edit-bar').waitFor();
+    await studio.screenshot({ path: path.join(out, 'studio-editing-shape.png') });
+    const bar = await studio.locator('.shape-edit-bar').evaluate(e => ({ text: e.textContent, html: e.outerHTML.slice(0, 300), box: e.getBoundingClientRect().toJSON() }));
+    assert.match(bar.text, /Editing Shape 1 from Map/, JSON.stringify(bar));
+    assert.equal(await studio.getByRole('button', { name: /^Export/ }).isDisabled(), true, 'Export is offered while editing a shape');
+    // The output stayed open while Map is not on screen.
+    assert.ok(app.windows().some(w => /#map-output/.test(w.url())), 'the output closed when Studio opened');
+    const before = (await wallStats()).prepares;
+    await studio.getByRole('button', { name: 'Randomize effect' }).click();
+    await output.waitForFunction(n => Object.values(window.__mapStats.prepares).reduce((a, b) => a + b, 0) > n, Object.values(before).reduce((a, b) => a + b, 0), { timeout: 10000 });
+    // Studio's autosave still holds Studio's own project.
+    await sleep(1200);
+    const autosave = JSON.parse(await fs.readFile(path.join(userData, 'autosave.formfield'), 'utf8'));
+    assert.equal(autosave.name, ownTitle, `Studio's autosave holds "${autosave.name}", not its own project "${ownTitle}"`);
+    // While editing, Studio shows the shape's composition.
+    assert.notEqual(await projectName(), ownTitle);
+    await studio.locator('.shape-edit-bar').getByRole('button', { name: 'Back to Map' }).click();
+    await studio.getByRole('region', { name: 'Map' }).waitFor();
+    assert.equal(await studio.getByRole('button', { name: 'Undo', exact: true }).isDisabled(), false);
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
@@ -271,6 +301,11 @@ try {
     assert.equal(await studio.getByRole('list').locator('li').count(), shapesBefore);
     const undo = studio.getByRole('button', { name: 'Undo', exact: true });
     assert.equal(await undo.isDisabled(), false, 'Undo is disabled after coming back to Map');
+    // Studio has its own composition back.
+    await studio.getByRole('region', { name: 'Map' }).getByRole('button', { name: 'Studio', exact: true }).click();
+    await studio.getByRole('region', { name: 'Map' }).waitFor({ state: 'detached' });
+    assert.equal(await projectName(), ownTitle);
+    await studio.getByRole('button', { name: 'Map', exact: true }).click();
   });
 
   await check('no page errors', async () => { assert.deepEqual(errors, []); });

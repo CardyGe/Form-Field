@@ -1,5 +1,6 @@
 import { applyEdit, type EditAction } from './editor';
 import type { ShowDocument } from './show';
+import type { Project } from '../shared/types';
 
 const LIMIT = 100;
 
@@ -32,4 +33,15 @@ export function mapReducer(state: MapState, action: MapAction): MapState {
       return { show: state.future[0], past: [...state.past, state.show], future: state.future.slice(1), refusal: null };
     }
   }
+}
+
+/**
+ * A change made to a source in Studio. The first change of an editing session is an undo step like any edit;
+ * the rest replace it, so the whole session in Studio undoes as one step in Map.
+ */
+export function applyStudioEdit(state: MapState, sourceId: string, project: Project, first: boolean): MapState {
+  const result = applyEdit(state.show, { type: 'setSourceProject', sourceId, project });
+  if (!result.ok) return { ...state, refusal: result.reason };
+  if (first) return { show: result.show, past: [...state.past, state.show].slice(-LIMIT), future: [], refusal: null };
+  return { ...state, show: result.show, future: [], refusal: null };
 }

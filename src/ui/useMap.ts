@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EditAction } from '../map/editor';
-import { initialMapState, mapReducer, type MapState } from '../map/state';
+import { applyStudioEdit, initialMapState, mapReducer, type MapState } from '../map/state';
+import type { Project } from '../shared/types';
 import { autosaveSchedule, canEdit } from '../map/autosave';
 import { acceptMapMessage, sourcesToSend, toWire, type MapMessage } from '../map/messages';
 import { createShow, validateShow, type ShowDocument } from '../map/show';
@@ -30,6 +31,15 @@ interface Session {
   saver: ReturnType<typeof autosaveSchedule<string>>;
   /** The screen showing the session, told when a save fails or recovers; null while Map is not shown. */
   onSaveResult: ((failed: boolean) => void) | null;
+  /** Whether the wall's window is open, and which composition revisions it has been sent (emptied when it opens). */
+  outputOpen: boolean;
+  sentSources: Map<string, number>;
+  /** The wall's switches, kept here so they survive leaving Map while the wall stays open. */
+  blackout: boolean;
+  testGrid: boolean;
+  freeze: boolean;
+  /** A shape's composition being edited in Studio: the wall stays open and follows the edits. */
+  studioEdit: { sourceId: string; shapeId: string; first: boolean } | null;
 }
 let session: Session | null = null;
 function mapSession(): Session {
@@ -37,6 +47,7 @@ function mapSession(): Session {
   const bridge = window.studio?.map;
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
+    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null,
     saver: autosaveSchedule<string>(async text => {
       if (!bridge) return;
       // A failed write is reported, never swallowed: the operator keeps working and can Save As.
@@ -50,8 +61,54 @@ function mapSession(): Session {
     try { await created.saver.flush(); }
     catch { created.saveFailed = true; created.onSaveResult?.(true); throw new Error('The Map show could not be saved. Open Map and use Save As to keep it.'); }
   });
+  // Followed for the window's life, so the session knows whether the wall is open even while Map is not shown.
+  bridge?.onOutputChanged(open => { created.outputOpen = open; if (open) created.sentSources = new Map(); });
   session = created;
   return created;
+}
+
+/** Sends the wall the compositions it lacks, then the show. False when something was too large to send. */
+function pushToWall(s: Session, show: ShowDocument): { show: boolean; sources: boolean } {
+  const bridge = window.studio?.map;
+  const result = { show: true, sources: true };
+  if (!s.outputOpen || !bridge) return result;
+  const { messages, sent } = sourcesToSend(show, s.sentSources);
+  s.sentSources = sent;
+  for (const message of messages) { if (acceptMapMessage(message as unknown)) bridge.send(message); else result.sources = false; }
+  const message: MapMessage = { type: 'show', show: toWire(show) };
+  if (acceptMapMessage(message as unknown)) bridge.send(message); else result.show = false;
+  return result;
+}
+
+/**
+ * Starts editing a shape's composition in Studio. The wall stays open and follows each change.
+ * Returns the composition and the shape's name, or null when the shape plays no composition.
+ */
+export function beginStudioEdit(sourceId: string, shapeId: string): { project: Project; shapeName: string } | null {
+  const s = mapSession();
+  const source = s.state.show.sources.find(src => src.id === sourceId);
+  const shape = s.state.show.shapes.find(sh => sh.id === shapeId);
+  if (!source || !shape) return null;
+  s.studioEdit = { sourceId, shapeId, first: true };
+  return { project: source.project, shapeName: shape.name };
+}
+
+/** A change made in Studio to the shape's composition. Returns why it was refused, or null. */
+export function studioEdit(project: Project): string | null {
+  const s = mapSession(), edit = s.studioEdit;
+  if (!edit) return null;
+  const before = s.state;
+  s.state = applyStudioEdit(before, edit.sourceId, project, edit.first);
+  if (s.state.show === before.show) return s.state.refusal;
+  edit.first = false;
+  s.saver.save(JSON.stringify(s.state.show));
+  pushToWall(s, s.state.show);
+  return null;
+}
+
+/** Back to Map. */
+export function endStudioEdit(): void {
+  mapSession().studioEdit = null;
 }
 
 /** What the operator screen does with the show: hold it, save it, and keep the wall in step. */
@@ -68,14 +125,15 @@ export function useMap(onError: (message: string) => void) {
   const [tool, setTool] = useState<'select' | 'rectangle'>('select');
   const [lastRefusal, setLastRefusal] = useState<string | null>(null);
   const [sendWarning, setSendWarning] = useState<string | null>(null);
-  const [blackout, setBlackoutState] = useState(false);
-  const [testGrid, setTestGridState] = useState(false);
-  const [freeze, setFreezeState] = useState(false);
+  const [blackout, setBlackoutState] = useState(kept.blackout);
+  const [testGrid, setTestGridState] = useState(kept.testGrid);
+  const [freeze, setFreezeState] = useState(kept.freeze);
   /** How the wall is keeping up, as it reports once a second while the output is open. */
   const [wallState, setWallState] = useState<import('../map/compositor').CompositorStats | null>(null);
   const [displays, setDisplays] = useState<Display[]>([]);
   const [display, setDisplay] = useState<number | null>(null);
-  const [outputOpen, setOutputOpen] = useState(false);
+  // The wall may still be open from before (a shape edited in Studio keeps it open).
+  const [outputOpen, setOutputOpen] = useState(kept.outputOpen);
   // While a drag is in progress this trial show is drawn and sent to the wall; the held show changes only on release.
   const [preview, setPreview] = useState<ShowDocument | null>(null);
   const shown = preview ?? show;
@@ -121,7 +179,11 @@ export function useMap(onError: (message: string) => void) {
     const offState = bridge.onState(setWallState);
     kept.onSaveResult = failed => setSaveError(failed ? SAVE_FAILED : null);
     // Leaving Map writes what is waiting. A failure stays recorded in the session and still refuses the close.
-    return () => { offOutput(); offDisplays(); offPreview(); offState(); kept.onSaveResult = null; saver.flush().catch(() => {}); void bridge.closeOutput().catch(() => {}); };
+    // The wall closes too, unless a shape is being edited in Studio: then it stays open and follows the edits.
+    return () => {
+      offOutput(); offDisplays(); offPreview(); offState(); kept.onSaveResult = null; saver.flush().catch(() => {});
+      if (!kept.studioEdit) void bridge.closeOutput().catch(() => {});
+    };
   }, []);
   useEffect(() => { if (!outputOpen) { setWallPicture(null); setWallState(null); } }, [outputOpen]);
 
@@ -151,12 +213,13 @@ export function useMap(onError: (message: string) => void) {
   };
   useEffect(() => () => { if (frame.current !== null) cancelAnimationFrame(frame.current); }, []);
   const showMessage = (s: ShowDocument): MapMessage => ({ type: 'show', show: toWire(s) });
-  // Which composition revisions the open output already has. Emptied when an output opens, so it is sent everything.
-  const sentSources = useRef(new Map<string, number>());
-  /** Compositions the output does not have yet go first, so the show never names one the wall cannot play. */
+  /**
+   * Compositions the output does not have yet go first, so the show never names one the wall cannot play.
+   * The record of what the wall has is the session's (emptied whenever an output opens), shared with Studio edits.
+   */
   const sendSources = (s: ShowDocument) => {
-    const { messages, sent } = sourcesToSend(s, sentSources.current);
-    sentSources.current = sent;
+    const { messages, sent } = sourcesToSend(s, kept.sentSources);
+    kept.sentSources = sent;
     for (const message of messages) {
       if (!acceptMapMessage(message as unknown)) { setSendWarning(`${TOO_LARGE_SOURCE}`); continue; }
       bridge?.send(message);
@@ -166,7 +229,6 @@ export function useMap(onError: (message: string) => void) {
   // When the wall reports ready: blackout and test grid first, so the wall never paints shapes while Blackout is on.
   // This effect is declared before the show effect, so it runs first when the output opens.
   useEffect(() => {
-    sentSources.current = new Map();
     if (!outputOpen || !bridge) return;
     sendNow({ type: 'blackout', on: latest.current.blackout });
     sendNow({ type: 'testGrid', on: latest.current.testGrid });
@@ -202,10 +264,10 @@ export function useMap(onError: (message: string) => void) {
   const undo = useCallback(() => { if (canEdit(loadedRef.current)) step({ type: 'undo' }); }, [step]);
   const redo = useCallback(() => { if (canEdit(loadedRef.current)) step({ type: 'redo' }); }, [step]);
 
-  const setBlackout = (on: boolean) => { setBlackoutState(on); if (outputOpen) bridge?.send({ type: 'blackout', on }); };
-  const setTestGrid = (on: boolean) => { setTestGridState(on); if (outputOpen) bridge?.send({ type: 'testGrid', on }); };
+  const setBlackout = (on: boolean) => { kept.blackout = on; setBlackoutState(on); if (outputOpen) bridge?.send({ type: 'blackout', on }); };
+  const setTestGrid = (on: boolean) => { kept.testGrid = on; setTestGridState(on); if (outputOpen) bridge?.send({ type: 'testGrid', on }); };
   /** Freeze holds the wall's picture: the instruments stop where they are. */
-  const setFreeze = (on: boolean) => { setFreezeState(on); if (outputOpen) bridge?.send({ type: 'freeze', on }); };
+  const setFreeze = (on: boolean) => { kept.freeze = on; setFreezeState(on); if (outputOpen) bridge?.send({ type: 'freeze', on }); };
   const openOutput = async () => {
     if (display === null) return;
     try { await bridge?.openOutput(display); }
