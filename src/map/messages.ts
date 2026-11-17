@@ -1,5 +1,5 @@
 import type { Project } from '../shared/types';
-import type { Point, ShowDocument, WireShow } from './show';
+import type { CurvePoint, Point, ShowDocument, WireShow } from './show';
 
 export type MapMessage =
   | { type: 'show'; show: WireShow }
@@ -9,13 +9,16 @@ export type MapMessage =
   | { type: 'testGrid'; on: boolean }
   | { type: 'freeze'; on: boolean }
   | { type: 'identify'; shapeId: string | null }
-  | { type: 'crosshair'; point: Point | null; shapeId: string | null };
+  | { type: 'crosshair'; point: Point | null; shapeId: string | null }
+  /** Only these shapes reach the wall; none means no solo. Not saved. */
+  | { type: 'solo'; ids: string[] };
 
 /**
- * Map's own limit, larger than Live's 16 KB settings cap: the largest valid show (64 shapes of 32 corners,
- * names and ids at their limits) is about 110 KB, so a valid show is never refused. Tested.
+ * Map's own limit, larger than Live's 16 KB settings cap: the largest valid show (64 shapes of 32 curve points with
+ * both handles, names, ids and groups at their limits) is about 360 KB at full precision, so a valid show is never
+ * refused. Tested.
  */
-export const MAP_MESSAGE_LIMIT = 256 * 1024;
+export const MAP_MESSAGE_LIMIT = 512 * 1024;
 /**
  * A composition can hold up to four layers, each with an image and a mask of up to 20 MB (Studio's MAX_ASSET_BYTES),
  * stored as text about a third larger: so its message has its own, much larger limit.
@@ -25,6 +28,12 @@ export const SOURCE_MESSAGE_LIMIT = 256 * 1024 * 1024;
 /** Four decimal places of a stage fraction: 0.2 projector pixels at 1920 wide. */
 const WIRE_PLACES = 1e4;
 const roundForWire = (value: number) => Math.round(value * WIRE_PLACES) / WIRE_PLACES;
+const roundPoint = (p: CurvePoint): CurvePoint => {
+  const q: CurvePoint = { x: roundForWire(p.x), y: roundForWire(p.y) };
+  if (p.in) q.in = { x: roundForWire(p.in.x), y: roundForWire(p.in.y) };
+  if (p.out) q.out = { x: roundForWire(p.out.x), y: roundForWire(p.out.y) };
+  return q;
+};
 
 /**
  * The show as sent to the wall: corners rounded to four decimal places, which keeps each message small, and the
@@ -34,7 +43,7 @@ const roundForWire = (value: number) => Math.round(value * WIRE_PLACES) / WIRE_P
 export function toWire(show: ShowDocument): WireShow {
   return {
     format: show.format, version: show.version, stage: show.stage,
-    shapes: show.shapes.map(shape => ({ ...shape, points: shape.points.map(p => ({ x: roundForWire(p.x), y: roundForWire(p.y) })) })),
+    shapes: show.shapes.map(shape => ({ ...shape, points: shape.points.map(roundPoint), holes: shape.holes.map(h => h.map(roundPoint)) })),
     sources: show.sources.map(({ id, kind, speed, revision }) => ({ id, kind, speed, revision })),
     groups: show.groups,
   };
@@ -72,6 +81,7 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'freeze': return typeof value.on === 'boolean';
     case 'identify': return idOrNull(value.shapeId);
     case 'crosshair': return idOrNull(value.shapeId) && (value.point === null || (plain(value.point) && finite(value.point.x) && finite(value.point.y)));
+    case 'solo': return Array.isArray(value.ids) && value.ids.every(id => typeof id === 'string');
     default: return false;
   }
 }

@@ -7,13 +7,20 @@
  */
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
-import { drawCommands, stageCommands, type DrawOptions } from './draw';
+import { drawCommands, ringPx, shownOnWall, stageCommands, traceRing, type DrawOptions } from './draw';
+import { borderColour, fadeKey, fadeSize } from './edge';
 import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
-import { STAGE_SIZE, type Shape } from './show';
+import { STAGE_SIZE, type Group, type Shape } from './show';
+import { ringBounds } from './outline';
 
-/** What the compositor needs of a show: its shapes, and each source's speed. Works for a stored show or the wall's. */
-export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number }[] }
+/** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
+export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number }[]; groups: Group[] }
+
+/** A shape's outline and holes as one path in stage pixels, with its box; kept until the shape's geometry changes. */
+interface Outline { key: string; path: Path2D; box: { x: number; y: number; w: number; h: number } }
+/** A shape's soft edge: white where the content shows, fading to nothing at the outline. */
+interface Fader { key: string; picture: OffscreenCanvas }
 
 type Frame = OffscreenCanvas;
 
@@ -52,6 +59,8 @@ export interface CompositorStats {
   failing: { id: string; reason: string }[];
   /** How many times each source has been prepared (for checks: editing one shape must not re-prepare another). */
   prepares: Record<string, number>;
+  /** How many soft-edge pictures have been made (for checks: they are made when a shape changes, not every frame). */
+  edgeBuilds: number;
 }
 
 const copyFrame = (source: CanvasImageSource, width: number, height: number, into: Frame | null): Frame => {
@@ -65,7 +74,12 @@ const kindsOf = (project: Project | null | undefined) => project ? project.layer
 
 export class MapCompositor {
   private readonly ctx: CanvasRenderingContext2D;
-  private show: PlayShow = { shapes: [], sources: [] };
+  private show: PlayShow = { shapes: [], sources: [], groups: [] };
+  private readonly outlines = new Map<string, Outline>();
+  private readonly faders = new Map<string, Fader>();
+  private edgeBuilds = 0;
+  /** Where a soft-edged shape's content is put together before its fade is applied; stage-sized, reused. */
+  private scratch: OffscreenCanvas | null = null;
   private projects = new Map<string, Project>();
   private options: DrawOptions = { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: null, selectedIndex: null, outlinesOnly: false, invalidIds: [] };
   private frozen = false;
@@ -115,6 +129,7 @@ export class MapCompositor {
       this.playing.set(shape.id, next);
     }
     for (const id of [...this.playing.keys()]) if (!show.shapes.some(s => s.id === id)) { this.playing.delete(id); this.fades.delete(id); }
+    for (const id of [...this.outlines.keys()]) if (!show.shapes.some(s => s.id === id)) { this.outlines.delete(id); this.faders.delete(id); }
     const live = new Set(show.sources.map(s => s.id));
     for (const [id, slot] of this.slots) if (!live.has(id)) this.release(id, slot);
     for (const id of [...this.restartAt.keys()]) if (!live.has(id)) this.restartAt.delete(id);
@@ -146,7 +161,7 @@ export class MapCompositor {
       const project = this.projects.get(source.id);
       if (!project) continue;
       // Only sources some visible shape plays are started; one whose shapes are all hidden gives its context back.
-      const users = this.show.shapes.filter(s => s.sourceId === source.id && s.visible);
+      const users = this.show.shapes.filter(s => s.sourceId === source.id && shownOnWall(this.show, s, this.options.solo));
       if (!users.length) { const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
       const slot = this.slot(source.id, now);
       if (!slot) continue;
@@ -184,6 +199,7 @@ export class MapCompositor {
         ...[...this.restartAt.keys()].filter(id => !this.slots.has(id)).map(id => ({ id, reason: 'the graphics card stopped this instrument; it will start again' })),
       ],
       prepares: Object.fromEntries([...this.slots].map(([id, s]) => [id, s.prepares])),
+      edgeBuilds: this.edgeBuilds,
     };
   }
 
@@ -254,24 +270,121 @@ export class MapCompositor {
     if (this.options.blackout) { ctx.restore(); return; }
     // The test grid shows outlines, names and numbers instead of content.
     if (!this.options.testGrid && !this.options.outlinesOnly) {
-      for (const shape of this.show.shapes) if (shape.visible) this.drawShape(shape, now);
+      for (const shape of this.show.shapes) if (shownOnWall(this.show, shape, this.options.solo)) this.drawShape(shape, now);
     }
     ctx.restore();
     drawCommands(ctx, stageCommands(this.show, this.options).filter(c => c.kind !== 'fill'));
   }
 
-  /** One shape's content, clipped to its outline: its source's picture covering its bounding box, or its colour. */
+  /** The shape's outline and holes as one path, made again only when its geometry changes. */
+  private outline(shape: Shape): Outline {
+    const key = JSON.stringify([shape.points, shape.holes]);
+    const held = this.outlines.get(shape.id);
+    if (held && held.key === key) return held;
+    const path = new Path2D();
+    for (const ring of [shape.points, ...shape.holes]) traceRing(path, ringPx(ring));
+    const b = ringBounds([shape.points]);
+    const box = { x: b.x0 * STAGE_SIZE.width, y: b.y0 * STAGE_SIZE.height, w: (b.x1 - b.x0) * STAGE_SIZE.width, h: (b.y1 - b.y0) * STAGE_SIZE.height };
+    const made = { key, path, box };
+    this.outlines.set(shape.id, made);
+    return made;
+  }
+
+  /**
+   * The shape's fade picture, at half resolution over its box: the outline filled, worn back by half the soft edge,
+   * blurred by a third of it, and cut by the outline again, so the content fades to nothing at the outline.
+   */
+  private fader(shape: Shape, outline: Outline): OffscreenCanvas {
+    const key = fadeKey(shape);
+    const held = this.faders.get(shape.id);
+    if (held && held.key === key) return held.picture;
+    const { width, height, scale } = fadeSize(outline.box);
+    const draw = (canvas: OffscreenCanvas) => {
+      const c = canvas.getContext('2d')!;
+      c.setTransform(scale, 0, 0, scale, -outline.box.x * scale, -outline.box.y * scale);
+      return c;
+    };
+    const worn = new OffscreenCanvas(width, height), w = draw(worn);
+    w.fillStyle = '#ffffff'; w.fill(outline.path, 'evenodd');
+    w.globalCompositeOperation = 'destination-out'; w.lineWidth = shape.softEdge; w.lineJoin = 'round'; w.stroke(outline.path);
+    const picture = held?.picture.width === width && held.picture.height === height ? held.picture : new OffscreenCanvas(width, height);
+    const p = picture.getContext('2d')!;
+    p.setTransform(1, 0, 0, 1, 0, 0);
+    p.globalCompositeOperation = 'source-over';
+    p.clearRect(0, 0, width, height);
+    p.filter = `blur(${Math.max(0.5, shape.softEdge / 3 * scale)}px)`;
+    p.drawImage(worn, 0, 0);
+    p.filter = 'none';
+    p.globalCompositeOperation = 'destination-in';
+    p.setTransform(scale, 0, 0, scale, -outline.box.x * scale, -outline.box.y * scale);
+    p.fillStyle = '#ffffff'; p.fill(outline.path, 'evenodd');
+    p.setTransform(1, 0, 0, 1, 0, 0);
+    p.globalCompositeOperation = 'source-over';
+    this.faders.set(shape.id, { key, picture });
+    this.edgeBuilds++;
+    return picture;
+  }
+
+  /**
+   * One shape: its source's picture covering its bounding box (or its colour, or black for a Blocker), cut by its
+   * outline and holes. With a soft edge it is put together on the scratch canvas and faded there first. Then its border.
+   */
   private drawShape(shape: Shape, now: number): void {
     const ctx = this.ctx;
-    const pts = shape.points.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }));
-    const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-    const box = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
-    ctx.save();
-    ctx.beginPath();
-    pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-    ctx.closePath();
-    ctx.clip();
+    const outline = this.outline(shape), box = outline.box;
+    const soft = shape.softEdge > 0 && box.w >= 1 && box.h >= 1;
+    // With a soft edge the content is drawn at the scratch canvas's origin; otherwise straight onto the stage, clipped.
+    let target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D = ctx;
+    let at = { x: box.x, y: box.y };
+    if (soft) {
+      if (!this.scratch) this.scratch = new OffscreenCanvas(STAGE_SIZE.width, STAGE_SIZE.height);
+      target = this.scratch.getContext('2d')!;
+      target.globalCompositeOperation = 'source-over';
+      target.globalAlpha = 1;
+      target.clearRect(0, 0, Math.ceil(box.w) + 1, Math.ceil(box.h) + 1);
+      at = { x: 0, y: 0 };
+    } else {
+      ctx.save();
+      ctx.clip(outline.path, 'evenodd');
+    }
+    const paintWith = (content: Frame | string, alpha: number) => {
+      target.globalAlpha = alpha;
+      if (typeof content === 'string') { target.fillStyle = content; target.fillRect(at.x, at.y, box.w, box.h); }
+      else target.drawImage(content, at.x, at.y, box.w, box.h);
+    };
 
+    if (shape.blocker) paintWith('#000000', 1);
+    else this.paintContent(shape, now, paintWith);
+
+    if (soft) {
+      const t = target as OffscreenCanvasRenderingContext2D;
+      t.globalAlpha = 1;
+      t.globalCompositeOperation = 'destination-in';
+      t.drawImage(this.fader(shape, outline), 0, 0, box.w, box.h);
+      t.globalCompositeOperation = 'source-over';
+      ctx.save();
+      ctx.globalAlpha = 1;
+      ctx.drawImage(this.scratch!, 0, 0, box.w, box.h, box.x, box.y, box.w, box.h);
+      ctx.restore();
+    } else ctx.restore();
+
+    // The border sits inside the outline (the clip takes the outer half of a stroke twice as wide), so it never spills off the object.
+    if (shape.border.width > 0 && !shape.blocker) {
+      const colour = borderColour(shape, shape.sourceId ? this.projects.get(shape.sourceId)?.layers[0]?.palette ?? null : null);
+      ctx.save();
+      ctx.clip(outline.path, 'evenodd');
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = shape.border.width * 2;
+      ctx.lineJoin = 'round';
+      if (shape.border.glow > 0) { ctx.shadowColor = colour; ctx.shadowBlur = shape.border.glow; }
+      ctx.stroke(outline.path);
+      ctx.restore();
+    }
+  }
+
+  /** What the shape plays: its source's picture, or its colour, crossfading after a change. */
+  private paintContent(shape: Shape, now: number, paintWith: (content: Frame | string, alpha: number) => void): void {
     const slot = shape.sourceId ? this.slots.get(shape.sourceId) : undefined;
     const wanted = shape.sourceId ? this.projects.get(shape.sourceId) : undefined;
     // A source that will not play (failing, over the limit, restarting, or with no composition) plays the shape's colour.
@@ -280,11 +393,6 @@ export class MapCompositor {
     // A fade waits for the composition the shape should now play, not one still drawing from before.
     const ready = cannotPlay || shape.sourceId === null ? shape.colour : slot?.project === wanted && slot?.frame ? slot.frame : null;
     const fade = this.fades.get(shape.id);
-    const paintWith = (content: Frame | string, alpha: number) => {
-      ctx.globalAlpha = alpha;
-      if (typeof content === 'string') { ctx.fillStyle = content; ctx.fillRect(box.x, box.y, box.w, box.h); }
-      else ctx.drawImage(content, box.x, box.y, box.w, box.h);
-    };
     if (fade) {
       // The old picture holds until the new one is ready, then they crossfade.
       if (ready && fade.start === null) fade.start = now;
@@ -294,6 +402,5 @@ export class MapCompositor {
       if (a >= 1) this.fades.delete(shape.id);
     } else if (picture) paintWith(picture, 1);
     else paintWith(shape.colour, 1); // a source not ready yet plays the shape's colour, never black
-    ctx.restore();
   }
 }

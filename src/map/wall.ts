@@ -50,5 +50,6 @@ export function applyMapMessage(state: WallState, value: unknown): WallState {
     case 'testGrid': return { ...state, options: { ...state.options, testGrid: message.on } };
     case 'identify': return { ...state, options: { ...state.options, identifyId: message.shapeId } };
     case 'crosshair': return { ...state, options: { ...state.options, crosshair: message.point, selectedId: message.shapeId } };
+    case 'solo': return { ...state, options: { ...state.options, solo: message.ids } };
   }
 }

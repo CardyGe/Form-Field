@@ -98,3 +98,34 @@ test('stageCommands: a refused outline stays red even when its shape is selected
   const normal = stageCommands(show(shape('a')), opts({ selectedId: 'a' }));
   assert.ok(normal.some(c => c.kind === 'stroke' && c.colour === '#ffd400'));
 });
+
+// Stage 3: curves, holes, blockers, solo and groups.
+import { shownOnWall } from '../src/map/draw';
+
+test('a shape is drawn as its outline and holes, curve handles in projector pixels', () => {
+  const holed = shape('a', {
+    points: [{ x: .1, y: .1, out: { x: .1, y: 0 } }, { x: .6, y: .1 }, { x: .6, y: .6 }, { x: .1, y: .6 }],
+    holes: [[{ x: .2, y: .2 }, { x: .3, y: .2 }, { x: .3, y: .3 }]],
+  });
+  const fill = stageCommands(show(holed), opts()).find(c => c.kind === 'fill')!;
+  assert.equal(fill.rings!.length, 2);
+  assert.deepEqual(fill.rings![0][0].out, { x: .1 * STAGE_SIZE.width, y: 0 });
+  assert.deepEqual(fill.rings![1][1], { x: .3 * STAGE_SIZE.width, y: .2 * STAGE_SIZE.height });
+});
+
+test('a blocker is black on the wall, hatched on the operator screen, and outlined in grey on the test grid', () => {
+  const b = shape('b', { blocker: true });
+  assert.partialDeepStrictEqual(stageCommands(show(b), opts()).find(c => c.shapeId === 'b'), { kind: 'fill', colour: '#000000' });
+  assert.partialDeepStrictEqual(stageCommands(show(b), opts({ operator: true })).find(c => c.shapeId === 'b'), { kind: 'hatch' });
+  assert.partialDeepStrictEqual(stageCommands(show(b), opts({ testGrid: true })).find(c => c.shapeId === 'b'), { kind: 'stroke', colour: '#808080' });
+});
+
+test('solo shows only the soloed shapes; a hidden group hides its members', () => {
+  const s = show(shape('a'), shape('b'));
+  const ids = (o: Partial<DrawOptions>) => stageCommands(s, opts(o)).filter(c => c.kind === 'fill').map(c => c.shapeId);
+  assert.deepEqual(ids({ solo: ['b'] }), ['b']);
+  assert.deepEqual(ids({ solo: [] }), ['a', 'b']);
+  const grouped = { ...createShow(), shapes: [shape('a', { groupId: 'g' }), shape('b')], groups: [{ id: 'g', name: 'G', visible: false, locked: false }] };
+  assert.deepEqual(stageCommands(grouped, opts()).filter(c => c.kind === 'fill').map(c => c.shapeId), ['b']);
+  assert.equal(shownOnWall(grouped, grouped.shapes[0], []), false);
+});

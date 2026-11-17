@@ -113,7 +113,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       local.frame(now);
     } else {
       // Not playing here (the wall plays them, or nothing does): the instruments here give their graphics contexts back.
-      if (playedShow.current && compositor.current) { compositor.current.setShow({ shapes: [], sources: [] }, new Map()); playedShow.current = null; }
+      if (playedShow.current && compositor.current) { compositor.current.setShow({ shapes: [], sources: [], groups: [] }, new Map()); playedShow.current = null; }
       paint(ctx, picture, options, background);
     }
     // Corner handles are for the operator only; the output never draws them.

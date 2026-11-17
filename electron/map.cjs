@@ -37,7 +37,7 @@ const { acceptPreview } = require('./live.cjs');
 
 // A copy of acceptMapMessage in src/map/messages.ts (the main process cannot load TypeScript).
 // tests/map-messages.test.ts runs one table of messages against both copies, so they stay in step.
-const MESSAGE_LIMIT = 256 * 1024; // MAP_MESSAGE_LIMIT
+const MESSAGE_LIMIT = 512 * 1024; // MAP_MESSAGE_LIMIT
 const SOURCE_MESSAGE_LIMIT = 256 * 1024 * 1024; // up to four layers, each with images of up to 20 MB, as text
 const SHOW_TEXT_LIMIT = 1024 * 1024 * 1024; // a show's compositions can hold many images
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -62,6 +62,7 @@ function acceptMapMessage(value) {
     case 'freeze': return typeof value.on === 'boolean';
     case 'identify': return idOrNull(value.shapeId);
     case 'crosshair': return idOrNull(value.shapeId) && (value.point === null || (plain(value.point) && finite(value.point.x) && finite(value.point.y)));
+    case 'solo': return Array.isArray(value.ids) && value.ids.every(id => typeof id === 'string');
     default: return false;
   }
 }

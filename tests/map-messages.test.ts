@@ -79,6 +79,10 @@ const PARITY: [string, unknown, boolean][] = [
   ['source bad revision', { type: 'source', id: 'a', revision: -1, project: {} }, false],
   ['source fractional revision', { type: 'source', id: 'a', revision: 1.5, project: {} }, false],
   ['source no project', { type: 'source', id: 'a', revision: 0 }, false],
+  ['solo', { type: 'solo', ids: ['a', 'b'] }, true],
+  ['solo none', { type: 'solo', ids: [] }, true],
+  ['solo bad', { type: 'solo', ids: [3] }, false],
+  ['solo not a list', { type: 'solo', ids: 'a' }, false],
   ['unknown', { type: 'explode' }, false],
   ['null', null, false],
   ['array', [], false],
@@ -130,4 +134,34 @@ test('undo and redo of a composition change reach the wall', () => {
   assert.ok(again.ok);
   push(again.show);
   assert.deepEqual(wall.projects.get('src0')?.project.layers[0].params, again.show.sources[0].project.layers[0].params);
+});
+
+// Stage 3: the largest show now has curve handles, holes, groups and borders; the photo never travels.
+import { createShow as createShow3, shapeExtras, MAX_SHAPES, MAX_POINTS, MAX_NAME_LENGTH, MAX_ID_LENGTH, MAX_GROUPS, type ShowDocument as Show3 } from '../src/map/show';
+
+test('the largest valid version 3 show fits in one message, rounded or not', () => {
+  const groups = Array.from({ length: MAX_GROUPS }, (_, i) => ({ id: 'g'.repeat(MAX_ID_LENGTH - 3) + String(i).padStart(3, '0'), name: 'n'.repeat(MAX_NAME_LENGTH), visible: true, locked: false }));
+  const shapes = Array.from({ length: MAX_SHAPES }, (_, i) => ({
+    id: 'i'.repeat(MAX_ID_LENGTH - 3) + String(i).padStart(3, '0'), name: 'n'.repeat(MAX_NAME_LENGTH), colour: '#ff9f0a', visible: true, locked: false,
+    sourceId: 's'.repeat(MAX_ID_LENGTH - 3) + String(i).padStart(3, '0'), ...shapeExtras(), groupId: groups[i % MAX_GROUPS].id, softEdge: 123.456789, border: { width: 12.3456789, colour: '#123456', glow: 33.3333333 },
+    points: Array.from({ length: MAX_POINTS }, (_, k) => ({
+      x: 0.5 + 0.3 * Math.cos(k / MAX_POINTS * 2 * Math.PI) + 1 / 3e5, y: 0.5 + 0.3 * Math.sin(k / MAX_POINTS * 2 * Math.PI) + 1 / 7e5,
+      in: { x: -0.0123456789012345, y: 0.0234567890123456 }, out: { x: 0.0123456789012345, y: -0.0234567890123456 },
+    })),
+  }));
+  const show: Show3 = { ...createShow3(), shapes, groups };
+  assert.ok(acceptMapMessage({ type: 'show', show }), `${JSON.stringify(show).length} bytes unrounded`);
+  assert.ok(acceptMapMessage({ type: 'show', show: toWire(show) }));
+});
+
+test('the photo never goes to the wall, and handles and holes are rounded for the trip', () => {
+  const show: Show3 = { ...createShow3(), photo: { data: 'data:image/jpeg;base64,AAAA', opacity: .5 }, shapes: [{
+    id: 'a', name: 'A', colour: '#ffffff', visible: true, locked: false, sourceId: null, ...shapeExtras(),
+    points: [{ x: .1, y: .1, out: { x: 1 / 3, y: 0 } }, { x: .6, y: .1 }, { x: .6, y: .6 }],
+    holes: [[{ x: .4, y: .2 }, { x: .5, y: .2 + 1 / 3e5 }, { x: .5, y: .3 }]],
+  }] };
+  const wire = toWire(show);
+  assert.equal('photo' in wire, false);
+  assert.equal(wire.shapes[0].points[0].out!.x, 0.3333);
+  assert.equal(wire.shapes[0].holes[0][1].y, 0.2);
 });
