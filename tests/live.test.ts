@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultLiveSettings, validateLiveSettings, PAINT_CONTROLS } from '../src/live/settings';
+import { defaultLiveSettings, validateLiveSettings, RELIEF_PRESETS, PAINT_CONTROLS } from '../src/live/settings';
 import { MAX_STEP, capStep, fadeFactor, boxWeight, birthChance } from '../src/live/maths';
 
 test('defaults validate to themselves', () => assert.deepEqual(validateLiveSettings(defaultLiveSettings()), defaultLiveSettings()));
@@ -148,6 +148,14 @@ test('Relief loads old settings and validates each control independently', () =>
   assert.deepEqual(validateLiveSettings({ look: 'smoke' }).relief, d.relief);
   const saved = validateLiveSettings({ look: 'relief', relief: { depth: 99, reach: -.1, settle: 2 } });
   assert.equal(saved.look, 'relief');
-  assert.deepEqual(saved.relief, { depth: 1.25, reach: 0, settle: 2 });
+  assert.deepEqual(saved.relief, { ...d.relief, depth: 1.25, reach: 0, settle: 2 });
   assert.equal(validateLiveSettings({ relief: { settle: null } }).relief.settle, d.relief.settle);
+});
+
+test('Relief presets round-trip and invalid materials fall back independently', () => {
+  for (const preset of RELIEF_PRESETS) {
+    assert.deepEqual(validateLiveSettings({ relief: preset.settings }).relief, preset.settings);
+  }
+  const style = validateLiveSettings({ relief: { surface: 'weave', motion: 'toString', finish: null, edgeLight: 2 } }).relief;
+  assert.deepEqual([style.surface, style.motion, style.finish, style.edgeLight], ['weave', 'sweep', 'silver', 1]);
 });

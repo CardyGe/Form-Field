@@ -119,8 +119,11 @@ try {
   await check('Relief controls persist and its artwork reaches the output', async () => {
     const look = page.getByLabel('Look', { exact: true });
     await look.selectOption('relief');
+    await page.getByLabel('Relief preset').selectOption('Gold brocade');
+    await page.getByLabel('Motion', { exact: true }).selectOption('ripple');
     await page.getByLabel('Settle', { exact: true }).fill('1.5');
-    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'relief' && v.relief.settle === 1.5, 'Relief settings were not saved');
+    assert.equal(await page.getByLabel('Relief preset').inputValue(), '');
+    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'relief' && v.relief.surface === 'weave' && v.relief.finish === 'brass' && v.relief.motion === 'ripple' && v.relief.settle === 1.5, 'Relief settings were not saved');
     const opened = app.waitForEvent('window');
     await page.getByRole('button', { name: 'Open output', exact: true }).click();
     const output = await opened;

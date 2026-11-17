@@ -16,7 +16,7 @@ const out = path.join(root, 'work/live');
 await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {LiveRenderer} from './src/live/LiveRenderer';
 export {TestSource, TestMaskProvider} from './src/live/test-source';
-export {defaultLiveSettings} from './src/live/settings';
+export {defaultLiveSettings, RELIEF_PRESETS} from './src/live/settings';
 export {recolourGLSL, setRamp} from './src/live/recolour';
 export {Passes} from './src/live/passes';
 export * as THREE from 'three';
@@ -92,8 +92,8 @@ try {
 
   if (performanceRun) {
     // Drive real display frames with the synthetic source and optionally encode the operator preview.
-    const measure = (seconds, relay, quality = 1080) => page.evaluate(async ([seconds, relay, quality, relief]) => {
-      const { source, renderer, canvas } = window.live.make(s => { s.quality = quality; if (relief) s.look = 'relief'; });
+    const measure = (seconds, relay, quality = 1080, preset = null) => page.evaluate(async ([seconds, relay, quality, preset]) => {
+      const { source, renderer, canvas } = window.live.make(s => { s.quality = quality; if (preset) { s.look = 'relief'; s.relief = preset.settings; } });
       let last = performance.now(), sent = 0, busy = false, running = true; const gaps = [];
       const small = new OffscreenCanvas(480, 270), context = small.getContext('2d');
       renderer.start();
@@ -104,10 +104,15 @@ try {
       await new Promise(r => setTimeout(r, 2000)); gaps.length = 0; renderer.stats();
       await new Promise(r => setTimeout(r, seconds * 1000)); running = false;
       const stats = renderer.stats(); renderer.stop(); renderer.frame(0); const painted = window.live.painted(0).fraction; gaps.sort((a, b) => a - b);
-      return { seconds, relay, quality, fps: stats.fps, worstMs: stats.worstMs, medianMs: gaps[gaps.length >> 1], p99Ms: gaps[Math.floor(gaps.length * .99)], over25ms: gaps.filter(g => g > 25).length, frames: stats.frames, painted };
-    }, [seconds, relay, quality, reliefPerf]);
+      return { seconds, relay, quality, preset: preset?.name, fps: stats.fps, worstMs: stats.worstMs, medianMs: gaps[gaps.length >> 1], p99Ms: gaps[Math.floor(gaps.length * .99)], over25ms: gaps.filter(g => g > 25).length, frames: stats.frames, painted };
+    }, [seconds, relay, quality, preset]);
     const length = Number(process.env.LIVE_PERF_SECONDS) || 120;
-    const runs = reliefPerf ? [await measure(length, true, 720), await measure(length, true, 1080)] : [await measure(length, false), await measure(Math.ceil(length / 2), true)];
+    const runs = [];
+    if (reliefPerf) {
+      const presets = await page.evaluate(() => window.live.m.RELIEF_PRESETS);
+      runs.push(await measure(length, true, 720, presets[0]));
+      for (const preset of presets) runs.push(await measure(length, true, 1080, preset));
+    } else runs.push(await measure(length, false), await measure(Math.ceil(length / 2), true));
     await fs.writeFile(path.join(out, reliefPerf ? 'relief-performance.json' : 'performance.json'), JSON.stringify(runs, null, 2));
     console.log(JSON.stringify(runs, null, 2));
     await app.close();
@@ -150,6 +155,41 @@ try {
       assert.ok(result.boxed.every(b => b.energy === 0), 'movement outside the interaction box bent the wall');
       assert.equal(result.providers, 0);
     }
+  });
+  await check('Relief presets each render a different surface and react to movement', async () => {
+    const presets = await page.evaluate(() => window.live.m.RELIEF_PRESETS);
+    const { count } = await page.evaluate(() => {
+      window.live.make(s => { s.look = 'relief'; });
+      window.reliefIdle = [];
+      return { count: window.live.m.RELIEF_PRESETS.length };
+    });
+    for (const preset of presets) {
+      const result = await page.evaluate(async preset => {
+        const { renderer } = window.live.current;
+        renderer.settings.relief = preset.settings;
+        renderer.clear(); renderer.frame(0);
+        function sample() {
+          const { data } = window.live.pixels();
+          const rgb = [];
+          for (let i = 0; i < data.length; i += 1012) rgb.push(data[i], data[i+1], data[i+2]);
+          return rgb;
+        }
+        const idle = sample();
+        const distance = (a,b) => a.reduce((sum,v,i) => sum+Math.abs(v-b[i]),0)/a.length;
+        const separate = window.reliefIdle.every(previous => distance(idle,previous) > 7);
+        window.reliefIdle.push(idle);
+        window.live.run(42);
+        const delta = distance(sample(),idle), picture = await window.live.png();
+        for (let i=0; i<180; i++) renderer.frame(1/30);
+        const tail = distance(sample(),idle);
+        return { separate, delta, tail, picture };
+      }, preset);
+      await save('relief-' + preset.name.toLowerCase().replaceAll(' ','-'), result.picture);
+      assert.ok(result.separate, preset.name + ' repeats another preset');
+      assert.ok(result.delta > .7, preset.name + ' barely reacted: ' + result.delta);
+      assert.ok(result.tail < .45, preset.name + ' failed to settle: ' + result.tail);
+    }
+    assert.ok(count >= 5);
   });
   await check('bare pipeline: the picture is not uniform', async () => {
     const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); const p = window.live.painted(0); return { p, frames: window.live.current.renderer.stats().frames }; });

@@ -1,6 +1,6 @@
 import { useRef, type ReactNode } from 'react';
 import { useLive } from './useLive';
-import { IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, type Box, type LiveSettings } from '../live/settings';
+import { IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, type Box, type LiveSettings } from '../live/settings';
 import { rampHex } from '../live/colour';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, SOLAR } from '../core/palettes';
@@ -47,6 +47,8 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
   const smoke = s.look === 'smoke', people = live.people;
   const peopleStatus = peopleLine(people.status);
   const roomMissing = smoke && s.people.useEmptyRoom && !people.roomCaptured;
+  const setRelief = (change: Partial<ReliefSettings>) => live.update(v => ({ ...v, relief: { ...v.relief, ...change } }));
+  const reliefPreset = RELIEF_PRESETS.find(p => (Object.keys(p.settings) as (keyof ReliefSettings)[]).every(k => p.settings[k] === s.relief[k]));
   const setSmoke = (change: Partial<LiveSettings['smoke']>) => live.update(v => ({ ...v, smoke: { ...v.smoke, ...change } }));
   const setPeople = (change: Partial<LiveSettings['people']>) => live.update(v => ({ ...v, people: { ...v.people, ...change } }));
 
@@ -109,9 +111,27 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
       <aside className="live-column" aria-label={LOOK_LABELS[s.look]}>
         <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value as LookKind }); }}>{Object.entries(LOOK_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         {s.look === 'relief' ? <>
-          <p className="live-note">Sweep a hand across the wall to turn the metal blades.</p>
+          <label className="stacked-label">Preset<select aria-label="Relief preset" value={reliefPreset?.name ?? ''} onChange={e => {
+            const preset = RELIEF_PRESETS.find(p => p.name === e.target.value);
+            if (preset) setRelief(preset.settings);
+          }}>
+            {!reliefPreset && <option value="">Custom</option>}
+            {RELIEF_PRESETS.map(p => <option key={p.name}>{p.name}</option>)}
+          </select></label>
+          <label className="stacked-label">Surface<select aria-label="Surface" value={s.relief.surface} onChange={e => setRelief({ surface: e.target.value as ReliefSettings['surface'] })}>
+            {Object.entries(RELIEF_SURFACES).map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+          </select></label>
+          <label className="stacked-label">Element size<select aria-label="Element size" value={s.relief.size} onChange={e => setRelief({ size: e.target.value as ReliefSettings['size'] })}>
+            {Object.entries(RELIEF_SIZES).map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+          </select></label>
+          <label className="stacked-label">Motion<select aria-label="Motion" value={s.relief.motion} onChange={e => setRelief({ motion: e.target.value as ReliefSettings['motion'] })}>
+            {Object.entries(RELIEF_MOTIONS).map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+          </select></label>
+          <label className="stacked-label">Finish<select aria-label="Finish" value={s.relief.finish} onChange={e => setRelief({ finish: e.target.value as ReliefSettings['finish'] })}>
+            {Object.entries(RELIEF_FINISHES).map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+          </select></label>
           {RELIEF_CONTROLS.map(c => <Slider key={c.key} label={c.label} value={s.relief[c.key]} min={c.min} max={c.max} step={c.step}
-            unit={c.key === 'settle' ? ' s' : ''} onChange={value => live.update(v => ({ ...v, relief: { ...v.relief, [c.key]: value } }))} />)}
+            unit={c.key === 'settle' ? ' s' : c.key === 'lightAngle' ? '°' : ''} onChange={value => setRelief({ [c.key]: value })} />)}
         </> : smoke ? <>
           <p className="live-note">People are made of smoke. Moving tears it off them.</p>
           <div className="live-starts" role="group" aria-label="Start from">{SMOKE_STARTS.map(start =>

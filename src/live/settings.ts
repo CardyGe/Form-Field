@@ -11,12 +11,34 @@ export type PaintKey = 'response' | 'strokeLength' | 'bristle' | 'spread' | 'fad
 export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number }
 export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief' } as const;
 export type LookKind = keyof typeof LOOK_LABELS;
-export type ReliefKey = 'depth' | 'reach' | 'settle';
+export type ReliefKey = 'depth' | 'reach' | 'settle' | 'lightAngle' | 'edgeLight';
 export const RELIEF_CONTROLS: LiveControl<ReliefKey>[] = [
   { key: 'depth', label: 'Depth', min: 0, max: 1.25, step: .01, default: 1 },
   { key: 'reach', label: 'Reach', min: 0, max: 1, step: .01, default: .6 },
   { key: 'settle', label: 'Settle', min: .25, max: 3, step: .05, default: 1 },
+  { key: 'lightAngle', label: 'Light angle', min: -90, max: 90, step: 1, default: 0 },
+  { key: 'edgeLight', label: 'Edge light', min: 0, max: 1, step: .01, default: 0 },
 ];
+export const RELIEF_SURFACES = { blades: 'Blades', scales: 'Hex scales', weave: 'Woven ribbons' } as const;
+export const RELIEF_SIZES = { broad: 'Broad', medium: 'Medium', fine: 'Fine' } as const;
+export const RELIEF_MOTIONS = { sweep: 'Directional sweep', ripple: 'Ripple tank', latch: 'Flip and hold' } as const;
+export const RELIEF_FINISHES = { silver: 'Brushed silver', brass: 'Hammered brass', pearl: 'Pearlescent ceramic', foil: 'Dichroic foil' } as const;
+export type ReliefSettings = Record<ReliefKey, number> & {
+  surface: keyof typeof RELIEF_SURFACES;
+  size: keyof typeof RELIEF_SIZES;
+  motion: keyof typeof RELIEF_MOTIONS;
+  finish: keyof typeof RELIEF_FINISHES;
+};
+
+export const RELIEF_PRESETS: { name: string; settings: ReliefSettings }[] = [
+  { name: 'Silver tide', settings: { surface: 'blades', size: 'medium', motion: 'sweep', finish: 'silver', depth: 1, reach: .6, settle: 1, lightAngle: 0, edgeLight: 0 } },
+  { name: 'Dragon skin', settings: { surface: 'scales', size: 'broad', motion: 'sweep', finish: 'foil', depth: 1.18, reach: .75, settle: 1.3, lightAngle: -20, edgeLight: .68 } },
+  { name: 'Porcelain pool', settings: { surface: 'scales', size: 'medium', motion: 'ripple', finish: 'pearl', depth: .95, reach: .87, settle: 2.2, lightAngle: 32, edgeLight: .27 } },
+  { name: 'Gold brocade', settings: { surface: 'weave', size: 'broad', motion: 'sweep', finish: 'brass', depth: 1.1, reach: .72, settle: 1.45, lightAngle: 25, edgeLight: .32 } },
+  { name: 'Signal shutters', settings: { surface: 'scales', size: 'fine', motion: 'latch', finish: 'brass', depth: 1.05, reach: .40, settle: .75, lightAngle: -28, edgeLight: .92 } },
+  { name: 'Aurora silk', settings: { surface: 'weave', size: 'broad', motion: 'ripple', finish: 'foil', depth: 1, reach: .67, settle: 1.85, lightAngle: -42, edgeLight: .66 } },
+];
+
 export type SmokeKey = 'density' | 'emit' | 'smoulder' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange' | 'vividness';
 /** Where people are found. ignoreStillSeconds null means Off. */
 export interface PeopleSettings { ignoreStillSeconds: number | null; useEmptyRoom: boolean }
@@ -34,7 +56,7 @@ export interface LiveSettings {
   /** Paint's palette. Smoke keeps its own in `smoke.palette`. */
   palette: string[];
   look: LookKind;
-  relief: Record<ReliefKey, number>;
+  relief: ReliefSettings;
   /** forever: smoke never fades, and stays in the picture. */
   smoke: Record<SmokeKey, number> & { palette: string[]; forever: boolean };
   people: PeopleSettings;
@@ -79,13 +101,16 @@ export function defaultLiveSettings(): LiveSettings {
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, c.default])) as Record<PaintKey, number>,
     palette: [...HOT_SIGNAL],
     look: 'paint',
-    relief: Object.fromEntries(RELIEF_CONTROLS.map(c => [c.key, c.default])) as Record<ReliefKey, number>,
+    relief: { ...RELIEF_PRESETS[0].settings },
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
   };
 }
 
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+function choice<K extends string>(value: unknown, labels: Record<K, string>, fallback: K): K {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(labels, value) ? value as K : fallback;
+}
 const ranged = (v: unknown, min: number, max: number, fallback: number) =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
 
@@ -109,7 +134,13 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, ranged(paint[c.key], c.min, c.max, c.default)])) as Record<PaintKey, number>,
     palette: [...palette],
     look: v.look === 'smoke' || v.look === 'relief' ? v.look : 'paint',
-    relief: Object.fromEntries(RELIEF_CONTROLS.map(c => [c.key, ranged(relief[c.key], c.min, c.max, c.default)])) as Record<ReliefKey, number>,
+    relief: {
+      ...Object.fromEntries(RELIEF_CONTROLS.map(c => [c.key, ranged(relief[c.key], c.min, c.max, c.default)])) as Record<ReliefKey, number>,
+      surface: choice(relief.surface, RELIEF_SURFACES, d.relief.surface),
+      size: choice(relief.size, RELIEF_SIZES, d.relief.size),
+      motion: choice(relief.motion, RELIEF_MOTIONS, d.relief.motion),
+      finish: choice(relief.finish, RELIEF_FINISHES, d.relief.finish),
+    },
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, ranged(smoke[c.key], c.min, c.max, c.default)])) as Record<SmokeKey, number>,
       palette: [...(isPalette(smoke.palette) ? smoke.palette : d.smoke.palette)], forever: smoke.forever === true },
     people: { ignoreStillSeconds: still, useEmptyRoom: typeof people.useEmptyRoom === 'boolean' ? people.useEmptyRoom : false },
