@@ -80,7 +80,7 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
     if (colour !== shape.colour) map.dispatch({ type: 'setColour', shapeId: shape.id, colour });
   };
   const choosePlays = (value: string) => {
-    if (value === 'colour') map.dispatch({ type: 'setContent', shapeId: shape.id, content: { kind: 'colour' } });
+    if (value === 'colour' || value === 'grid') map.dispatch({ type: 'setContent', shapeId: shape.id, content: { kind: value } });
     else if (value.startsWith('preset:')) map.dispatch({ type: 'setContent', shapeId: shape.id, content: { kind: 'preset', presetId: value.slice('preset:'.length), sourceId: newSourceId(), seed: randomSeed() } });
   };
   const commitPosition = (axis: 'x' | 'y', text: string) => {
@@ -113,7 +113,8 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
     <h3>Content</h3>
     <label className="map-check"><input type="checkbox" aria-label="Blocker" checked={shape.blocker} disabled={locked} onChange={e => map.dispatch({ type: 'setBlocker', shapeId: shape.id, blocker: e.target.checked })} />Blocker</label>
     {shape.blocker ? <p className="muted-text">Blocks everything beneath it: black on the projector, hatched here.</p> : <>
-      <label className="map-field">Plays<select aria-label="Plays" value={source ? 'current' : 'colour'} disabled={locked} onChange={e => choosePlays(e.target.value)}>
+      <label className="map-field">Plays<select aria-label="Plays" value={source ? 'current' : shape.fill} disabled={locked} onChange={e => choosePlays(e.target.value)}>
+        <option value="grid">Grid pattern</option>
         <option value="colour">Its colour</option>
         {source && <option value="current">{source.project.name}</option>}
         {LIBRARY.map(g => <optgroup key={g.label} label={g.label}>{g.presets.map(p => <option key={p.id} value={`preset:${p.id}`}>{p.name}</option>)}</optgroup>)}

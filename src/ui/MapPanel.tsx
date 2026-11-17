@@ -514,6 +514,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       { kind: 'item', label: 'Test grid', checked: map.testGrid, onSelect: () => map.setTestGrid(!map.testGrid) },
       { kind: 'item', label: 'Blackout', checked: map.blackout, onSelect: () => map.setBlackout(!map.blackout) },
       { kind: 'item', label: 'Snap', checked: map.snap, onSelect: () => map.setSnap(!map.snap) },
+      { kind: 'item', label: map.show.photo ? 'Change the room photo…' : 'Add a photo of the room…', onSelect: () => photoInput.current?.click() },
       ...(map.selectedIds.length ? [{ kind: 'separator' } as const, { kind: 'item', label: 'Deselect', shortcut: 'Esc', onSelect: () => map.setSelection(null) } as const] : []),
     ];
     const ids = map.selectedIds.includes(shape.id) ? act.selected() : [shape.id];
@@ -593,7 +594,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     <div className="map-body">
       <aside className="live-column map-shapes" aria-label="Shapes">
         <h2>Shapes</h2>
-        {map.show.shapes.length === 0 && <p className="muted-text">No shapes yet. Pick a drawing tool above the stage.</p>}
+        {map.show.shapes.length === 0 && <p className="muted-text">No shapes yet. Add a photo of the room to trace over (Room photo, or drop one on the stage), then pick a drawing tool above the stage.</p>}
         <MapShapeList map={map} onMenu={(e, id) => openMenu(e.clientX, e.clientY, id)} />
         {map.selectedIds.length > 0 && <div className="map-toggles map-list-actions">
           <button className="text-button" title="Put the selected shapes in a folder · ⌘G" onClick={() => act.group()}>Group</button>
@@ -602,16 +603,19 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       <div className="map-centre">
         <div className="map-tools" role="toolbar" aria-label="Tools">
           {TOOLS.map(t => <button key={t.tool} className="text-button" aria-pressed={map.tool === t.tool} title={`${t.title} · ${t.key}`} onClick={() => chooseTool(t.tool)}>{t.label}</button>)}
+          <button className="text-button map-photo-button" disabled={!map.loaded} title="A photograph of the room or object you are mapping, to trace over. Only on this screen: it never reaches the projector. You can also drop a picture on the stage." onClick={() => photoInput.current?.click()}>{map.show.photo ? 'Room photo ✓' : 'Room photo…'}</button>
           <span className="muted-text map-tool-hint">{map.tool === 'select' ? 'Alt-drag copies · double-click a side to add a point' : map.tool === 'pen' ? 'Alt on the first click inside the selected shape cuts a hole' : 'Alt-drag inside the selected shape cuts a hole'}</span>
         </div>
-        <main className="map-stage" tabIndex={0} aria-label="Stage area"><canvas ref={canvas} aria-label="Stage" data-wall={map.outputOpen && map.wallPicture ? 'picture' : 'local'} style={{ cursor: map.tool === 'select' ? 'default' : 'crosshair', touchAction: 'none' }}
+        <main className="map-stage" tabIndex={0} aria-label="Stage area"
+          onDragOver={e => { if ([...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); }}
+          onDrop={e => { e.preventDefault(); const file = [...e.dataTransfer.files].find(f => /^image\/(jpeg|png)$/.test(f.type)); if (file) void choosePhoto(file); else setInspectorNote('Drop a JPEG or PNG photo of the room.'); }}><canvas ref={canvas} aria-label="Stage" data-wall={map.outputOpen && map.wallPicture ? 'picture' : 'local'} style={{ cursor: map.tool === 'select' ? 'default' : 'crosshair', touchAction: 'none' }}
           onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} onLostPointerCapture={e => { if (drag.current) finishDrag(e, false); }} onPointerLeave={() => setHover(null)}
           onDoubleClick={onDoubleClick} onContextMenu={onStageMenu} width={STAGE_SIZE.width} height={STAGE_SIZE.height} /></main>
         <div className="map-stage-bar">
           <label className="map-check" title="Points join other shapes' points and sides, and the stage's edges and centre. Corners on the same spot move together. Hold Ctrl to switch it off for a moment.">
             <input type="checkbox" aria-label="Snap" checked={map.snap} onChange={e => map.setSnap(e.target.checked)} />Snap</label>
           <span className="map-bar-gap" />
-          <span className="muted-text">Photo (this screen only)</span>
+          <span className="muted-text">Room photo (this screen only)</span>
           <button className="text-button" disabled={!map.loaded} title="A photograph of the scene to trace over. It never reaches the projector." onClick={() => photoInput.current?.click()}>{map.show.photo ? 'Change…' : 'Choose…'}</button>
           <input ref={photoInput} type="file" accept="image/jpeg,image/png" hidden aria-label="Photo file" onChange={e => { void choosePhoto(e.target.files?.[0]); e.target.value = ''; }} />
           {map.show.photo && <>

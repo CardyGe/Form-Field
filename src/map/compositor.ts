@@ -8,6 +8,7 @@
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
 import { drawCommands, ringPx, shownOnWall, stageCommands, traceRing, type DrawOptions } from './draw';
+import { drawPattern } from './pattern';
 import { borderColour, effectiveSoftEdge, fadeKey, fadeSize } from './edge';
 import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
@@ -77,6 +78,8 @@ export class MapCompositor {
   private show: PlayShow = { shapes: [], sources: [], groups: [] };
   private readonly outlines = new Map<string, Outline>();
   private readonly faders = new Map<string, Fader>();
+  /** Each grid-pattern shape's pattern, drawn once over its box and reused until the shape changes. */
+  private readonly patterns = new Map<string, { shape: Shape; picture: OffscreenCanvas }>();
   private edgeBuilds = 0;
   /** Where a soft-edged shape's content is put together before its fade is applied; stage-sized, reused. */
   private scratch: OffscreenCanvas | null = null;
@@ -129,7 +132,7 @@ export class MapCompositor {
       this.playing.set(shape.id, next);
     }
     for (const id of [...this.playing.keys()]) if (!show.shapes.some(s => s.id === id)) { this.playing.delete(id); this.fades.delete(id); }
-    for (const id of [...this.outlines.keys()]) if (!show.shapes.some(s => s.id === id)) { this.outlines.delete(id); this.faders.delete(id); }
+    for (const id of [...this.outlines.keys()]) if (!show.shapes.some(s => s.id === id)) { this.outlines.delete(id); this.faders.delete(id); this.patterns.delete(id); }
     const live = new Set(show.sources.map(s => s.id));
     for (const [id, slot] of this.slots) if (!live.has(id)) this.release(id, slot);
     for (const id of [...this.restartAt.keys()]) if (!live.has(id)) this.restartAt.delete(id);
@@ -275,7 +278,7 @@ export class MapCompositor {
       for (const shape of this.show.shapes) if (shownOnWall(this.show, shape, this.options.solo)) this.drawShape(shape, now);
     }
     ctx.restore();
-    drawCommands(ctx, stageCommands(this.show, this.options).filter(c => c.kind !== 'fill'));
+    drawCommands(ctx, stageCommands(this.show, this.options).filter(c => c.kind !== 'fill' && c.kind !== 'pattern'));
   }
 
   /** The shape's outline and holes as one path, made again only when its geometry changes. */
@@ -395,15 +398,32 @@ export class MapCompositor {
     }
   }
 
-  /** What the shape plays: its source's picture, or its colour, crossfading after a change. */
+  /** A shape's own fill when it plays nothing: its grid pattern, or its plain colour. */
+  private own(shape: Shape): Frame | string {
+    if (shape.fill !== 'grid') return shape.colour;
+    const held = this.patterns.get(shape.id);
+    if (held && held.shape === shape) return held.picture;
+    const { box, path } = this.outline(shape);
+    const w = Math.max(1, Math.ceil(box.w)), h = Math.max(1, Math.ceil(box.h));
+    const picture = held?.picture.width === w && held.picture.height === h ? held.picture : new OffscreenCanvas(w, h);
+    const p = picture.getContext('2d')!;
+    p.setTransform(1, 0, 0, 1, 0, 0); p.clearRect(0, 0, w, h);
+    p.setTransform(w / box.w || 1, 0, 0, h / box.h || 1, -box.x * (w / box.w || 1), -box.y * (h / box.h || 1));
+    p.save(); p.clip(path, 'evenodd'); drawPattern(p, shape, path); p.restore();
+    p.setTransform(1, 0, 0, 1, 0, 0);
+    this.patterns.set(shape.id, { shape, picture });
+    return picture;
+  }
+
+  /** What the shape plays: its source's picture, or its own fill, crossfading after a change. */
   private paintContent(shape: Shape, now: number, paintWith: (content: Frame | string, alpha: number) => void): void {
     const slot = shape.sourceId ? this.slots.get(shape.sourceId) : undefined;
     const wanted = shape.sourceId ? this.projects.get(shape.sourceId) : undefined;
     // A source that will not play (failing, over the limit, restarting, or with no composition) plays the shape's colour.
     const cannotPlay = shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === wanted) || !wanted);
-    const picture = shape.sourceId === null || cannotPlay ? shape.colour : slot?.project && slot.frame ? slot.frame : null;
+    const picture = shape.sourceId === null || cannotPlay ? this.own(shape) : slot?.project && slot.frame ? slot.frame : null;
     // A fade waits for the composition the shape should now play, not one still drawing from before.
-    const ready = cannotPlay || shape.sourceId === null ? shape.colour : slot?.project === wanted && slot?.frame ? slot.frame : null;
+    const ready = cannotPlay || shape.sourceId === null ? this.own(shape) : slot?.project === wanted && slot?.frame ? slot.frame : null;
     const fade = this.fades.get(shape.id);
     if (fade) {
       // The old picture holds until the new one is ready, then they crossfade.

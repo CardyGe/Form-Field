@@ -3,6 +3,7 @@
  * commands in draw order, in stage pixels. paint only translates them to Canvas 2D.
  * invalidIds is for the operator screen; the caller decides what the wall gets.
  */
+import { drawPattern } from './pattern';
 import { STAGE_SIZE, isShapeShown, type Group, type Point, type Ring, type Shape } from './show';
 
 /** Drawing needs only the shapes and groups, so it takes a stored show or the show as the wall receives it. */
@@ -23,7 +24,9 @@ export interface DrawOptions {
  * all in stage pixels. Holes are cut with the even-odd rule.
  */
 export interface PathCommand {
-  kind: 'fill' | 'hatch' | 'stroke' | 'text' | 'line' | 'rect';
+  kind: 'fill' | 'pattern' | 'hatch' | 'stroke' | 'text' | 'line' | 'rect';
+  /** pattern: the shape whose grid pattern is drawn. */
+  shape?: Shape;
   shapeId?: string; points?: Point[]; rings?: Ring[]; colour?: string; text?: string; at?: Point; width?: number;
 }
 
@@ -64,6 +67,9 @@ export function stageCommands(show: Shapes, options: DrawOptions): PathCommand[]
     else if (options.outlinesOnly || options.testGrid) out.push({ kind: 'stroke', shapeId: s.id, ...outline, colour: s.blocker ? BLOCKER_OUTLINE : s.colour, width: 2 });
     // A Blocker blacks out what is beneath it; on the operator screen it is hatched so it can still be seen.
     else if (s.blocker) out.push({ kind: options.operator ? 'hatch' : 'fill', shapeId: s.id, ...outline, colour: '#000000' });
+    // A shape that plays nothing shows its grid pattern or its plain colour. (One playing an instrument is filled with its colour here;
+    // the compositor draws the instrument instead.)
+    else if (s.fill === 'grid' && s.sourceId === null) out.push({ kind: 'pattern', shapeId: s.id, ...outline, colour: s.colour, shape: s });
     else out.push({ kind: 'fill', shapeId: s.id, ...outline, colour: s.colour });
   }
 
@@ -119,6 +125,13 @@ export function drawCommands(ctx: CanvasRenderingContext2D | OffscreenCanvasRend
     const pts = c.points ?? [];
     switch (c.kind) {
       case 'fill': ctx.fillStyle = c.colour ?? '#fff'; shapePath(c); ctx.fill('evenodd'); break;
+      case 'pattern': {
+        if (!c.shape) break;
+        const path = new Path2D();
+        for (const ring of c.rings ?? []) traceRing(path, ring);
+        ctx.save(); ctx.clip(path, 'evenodd'); drawPattern(ctx, c.shape, path); ctx.restore();
+        break;
+      }
       case 'hatch': {
         ctx.save();
         shapePath(c); ctx.clip('evenodd');

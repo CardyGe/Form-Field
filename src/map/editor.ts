@@ -14,8 +14,8 @@ type RingRef = { ring?: number };
 
 export type EditAction =
   | { type: 'addRectangle'; id: string; a: Point; b: Point; colour: string }
-  /** Any new shape: rectangle, triangle, ellipse or a Pen outline. */
-  | { type: 'addShape'; id: string; points: CurvePoint[]; colour: string; name?: string }
+  /** Any new shape: rectangle, triangle, ellipse or a Pen outline. It shows the grid pattern until told otherwise. */
+  | { type: 'addShape'; id: string; points: CurvePoint[]; colour: string; name?: string; fill?: 'colour' | 'grid' }
   | { type: 'addHole'; shapeId: string; points: CurvePoint[] }
   /** joined: corners of other shapes on the same spot move with this one. */
   | ({ type: 'movePoint'; shapeId: string; index: number; to: Point; joined?: boolean } & RingRef)
@@ -54,7 +54,7 @@ export type EditAction =
   | { type: 'setPhoto'; photo: Photo | null }
   | { type: 'setPhotoOpacity'; opacity: number }
   /** What a shape plays: its own colour, or a Library preset in a new source of its own. */
-  | { type: 'setContent'; shapeId: string; content: { kind: 'colour' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number } }
+  | { type: 'setContent'; shapeId: string; content: { kind: 'colour' } | { kind: 'grid' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number } }
   | { type: 'varySource'; sourceId: string; entropy: number }
   | { type: 'setSourcePalette'; sourceId: string; palette: string[] }
   | { type: 'setSourceSpeed'; sourceId: string; speed: number }
@@ -252,7 +252,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
       if (find(action.id)) return { reason: 'duplicate-id' };
       const name = cleanName(action.name ?? '').slice(0, MAX_NAME_LENGTH) || nextName(next);
-      const shape: Shape = { id: action.id, name, points: copyRing(action.points), colour: action.colour, visible: true, locked: false, sourceId: null, ...shapeExtras() };
+      const shape: Shape = { id: action.id, name, points: copyRing(action.points), colour: action.colour, visible: true, locked: false, sourceId: null, ...shapeExtras(), fill: action.fill ?? 'grid' };
       next.shapes.push(shape);
       return done([shape]);
     }
@@ -357,7 +357,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     case 'delete': next.shapes = next.shapes.filter(s => s !== shape); dropUnplayed(next); return { show: normaliseGroups(next), touched: [] };
     case 'setContent': {
       const content = action.content;
-      if (content.kind === 'colour') { shape.sourceId = null; dropUnplayed(next); return done(); }
+      if (content.kind === 'colour' || content.kind === 'grid') { shape.sourceId = null; shape.fill = content.kind; dropUnplayed(next); return done(); }
       if (shape.blocker) return { reason: 'blocker' };
       if (next.sources.some(s => s.id === content.sourceId)) return { reason: 'duplicate-id' };
       const project = presetComposition(content.presetId, content.seed);

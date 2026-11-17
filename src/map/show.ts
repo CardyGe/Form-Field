@@ -19,10 +19,11 @@ export interface Border { width: number; colour: 'shape' | 'palette' | string; g
  * sourceId: the instrument source the shape plays, or null when it plays its own colour.
  * holes: outlines cut out of the shape. blocker: plays nothing and blacks out everything beneath it.
  * softEdge: projector pixels over which the content fades in from the outline.
+ * fill: what a shape that plays no instrument shows: its plain colour, or a grid pattern in its colour (new shapes).
  */
 export interface Shape {
   id: string; name: string; points: CurvePoint[]; colour: string; visible: boolean; locked: boolean; sourceId: string | null;
-  holes: Ring[]; groupId: string | null; blocker: boolean; softEdge: number; border: Border;
+  holes: Ring[]; groupId: string | null; blocker: boolean; softEdge: number; border: Border; fill: 'colour' | 'grid';
 }
 /** A folder of shapes, one level deep. Hidden or locked, it hides or locks its members without changing their own settings. */
 export interface Group { id: string; name: string; visible: boolean; locked: boolean }
@@ -59,7 +60,7 @@ export const GLOW_MAX = 40;
 export const PHOTO_TEXT_LIMIT = 8 * 1024 * 1024;
 export const DEFAULT_BORDER: Border = { width: 0, colour: 'shape', glow: 0 };
 /** The stage 3 fields of a new shape, at their defaults. */
-export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'softEdge' | 'border'> => ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER } });
+export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'softEdge' | 'border' | 'fill'> => ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour' });
 
 export function createShow(): ShowDocument {
   return { format: 'formshow', version: 3, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null };
@@ -223,7 +224,10 @@ function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaire
     if (raw.groupId !== undefined && raw.groupId !== null && groupId === null) repaired = true;
     const softEdge = clampNumber(raw.softEdge, SOFT_EDGE_MAX), border = readBorder(raw.border);
     if (softEdge.repaired || border.repaired) repaired = true;
-    shapes.push({ id, name, points, colour: colourOk ? raw.colour as string : '#ffffff', visible, locked, sourceId, holes, groupId, blocker, softEdge: softEdge.value, border: border.border });
+    // Shapes from before the grid pattern keep their plain colour.
+    const fill = raw.fill === 'grid' ? 'grid' : 'colour';
+    if (raw.fill !== undefined && raw.fill !== 'grid' && raw.fill !== 'colour') repaired = true;
+    shapes.push({ id, name, points, colour: colourOk ? raw.colour as string : '#ffffff', visible, locked, sourceId, holes, groupId, blocker, softEdge: softEdge.value, border: border.border, fill });
   }
   const normal = normaliseGroups({ shapes, groups: readG.groups });
   if (normal.shapes !== shapes) repaired = true;

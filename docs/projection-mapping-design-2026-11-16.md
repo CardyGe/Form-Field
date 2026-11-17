@@ -378,7 +378,16 @@ Made 17 November 2026, before building stage 3. Greg chose the first four; the r
   - Chosen from a file on this screen and stored in the show, shrunk to fit 1920 × 1080 as a JPEG, so it travels with Save As.
   - It is drawn under the outlines on the operator screen only, with its own opacity. It is never sent to the wall.
 
-**Known limits, stage 3**
+**Added after stage 3, at Greg's request (17 November)**
+
+- **New shapes show a grid pattern**, like a pro tool's test card. Lines run about every 80 projector pixels in the shape's colour over a dim fill of it. The centre lines are bold, and the shape's name sits in the middle.
+  - On a four-corner shape the lines and two diagonals follow its corners, so a shape that is not square to the object shows it at once.
+  - Other shapes get straight lines across their box, cut by the outline.
+  - "Plays" offers Grid pattern, Its colour or an instrument. The pattern stays until another is chosen.
+  - Shows from before keep their plain colour (a shape's `fill` is `colour` unless saved as `grid`).
+  - The pattern is drawn once per shape and reused until the shape changes.
+- **Room photo** is now offered in three places: a button in the tool strip, the stage's right-click menu, and dropping a JPEG or PNG on the stage. It was already under the stage.
+
 
 - **Points.**
   - At most 32 points a shape, its holes included, and at most 8 holes.

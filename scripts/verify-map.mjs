@@ -80,7 +80,7 @@ try {
     output.on('pageerror', e => errors.push(String(e)));
   });
 
-  await check('a drawn rectangle projects its colour inside the box and black outside', async () => {
+  await check('a new rectangle shows its grid pattern, then its colour inside the box and black outside', async () => {
     await studio.getByRole('button', { name: 'Rectangle', exact: true }).click();
     const rect = await stage.evaluate(c => { const r = c.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
     assert.ok(rect.width > 200 && rect.height > 100, `stage canvas is ${rect.width} x ${rect.height}`);
@@ -88,6 +88,20 @@ try {
     await studio.mouse.move(...at(BOX.x0, BOX.y0)); await studio.mouse.down();
     await studio.mouse.move(...at(.4, .4), { steps: 6 }); await studio.mouse.move(...at(BOX.x1, BOX.y1), { steps: 6 }); await studio.mouse.up();
     await studio.getByRole('button', { name: 'Select', exact: true }).click();
+    // A new shape shows its grid pattern: bold centre lines in its colour, dim between the lines, black outside.
+    let g;
+    const centre = [(BOX.x0 + BOX.x1) / 2, (BOX.y0 + BOX.y1) / 2];
+    // Probes about two projector pixels apart across the shape, 100 px below the middle (clear of the centre line and the name).
+    const row = Array.from({ length: 300 }, (_, i) => [BOX.x0 + .01 + i * (BOX.x1 - BOX.x0 - .02) / 299, centre[1] + 100 / 1080]);
+    // The centre point is on the bold vertical centre line, below the name.
+    for (let i = 0; i < 30; i++) { g = await sample(output, [[centre[0], centre[1] + 100 / 1080], [.1, .1], ...row]); if (near(g.colours[0], RED, 40)) break; await sleep(100); }
+    assert.ok(near(g.colours[0], RED, 40), `the centre of a new shape is rgb(${g.colours[0]}), not its colour`);
+    assert.ok(near(g.colours[1], BLACK), 'outside the new shape is black');
+    const lit = g.colours.slice(2).filter(c => c[0] > 150).length, dim = g.colours.slice(2).filter(c => c[0] < 120 && c[0] > 15).length;
+    assert.ok(lit >= 5 && dim >= 200, `grid pattern: ${lit} probes on a line, ${dim} dim between lines`);
+    await fs.writeFile(path.join(out, 'output-grid-pattern.png'), Buffer.from(g.png, 'base64'));
+    // The rest of the checks use a plain colour.
+    await studio.getByLabel('Plays').selectOption('colour');
     let s;
     for (let i = 0; i < 30; i++) { s = await sample(output, [...INSIDE, ...OUTSIDE]); if (near(s.colours[0], RED)) break; await sleep(100); }
     assert.deepEqual(s.size, [1920, 1080]);
@@ -310,12 +324,14 @@ try {
     throw new Error(`${what}: wall shows ${s.colours.map(c => `rgb(${c})`).join(', ')}`);
   };
   const shapeCount = () => studio.locator('.map-shape-list li:not(.map-group-row)').count();
+  /** The selected shape plays its plain colour, not the grid pattern new shapes start with. */
+  const asColour = () => studio.getByLabel('Plays').selectOption('colour');
 
   await check('an ellipse projects a round shape; a hole cut with Alt is black on the wall, and Undo takes it away', async () => {
     await clearStage();
     await tool('Ellipse');
     await dragOn([.2, .2], [.5, .6]);
-    await tool('Select');
+    await tool('Select'); await asColour();
     // Centre coloured; the box's corners outside the ellipse black.
     await wallUntil([[.35, .4], [.21, .21], [.49, .59]], c => coloured(c[0]) && near(c[1], BLACK) && near(c[2], BLACK), 'ellipse');
     await tool('Rectangle');
@@ -336,7 +352,7 @@ try {
     await studio.mouse.move(...at(.85, .2)); await studio.mouse.down(); await studio.mouse.move(...at(.9, .3), { steps: 6 }); await studio.mouse.up();
     await clickOn([.85, .5]); await clickOn([.6, .5]);
     await focusStage(); await studio.keyboard.press('Enter');
-    await tool('Select');
+    await tool('Select'); await asColour();
     assert.equal(await shapeCount(), 1);
     // x .862 at y .32 is outside the straight side at x .85 but inside the curve, which reaches about x .872 there.
     await wallUntil([[.7, .35], [.862, .32], [.885, .32]], c => coloured(c[0]) && coloured(c[1]) && near(c[2], BLACK), 'curved side');
@@ -347,7 +363,7 @@ try {
 
   await check('a Blocker blacks out the shape beneath it on the wall', async () => {
     await clearStage();
-    await tool('Rectangle'); await dragOn([.1, .1], [.5, .5]);
+    await tool('Rectangle'); await dragOn([.1, .1], [.5, .5]); await asColour();
     await tool('Rectangle'); await dragOn([.3, .3], [.6, .6]);
     await tool('Select');
     await studio.getByLabel('Blocker', { exact: true }).check();
@@ -357,7 +373,7 @@ try {
   await check('soft edge fades to dark at the outline; a border brings the outline back', async () => {
     await clearStage();
     await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
-    await tool('Select');
+    await tool('Select'); await asColour();
     const slider = async (label, value) => { const s = studio.getByLabel(label, { exact: true }); await s.fill(String(value)); await s.dispatchEvent('pointerup'); };
     await slider('Soft edge', 80);
     // 6 px inside the left side, the fade has barely begun; the middle is full colour.
@@ -369,8 +385,8 @@ try {
 
   await check('Solo shows only the soloed shape on the wall; a hidden group hides its members', async () => {
     await clearStage();
-    await tool('Rectangle'); await dragOn([.1, .1], [.3, .3]);
-    await tool('Rectangle'); await dragOn([.5, .5], [.7, .7]);
+    await tool('Rectangle'); await dragOn([.1, .1], [.3, .3]); await asColour();
+    await tool('Rectangle'); await dragOn([.5, .5], [.7, .7]); await asColour();
     await tool('Select');
     const names = await studio.locator('.map-shape-list li .map-shape-name').allTextContents();
     await studio.getByRole('button', { name: `Solo ${names[0]}`, exact: true }).click();
@@ -407,7 +423,7 @@ try {
   await check('Make a grid: a 2 x 2 grid projects four cells with a gap between them, in a group', async () => {
     await clearStage();
     await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
-    await tool('Select');
+    await tool('Select'); await asColour();
     await studio.locator('.map-grid-tool summary').click();
     await studio.getByLabel('Grid gap', { exact: true }).fill('60');
     await studio.getByRole('button', { name: 'Make grid', exact: true }).click();
