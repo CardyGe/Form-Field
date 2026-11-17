@@ -24,6 +24,7 @@ async function ensureCameraAccess(systemPreferences) {
 }
 
 const fs = require('node:fs/promises');
+const { createOutputWindow } = require('./output-window.cjs');
 const path = require('node:path');
 
 const MESSAGE_LIMIT = 16 * 1024;
@@ -101,23 +102,10 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSav
     closeOutput();
     // The scripted checks open the artwork as an ordinary window so they do not take over the screen.
     const windowed = process.env.STUDIO_LIVE_TEST_WINDOW === '1';
-    const window = new BrowserWindow({
-      ...(windowed ? { width: 960, height: 540 } : display.bounds), frame: false, show: false, backgroundColor: '#000000', title: 'Form & Field Live', resizable: false, movable: false,
-      minimizable: false, fullscreenable: true, skipTaskbar: true, autoHideMenuBar: true,
-      webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: false, spellcheck: false },
-    });
+    const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, windowed });
     output = window;
-    window.displayId = display.id;
-    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    window.webContents.on('will-attach-webview', event => event.preventDefault());
-    window.webContents.on('will-navigate', event => event.preventDefault());
-    window.webContents.on('before-input-event', (event, input) => { if (input.type === 'keyDown' && input.key === 'Escape') { event.preventDefault(); window.close(); } });
-    window.webContents.on('render-process-gone', () => { if (!window.isDestroyed()) window.close(); });
-    window.once('ready-to-show', () => { if (window.isDestroyed()) return; window.show(); if (windowed) return; if (process.platform === 'darwin') window.setSimpleFullScreen(true); else window.setFullScreen(true); });
-    // A projector gets no keyboard or mouse input, so without this macOS would dim or sleep it mid-show.
-    const awake = powerSaveBlocker?.start('prevent-display-sleep');
     window.on('closed', () => {
-      if (awake !== undefined && powerSaveBlocker.isStarted(awake)) powerSaveBlocker.stop(awake);
+      release();
       if (output === window) { output = null; tellStudio('studio:live:output', false); }
     });
     open(window);
