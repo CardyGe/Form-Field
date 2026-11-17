@@ -36,3 +36,24 @@
 /* Editing a Map shape's composition in Studio */
 .shape-edit-bar { display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 12px; border-radius: 6px; background: #26301a; color: var(--accent); font-size: 12px; white-space: nowrap; }
 .shape-edit-bar .primary-button { min-height: 26px; padding: 3px 10px; }
+
+/* Stage 3: tools, the bar under the stage, groups in the list, Details sections */
+.map-centre { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.map-centre .map-stage { flex: 1; }
+.map-tools, .map-stage-bar { display: flex; align-items: center; gap: 4px; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.map-stage-bar { border-bottom: 0; border-top: 1px solid var(--line); font-size: 11px; }
+.map-tools .text-button[aria-pressed="true"] { background: var(--raised); color: var(--accent); }
+.map-tool-hint { margin-left: 8px; font-size: 11px; }
+.map-bar-gap { flex: 1; }
+.map-check { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink); }
+.map-inline-range { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.map-inline-range input { width: 90px; }
+.map-shape-list li.map-member { padding-left: 18px; }
+.map-shape-list li.map-group-row .map-shape-name { font-weight: 600; }
+.map-folder { width: 18px; min-height: 24px; padding: 0; border: 0; background: none; color: var(--muted); }
+.map-swatch.blocker { background: repeating-linear-gradient(45deg, #111 0 3px, #777 3px 5px); }
+.map-list-actions { margin-top: 8px; }
+.map-inspector { overflow-y: auto; }
+.map-grid-tool summary { cursor: pointer; font-size: 12px; margin-top: 4px; }
+.map-grid-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 6px 0; }
+.map-group-line { display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 6px; }

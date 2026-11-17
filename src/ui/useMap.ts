@@ -6,6 +6,12 @@ import { autosaveSchedule, canEdit } from '../map/autosave';
 import { acceptMapMessage, sourcesToSend, toWire, type MapMessage } from '../map/messages';
 import { createShow, validateShow, type ShowDocument } from '../map/show';
 
+export type MapTool = 'select' | 'rectangle' | 'triangle' | 'ellipse' | 'pen';
+/** The shapes soloed, directly or through their group, that are still in the show. */
+export function soloIds(show: ShowDocument, solo: { shapes: string[]; groups: string[] }): string[] {
+  return show.shapes.filter(s => solo.shapes.includes(s.id) || (s.groupId !== null && solo.groups.includes(s.groupId))).map(s => s.id);
+}
+
 export interface Display { id: number; label: string; primary: boolean }
 
 const TOO_LARGE = 'This show is too large to send to the wall. The wall keeps its last show.';
@@ -47,6 +53,11 @@ interface Session {
   wallFrame: number | null;
   /** Told when a Studio edit could not reach the wall. */
   onStudioWarning: ((text: string) => void) | null;
+  /** Solo: shapes and groups soloed. Not saved, not an undo step; kept while the app is open. */
+  solo: { shapes: string[]; groups: string[] };
+  /** Snap, and whether the trace-over photo is shown on this screen. */
+  snap: boolean;
+  photoShown: boolean;
 }
 let session: Session | null = null;
 function mapSession(): Session {
@@ -55,6 +66,7 @@ function mapSession(): Session {
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
     outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, mounted: 0, wallFrame: null, onStudioWarning: null,
+    solo: { shapes: [], groups: [] }, snap: true, photoShown: true,
     saver: autosaveSchedule<ShowDocument>(async show => {
       if (!bridge) return;
       // A failed write is reported, never swallowed: the operator keeps working and can Save As.
@@ -145,9 +157,16 @@ export function useMap(onError: (message: string) => void) {
   const [state, setState] = useState<MapState>(stateRef.current);
   const show = state.show;
   const [loaded, setLoaded] = useState(kept.loaded);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The selection: every selected shape, the first being the one whose details and points are shown;
+  // the chosen point is selectedIndex of ring selectedRing (-1 the outline, 0 and up its holes).
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const selectedId = selectedIds[0] ?? null;
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [tool, setTool] = useState<'select' | 'rectangle'>('select');
+  const [selectedRing, setSelectedRing] = useState(-1);
+  const [tool, setTool] = useState<MapTool>('select');
+  const [solo, setSoloState] = useState(kept.solo);
+  const [snap, setSnapState] = useState(kept.snap);
+  const [photoShown, setPhotoShownState] = useState(kept.photoShown);
   const [lastRefusal, setLastRefusal] = useState<string | null>(null);
   const [sendWarning, setSendWarning] = useState<string | null>(null);
   /** Kept apart from the show's own warning, which every show message clears. */
@@ -280,6 +299,14 @@ export function useMap(onError: (message: string) => void) {
     else sendNow(showMessage(shown));
   }, [shown, outputOpen]);
 
+  // Solo reaches the wall as the shapes it covers, sent again whenever that changes.
+  const soloed = soloIds(shown, solo);
+  const soloKey = soloed.join('\n');
+  useEffect(() => {
+    if (!outputOpen || !bridge) return;
+    sendNow({ type: 'solo', ids: soloed });
+  }, [soloKey, outputOpen, outputEpoch]);
+
   const loadedRef = useRef(false);
   loadedRef.current = loaded;
   const step = useCallback((action: Parameters<typeof mapReducer>[1]) => {
@@ -311,7 +338,8 @@ export function useMap(onError: (message: string) => void) {
   const closeOutput = () => { void bridge?.closeOutput(); };
 
   // The wall's crosshair follows the selected corner, including while it is being dragged.
-  const crossPoint = selectedId !== null && selectedIndex !== null ? shown.shapes.find(s => s.id === selectedId)?.points[selectedIndex] ?? null : null;
+  const crossShape = selectedId !== null ? shown.shapes.find(s => s.id === selectedId) : undefined;
+  const crossPoint = crossShape && selectedIndex !== null ? (selectedRing < 0 ? crossShape.points : crossShape.holes[selectedRing])?.[selectedIndex] ?? null : null;
   const crossX = crossPoint?.x ?? null, crossY = crossPoint?.y ?? null;
   useEffect(() => {
     if (!outputOpen || !bridge) return;
@@ -359,8 +387,16 @@ export function useMap(onError: (message: string) => void) {
     identifyTimer.current = setTimeout(() => { identifyTimer.current = null; bridge.send({ type: 'identify', shapeId: null }); }, 3000);
   };
 
-  const setSelection = (id: string | null, index: number | null = null) => { setSelectedId(id); setSelectedIndex(id === null ? null : index); };
+  const setSelection = (id: string | null, index: number | null = null, ring = -1) => { setSelectedIds(id === null ? [] : [id]); setSelectedIndex(id === null ? null : index); setSelectedRing(id === null ? -1 : ring); };
+  /** Several shapes; their points are not chosen. */
+  const selectMany = (ids: string[]) => { setSelectedIds(ids); setSelectedIndex(null); setSelectedRing(-1); };
+  /** Shift-click: adds a shape to the selection, or takes it out. */
+  const toggleSelected = (id: string) => { setSelectedIds(ids => ids.includes(id) ? ids.filter(i => i !== id) : [...ids, id]); setSelectedIndex(null); setSelectedRing(-1); };
+  const setSolo = (next: { shapes: string[]; groups: string[] }) => { kept.solo = next; setSoloState(next); };
+  const setSnap = (on: boolean) => { kept.snap = on; setSnapState(on); };
+  const setPhotoShown = (on: boolean) => { kept.photoShown = on; setPhotoShownState(on); };
 
-  return { show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIndex, setSelection, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
+  return { show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
+    solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

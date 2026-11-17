@@ -139,3 +139,17 @@ test('⌘D or Ctrl-D duplicates, but not from a text box', async () => {
   assert.equal(shortcutFor(ev('d', { metaKey: true, target: { tagName: 'INPUT' } })), null);
   assert.equal(shortcutFor(ev('d')), null);
 });
+
+test('stage 3 keys: T, E and P pick tools; Enter closes a Pen outline; ⌘A, ⌘G and ⇧⌘G', async () => {
+  const { shortcutFor } = await import('../src/map/keys');
+  const ev = (key: string, extra = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: { tagName: 'DIV' }, onStage: true, ...extra });
+  assert.equal(shortcutFor(ev('t')), 'triangle');
+  assert.equal(shortcutFor(ev('e')), 'ellipse');
+  assert.equal(shortcutFor(ev('p')), 'pen');
+  assert.equal(shortcutFor(ev('Enter')), 'close');
+  assert.equal(shortcutFor(ev('Enter', { onStage: false, target: { tagName: 'BUTTON' } })), null);
+  assert.equal(shortcutFor(ev('a', { metaKey: true })), 'select-all');
+  assert.equal(shortcutFor(ev('g', { metaKey: true })), 'group');
+  assert.equal(shortcutFor(ev('G', { metaKey: true, shiftKey: true })), 'ungroup');
+  assert.equal(shortcutFor(ev('a', { metaKey: true, target: { tagName: 'INPUT' } })), null);
+});

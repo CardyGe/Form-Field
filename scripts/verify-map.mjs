@@ -1,5 +1,7 @@
 // Real Electron check of the Map section: draw, project, refusal (red on the operator screen), the wall's picture
-// on the operator screen, Lock, keys from buttons, blackout, Escape, and coming back to Map.
+// on the operator screen, Lock, keys from buttons, blackout, instruments, Edit in Studio, the stage 3 drawing kit
+// (ellipse, holes, Pen curves, Blocker, soft edge and border, solo and groups, joined corners, grids, Photo),
+// Escape, and coming back to Map.
 // Run: npm run test:map   (builds first). Uses a throwaway user-data folder under work/map/.
 // Writes work/map/output-rectangle.png and work/map/output-blackout.png for review by eye.
 import fs from 'node:fs/promises';
@@ -279,6 +281,160 @@ try {
     assert.equal(await studio.getByRole('button', { name: 'Undo', exact: true }).isDisabled(), false);
   });
 
+  // ---- Stage 3: the drawing kit ----
+  const geo = async () => { const r = await stage.evaluate(c => { const b = c.getBoundingClientRect(); return { left: b.left, top: b.top, width: b.width, height: b.height }; }); return (fx, fy) => [r.left + fx * r.width, r.top + fy * r.height]; };
+  const tool = name => studio.getByRole('toolbar', { name: 'Tools' }).getByRole('button', { name, exact: true }).click();
+  const focusStage = () => studio.locator('main.map-stage').focus();
+  const dragOn = async (from, to, mods = []) => {
+    const at = await geo();
+    for (const m of mods) await studio.keyboard.down(m);
+    try { await studio.mouse.move(...at(...from)); await studio.mouse.down(); await studio.mouse.move(...at(...to), { steps: 8 }); await studio.mouse.up(); }
+    finally { for (const m of mods) await studio.keyboard.up(m); }
+  };
+  const clickOn = async (p, mods = []) => {
+    const at = await geo();
+    for (const m of mods) await studio.keyboard.down(m);
+    try { await studio.mouse.click(...at(...p)); } finally { for (const m of mods) await studio.keyboard.up(m); }
+  };
+  /** Every shape selected and deleted, so each check starts from an empty stage. */
+  const clearStage = async () => {
+    await tool('Select'); await focusStage();
+    await studio.keyboard.press('Meta+a'); await studio.keyboard.press('Backspace');
+    await studio.waitForFunction(() => document.querySelectorAll('.map-shape-list li').length === 0, null, { timeout: 5000 });
+  };
+  const coloured = c => !near(c, BLACK, 60);
+  /** Waits until the wall agrees with `test`, then returns its colours at `points`. */
+  const wallUntil = async (points, test, what) => {
+    let s;
+    for (let i = 0; i < 40; i++) { s = await sample(output, points); if (test(s.colours)) return s.colours; await sleep(100); }
+    throw new Error(`${what}: wall shows ${s.colours.map(c => `rgb(${c})`).join(', ')}`);
+  };
+  const shapeCount = () => studio.locator('.map-shape-list li:not(.map-group-row)').count();
+
+  await check('an ellipse projects a round shape; a hole cut with Alt is black on the wall, and Undo takes it away', async () => {
+    await clearStage();
+    await tool('Ellipse');
+    await dragOn([.2, .2], [.5, .6]);
+    await tool('Select');
+    // Centre coloured; the box's corners outside the ellipse black.
+    await wallUntil([[.35, .4], [.21, .21], [.49, .59]], c => coloured(c[0]) && near(c[1], BLACK) && near(c[2], BLACK), 'ellipse');
+    await tool('Rectangle');
+    await dragOn([.3, .33], [.4, .47], ['Alt']);
+    await tool('Select');
+    await wallUntil([[.35, .4], [.25, .4]], c => near(c[0], BLACK) && coloured(c[1]), 'hole');
+    assert.equal(await shapeCount(), 1, 'the hole is not a shape of its own');
+    await focusStage(); await studio.keyboard.press('Meta+z');
+    await wallUntil([[.35, .4]], c => coloured(c[0]), 'after undo');
+  });
+
+  await check('the Pen draws straight and curved sides: the curve bulges past the straight line on the wall', async () => {
+    await clearStage();
+    await tool('Pen');
+    const at = await geo();
+    await clickOn([.6, .2]);
+    // Click and drag: a curve point with handles.
+    await studio.mouse.move(...at(.85, .2)); await studio.mouse.down(); await studio.mouse.move(...at(.9, .3), { steps: 6 }); await studio.mouse.up();
+    await clickOn([.85, .5]); await clickOn([.6, .5]);
+    await focusStage(); await studio.keyboard.press('Enter');
+    await tool('Select');
+    assert.equal(await shapeCount(), 1);
+    // x .862 at y .32 is outside the straight side at x .85 but inside the curve, which reaches about x .872 there.
+    await wallUntil([[.7, .35], [.862, .32], [.885, .32]], c => coloured(c[0]) && coloured(c[1]) && near(c[2], BLACK), 'curved side');
+    // For review by eye: the curve point chosen, with its handles.
+    await clickOn([.7, .35]); await clickOn([.85, .2]); await sleep(300);
+    await studio.screenshot({ path: path.join(out, 'operator-pen.png') });
+  });
+
+  await check('a Blocker blacks out the shape beneath it on the wall', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.1, .1], [.5, .5]);
+    await tool('Rectangle'); await dragOn([.3, .3], [.6, .6]);
+    await tool('Select');
+    await studio.getByLabel('Blocker', { exact: true }).check();
+    await wallUntil([[.2, .2], [.4, .4], [.55, .55]], c => coloured(c[0]) && near(c[1], BLACK) && near(c[2], BLACK), 'blocker');
+  });
+
+  await check('soft edge fades to dark at the outline; a border brings the outline back', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
+    await tool('Select');
+    const slider = async (label, value) => { const s = studio.getByLabel(label, { exact: true }); await s.fill(String(value)); await s.dispatchEvent('pointerup'); };
+    await slider('Soft edge', 80);
+    // 6 px inside the left side, the fade has barely begun; the middle is full colour.
+    const [edge, middle] = await wallUntil([[.2 + 6 / 1920, .4], [.4, .4]], c => coloured(c[1]) && c[0].reduce((a, b) => a + b) < c[1].reduce((a, b) => a + b) / 3, 'soft edge');
+    assert.ok(coloured(middle) && !coloured(edge) || edge.reduce((a, b) => a + b) < middle.reduce((a, b) => a + b) / 3);
+    await slider('Border', 16);
+    await wallUntil([[.2 + 6 / 1920, .4], [.4, .4]], c => near(c[0], c[1], 40), 'border');
+  });
+
+  await check('Solo shows only the soloed shape on the wall; a hidden group hides its members', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.1, .1], [.3, .3]);
+    await tool('Rectangle'); await dragOn([.5, .5], [.7, .7]);
+    await tool('Select');
+    const names = await studio.locator('.map-shape-list li .map-shape-name').allTextContents();
+    await studio.getByRole('button', { name: `Solo ${names[0]}`, exact: true }).click();
+    await wallUntil([[.2, .2], [.6, .6]], c => coloured(c[0]) && near(c[1], BLACK), 'solo');
+    await studio.getByRole('button', { name: 'Solo on · Clear' }).click();
+    await wallUntil([[.2, .2], [.6, .6]], c => coloured(c[0]) && coloured(c[1]), 'solo cleared');
+    await focusStage(); await studio.keyboard.press('Meta+a'); await studio.keyboard.press('Meta+g');
+    await studio.locator('.map-group-row').waitFor();
+    await studio.getByRole('button', { name: /^Hide group / }).click();
+    await wallUntil([[.2, .2], [.6, .6]], c => near(c[0], BLACK) && near(c[1], BLACK), 'hidden group');
+    await studio.getByRole('button', { name: /^Show group / }).click();
+    await wallUntil([[.2, .2], [.6, .6]], c => coloured(c[0]) && coloured(c[1]), 'group shown again');
+  });
+
+  await check('Snap: a corner drawn onto a neighbour’s corner joins it, and dragging one moves both', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.1, .1], [.2, .2]);
+    // Started a few pixels from the first rectangle's top-right corner: it snaps onto it.
+    const at = await geo();
+    const near3 = (await stage.evaluate(c => c.getBoundingClientRect().width)) > 0 ? 3 / 1920 : 0;
+    await tool('Rectangle'); await dragOn([.2 + near3, .1 + near3], [.3, .2]);
+    await tool('Select');
+    // Pick the first rectangle, then drag its top-right corner up and right.
+    await clickOn([.15, .15]);
+    await dragOn([.2, .1], [.22, .08]);
+    // Pick the second rectangle and its top-left corner: it moved with the first.
+    await clickOn([.27, .17]);
+    await clickOn([.22, .08]);
+    const x = Number(await studio.getByLabel('X', { exact: true }).inputValue()), y = Number(await studio.getByLabel('Y', { exact: true }).inputValue());
+    assert.ok(Math.abs(x - .22 * 1920) <= 3 && Math.abs(y - .08 * 1080) <= 3, `the joined corner is at ${x}, ${y}`);
+    void at;
+  });
+
+  await check('Make a grid: a 2 x 2 grid projects four cells with a gap between them, in a group', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
+    await tool('Select');
+    await studio.locator('.map-grid-tool summary').click();
+    await studio.getByLabel('Grid gap', { exact: true }).fill('60');
+    await studio.getByRole('button', { name: 'Make grid', exact: true }).click();
+    await studio.locator('.map-group-row').waitFor();
+    assert.equal(await shapeCount(), 4);
+    await wallUntil([[.3, .3], [.5, .3], [.3, .5], [.5, .5], [.4, .4]], c => c.slice(0, 4).every(coloured) && near(c[4], BLACK), 'grid');
+    await sleep(300);
+    await studio.screenshot({ path: path.join(out, 'operator-grid.png') });
+  });
+
+  await check('the Photo shows on this screen only, never on the wall', async () => {
+    await clearStage();
+    // A plain white picture, made in the page.
+    const png = await studio.evaluate(() => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; const x = c.getContext('2d'); x.fillStyle = '#ffffff'; x.fillRect(0, 0, 320, 180); return c.toDataURL('image/png').split(',')[1]; });
+    const file = path.join(out, 'photo.png');
+    await fs.writeFile(file, Buffer.from(png, 'base64'));
+    await studio.getByLabel('Photo file').setInputFiles(file);
+    await studio.getByLabel('Photo opacity').waitFor();
+    let here;
+    for (let i = 0; i < 30; i++) { here = await operatorAt(stage, .9, .9); if (!near(here, BLACK, 40)) break; await sleep(100); }
+    assert.ok(!near(here, BLACK, 40), `operator screen with the photo is rgb(${here})`);
+    await sleep(600);
+    const wall = await sample(output, [[.9, .9], [.5, .5], [.1, .1]]);
+    wall.colours.forEach(c => assert.ok(near(c, BLACK), `the wall shows rgb(${c}) with only a photo`));
+    await studio.getByRole('button', { name: 'Remove photo' }).click();
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
@@ -316,5 +472,5 @@ try {
   await app.close().catch(() => {});
   console.log(results.join('\n'));
   console.log(process.exitCode ? 'MAP CHECK FAILED' : 'MAP CHECK PASSED');
-  console.log(`PNGs: ${path.join(out, 'output-rectangle.png')}, ${path.join(out, 'output-blackout.png')}`);
+  console.log(`PNGs: ${['output-rectangle', 'output-blackout', 'operator-pen', 'operator-grid'].map(n => path.join(out, `${n}.png`)).join(', ')}`);
 }

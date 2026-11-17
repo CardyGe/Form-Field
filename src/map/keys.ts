@@ -10,7 +10,8 @@ export function shouldCommit(startText: string, draft: string): boolean {
   return draft !== startText;
 }
 
-export type Shortcut = 'undo' | 'redo' | 'delete' | 'duplicate' | 'select' | 'rectangle' | 'deselect' | 'arrow' | 'next-corner' | 'previous-corner';
+export type Shortcut = 'undo' | 'redo' | 'delete' | 'duplicate' | 'select' | 'rectangle' | 'triangle' | 'ellipse' | 'pen' | 'close'
+  | 'select-all' | 'group' | 'ungroup' | 'deselect' | 'arrow' | 'next-corner' | 'previous-corner';
 
 /**
  * What a key press asks the Map screen to do, or null when it asks nothing or belongs to a text box.
@@ -24,11 +25,18 @@ export function shortcutFor(e: { key: string; metaKey: boolean; ctrlKey: boolean
     if (e.altKey) return null;
     if (key === 'z') return e.shiftKey ? 'redo' : 'undo';
     if (key === 'd' && !e.shiftKey) return 'duplicate';
+    if (key === 'a' && !e.shiftKey) return 'select-all';
+    if (key === 'g') return e.shiftKey ? 'ungroup' : 'group';
     return null;
   }
   if (e.altKey) return null;
   if (key === 'v') return 'select';
   if (key === 'r') return 'rectangle';
+  if (key === 't') return 'triangle';
+  if (key === 'e') return 'ellipse';
+  if (key === 'p') return 'pen';
+  // Enter closes a Pen outline, only from the stage: on a button it presses the button.
+  if (e.key === 'Enter') return e.onStage ? 'close' : null;
   if (e.key === 'Escape') return 'deselect';
   if (e.key === 'Delete' || e.key === 'Backspace') return e.onStage ? 'delete' : null;
   if (e.key === 'Tab') return e.onStage ? (e.shiftKey ? 'previous-corner' : 'next-corner') : null;
