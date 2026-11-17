@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import type { Passes, Pair } from './passes';
 import type { FrameSource, TrackingFeed } from './look';
-import type { LiveSettings } from './settings';
+import { usesPeople, type LiveSettings } from './settings';
 import { cameraFragment, flowFragment, lumaFragment, smoothFragment } from './tracking-shaders';
 import type { MaskProvider, PeopleStatus } from './MaskProvider';
 import { People } from './People';
@@ -40,6 +40,7 @@ export class Tracking implements TrackingFeed {
   private lastFrameAt = 0;
   private readonly peopleStage: People;
   private provider: MaskProvider | null = null;
+  private providerKind = '';
   private epoch = 0;
   /** Counts restarts after a stalled camera, so people settle again. */
   private restarts = 0;
@@ -77,12 +78,17 @@ export class Tracking implements TrackingFeed {
 
   /** One display frame: movement from new camera frames, and people when the look wants them. `step` is the capped time step. */
   update(source: FrameSource, settings: LiveSettings, step = 0): void {
-    const wants = settings.look === 'smoke' && !!this.makeProvider;
-    if (wants && !this.provider) {
-      try { this.provider = this.makeProvider!(); }
-      catch (error) { this.provider = new FailedProvider(error); }
+    const kind = usesPeople(settings) ? settings.look + ':' + settings.source.kind : '';
+    if (kind !== this.providerKind) {
+      this.provider?.dispose();
+      this.provider = null;
+      this.peopleStage.reset();
+      this.providerKind = kind;
+      if (kind && this.makeProvider) {
+        try { this.provider = this.makeProvider(); }
+        catch (error) { this.provider = new FailedProvider(error); }
+      }
     }
-    if (!wants && this.provider) { this.provider.dispose(); this.provider = null; this.peopleStage.reset(); }
     const before = this.frameId, restartsBefore = this.restarts;
     this.analyse(source, settings);
     if (!this.provider) return;

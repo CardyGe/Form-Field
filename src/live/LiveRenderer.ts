@@ -14,8 +14,11 @@ import type { MaskProvider } from './MaskProvider';
 import { Tracking, FLOW_SIZE } from './Tracking';
 import { Paint } from './Paint';
 import { Smoke } from './Smoke';
+import { Relief } from './Relief';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
+
+const looks = { paint: Paint, smoke: Smoke, relief: Relief };
 
 /** Operator setup view: the camera dimmed, people in blue with a pink outline. Never shown in the artwork window. */
 const peopleViewFragment = /* glsl */`
@@ -107,7 +110,7 @@ export class LiveRenderer {
     if (this.lookKind !== this.settings.look) {
       // Switching looks starts the new one fresh; each keeps its own settings.
       this.look?.dispose();
-      this.look = this.settings.look === 'smoke' ? new Smoke(this.passes, this.width, this.height) : new Paint(this.passes, this.width, this.height);
+      this.look = new looks[this.settings.look](this.passes, this.width, this.height);
       this.lookKind = this.settings.look;
     }
     if (!this.look) return;

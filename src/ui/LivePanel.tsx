@@ -1,6 +1,7 @@
 import { useRef, type ReactNode } from 'react';
 import { useLive } from './useLive';
-import { IGNORE_STILL, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, type Box, type LiveSettings } from '../live/settings';
+import { IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SMOKE_CONTROLS, SMOKE_STARTS, usesPeople, type Box, type LiveSettings } from '../live/settings';
+import { RELIEF_PALETTES, validateReliefPalette } from '../live/relief-palettes';
 import { rampHex } from '../live/colour';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, SOLAR } from '../core/palettes';
@@ -46,7 +47,9 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
   const smokePaletteName = PALETTES.find(([, colours]) => colours.join() === s.smoke.palette.join())?.[0] ?? '';
   const smoke = s.look === 'smoke', people = live.people;
   const peopleStatus = peopleLine(people.status);
-  const roomMissing = smoke && s.people.useEmptyRoom && !people.roomCaptured;
+  const roomMissing = usesPeople(s) && s.people.useEmptyRoom && !people.roomCaptured;
+  const setRelief = (change: Partial<ReliefSettings>) => live.update(v => ({ ...v, relief: { ...v.relief, ...change } }));
+  const reliefPreset = RELIEF_PRESETS.find(p => (Object.keys(p.settings) as (keyof ReliefSettings)[]).every(k => p.settings[k] === s.relief[k]));
   const setSmoke = (change: Partial<LiveSettings['smoke']>) => live.update(v => ({ ...v, smoke: { ...v.smoke, ...change } }));
   const setPeople = (change: Partial<LiveSettings['people']>) => live.update(v => ({ ...v, people: { ...v.people, ...change } }));
 
@@ -80,20 +83,20 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         <label className="live-check"><input aria-label="Mirror" type="checkbox" checked={s.mirror} onChange={e => set({ mirror: e.target.checked })} />Mirror<small>On when the camera faces the people</small></label>
         <Slider label="Sensitivity" value={s.sensitivity} min={SENSITIVITY.min} max={SENSITIVITY.max} step={.05} onChange={sensitivity => set({ sensitivity })} />
         <Slider label="Camera noise floor" value={s.noiseFloor} min={NOISE_FLOOR.min} max={NOISE_FLOOR.max} step={.005} onChange={noiseFloor => set({ noiseFloor })} />
-        <h3>Area that paints</h3>
+        <h3>Interaction area</h3>
         <Slider label="Area left" value={s.box.left} min={0} max={1} step={.01} onChange={v => setBox('left', v)} />
         <Slider label="Area right" value={s.box.right} min={0} max={1} step={.01} onChange={v => setBox('right', v)} />
         <Slider label="Area bottom" value={s.box.bottom} min={0} max={1} step={.01} onChange={v => setBox('bottom', v)} />
         <Slider label="Area top" value={s.box.top} min={0} max={1} step={.01} onChange={v => setBox('top', v)} />
         <label className="live-check"><input aria-label="Show tracking" type="checkbox" disabled={live.outputOpen} checked={live.view === 'tracking'} onChange={e => live.setView(e.target.checked ? 'tracking' : 'art')} />Show tracking
           <small>{live.outputOpen ? 'Close the output to adjust tracking.' : 'Camera with movement drawn over it. Only ever shown here.'}</small></label>
-        {smoke && <section className="live-people" aria-label="Finding people">
+        {usesPeople(s) && <section className="live-people" aria-label="Finding people">
           <h3>Finding people</h3>
           <label className="live-check"><input aria-label="Show people" type="checkbox" disabled={live.outputOpen} checked={live.view === 'people'} onChange={e => live.setView(e.target.checked ? 'people' : 'art')} />Show people
             <small>{live.outputOpen ? 'Close the output to adjust tracking.' : 'Blue is a person; pink is their outline. Only ever shown here.'}</small></label>
-          {s.people.ignoreStillSeconds !== null && <Slider label="Ignore still objects" value={s.people.ignoreStillSeconds} min={IGNORE_STILL.min} max={IGNORE_STILL.max} step={1} unit=" s" onChange={v => setPeople({ ignoreStillSeconds: v })} />}
-          <label className="live-check"><input aria-label="Ignore still objects off" type="checkbox" checked={s.people.ignoreStillSeconds === null} onChange={e => setPeople({ ignoreStillSeconds: e.target.checked ? null : IGNORE_STILL.default })} />Count still objects too
-            <small>Off: anything the camera thinks is a person counts, even a poster.</small></label>
+          {smoke && s.people.ignoreStillSeconds !== null && <Slider label="Ignore still objects" value={s.people.ignoreStillSeconds} min={IGNORE_STILL.min} max={IGNORE_STILL.max} step={1} unit=" s" onChange={v => setPeople({ ignoreStillSeconds: v })} />}
+          {smoke && <label className="live-check"><input aria-label="Ignore still objects off" type="checkbox" checked={s.people.ignoreStillSeconds === null} onChange={e => setPeople({ ignoreStillSeconds: e.target.checked ? null : IGNORE_STILL.default })} />Count still objects too
+            <small>Off: anything the camera thinks is a person counts, even a poster.</small></label>}
           <label className="live-check"><input aria-label="Use empty room" type="checkbox" checked={s.people.useEmptyRoom} onChange={e => setPeople({ useEmptyRoom: e.target.checked })} />Use empty room
             <small>Only counts what differs from the empty room. Needs a fixed camera and steady light.</small></label>
           {s.people.useEmptyRoom && <button className="secondary-button live-wide" onClick={live.captureRoom}>Capture empty room</button>}
@@ -106,9 +109,41 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         {live.outputOpen ? (live.preview ? <img alt="Output preview" src={live.preview} /> : <p className="live-status">Waiting for the output…</p>)
           : <canvas aria-label="Live preview" ref={live.setCanvas} />}
       </div>
-      <aside className="live-column" aria-label={smoke ? 'Smoke' : 'Paint'}>
-        <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value === 'smoke' ? 'smoke' : 'paint' }); }}><option value="paint">Paint</option><option value="smoke">Smoke</option></select></label>
-        {smoke ? <>
+      <aside className="live-column" aria-label={LOOK_LABELS[s.look]}>
+        <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value as LookKind }); }}>{Object.entries(LOOK_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        {s.look === 'relief' ? <>
+          <label className="live-check"><input type="checkbox" checked={s.reliefPresence} onChange={e => {
+            live.setView('art'); set({ reliefPresence: e.target.checked });
+          }} />Body imprint
+            <small>Stand still to see your shape. Sweep toward someone opposite you to meet in the middle.</small></label>
+          <label className="stacked-label">Preset<select aria-label="Relief preset" value={reliefPreset?.name ?? ''} onChange={e => {
+            const preset = RELIEF_PRESETS.find(p => p.name === e.target.value);
+            if (preset) setRelief(preset.settings);
+          }}>
+            {!reliefPreset && <option value="">Custom</option>}
+            {RELIEF_PRESETS.map(p => <option key={p.name}>{p.name}</option>)}
+          </select></label>
+          <label className="stacked-label">Surface<select aria-label="Surface" value={s.relief.surface} onChange={e => setRelief({ surface: e.target.value as ReliefSettings['surface'] })}>
+            {Object.entries(RELIEF_SURFACES).map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+          </select></label>
+          <label className="stacked-label">Element size<select aria-label="Element size" value={s.relief.size} onChange={e => setRelief({ size: e.target.value as ReliefSettings['size'] })}>
+            {Object.entries(RELIEF_SIZES).map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+          </select></label>
+          <label className="stacked-label">Motion<select aria-label="Motion" value={s.relief.motion} onChange={e => setRelief({ motion: e.target.value as ReliefSettings['motion'] })}>
+            {Object.entries(RELIEF_MOTIONS).map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+          </select></label>
+          <label className="stacked-label">Finish<select aria-label="Finish" value={s.relief.finish} onChange={e => setRelief({ finish: e.target.value as ReliefSettings['finish'] })}>
+            {Object.entries(RELIEF_FINISHES).map(([v, name]) => <option key={v} value={v}>{name}</option>)}
+          </select></label>
+          <label className="stacked-label">Colour scheme<select aria-label="Colour scheme" value={s.reliefPalette} onChange={e => set({ reliefPalette: validateReliefPalette(e.target.value) })}>
+            {Object.entries(RELIEF_PALETTES).map(([name, palette]) => <option key={name} value={name}>{palette.label}</option>)}
+          </select></label>
+          {s.reliefPalette !== 'material' && <div className="live-swatches" aria-hidden="true">
+            {RELIEF_PALETTES[s.reliefPalette].colours.map((colour, i) => <i key={i} style={{ background: colour }} />)}
+          </div>}
+          {RELIEF_CONTROLS.map(c => <Slider key={c.key} label={c.label} value={s.relief[c.key]} min={c.min} max={c.max} step={c.step}
+            unit={c.key === 'settle' ? ' s' : c.key === 'lightAngle' ? '°' : ''} onChange={value => setRelief({ [c.key]: value })} />)}
+        </> : smoke ? <>
           <p className="live-note">People are made of smoke. Moving tears it off them.</p>
           <div className="live-starts" role="group" aria-label="Start from">{SMOKE_STARTS.map(start =>
             <button key={start.id} className={`text-button ${Object.entries(start.values).every(([k, v]) => s.smoke[k as keyof typeof start.values] === v) ? 'on' : ''}`} onClick={() => setSmoke({ ...start.values })}>{start.label}</button>)}</div>

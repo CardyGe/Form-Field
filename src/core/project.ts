@@ -356,6 +356,11 @@ function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
     const keys=new Set(['cuts','textureSet','scale','rotation','motion','cycles','phaseOffset','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key));
   }
+  if (layer.kind === 'relief' && layer.params.reliefMode === 2) {
+    const keys = new Set(['reliefMode','scale','columns','opening','motion','cycles','phaseOffset','delaySpread','pause',
+      'lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
+    return definitions.filter(d => keys.has(d.key)).map(d => d.key === 'columns' ? {...d, label:'Pleats'} : d);
+  }
   if(layer.kind==='relief'&&layer.params.reliefMode===1){
     const keys=new Set([...TIMING_KEYS,'panelMix','reliefMode','scale','columns','gap','stagger','hingeBias','opening','depth','axis','phaseSpread','organic','motion','cycles','phrase','phaseOffset','lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key));
