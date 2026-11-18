@@ -1,5 +1,5 @@
 import type { Project } from '../shared/types';
-import type { CurvePoint, Point, ShowDocument, WireShow } from './show';
+import { usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow } from './show';
 import { shapeValidity } from './outline';
 import { acceptSignals, type Signals } from '../react/signals';
 import { ownCornersPinnable } from './placement';
@@ -63,6 +63,7 @@ export function toWire(show: ShowDocument): WireShow {
     groups: show.groups,
     // Not rounded: a pinnable quad at the edge of the rules could round to one that is not.
     stageCorners: show.stageCorners,
+    usesLive: usesLive(show),
   };
 }
 

@@ -1,7 +1,7 @@
 import {
   BORDER_MAX, GLOW_MAX, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, PHOTO_TEXT_LIMIT, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE,
   BRIGHTNESS_MAX, ZOOM_RANGE, MAX_LINKS, MAX_TRIGGERS, TEMPO_SYNC_BEATS, playedBy, readLink, readTrigger, cleanName, isShapeLocked, normaliseGroups, shapeExtras,
-  type Border, type Placement, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source,
+  type Border, type Placement, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source, LIVE_SOURCE_ID,
 } from './show';
 import { clampToStage, nudge, rectangleFromDrag } from './geometry';
 import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
@@ -66,7 +66,7 @@ export type EditAction =
    * linked (the default): when the shape shares its instrument with others, they are one instrument and all change;
    * false changes this shape only (a new look gets an instrument of its own).
    */
-  | { type: 'setContent'; shapeId: string; content: ({ kind: 'colour' } | { kind: 'grid' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number }) & { linked?: boolean } }
+  | { type: 'setContent'; shapeId: string; content: ({ kind: 'colour' } | { kind: 'grid' } | { kind: 'live' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number }) & { linked?: boolean } }
   | { type: 'varySource'; sourceId: string; entropy: number }
   | { type: 'setSourcePalette'; sourceId: string; palette: string[] }
   | { type: 'setSourceSpeed'; sourceId: string; speed: number }
@@ -223,7 +223,8 @@ function addCopies(next: ShowDocument, originals: Shape[], ids: string[], source
   for (const [n, shape] of originals.entries()) {
     const copy: Shape = { ...structuredClone(shape), ...place(shape), id: ids[n], name: name(shape), visible: true, locked: false };
     // The copy gets its own source, so from here on its settings are its own.
-    if (shape.sourceId !== null) {
+    // A copy of a Live shape plays Live: there is only one.
+    if (shape.sourceId !== null && shape.sourceId !== LIVE_SOURCE_ID) {
       const original = next.sources.find(s => s.id === shape.sourceId);
       const sourceId = sourceIds[n];
       if (!sourceId) return { reason: 'needs-source-id' };
@@ -481,6 +482,14 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const linked = content.linked !== false && shape.sourceId !== null ? next.shapes.filter(s => s.sourceId === shape.sourceId) : [shape];
       if (linked.some(s => isShapeLocked(next, s))) return { reason: 'locked' };
       if (content.kind === 'colour' || content.kind === 'grid') { for (const s of linked) { s.sourceId = null; s.fill = content.kind; } dropUnplayed(next); return done(); }
+      // Live: the Live screen's one look. Every linked shape plays it; it is no source of the show's.
+      if (content.kind === 'live') {
+        if (shape.blocker) return { reason: 'blocker' };
+        if (linked.every(s => s.sourceId === LIVE_SOURCE_ID)) return { show, touched: [] };
+        for (const s of linked) s.sourceId = LIVE_SOURCE_ID;
+        dropUnplayed(next);
+        return done();
+      }
       if (linked.length > 1) {
         if (shape.blocker) return { reason: 'blocker' };
         const project = presetComposition(content.presetId, content.seed);
@@ -491,7 +500,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
         return done();
       }
       if (shape.blocker) return { reason: 'blocker' };
-      if (next.sources.some(s => s.id === content.sourceId)) return { reason: 'duplicate-id' };
+      if (content.sourceId === LIVE_SOURCE_ID || next.sources.some(s => s.id === content.sourceId)) return { reason: 'duplicate-id' };
       const project = presetComposition(content.presetId, content.seed);
       if (!project) return { reason: 'unknown-preset' };
       const old = shape.sourceId;
@@ -654,7 +663,7 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const made: Shape[] = cells.map((points, k) => ({
     ...structuredClone(shape), id: action.ids[k], name: `${base} ${k + 1}`, points, holes: [], groupId, locked: false, visible: true,
     placement: { ...shape.placement, pin: null },
-    sourceId: source ? (action.spread ? source.id : action.sourceIds[k]) : null,
+    sourceId: shape.sourceId === LIVE_SOURCE_ID ? LIVE_SOURCE_ID : source ? (action.spread ? source.id : action.sourceIds[k]) : null,
     ...(action.spread ? { placement: { ...shape.placement, kind: 'across-group' as const, pin: null } } : {}),
   }));
   if (source && !action.spread) next.sources.push(...action.sourceIds.map(id => ({ ...source, id, revision: 0 })));
@@ -720,7 +729,7 @@ function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'add
       const target = next.scenes.find(s => s.id === scene.id)!;
       // A locked shape keeps its state; a shape the scene has never seen keeps its own.
       next.shapes = next.shapes.map(sh => isShapeLocked(next, sh) ? sh : pinnable(withState(sh, target.shapes[sh.id])));
-      for (const sh of next.shapes) if (sh.sourceId !== null && !next.sources.some(src => src.id === sh.sourceId)) sh.sourceId = null;
+      for (const sh of next.shapes) if (sh.sourceId !== null && sh.sourceId !== LIVE_SOURCE_ID && !next.sources.some(src => src.id === sh.sourceId)) sh.sourceId = null;
       next.sceneId = scene.id;
       return { show: next, touched: [] };
     }

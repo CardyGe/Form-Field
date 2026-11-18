@@ -49,12 +49,24 @@ export interface InstrumentSource { id: string; kind: 'instrument'; project: Pro
 export type Source = InstrumentSource;
 /** stageCorners: where the stage's four corners go on the projector (to fix a nudged projector), or null for none. */
 /** Stage 5: scenes (with the live one and the default fade in seconds), and the links and triggers sound and MIDI drive. */
-export interface ShowDocument { format: 'formshow'; version: 5; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null;
+export interface ShowDocument { format: 'formshow'; version: 6; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null;
   scenes: Scene[]; sceneId: string | null; sceneFade: number; links: Link[]; triggers: Trigger[] }
 /** A source as the wall first hears of it: everything but the composition, which travels in its own message. */
 export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number; tempoSync: number | null }
 /** The show as sent to the wall: no compositions, and never the photo. */
-export interface WireShow { format: 'formshow'; version: 5; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[] }
+export interface WireShow { format: 'formshow'; version: 6; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[];
+  /** The show plays Live somewhere (a shape, or a scene): the wall keeps Live's camera running. */
+  usesLive: boolean }
+
+/**
+ * Live in Map: a shape that plays the Live screen's look names this as its sourceId. There is one Live, shared, and it
+ * has no entry in `sources` (it has no composition). Version 6 and later.
+ */
+export const LIVE_SOURCE_ID = 'live';
+/** True when a shape, or any scene, plays Live. */
+export function usesLive(show: Pick<ShowDocument, 'shapes'> & { scenes?: Scene[] }): boolean {
+  return playedBy(show, LIVE_SOURCE_ID);
+}
 
 export const MAX_SHAPES = 64;
 export const MAX_POINTS = 32;
@@ -90,7 +102,7 @@ export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'so
   ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour', placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, brightness: 1, tint: '#ffffff' });
 
 export function createShow(): ShowDocument {
-  return { format: 'formshow', version: 5, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null, scenes: [], sceneId: null, sceneFade: DEFAULT_SCENE_FADE, links: [], triggers: [] };
+  return { format: 'formshow', version: 6, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null, scenes: [], sceneId: null, sceneFade: DEFAULT_SCENE_FADE, links: [], triggers: [] };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -241,7 +253,7 @@ export function normaliseGroups<T extends { shapes: Shape[]; groups: Group[] }>(
 function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaired: boolean; ok: boolean } {
   if (!isRecord(value)) return { shapes: [], groups: [], repaired: true, ok: false };
   // Version 1 and 2 shows open with every later field at its default, which is not a repair.
-  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5);
+  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5 && value.version !== 6);
   if (!isRecord(value.stage) || value.stage.width !== STAGE_SIZE.width || value.stage.height !== STAGE_SIZE.height) repaired = true;
   if (!Array.isArray(value.shapes)) return { shapes: [], groups: [], repaired: true, ok: false };
   if (value.shapes.length > MAX_SHAPES) repaired = true;
@@ -334,9 +346,13 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
       sources.set(checked.source.id, checked.source);
     }
   } else if (value.sources !== undefined) repaired = true;
-  if (linkSources(show.shapes, sources)) repaired = true;
+  // From version 6 a shape (or a scene) may play Live, which is no source of the file's.
+  if (sources.has(LIVE_SOURCE_ID)) { sources.delete(LIVE_SOURCE_ID); repaired = true; }
+  const known = new Map<string, unknown>(sources);
+  if (value.version === 6) known.set(LIVE_SOURCE_ID, true);
+  if (linkSources(show.shapes, known)) repaired = true;
   // Scenes, then the instruments any shape or scene plays, then the links and triggers that name what is left.
-  const scenes = readScenes(value, show, sources);
+  const scenes = readScenes(value, show, known);
   if (scenes.repaired) repaired = true;
   show.sources = [...sources.values()].filter(source => playedBy(show, source.id));
   if (show.sources.length !== sources.size) repaired = true;
@@ -361,10 +377,13 @@ export function validateWireShow(value: unknown): WireShow {
     }
   }
   const shapes = read.shapes;
-  linkSources(shapes, sources);
+  const known = new Map<string, unknown>(sources);
+  known.set(LIVE_SOURCE_ID, true);
+  linkSources(shapes, known);
   const kept = [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id));
-  return { format: 'formshow', version: 5, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
-    links: isRecord(value) ? readLinks(value.links, { shapes, sources: kept }, true).links : [] };
+  return { format: 'formshow', version: 6, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
+    links: isRecord(value) ? readLinks(value.links, { shapes, sources: kept }, true).links : [],
+    usesLive: (isRecord(value) && value.usesLive === true) || shapes.some(s => s.sourceId === LIVE_SOURCE_ID) };
 }
 
 /** Shapes that name a source the show does not have play their colour. True when any had to. */

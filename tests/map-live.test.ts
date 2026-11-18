@@ -1,0 +1,108 @@
+// Live in Map: a shape can play Live (the Live screen's one look), shared, in scenes, and told to the wall.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { applyEdit, type EditAction } from '../src/map/editor';
+import { createShow, validateShow, validateWireShow, LIVE_SOURCE_ID, usesLive, type CurvePoint, type ShowDocument } from '../src/map/show';
+import { toWire } from '../src/map/messages';
+
+const sq = (x0: number, y0: number, x1: number, y1: number): CurvePoint[] => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+const ok = (show: ShowDocument, action: EditAction): ShowDocument => { const r = applyEdit(show, action); assert.ok(r.ok, `refused: ${!r.ok && r.reason}`); return r.show; };
+const shapeOf = (show: ShowDocument, id: string) => show.shapes.find(s => s.id === id)!;
+/** a and b sharing one instrument, c on its own colour. */
+const base = () => {
+  let show = ok(ok(ok(createShow(), { type: 'addShape', id: 'a', points: sq(.1, .1, .3, .3), colour: '#ff0000' }), { type: 'addShape', id: 'b', points: sq(.4, .1, .6, .3), colour: '#00ff00' }), { type: 'addShape', id: 'c', points: sq(.7, .1, .9, .3), colour: '#0000ff' });
+  show = ok(show, { type: 'setContent', shapeId: 'a', content: { kind: 'preset', presetId: 'porcelain-shutters', sourceId: 'sa', seed: 1, linked: false } });
+  return ok(show, { type: 'shareSource', shapeId: 'b', withShapeId: 'a' });
+};
+
+test('LIVE_SOURCE_ID is the reserved id "live"', () => { assert.equal(LIVE_SOURCE_ID, 'live'); });
+
+test('a shape plays Live; linked shapes all change; Live is never in sources', () => {
+  const all = ok(base(), { type: 'setContent', shapeId: 'a', content: { kind: 'live', linked: true } });
+  assert.equal(shapeOf(all, 'a').sourceId, 'live');
+  assert.equal(shapeOf(all, 'b').sourceId, 'live');
+  assert.deepEqual(all.sources, [], 'the instrument nobody plays is gone, and Live is not a source');
+  const one = ok(base(), { type: 'setContent', shapeId: 'a', content: { kind: 'live', linked: false } });
+  assert.equal(shapeOf(one, 'a').sourceId, 'live');
+  assert.equal(shapeOf(one, 'b').sourceId, 'sa');
+});
+
+test('Make separate on a Live shape keeps Live', () => {
+  let show = ok(base(), { type: 'setContent', shapeId: 'a', content: { kind: 'live', linked: true } });
+  show = ok(show, { type: 'makeSeparate', shapeId: 'a', sourceId: 'new' });
+  assert.equal(shapeOf(show, 'a').sourceId, 'live');
+  assert.ok(!show.sources.some(s => s.id === 'new'));
+});
+
+test('Share with a Live shape plays Live', () => {
+  let show = ok(base(), { type: 'setContent', shapeId: 'a', content: { kind: 'live', linked: false } });
+  show = ok(show, { type: 'shareSource', shapeId: 'c', withShapeId: 'a' });
+  assert.equal(shapeOf(show, 'c').sourceId, 'live');
+});
+
+test('a blocker never plays Live', () => {
+  let show = ok(base(), { type: 'setContent', shapeId: 'c', content: { kind: 'live' } });
+  show = ok(show, { type: 'setBlocker', shapeId: 'c', blocker: true });
+  assert.equal(shapeOf(show, 'c').sourceId, null);
+  assert.equal(applyEdit(show, { type: 'setContent', shapeId: 'c', content: { kind: 'live' } }).ok, false);
+});
+
+test('scenes keep Live, and a show uses Live while only a scene names it', () => {
+  let show = ok(base(), { type: 'addScene', sceneId: 's1', name: 'One' });
+  show = ok(show, { type: 'setContent', shapeId: 'c', content: { kind: 'live' } });
+  assert.equal(usesLive(show), true);
+  show = ok(show, { type: 'addScene', sceneId: 's2', name: 'Two' });
+  show = ok(show, { type: 'setContent', shapeId: 'c', content: { kind: 'colour' } });
+  assert.equal(shapeOf(show, 'c').sourceId, null);
+  assert.equal(usesLive(show), true, 'scene 1 still plays Live');
+  show = ok(show, { type: 'switchScene', sceneId: 's1' });
+  assert.equal(shapeOf(show, 'c').sourceId, 'live');
+  show = ok(show, { type: 'setContent', shapeId: 'c', content: { kind: 'colour' } });
+  show = ok(show, { type: 'switchScene', sceneId: 's2' });
+  assert.equal(usesLive(show), false);
+});
+
+test('version 6 round-trips; version 5 files open unrepaired; "live" in a version 5 file is a missing source, repaired', () => {
+  let show = ok(base(), { type: 'addScene', sceneId: 's1', name: 'One' });
+  show = ok(show, { type: 'setContent', shapeId: 'c', content: { kind: 'live' } });
+  assert.equal(show.version, 6);
+  const again = validateShow(JSON.parse(JSON.stringify(show)));
+  assert.equal(again.repaired, false);
+  assert.equal(shapeOf(again.show, 'c').sourceId, 'live');
+  const old = JSON.parse(JSON.stringify(base())); old.version = 5;
+  assert.equal(validateShow(old).repaired, false);
+  const oldLive = JSON.parse(JSON.stringify(show)); oldLive.version = 5;
+  const read = validateShow(oldLive);
+  assert.equal(read.repaired, true);
+  assert.equal(shapeOf(read.show, 'c').sourceId, null);
+});
+
+test('the wall is told whether the show uses Live, and keeps Live shapes', () => {
+  assert.equal(toWire(base()).usesLive, false);
+  const show = ok(base(), { type: 'setContent', shapeId: 'c', content: { kind: 'live' } });
+  const wire = toWire(show);
+  assert.equal(wire.usesLive, true);
+  const read = validateWireShow(JSON.parse(JSON.stringify(wire)));
+  assert.equal(read.usesLive, true);
+  assert.equal(read.shapes.find(s => s.id === 'c')!.sourceId, 'live');
+});
+
+test('a copy of a Live shape plays Live too, and takes no source id', () => {
+  let show = ok(base(), { type: 'setContent', shapeId: 'c', content: { kind: 'live' } });
+  show = ok(show, { type: 'duplicateShapes', shapeIds: ['c'], ids: ['c2'], sourceIds: ['unused'] });
+  assert.equal(shapeOf(show, 'c2').sourceId, 'live');
+  assert.ok(!show.sources.some(s => s.id === 'unused'));
+});
+
+test('a grid made from a Live shape plays Live in every cell, spread or not', () => {
+  for (const spread of [true, false]) {
+    let show = ok(base(), { type: 'setContent', shapeId: 'c', content: { kind: 'live' } });
+    show = ok(show, { type: 'makeGrid', shapeId: 'c', rows: 1, cols: 2, gapPx: 0, ids: ['g1', 'g2'], sourceIds: ['x1', 'x2'], groupId: 'grp', spread });
+    assert.deepEqual(['g1', 'g2'].map(id => shapeOf(show, id).sourceId), ['live', 'live'], `spread ${spread}`);
+  }
+});
+
+test('an instrument can never take the id "live"', () => {
+  const r = applyEdit(base(), { type: 'setContent', shapeId: 'c', content: { kind: 'preset', presetId: 'porcelain-shutters', sourceId: 'live', seed: 1 } });
+  assert.deepEqual(r, { ok: false, reason: 'duplicate-id' });
+});
