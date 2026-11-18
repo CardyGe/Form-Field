@@ -42,6 +42,8 @@ const EMBER_PARAMETERS = [
   { ...parameter('emberPulse', 'Pulse depth', 0, 1, .01, .72, 'Motion'), description: 'Increases the contrast in the movement and light between accents.' },
   { ...parameter('emberRings', 'Ring strength', 0, 1, .01, .62, 'Motion'), description: 'Sets the strength of the rings that travel out from the filament body.' },
   { ...parameter('emberHeat', 'Heat', 0, 1, .01, .62, 'Material'), description: 'Brings orange and gold into the brightest filaments.' },
+  { ...parameter('emberSmoke', 'Smoke', 0, 1, .01, .70, 'Material'), description: 'Adds smoke that curls out of the filament body and thins between accents.' },
+  { ...parameter('emberSmokeSpread', 'Smoke spread', 0, 1, .01, .44, 'Motion'), advanced: true, description: 'Sets how far the smoke drifts from the bloom before dispersing.' },
   { ...parameter('emberDensity', 'Filament density', 0, 1, .01, .62, 'Shape'), advanced: true, description: 'Fades more fine strands into the central body.' },
   { ...parameter('emberOuter', 'Outer contours', 0, 1, .01, .30, 'Shape'), advanced: true, description: 'Sets the strength of the broad traces around the frame.' },
   { ...parameter('emberPhrases', 'Phrases per loop', 1, 16, 1, 5, 'Motion'), advanced: true, description: 'Sets how many four-beat phrases play in one composition loop.' },

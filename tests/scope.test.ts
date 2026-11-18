@@ -4,6 +4,7 @@ import { SCOPE_FIGURES, SCOPE_PLAIN, scopeWave, scopeCurve, scopeDash, scopeFigu
 import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 
 import { emberPhrase, SCOPE_POINT_STRIDE, writeEmberPoints } from '../src/rendering/scope-ember';
+import { emberSmokeFrame } from '../src/rendering/scope-ember-smoke';
 
 const TAU = Math.PI * 2;
 const motion = { tilt: .4, tumbleX: 1, tumbleY: 2 };
@@ -224,4 +225,32 @@ test('Ember phrase separates the hollow and hot accents, and rings leave the mov
   const portrait = emberFrame(params, phase(.8));
   const landscape = emberFrame(params, phase(.8), 16 / 9);
   assert.ok(Math.abs(portrait.radius / (9 / 16) - landscape.radius) < 1e-10);
+});
+
+test('Older Ember layers pick up smoke defaults, and Classic hides the smoke controls', () => {
+  const old = emberLayer();
+  delete old.params.emberSmoke;
+  delete old.params.emberSmokeSpread;
+  const updated = validateProject({ ...createProject(), layers: [old] }).layers[0];
+  assert.ok(updated.params.emberSmoke > 0 && updated.params.emberSmokeSpread > 0);
+  assert.ok(visibleParameterDefinitions(updated).some(d => d.key === 'emberSmoke'));
+  assert.ok(!visibleParameterDefinitions(createLayer('scope')).some(d => d.key === 'emberSmoke'));
+  updated.params.emberSmoke = 0;
+  assert.equal(validateProject({ ...createProject(), layers: [updated] }).layers[0].params.emberSmoke, 0);
+});
+
+test('Ember smoke keeps the same launch direction as puffs age and fades across the loop seam', () => {
+  const at = (phase: number) => emberSmokeFrame(phase, 5, 1729);
+  assert.deepEqual(at(0), at(TAU));
+  const last = at(TAU - 1e-6), first = at(0);
+  assert.ok(first.puffs.some(puff => puff.gain > .1), 'smoke survives the seam');
+  for (let i = 0; i < first.puffs.length; i++) {
+    const a = last.puffs[i], b = first.puffs[i];
+    assert.ok(Math.abs(a.gain - b.gain) < 1e-4);
+    if (b.gain > .1) {
+      assert.ok(Math.hypot(a.x - b.x, a.y - b.y) < 1e-5);
+      assert.ok(b.age > a.age, 'puffs continue travelling across the seam');
+    }
+  }
+  assert.notDeepEqual(at(0).puffs, at(TAU / 5).puffs, 'launch directions vary by phrase');
 });

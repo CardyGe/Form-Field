@@ -4,6 +4,7 @@ import { sourceViewMatrix } from './source-view';
 import { fullscreenVertex } from './shaders';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, lightTarget } from './bloom';
 import { SCOPE_POINT_STRIDE as STRIDE, writeEmberPoints } from './scope-ember';
+import { EMBER_SMOKE_SOURCES, emberSmokeFragment, emberSmokeFrame } from './scope-ember-smoke';
 import { SCOPE_WAVE, scopeDash, scopeLine, scopePerspective, scopeWave, type ScopeMotion, type ScopeShape } from './scope-curve';
 
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
@@ -42,6 +43,17 @@ export class ScopeRenderer {
   private readonly camera = new THREE.Camera();
   private readonly light = lightTarget(true);
   private readonly bloom = new BloomPyramid();
+  private readonly smokeTarget = lightTarget();
+  private readonly smoke = new THREE.ShaderMaterial({
+    vertexShader: fullscreenVertex, fragmentShader: emberSmokeFragment,
+    uniforms: {
+      uView: { value: new THREE.Matrix3() }, uClock: { value: new THREE.Vector2() },
+      uAspect: { value: 1 }, uRadius: { value: 1 }, uSpread: { value: 0 },
+      uOpening: { value: 0 }, uSeed: { value: 0 },
+      uPuffs: { value: Array.from({ length: EMBER_SMOKE_SOURCES }, () => new THREE.Vector4()) },
+    },
+    depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
+  });
   private readonly beam = new THREE.ShaderMaterial({
     vertexShader: /* glsl */`
       attribute vec4 aStart, aEnd; attribute float aMix;
@@ -91,10 +103,10 @@ export class ScopeRenderer {
     vertexShader: fullscreenVertex,
     fragmentShader: /* glsl */`
       precision highp float; varying vec2 vUv;
-      uniform sampler2D uLight, uBloom0, uBloom1, uBloom2, uBloom3, uBloom4;
+      uniform sampler2D uLight, uBloom0, uBloom1, uBloom2, uBloom3, uBloom4, uSmoke;
       uniform vec3 uLine, uSecond, uHaloTint, uBloomTint, uHot;
       uniform float uWeights[5];
-      uniform vec2 uCentre; uniform float uAspect, uRadius, uFringe, uEmber, uHeat;
+      uniform vec2 uCentre; uniform float uAspect, uRadius, uFringe, uEmber, uHeat, uSmokeGain;
       float glow(sampler2D level) { vec3 b=texture2D(level,vUv).rgb; return b.r+b.g*.6; }
       void main() {
         // Red and blue are read a little apart, more so towards the edge of the sphere.
@@ -110,6 +122,12 @@ export class ScopeRenderer {
           float heat=uHeat*smoothstep(.12,.75,light.r)*(.38+.62*ridge);
           vec3 ember=mix(uLine,uSecond,.7*ridge);
           sum=light.r*(ember+uHot*heat)+uHaloTint*light.g+uBloomTint*bloom;
+          if (uSmokeGain > 0.) {
+            vec2 smoke=texture2D(uSmoke,vUv).rg*uSmokeGain;
+            float warm=uHeat*.065;
+            vec3 scattering=mix(uHaloTint,uLine,.70)+uHot*warm;
+            sum=sum*exp(-.42*smoke.x)+smoke.x*scattering+smoke.y*mix(uLine,uSecond,.55)*.42;
+          }
         }
         // Roll off towards 1 per channel: bright light loses its colour and burns white.
         vec3 c=1.-exp(-max(sum,0.));
@@ -120,7 +138,7 @@ export class ScopeRenderer {
       uLine: { value: new THREE.Color() }, uSecond: { value: new THREE.Color() }, uHaloTint: { value: new THREE.Color() },
       uBloomTint: { value: new THREE.Color() }, uHot: { value: new THREE.Color() },
       uWeights: { value: [0, 0, 0, 0, 0] }, uCentre: { value: new THREE.Vector2(.5, .5) }, uAspect: { value: 1 }, uRadius: { value: .3 }, uFringe: { value: 0 },
-      uEmber: { value: 0 }, uHeat: { value: 0 },
+      uEmber: { value: 0 }, uHeat: { value: 0 }, uSmoke: { value: null }, uSmokeGain: { value: 0 },
     },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
@@ -185,6 +203,26 @@ export class ScopeRenderer {
     return length / SEGMENTS;
   }
 
+  private drawSmoke(p: Layer['params'], phase: number, view: THREE.Matrix3, radius: number, width: number, height: number, draw: Draw): number {
+    const seed = p.seed ?? 1729, frame = emberSmokeFrame(phase, p.emberPhrases, seed);
+    const aspect = width / height;
+    const u = this.smoke.uniforms;
+    (u.uView.value as THREE.Matrix3).copy(view);
+    (u.uClock.value as THREE.Vector2).set(Math.cos(frame.clock), Math.sin(frame.clock));
+    u.uAspect.value = aspect; u.uRadius.value = radius; u.uSpread.value = p.emberSmokeSpread;
+    u.uOpening.value = Math.min(1, p.emberOpening * frame.opening * 1.65);
+    u.uSeed.value = (seed >>> 0) % 881 * .073;
+    frame.puffs.forEach(({ x, y, age, gain }, i) => (u.uPuffs.value[i] as THREE.Vector4).set(x, y, age, gain));
+    // The broad density field needs fewer samples than the fine beam geometry.
+    const scale = Math.min(.5, 640 / Math.max(width, height));
+    const w = Math.max(1, Math.round(width * scale));
+    const h = Math.max(1, Math.round(height * scale));
+    if (this.smokeTarget.width !== w || this.smokeTarget.height !== h) this.smokeTarget.setSize(w, h);
+    draw(this.smoke, this.smokeTarget);
+    const exposure = 1 - p.emberPulse * (1 - frame.body) * (1 - p.emberRest);
+    return p.emberSmoke * (.28 + .36 * p.intensity) * (.12 + .88 * exposure * exposure);
+  }
+
   draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw): void {
     const p = layer.params, aspect = width / height;
     const ember = p.scopeMode === 1 ? writeEmberPoints(this.points, p, phase, aspect) : null;
@@ -224,10 +262,13 @@ export class ScopeRenderer {
     (r.uCentre.value as THREE.Vector2).set(centre.x, centre.y);
     r.uAspect.value = aspect; r.uRadius.value = radius * layer.transform.scale; r.uFringe.value = ember ? 0 : p.fringe;
     r.uEmber.value = Number(!!ember); r.uHeat.value = ember?.heat ?? 0;
+    r.uSmokeGain.value = ember && p.emberSmoke > 0 ? this.drawSmoke(p, phase, view, radius, width, height, draw) : 0;
+    r.uSmoke.value = r.uSmokeGain.value > 0 ? this.smokeTarget.texture : null;
     draw(this.resolve, target);
   }
 
   dispose(): void {
     this.geometry.dispose(); this.beam.dispose(); this.bloom.dispose(); this.resolve.dispose(); this.light.dispose();
+    this.smoke.dispose(); this.smokeTarget.dispose();
   }
 }
