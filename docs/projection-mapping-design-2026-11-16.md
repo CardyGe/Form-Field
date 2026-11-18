@@ -616,6 +616,97 @@ The 21 stage 3 checks pass on the new graphics-card drawing.
 
 Both need Greg, a projector and a box.
 
+## Stage 5 decisions: scenes, and sound and MIDI
+
+Made 18 November 2026. The design had set sound and MIDI aside for a design of their own after stage 5; Greg asked for both together.
+
+**Greg's choices**
+
+- **What sound and MIDI drive:**
+  - instrument settings
+  - shape look
+  - scenes
+  - speed and tempo
+- **Audio source:** any audio input device: the microphone, an interface's line in, or a loopback app such as BlackHole.
+- **Where:** Map and Live, in this round.
+- **How a control is linked:** both ways. MIDI learn and a list of links for full control, and ready-made reactions with an amount for quick use.
+
+**Scenes (my calls, following the design's Scenes section)**
+
+- **What a scene stores**, for each shape: what it plays (instrument or fill), placement, look, edge and visibility. It does not store outlines or positions. Instruments used by any scene are kept in the show.
+- **Editing while a scene is live changes that scene.** The shapes on screen are always the live scene, and switching away keeps it.
+- **A shape added after a scene was made** keeps its current state in that scene until it is edited there.
+- **Switching:**
+  - Content that changes crossfades over the scene's fade time: the show's own (default 2 s), or the scene's override.
+  - Brightness and visibility glide over the same time.
+  - Placement and edges change at once.
+  - Instruments used by both scenes keep running without a restart.
+- **Ways to switch:** keys 1 to 9, the scene bar along the bottom of Map, MIDI, or the beat.
+- **Show format, version 5:** `scenes`, `sceneId`, `sceneFade`, and the links described below. Version 1 to 4 files open with no scenes.
+
+**The reactivity engine (my calls)**
+
+- **One engine, in `src/react/`**, shared by Map and Live. Its rules (features, beat detection, tempo, link maths, triggers) are pure and tested.
+- **The studio window does the listening.**
+  - It reads the audio device (Web Audio analyser) and MIDI (Web MIDI), and works out the signals each frame.
+  - It sends them to the open output window (Map's or Live's) as one small message a frame. Background throttling is already off for both windows.
+  - The operator screen uses the same signals directly.
+  - The listening runs only while something uses it.
+- **Signals:**
+  - **Sound:** level, bass, mids and highs, each 0 to 1. Each band follows its own loudness (auto-gain), so quiet and loud rooms both give the full range.
+  - **Beat:** a beat pulse, the beat count, and the tempo.
+  - **MIDI:** every control change (channel and number, 0 to 1), every note (gate and velocity), and MIDI clock and start/stop.
+- **Tempo:** one clock with a phase per beat and per bar. Its source is chosen once: the detected beat, tap tempo (the T key or a button), MIDI clock, or a fixed BPM.
+- **Links.** A link connects a signal to a target. It has:
+  - a **mode**:
+    - **Modulate** (sound, beat and tempo; the default): adds the signal's value, times an amount from −100 to +100 % of the target's range, to the value the control is set to.
+    - **Control** (MIDI knobs and faders): sets the target between a low and a high value; the control's own value is set aside while the link is on.
+  - **attack and release smoothing**, in milliseconds
+  - an **on/off** switch
+  - a **name for the list**
+
+  Values are always kept inside the target's range.
+- **Targets:**
+  - **Map shapes:** brightness, opacity (new, for drawing only), zoom, turn, move across, and move up and down. Soft edge is not a target: its fade picture is remade when it changes, too slow to follow the music.
+  - **Map instruments:** speed, and every numeric setting of every layer, with its range from the instrument's own definitions. Settings are changed for drawing only, so the composition, its undo history and its file stay as set.
+  - **Live:** every slider of the current look (Paint, Smoke, Relief, Signal Melt), and sensitivity.
+- **Triggers** turn a note, a control passing halfway, or every N beats into an action:
+  - go to a scene, or the next or previous scene
+  - Vary a shape's instrument
+  - Blackout on or off
+  - Freeze on or off
+  - tap tempo
+- **Tempo sync for instruments:** an instrument can run in time with the clock, one loop every 1, 2, 4, 8 or 16 beats, instead of its own speed.
+- **Ready-made reactions** fill in links with one click:
+  - **Pulse on the beat:** brightness
+  - **Breathe with the level:** brightness
+  - **Bass zoom:** zoom
+  - **Highs flicker:** opacity
+  - **Instrument on the bass:** the instrument's first motion setting
+  - **Live:** **Movement on the bass**, **Glow on the beat**
+
+  Each one adds ordinary links, which can then be adjusted in the list.
+- **Learn:**
+  1. Right-click a slider and choose **React to…**.
+  2. Either move a MIDI control (the first control or note that moves is taken), or pick a sound band.
+  3. Escape cancels.
+- **The Reactivity panel**, opened from a header button, lists:
+  - the audio device and a meter for each band
+  - the MIDI devices
+  - the tempo source and BPM
+  - every link (on/off, amount, low/high, smoothing, delete) and every trigger
+
+  A shape's own links are also listed under it in Details.
+- **Where links are stored:** Map's in the show; Live's in Live's settings. The device choices belong to this Mac and are kept in the app's own storage.
+- **Permissions:** the app's own windows may use the microphone and MIDI (no system-exclusive messages). macOS asks for the microphone the first time.
+
+**Not in this round:**
+- MIDI output (lights on a controller)
+- OSC
+- system sound capture without a loopback app
+- reacting to a sound file in Studio's export
+- per-link response curves beyond smoothing
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
