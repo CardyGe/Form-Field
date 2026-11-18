@@ -1,6 +1,7 @@
 // Performance record for Map: eight shapes playing four instruments (two shapes each, each with its own source)
 // on a 1920 × 1080 stage, measured in the output window for 30 s after a warm-up.
 // Run: npm run build && node scripts/measure-map.mjs [--seconds 30] [--edges]
+// --pin pins every shape and sets the stage corners.
 // --edges gives every shape a 40 px soft edge and a 6 px border with an 8 px glow (stage 3).
 // Uses a throwaway user-data folder under work/map-measure/. Prints a table and writes work/map-measure/results.json.
 import fs from 'node:fs/promises';
@@ -13,6 +14,10 @@ const out = path.join(root, 'work/map-measure');
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? Number(process.argv[i + 1]) : fallback; };
 const SECONDS = arg('--seconds', 30), WARMUP = 4;
 const EDGES = process.argv.includes('--edges');
+// --pin pins every shape in perspective and sets the stage corners (stage 4).
+const PIN = process.argv.includes('--pin');
+// --corners sets the stage corners (on its own, or with --pin).
+const CORNERS = process.argv.includes('--corners') || PIN && !process.argv.includes('--no-corners');
 const MIXES = {
   medium: ['ivory-coral', 'porcelain-shutters', 'salt-mandala', 'rapid-cuts'],
   heavy: ['prismatic-fold', 'pearl-organism', 'ivory-coral', 'acid-slide'],
@@ -49,12 +54,20 @@ for (const [mix, presets] of Object.entries(MIXES)) {
       await studio.mouse.move(...at(0.03 + col * 0.24, 0.05 + row * 0.47)); await studio.mouse.down();
       await studio.mouse.move(...at(0.24 + col * 0.24, 0.47 + row * 0.47), { steps: 4 }); await studio.mouse.up();
       await studio.getByLabel('Plays').selectOption(`preset:${presets[i % 4]}`);
+      if (PIN) await studio.getByLabel('Placement', { exact: true }).selectOption('pin');
       if (EDGES) {
         const slider = async (label, value) => { const el = studio.getByLabel(label, { exact: true }); await el.fill(String(value)); await el.dispatchEvent('pointerup'); };
         await slider('Soft edge', 40); await slider('Border', 6); await slider('Glow', 8);
       }
     }
-    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 8, null, { timeout: 30000 });
+    if (CORNERS) {
+      // Every shape is already pinned (with --pin); the stage corners go in a little, as after a nudged projector.
+      await studio.getByRole('button', { name: 'Stage corners', exact: true }).click();
+      await studio.mouse.move(...at(0, 0)); await studio.mouse.down(); await studio.mouse.move(...at(.02, .03), { steps: 4 }); await studio.mouse.up();
+      await studio.getByRole('button', { name: 'Stage corners', exact: true }).click();
+    }
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 8, null, { timeout: 30000 })
+      .catch(async error => { console.error('instruments did not all start:', JSON.stringify(await output.evaluate(() => window.__mapStats))); throw error; });
     await sleep(WARMUP * 1000);
 
     const edgeBuildsBefore = await output.evaluate(() => window.__mapStats?.edgeBuilds ?? 0);
@@ -82,7 +95,7 @@ for (const [mix, presets] of Object.entries(MIXES)) {
 }
 
 await fs.mkdir(out, { recursive: true });
-await fs.writeFile(path.join(out, EDGES ? 'results-edges.json' : 'results.json'), JSON.stringify(results, null, 2));
+await fs.writeFile(path.join(out, PIN ? 'results-pin.json' : EDGES ? 'results-edges.json' : 'results.json'), JSON.stringify(results, null, 2));
 for (const [mix, r] of Object.entries(results)) {
   console.log(`${mix.padEnd(7)} ${r.presets.join(', ')}`);
   console.log(`        ${r.frames} frames in ${r.seconds} s · median ${r.medianMs} ms · p95 ${r.p95Ms} ms · max ${r.maxMs} ms · ${r.over16_7} frames over 16.7 ms · governor levels ${r.governorLevels.join(',')} · fps reported ${Math.min(...r.fpsReported)}–${Math.max(...r.fpsReported)} · failing ${r.failing.length}${r.edges ? ` · soft edges made during the run ${r.edgeBuildsDuringRun}` : ''}`);
