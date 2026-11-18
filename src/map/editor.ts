@@ -44,7 +44,8 @@ export type EditAction =
   | { type: 'duplicateShapes'; shapeIds: string[]; ids: string[]; sourceIds: string[]; offset?: { dx: number; dy: number } }
   /** Mirrored copies across the stage's centre line: vertical mirrors left and right, horizontal top and bottom. */
   | { type: 'mirrorShapes'; shapeIds: string[]; axis: 'vertical' | 'horizontal'; ids: string[]; sourceIds: string[] }
-  | { type: 'makeGrid'; shapeId: string; rows: number; cols: number; gapPx: number; ids: string[]; sourceIds: string[]; groupId: string }
+  /** spread: the cells share the shape's own instrument, laid across the grid (Across group), so one picture runs through them all. */
+  | { type: 'makeGrid'; shapeId: string; rows: number; cols: number; gapPx: number; ids: string[]; sourceIds: string[]; groupId: string; spread?: boolean }
   | { type: 'reorder'; shapeId: string; to: 'front' | 'back' | 'forward' | 'backward' }
   | { type: 'group'; shapeIds: string[]; groupId: string; name: string }
   | { type: 'ungroup'; groupId: string }
@@ -543,7 +544,7 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const taken = new Set([...next.shapes.filter(s => s !== shape).map(s => s.id), ...next.sources.map(s => s.id)]);
   if (action.ids.some(id => taken.has(id))) return { reason: 'duplicate-id' };
   const source = shape.sourceId ? next.sources.find(s => s.id === shape.sourceId) : undefined;
-  if (source) {
+  if (source && !action.spread) {
     if (action.sourceIds.length !== count || new Set(action.sourceIds).size !== count || action.sourceIds.some(id => taken.has(id) || action.ids.includes(id))) return { reason: 'duplicate-id' };
     const sharedElsewhere = next.shapes.some(s => s !== shape && s.sourceId === source.id);
     if (next.sources.length - (sharedElsewhere ? 0 : 1) + count > MAX_SOURCES) return { reason: 'too-many-sources' };
@@ -561,9 +562,10 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const made: Shape[] = cells.map((points, k) => ({
     ...structuredClone(shape), id: action.ids[k], name: `${base} ${k + 1}`, points, holes: [], groupId, locked: false, visible: true,
     placement: { ...shape.placement, pin: null },
-    sourceId: source ? action.sourceIds[k] : null,
+    sourceId: source ? (action.spread ? source.id : action.sourceIds[k]) : null,
+    ...(action.spread ? { placement: { ...shape.placement, kind: 'across-group' as const, pin: null } } : {}),
   }));
-  if (source) next.sources.push(...action.sourceIds.map(id => ({ ...source, id, revision: 0 })));
+  if (source && !action.spread) next.sources.push(...action.sourceIds.map(id => ({ ...source, id, revision: 0 })));
   next.shapes.splice(next.shapes.indexOf(shape), 1, ...made);
   dropUnplayed(next);
   return { show: normaliseGroups(next), touched: made };

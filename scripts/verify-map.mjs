@@ -550,6 +550,34 @@ try {
     await wallUntil([[.97, .97], [.75, .75]], c => near(c[0], BLACK) && coloured(c[1]), 'shrunk by its handle');
   });
 
+  await check('a square playing an instrument, split into a grid, plays one picture running across its cells', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
+    await tool('Select');
+    await studio.getByLabel('Plays').selectOption('preset:porcelain-shutters');
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
+    await sleep(800);
+    // Frozen, the square's picture holds still: split into cells, the cells together must show exactly that picture.
+    const freeze = studio.getByRole('button', { name: 'Freeze', exact: true });
+    await freeze.click(); await sleep(400);
+    const points = Array.from({ length: 64 }, (_, i) => [.21 + (i % 8) * .054, .21 + Math.floor(i / 8) * .054]);
+    const before = await sample(output, points);
+    await studio.locator('.map-grid-tool summary').click();
+    assert.equal(await studio.getByLabel('One picture across the cells', { exact: true }).isChecked(), true);
+    await studio.getByLabel('Grid gap', { exact: true }).fill('0');
+    await studio.getByRole('button', { name: 'Make grid', exact: true }).click();
+    await studio.locator('.map-group-row').waitFor();
+    assert.equal(await shapeCount(), 4);
+    await sleep(600);
+    const after = await sample(output, points);
+    await fs.writeFile(path.join(out, 'output-grid-across.png'), Buffer.from(after.png, 'base64'));
+    await freeze.click();
+    assert.equal(Object.keys(await output.evaluate(() => window.__mapStats.prepares)).length, 1, 'the cells play one instrument');
+    const same = before.colours.filter((c, i) => near(c, after.colours[i], 24)).length;
+    assert.ok(same >= 60, `only ${same} of 64 points show the same picture after the split`);
+    assert.ok(after.colours.filter(c => !near(c, BLACK, 30)).length >= 40, 'the grid is mostly black');
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.

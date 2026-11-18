@@ -136,3 +136,14 @@ test('a stored pin cannot be carried past half a stage off the edge; nudging one
   state = mapReducer(state, { type: 'edit', action: { type: 'moveStageCorner', index: 1, to: { x: .95, y: 0 } } });
   assert.equal(state.past.length, 2);
 });
+
+test('Make a grid with one picture across the cells: every cell plays the shape’s own instrument, laid across the group', () => {
+  let show = play(add(createShow(), 'a', sq(.1, .1, .5, .5)), 'a', 'sa');
+  const ids = ['c1', 'c2', 'c3', 'c4'];
+  show = ok(show, { type: 'makeGrid', shapeId: 'a', rows: 2, cols: 2, gapPx: 10, ids, sourceIds: ids.map(i => `s-${i}`), groupId: 'g', spread: true });
+  assert.ok(show.shapes.every(s => s.sourceId === 'sa' && s.placement.kind === 'across-group' && s.groupId === 'g'));
+  assert.deepEqual(show.sources.map(s => s.id), ['sa']);
+  // Without spreading, each cell its own copy, as before.
+  const copies = ok(play(add(createShow(), 'a', sq(.1, .1, .5, .5)), 'a', 'sa'), { type: 'makeGrid', shapeId: 'a', rows: 1, cols: 2, gapPx: 0, ids: ['x', 'y'], sourceIds: ['sx', 'sy'], groupId: 'g' });
+  assert.deepEqual(copies.shapes.map(s => s.sourceId), ['sx', 'sy']);
+});

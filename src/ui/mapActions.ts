@@ -45,10 +45,10 @@ export function mapActions(map: Map) {
     ungroup(groupId: string | null) {
       if (groupId) map.dispatch({ type: 'ungroup', groupId });
     },
-    makeGrid(shapeId: string, rows: number, cols: number, gapPx: number) {
+    makeGrid(shapeId: string, rows: number, cols: number, gapPx: number, spread = false) {
       const n = rows * cols;
       const ids = several(n, newId);
-      if (map.dispatch({ type: 'makeGrid', shapeId, rows, cols, gapPx, ids, sourceIds: several(n, newSourceId), groupId: newGroupId() })) map.selectMany(ids);
+      if (map.dispatch({ type: 'makeGrid', shapeId, rows, cols, gapPx, ids, sourceIds: several(n, newSourceId), groupId: newGroupId(), spread })) map.selectMany(ids);
     },
     toggleSolo(shapeId: string) {
       const s = map.solo;

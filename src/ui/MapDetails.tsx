@@ -52,7 +52,7 @@ function SliderField({ label, value, min, max, step, unit, disabled, onCommit, f
 /** The Details panel: the selected shape's name, colour, what it plays, its edge, shape tools and its chosen point. */
 export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void }) {
   const act = mapActions(map);
-  const [grid, setGrid] = useState({ rows: '2', cols: '2', gap: '0' });
+  const [grid, setGrid] = useState({ rows: '2', cols: '2', gap: '0', spread: true });
   const many = map.selectedIds.length > 1;
   const shape = map.show.shapes.find(s => s.id === map.selectedId) ?? null;
   const locked = shape ? isShapeLocked(map.show, shape) : false;
@@ -108,7 +108,7 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
     if (![rows, cols].every(n => Number.isInteger(n) && n >= 1 && n <= 16) || rows * cols < 2) { setNote('A grid needs 1 to 16 rows and columns, and at least two cells'); return; }
     if (!Number.isFinite(gap) || gap < 0) { setNote('The gap must be a number of pixels, 0 or more'); return; }
     setNote(null);
-    act.makeGrid(shape.id, rows, cols, gap);
+    act.makeGrid(shape.id, rows, cols, gap, grid.spread);
   };
 
   return <>
@@ -221,6 +221,8 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
           <label className="map-field">Columns<input aria-label="Grid columns" type="number" min={1} max={16} value={grid.cols} onChange={e => setGrid({ ...grid, cols: e.target.value })} /></label>
           <label className="map-field">Gap px<input aria-label="Grid gap" type="number" min={0} max={100} value={grid.gap} onChange={e => setGrid({ ...grid, gap: e.target.value })} /></label>
         </div>
+        <label className="map-check" title="On: every cell plays this shape's instrument, laid across the whole grid, so the picture runs from cell to cell. Off: each cell gets its own copy to change on its own.">
+          <input type="checkbox" aria-label="One picture across the cells" checked={grid.spread} onChange={e => setGrid({ ...grid, spread: e.target.checked })} />One picture across the cells</label>
         <button className="text-button" disabled={locked} onClick={makeGrid}>Make grid</button>
       </> : <p className="muted-text">Only a shape with four corners, no curves and no holes can be made into a grid.</p>}
     </details>

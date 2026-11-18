@@ -546,6 +546,10 @@ Made 18 November 2026, before building stage 4. Greg handed over the how; each o
 - **Handles beside the stage.** The selection's scale and turn handles, and the stage corners, are drawn on a layer over the whole stage area, so a shape against the stage's edge keeps handles that can be grabbed.
   - Each drag is one undo step, and so is each arrow nudge.
 - **Sharing.** A shared instrument is drawn once, at the largest place it lands. Vary, palette and speed change every shape that shares it, and Make separate gives a shape its own copy.
+- **Make a grid: one picture across the cells** (added 18 November, at Greg's request). On by default.
+  - The cells share the shape's own instrument, laid Across group, so one picture runs through them all.
+  - Off, each cell gets its own copy of the instrument, as stage 3 had it.
+  - A shape already in a group keeps its cells in that group, so the picture spreads over the whole group.
 - **Brightness and tint** apply to everything a shape shows, its own grid pattern included, but not to Blockers.
 - **The projector's drawing is on the graphics card.**
   - If the graphics card resets, the projector shows black until it comes back by itself, usually within a second. The operator is told.
