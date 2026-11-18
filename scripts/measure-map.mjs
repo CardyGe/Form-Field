@@ -9,6 +9,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 
+// The look browser and the Details panel's folding sections (Map UI pass).
+const playLook = async (page, value) => {
+  await page.getByRole('button', { name: 'Change look' }).click();
+  await page.locator(`[data-look="${value}"]`).click();
+  // A person presses Escape well after the click; pressed within milliseconds it can arrive before the page settles.
+  await new Promise(r => setTimeout(r, 150));
+  await page.keyboard.press('Escape');
+  // If the key was lost, the panel's own close button.
+  await page.locator('.look-browser').waitFor({ state: 'detached', timeout: 2000 }).catch(async () => {
+    await page.getByRole('button', { name: 'Close looks' }).click();
+    await page.locator('.look-browser').waitFor({ state: 'detached' });
+  });
+};
+const openSection = (page, id) => page.evaluate(id => { const d = document.querySelector(`details[data-section="${id}"]`); if (d && !d.open) d.open = true; }, id);
+
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'work/map-measure');
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? Number(process.argv[i + 1]) : fallback; };
@@ -53,10 +69,10 @@ for (const [mix, presets] of Object.entries(MIXES)) {
       await studio.getByRole('button', { name: 'Rectangle', exact: true }).click();
       await studio.mouse.move(...at(0.03 + col * 0.24, 0.05 + row * 0.47)); await studio.mouse.down();
       await studio.mouse.move(...at(0.24 + col * 0.24, 0.47 + row * 0.47), { steps: 4 }); await studio.mouse.up();
-      await studio.getByLabel('Plays').selectOption(`preset:${presets[i % 4]}`);
-      if (PIN) await studio.getByLabel('Placement', { exact: true }).selectOption('pin');
+      await playLook(studio, `preset:${presets[i % 4]}`);
+      if (PIN) { await openSection(studio, 'placement'); await studio.getByLabel('Placement', { exact: true }).selectOption('pin'); }
       if (EDGES) {
-        const slider = async (label, value) => { const el = studio.getByLabel(label, { exact: true }); await el.fill(String(value)); await el.dispatchEvent('pointerup'); };
+        const slider = async (label, value) => { await openSection(studio, label === 'Brightness' ? 'look' : 'edge'); const el = studio.getByLabel(label, { exact: true }); await el.fill(String(value)); await el.dispatchEvent('pointerup'); };
         await slider('Soft edge', 40); await slider('Border', 6); await slider('Glow', 8);
       }
     }

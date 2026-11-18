@@ -1,4 +1,4 @@
-.map-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 272px minmax(0, 1fr) 248px; }
+.map-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 260px minmax(0, 1fr) 276px; }
 .map-stage { position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; padding: 40px; background: #0b0c0b; }
 /* Handles beside the stage (selection box, stage corners) are drawn on this layer over the whole stage area. */
 .map-handles { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -67,3 +67,87 @@
 .map-tints { display: flex; gap: 6px; margin-top: 4px; }
 .map-tint { width: 22px; height: 22px; padding: 0; border: 1px solid #484848; border-radius: 4px; }
 .map-tint[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Compact shape list (Map UI pass) */
+.map-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.map-list-head h2 { margin: 0; }
+.map-shape-list { gap: 1px; }
+.map-shape-list li.map-row { height: 26px; padding: 0 2px 0 4px; gap: 2px; }
+.map-shape-list li.map-row.member { padding-left: 20px; }
+.map-shape-list li.map-row.hidden .map-row-name { color: var(--muted); text-decoration: line-through; }
+.map-shape-list li.map-row:hover { background: rgba(255,255,255,0.04); }
+.map-shape-list li.map-row.selected { background: var(--raised); }
+.map-shape-name { gap: 6px; padding: 0 4px; min-height: 24px; border: 0; background: none; color: var(--ink); }
+.map-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.map-row-plays { flex: none; max-width: 92px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 10px; }
+.map-group-row .map-shape-name { font-weight: 600; color: var(--muted); }
+.map-row-icons { display: flex; flex: none; }
+.map-icon { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; }
+.map-icon:hover:not(:disabled) { color: var(--ink); background: rgba(255,255,255,0.06); }
+.map-icon:disabled { opacity: .35; cursor: default; }
+/* At rest (shown, unlocked, not soloed) the row's icons appear only on hover or keyboard focus. */
+.map-row .map-icon:not(.set) { opacity: 0; }
+.map-row:hover .map-icon, .map-row .map-icon:focus-visible { opacity: 1; }
+.map-icon.set { color: var(--ink); }
+.map-icon.solo { color: var(--accent); }
+.map-folder { display: inline-flex; align-items: center; justify-content: center; width: 16px; }
+
+/* Look browser */
+.look-browser { position: fixed; z-index: 40; top: 64px; right: 290px; width: min(520px, calc(100vw - 600px)); max-height: calc(100vh - 120px); display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 14px 40px rgba(0,0,0,.55); }
+.look-head { display: flex; align-items: center; gap: 6px; }
+.look-search { flex: 1; display: flex; align-items: center; gap: 6px; padding: 0 8px; height: 30px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); }
+.look-search input { flex: 1; border: 0; background: none; color: var(--ink); outline: none; font-size: 12px; }
+.look-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.look-chip { padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; background: none; color: var(--muted); font-size: 11px; cursor: pointer; }
+.look-chip.on { color: var(--accent); border-color: var(--accent); }
+.look-grid { overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; padding-right: 2px; }
+.look-tile { display: grid; gap: 3px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: #0b0c0b; overflow: hidden; cursor: pointer; text-align: left; color: var(--ink); }
+.look-tile:hover { border-color: #6b6b6b; }
+.look-tile.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.look-art { position: relative; display: block; aspect-ratio: 16 / 9; background: #000; }
+.look-art img, .look-art canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.look-art canvas { opacity: 0; }
+.look-art canvas.playing { opacity: 1; }
+.look-art.colour { background: var(--shape-colour); }
+.look-art.grid { background: repeating-linear-gradient(90deg, transparent 0 18px, var(--shape-colour) 18px 20px), repeating-linear-gradient(0deg, #000 0 18px, var(--shape-colour) 18px 20px); opacity: .8; }
+.look-name { padding: 2px 6px 5px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Details panel (Map UI pass): nothing runs past the panel's edge. */
+.map-inspector { overflow-x: hidden; gap: 6px; }
+.map-inspector *, .map-inspector *::before, .map-inspector *::after { box-sizing: border-box; }
+.map-inspector select, .map-inspector input:not([type="checkbox"]):not([type="color"]) { width: 100%; max-width: 100%; min-width: 0; }
+.map-detail-head { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 8px; align-items: end; }
+.map-colour input { width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+.map-content-card { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,0.02); }
+.map-content-top { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: center; }
+.map-content-thumb { position: relative; display: block; width: 64px; aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden; background: #000; border: 1px solid var(--line); }
+.map-content-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.map-content-thumb.colour { background: var(--shape-colour); }
+.map-content-thumb.grid { background: repeating-linear-gradient(90deg, transparent 0 9px, var(--shape-colour) 9px 10px), repeating-linear-gradient(0deg, #000 0 9px, var(--shape-colour) 9px 10px); }
+.map-content-thumb.blocker { background: repeating-linear-gradient(45deg, #111 0 4px, #555 4px 6px); }
+.map-content-name { display: grid; min-width: 0; font-size: 12px; }
+.map-content-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.map-content-name small { color: var(--muted); font-size: 10px; }
+.map-content-card .map-check small { margin-left: 4px; font-size: 10px; }
+.map-point { display: grid; gap: 4px; padding: 6px 8px; border: 1px solid var(--accent); border-radius: 8px; }
+.map-point h3 { margin: 0; }
+.map-xy { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.map-section { border-top: 1px solid var(--line); }
+.map-section summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; cursor: pointer; font-size: 12px; font-weight: 600; list-style: none; }
+.map-section summary::-webkit-details-marker { display: none; }
+.map-section summary::before { content: '\25B8'; color: var(--muted); font-size: 10px; margin-right: 4px; }
+.map-section[open] summary::before { content: '\25BE'; }
+.map-section summary > span:first-child { flex: 1; }
+.map-section-summary { color: var(--muted); font-weight: 400; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }
+.map-section-body { display: grid; gap: 6px; padding-bottom: 8px; }
+.map-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1px solid #484848; }
+.map-tints { flex-wrap: wrap; }
+.map-tint.custom { position: relative; overflow: hidden; background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+.map-tint.custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.map-hint { font-size: 11px; }
+/* Tiles keep their own height; the grid scrolls instead of squashing them. */
+.look-grid { flex: 1; min-height: 0; grid-auto-rows: max-content; align-content: start; }
+.look-tile { grid-template-rows: auto auto; }
+/* A shape's name comes first; what it plays gives way. */
+.map-row-name { min-width: 48px; }
+.map-row-plays { max-width: 74px; }

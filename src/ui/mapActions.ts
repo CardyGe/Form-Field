@@ -50,6 +50,11 @@ export function mapActions(map: Map) {
       const ids = several(n, newId);
       if (map.dispatch({ type: 'makeGrid', shapeId, rows, cols, gapPx, ids, sourceIds: several(n, newSourceId), groupId: newGroupId(), spread })) map.selectMany(ids);
     },
+    /** What a shape plays: 'grid', 'colour' or 'preset:<id>' (a new instrument of its own). */
+    play(shapeId: string, value: string) {
+      if (value === 'colour' || value === 'grid') map.dispatch({ type: 'setContent', shapeId, content: { kind: value } });
+      else if (value.startsWith('preset:')) map.dispatch({ type: 'setContent', shapeId, content: { kind: 'preset', presetId: value.slice('preset:'.length), sourceId: newSourceId(), seed: randomSeed() } });
+    },
     toggleSolo(shapeId: string) {
       const s = map.solo;
       map.setSolo({ ...s, shapes: s.shapes.includes(shapeId) ? s.shapes.filter(id => id !== shapeId) : [...s.shapes, shapeId] });

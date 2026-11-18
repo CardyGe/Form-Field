@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { useMap } from './useMap';
 import { mapActions, newSourceId, randomSeed } from './mapActions';
+import { kindArt } from './kindArt';
+import { LookPreviews } from './lookPreviews';
 import { parsePixelField } from '../map/geometry';
 import { isCurved } from '../map/outline';
 import { shouldCommit } from '../map/keys';
@@ -50,7 +52,7 @@ function SliderField({ label, value, min, max, step, unit, disabled, onCommit, f
 }
 
 /** The Details panel: the selected shape's name, colour, what it plays, its edge, shape tools and its chosen point. */
-export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void }) {
+export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks }: { map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void; onOpenLooks: () => void }) {
   const act = mapActions(map);
   const [grid, setGrid] = useState({ rows: '2', cols: '2', gap: '0', spread: true });
   const many = map.selectedIds.length > 1;
@@ -111,27 +113,34 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
     act.makeGrid(shape.id, rows, cols, gap, grid.spread);
   };
 
+  const presetId = source?.project.layers.length === 1 ? PRESETS.find(p => p.name === source.project.name)?.id : undefined;
+  const thumb = presetId ? LookPreviews.known(presetId) ?? kindArt(PRESETS.find(p => p.id === presetId)!.kind) : source ? kindArt(source.project.layers[0]?.kind ?? '') : undefined;
+  const playsName = shape.blocker ? 'Blocker' : source ? source.project.name : shape.fill === 'grid' ? 'Grid pattern' : 'Its colour';
+  const pct = (v: number) => `${Math.round(v * 100)} %`;
+  const placeLabel = { fit: 'Fit', pin: 'Pin', 'across-group': 'Across group', 'across-stage': 'Across stage' }[place.kind];
+  const edgeSummary = [shape.softEdge ? `soft ${Math.round(shape.softEdge)} px` : '', border.width ? `border ${Math.round(border.width)} px` : ''].filter(Boolean).join(' · ') || 'none';
+
   return <>
-    <CommitField label="Name" value={shape.name} onCommit={commitName} maxLength={MAX_NAME_LENGTH} />
-    <CommitField label="Colour" value={shape.colour} onCommit={commitColour} narrow />
+    <div className="map-detail-head">
+      <label className="map-colour" title="The shape's colour"><input type="color" aria-label="Colour" value={shape.colour} disabled={locked} onChange={e => commitColour(e.target.value)} /></label>
+      <CommitField label="Name" value={shape.name} onCommit={commitName} maxLength={MAX_NAME_LENGTH} />
+    </div>
     {group && <div className="map-group-line"><span className="muted-text">In</span>
       <CommitField label="Group name" value={group.name} maxLength={MAX_NAME_LENGTH} disabled={group.locked} onCommit={text => { const name = text.trim(); if (name && name !== group.name) map.dispatch({ type: 'renameGroup', groupId: group.id, name }); }} />
       <button className="text-button" disabled={group.locked} title="Dissolve this group; its shapes stay · ⇧⌘G" onClick={() => act.ungroup(group.id)}>Ungroup</button></div>}
 
-    <h3>Content</h3>
-    <label className="map-check"><input type="checkbox" aria-label="Blocker" checked={shape.blocker} disabled={locked} onChange={e => map.dispatch({ type: 'setBlocker', shapeId: shape.id, blocker: e.target.checked })} />Blocker</label>
-    {shape.blocker ? <p className="muted-text">Blocks everything beneath it: black on the projector, hatched here.</p> : <>
-      <label className="map-field">Plays<select aria-label="Plays" value={source ? 'current' : shape.fill} disabled={locked} onChange={e => choosePlays(e.target.value)}>
-        <option value="grid">Grid pattern</option>
-        <option value="colour">Its colour</option>
-        {source && <option value="current">{source.project.name}</option>}
-        {LIBRARY.map(g => <optgroup key={g.label} label={g.label}>{g.presets.map(p => <option key={p.id} value={`preset:${p.id}`}>{p.name}</option>)}</optgroup>)}
-      </select></label>
-      {source && <>
-        <div className="map-toggles">
-          <button className="text-button" disabled={locked} title="A new variation of this instrument" onClick={() => map.dispatch({ type: 'varySource', sourceId: source.id, entropy: randomSeed() })}>Vary</button>
-          {onEditInStudio && <button className="text-button" disabled={locked} title="Every control, in Studio; changes show on the projector as you make them" onClick={() => onEditInStudio(source.id, shape.id)}>Edit in Studio</button>}
-        </div>
+    <div className="map-content-card">
+      <div className="map-content-top">
+        <span className={`map-content-thumb ${shape.blocker ? 'blocker' : !source ? (shape.fill === 'grid' ? 'grid' : 'colour') : ''}`} style={{ ['--shape-colour' as string]: shape.colour }}>{thumb && !shape.blocker && <img src={thumb} alt="" />}</span>
+        <div className="map-content-name"><strong>{playsName}</strong>
+          {sharers.length > 1 && <small>{sharers.length} shapes share it</small>}</div>
+      </div>
+      <div className="map-toggles">
+        <button className="text-button" data-opens-looks disabled={locked || shape.blocker} aria-label="Change look" title="Choose what this shape plays" onClick={onOpenLooks}>Change…</button>
+        {source && <button className="text-button" disabled={locked} title="A new variation of this instrument" onClick={() => map.dispatch({ type: 'varySource', sourceId: source.id, entropy: randomSeed() })}>Vary</button>}
+        {source && onEditInStudio && <button className="text-button" disabled={locked} title="Every control, in Studio; changes show on the projector as you make them" onClick={() => onEditInStudio(source.id, shape.id)}>Edit in Studio</button>}
+      </div>
+      {source && !shape.blocker && <>
         <label className="map-field">Palette<select aria-label="Palette" value={paletteName(source.project.layers[0]?.palette ?? [])} disabled={locked}
           onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) map.dispatch({ type: 'setSourcePalette', sourceId: source.id, palette: found[1] }); }}>
           <option value="" disabled>As made</option>
@@ -139,105 +148,118 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
         </select></label>
         <SliderField key={`speed-${source.id}`} label="Speed" value={source.speed} min={SPEED_RANGE.min} max={SPEED_RANGE.max} step={0.05} disabled={locked} format={v => `${v.toFixed(2)}×`}
           onCommit={speed => map.dispatch({ type: 'setSourceSpeed', sourceId: source.id, speed })} />
-        {sharers.length > 1 && <p className="muted-text">{sharers.length} shapes play this instrument: Vary, palette and speed change them all.</p>}
         {sharers.length > 1 && <button className="text-button" disabled={locked} title="Give this shape its own copy of the instrument, to change on its own" onClick={() => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() })}>Make separate</button>}
       </>}
-      {playing.length > 0 && <label className="map-field">Share with<select aria-label="Share with" value="" disabled={locked}
+      {!shape.blocker && playing.length > 0 && <label className="map-field">Share with<select aria-label="Share with" value="" disabled={locked}
         onChange={e => { if (e.target.value) map.dispatch({ type: 'shareSource', shapeId: shape.id, withShapeId: e.target.value }); }}>
         <option value="">Play another shape's instrument…</option>
         {playing.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select></label>}
-    </>}
-
-    {!shape.blocker && <>
-    <h3>Placement</h3>
-    <label className="map-field">Picture<select aria-label="Placement" value={place.kind} disabled={locked} onChange={e => setPlacement({ kind: e.target.value as PlacementKind })}>
-      <option value="fit">Fit: fills the shape</option>
-      <option value="pin">Pin: in perspective on four corners</option>
-      <option value="across-group">Across group: one picture over the group</option>
-      <option value="across-stage">Across stage: one picture over the stage</option>
-    </select></label>
-    {place.kind === 'pin' && <p className="muted-text">{shape.placement.pin && !ownCornersPinnable(shape) ? 'Drag the four diamond handles on the stage onto the surface\'s corners.' : 'The picture is laid on this shape\'s four corners in perspective: drag the corners onto the surface\'s corners.'}</p>}
-    {place.kind === 'across-group' && !group && <p className="muted-text">This shape is in no group, so its picture spreads over the whole stage.</p>}
-    {place.kind !== 'pin' && <>
-      <SliderField key={`zoom-${shape.id}`} label="Zoom" value={place.zoom} min={ZOOM_RANGE.min} max={ZOOM_RANGE.max} step={0.01} disabled={locked} format={v => `${Math.round(v * 100)} %`} onCommit={zoom => setPlacement({ zoom })} />
-      <SliderField key={`movex-${shape.id}`} label="Move across" value={place.offset.x * STAGE_SIZE.width} min={-STAGE_SIZE.width / 2} max={STAGE_SIZE.width / 2} step={1} unit=" px" disabled={locked} onCommit={x => setPlacement({ offset: { x: x / STAGE_SIZE.width, y: place.offset.y } })} />
-      <SliderField key={`movey-${shape.id}`} label="Move up and down" value={place.offset.y * STAGE_SIZE.height} min={-STAGE_SIZE.height / 2} max={STAGE_SIZE.height / 2} step={1} unit=" px" disabled={locked} onCommit={y => setPlacement({ offset: { x: place.offset.x, y: y / STAGE_SIZE.height } })} />
-      <SliderField key={`turn-${shape.id}`} label="Turn" value={place.turn} min={-180} max={180} step={1} unit="°" disabled={locked} onCommit={turn => setPlacement({ turn })} />
-    </>}
-    <div className="map-toggles">
-      {place.kind !== 'pin' && <button className="text-button" disabled={locked || (place.zoom === 1 && place.turn === 0 && place.offset.x === 0 && place.offset.y === 0)} onClick={() => setPlacement({ zoom: 1, turn: 0, offset: { x: 0, y: 0 } })}>Reset picture</button>}
-      {place.kind === 'pin' && shape.placement.pin && !ownCornersPinnable(shape) && <button className="text-button" disabled={locked} title="Put the four handles back at the shape's box" onClick={() => setPlacement({ pin: null })}>Reset pin</button>}
+      <label className="map-check"><input type="checkbox" aria-label="Blocker" checked={shape.blocker} disabled={locked} onChange={e => map.dispatch({ type: 'setBlocker', shapeId: shape.id, blocker: e.target.checked })} />Blocker
+        <small className="muted-text">blacks out what is beneath</small></label>
     </div>
-    </>}
 
-    {!shape.blocker && <>
-      <h3>Look</h3>
-      <SliderField key={`bright-${shape.id}`} label="Brightness" value={shape.brightness} min={0} max={BRIGHTNESS_MAX} step={0.01} disabled={locked} format={v => `${Math.round(v * 100)} %`} onCommit={brightness => map.dispatch({ type: 'setLook', shapeId: shape.id, brightness })} />
-      <div className="map-field">Tint<div className="map-tints" role="group" aria-label="Tint">{TINTS.map(([name, colour]) =>
-        <button key={colour} type="button" className="map-tint" aria-pressed={shape.tint === colour} aria-label={`Tint ${name}`} title={name} disabled={locked} style={{ background: colour }}
-          onClick={() => map.dispatch({ type: 'setLook', shapeId: shape.id, tint: colour })} />)}</div></div>
-      <CommitField label="Tint hex" value={shape.tint} narrow disabled={locked} onCommit={text => {
-        if (!/^#[0-9a-f]{6}$/i.test(text.trim())) { setNote('Colour must look like #rrggbb'); return; }
-        setNote(null); map.dispatch({ type: 'setLook', shapeId: shape.id, tint: text.trim().toLowerCase() });
-      }} />
-    </>}
-
-    <h3>Edge</h3>
-    <SliderField key={`soft-${shape.id}`} label="Soft edge" value={shape.softEdge} min={0} max={SOFT_EDGE_MAX} step={1} unit=" px" disabled={locked} onCommit={px => map.dispatch({ type: 'setSoftEdge', shapeId: shape.id, px })} />
-    {!shape.blocker && <>
-      <SliderField key={`border-${shape.id}`} label="Border" value={border.width} min={0} max={BORDER_MAX} step={1} unit=" px" disabled={locked} onCommit={width => setBorder({ width })} />
-      {border.width > 0 && <>
-        <label className="map-field">Border colour<select aria-label="Border colour" value={borderMode} disabled={locked}
-          onChange={e => setBorder({ colour: e.target.value === 'fixed' ? shape.colour : e.target.value })}>
-          <option value="shape">Shape colour</option>
-          <option value="palette">Instrument palette</option>
-          <option value="fixed">Fixed colour</option>
-        </select></label>
-        {borderMode === 'fixed' && <CommitField label="Border hex" value={border.colour} narrow disabled={locked} onCommit={text => {
-          if (!/^#[0-9a-f]{6}$/i.test(text.trim())) { setNote('Colour must look like #rrggbb'); return; }
-          setNote(null); setBorder({ colour: text.trim() });
-        }} />}
-        <SliderField key={`glow-${shape.id}`} label="Glow" value={border.glow} min={0} max={GLOW_MAX} step={1} unit=" px" disabled={locked} onCommit={glow => setBorder({ glow })} />
-      </>}
-    </>}
-
-    <h3>Shape</h3>
-    <div className="map-toggles">
-      <button className="text-button" aria-pressed={shape.visible} onClick={() => map.dispatch({ type: 'setVisible', shapeId: shape.id, visible: !shape.visible })}>{shape.visible ? 'Shown' : 'Hidden'}</button>
-      <button className="text-button" aria-pressed={shape.locked} onClick={() => map.dispatch({ type: 'setLocked', shapeId: shape.id, locked: !shape.locked })}>{shape.locked ? 'Locked' : 'Unlocked'}</button>
-    </div>
-    <div className="map-toggles">
-      <button className="text-button" title="Copy this shape · ⌘D, or Alt-drag it" onClick={() => act.duplicate([shape.id])}>Duplicate</button>
-      <button className="text-button danger-button" disabled={locked} title={locked ? 'Unlock the shape to delete it' : 'Delete this shape · ⌫'} onClick={() => act.remove([shape.id])}>Delete shape</button>
-    </div>
-    <ShapeTools act={act} ids={[shape.id]} locked={locked} />
-    <details className="map-grid-tool">
-      <summary>Make a grid</summary>
-      {gridReady ? <>
-        <p className="muted-text">Splits this shape into rows and columns of separate shapes, in a group, following its perspective.</p>
-        <div className="map-grid-fields">
-          <label className="map-field">Rows<input aria-label="Grid rows" type="number" min={1} max={16} value={grid.rows} onChange={e => setGrid({ ...grid, rows: e.target.value })} /></label>
-          <label className="map-field">Columns<input aria-label="Grid columns" type="number" min={1} max={16} value={grid.cols} onChange={e => setGrid({ ...grid, cols: e.target.value })} /></label>
-          <label className="map-field">Gap px<input aria-label="Grid gap" type="number" min={0} max={100} value={grid.gap} onChange={e => setGrid({ ...grid, gap: e.target.value })} /></label>
-        </div>
-        <label className="map-check" title="On: every cell plays this shape's instrument, laid across the whole grid, so the picture runs from cell to cell. Off: each cell gets its own copy to change on its own.">
-          <input type="checkbox" aria-label="One picture across the cells" checked={grid.spread} onChange={e => setGrid({ ...grid, spread: e.target.checked })} />One picture across the cells</label>
-        <button className="text-button" disabled={locked} onClick={makeGrid}>Make grid</button>
-      </> : <p className="muted-text">Only a shape with four corners, no curves and no holes can be made into a grid.</p>}
-    </details>
-
-    {point && map.selectedIndex !== null ? <>
+    {point && map.selectedIndex !== null && <div className="map-point">
       <h3>{map.selectedRing >= 0 ? `Hole ${map.selectedRing + 1}, ${isCurved(point) ? 'curve point' : 'corner'}` : isCurved(point) ? 'Curve point' : 'Corner'} {map.selectedIndex + 1}</h3>
-      <CommitField label="X" value={String(Math.round(point.x * STAGE_SIZE.width))} onCommit={t => commitPosition('x', t)} narrow disabled={locked} />
-      <CommitField label="Y" value={String(Math.round(point.y * STAGE_SIZE.height))} onCommit={t => commitPosition('y', t)} narrow disabled={locked} />
+      <div className="map-xy">
+        <CommitField label="X" value={String(Math.round(point.x * STAGE_SIZE.width))} onCommit={t => commitPosition('x', t)} narrow disabled={locked} />
+        <CommitField label="Y" value={String(Math.round(point.y * STAGE_SIZE.height))} onCommit={t => commitPosition('y', t)} narrow disabled={locked} />
+      </div>
       <div className="map-toggles">
         <button className="text-button" disabled={locked} title="Alt-click a point to switch it" onClick={() => map.dispatch({ type: 'setCurve', shapeId: shape.id, ring: map.selectedRing, index: map.selectedIndex!, curved: !isCurved(point) })}>{isCurved(point) ? 'Make corner' : 'Make curve'}</button>
         <button className="text-button" disabled={locked} title="Double-click a point to remove it" onClick={() => { if (map.dispatch({ type: 'removePoint', shapeId: shape.id, ring: map.selectedRing, index: map.selectedIndex! })) map.setSelection(shape.id); }}>Remove point</button>
       </div>
-      <p className="muted-text">Positions are in pixels on the projector. Arrow keys nudge (Shift for 10); Tab steps to the next point. Drag a curve's handles to bend it; Alt moves one handle alone.</p>
-    </> : <p className="muted-text">Click a point on the stage to set its exact position. Double-click a side to add a point.</p>}
+    </div>}
+
+    {!shape.blocker && <Section id="placement" title="Placement" summary={placeLabel}>
+      <label className="map-field">Picture<select aria-label="Placement" value={place.kind} disabled={locked} onChange={e => setPlacement({ kind: e.target.value as PlacementKind })}>
+        <option value="fit">Fit: fills the shape</option>
+        <option value="pin">Pin: in perspective on four corners</option>
+        <option value="across-group">Across group: one picture over the group</option>
+        <option value="across-stage">Across stage: one picture over the stage</option>
+      </select></label>
+      {place.kind === 'pin' && <p className="muted-text">{shape.placement.pin && !ownCornersPinnable(shape) ? 'Drag the four diamond handles on the stage onto the surface’s corners.' : 'The picture is laid on this shape’s four corners in perspective: drag the corners onto the surface’s corners.'}</p>}
+      {place.kind === 'across-group' && !group && <p className="muted-text">This shape is in no group, so its picture spreads over the whole stage.</p>}
+      {place.kind !== 'pin' && <>
+        <SliderField key={`zoom-${shape.id}`} label="Zoom" value={place.zoom} min={ZOOM_RANGE.min} max={ZOOM_RANGE.max} step={0.01} disabled={locked} format={pct} onCommit={zoom => setPlacement({ zoom })} />
+        <SliderField key={`movex-${shape.id}`} label="Move across" value={place.offset.x * STAGE_SIZE.width} min={-STAGE_SIZE.width / 2} max={STAGE_SIZE.width / 2} step={1} unit=" px" disabled={locked} onCommit={x => setPlacement({ offset: { x: x / STAGE_SIZE.width, y: place.offset.y } })} />
+        <SliderField key={`movey-${shape.id}`} label="Move up and down" value={place.offset.y * STAGE_SIZE.height} min={-STAGE_SIZE.height / 2} max={STAGE_SIZE.height / 2} step={1} unit=" px" disabled={locked} onCommit={y => setPlacement({ offset: { x: place.offset.x, y: y / STAGE_SIZE.height } })} />
+        <SliderField key={`turn-${shape.id}`} label="Turn" value={place.turn} min={-180} max={180} step={1} unit="°" disabled={locked} onCommit={turn => setPlacement({ turn })} />
+      </>}
+      <div className="map-toggles">
+        {place.kind !== 'pin' && <button className="text-button" disabled={locked || (place.zoom === 1 && place.turn === 0 && place.offset.x === 0 && place.offset.y === 0)} onClick={() => setPlacement({ zoom: 1, turn: 0, offset: { x: 0, y: 0 } })}>Reset picture</button>}
+        {place.kind === 'pin' && shape.placement.pin && !ownCornersPinnable(shape) && <button className="text-button" disabled={locked} title="Put the four handles back at the shape's box" onClick={() => setPlacement({ pin: null })}>Reset pin</button>}
+      </div>
+    </Section>}
+
+    {!shape.blocker && <Section id="look" title="Look" summary={<>{pct(shape.brightness)} {shape.tint !== '#ffffff' && <i className="map-dot" style={{ background: shape.tint }} />}</>}>
+      <SliderField key={`bright-${shape.id}`} label="Brightness" value={shape.brightness} min={0} max={BRIGHTNESS_MAX} step={0.01} disabled={locked} format={pct} onCommit={brightness => map.dispatch({ type: 'setLook', shapeId: shape.id, brightness })} />
+      <div className="map-field">Tint<div className="map-tints" role="group" aria-label="Tint">{TINTS.map(([name, colour]) =>
+        <button key={colour} type="button" className="map-tint" aria-pressed={shape.tint === colour} aria-label={`Tint ${name}`} title={name} disabled={locked} style={{ background: colour }}
+          onClick={() => map.dispatch({ type: 'setLook', shapeId: shape.id, tint: colour })} />)}
+        <label className="map-tint custom" title="Any tint"><input type="color" aria-label="Tint colour" value={shape.tint} disabled={locked} onChange={e => map.dispatch({ type: 'setLook', shapeId: shape.id, tint: e.target.value.toLowerCase() })} /></label></div></div>
+    </Section>}
+
+    <Section id="edge" title="Edge" summary={edgeSummary}>
+      <SliderField key={`soft-${shape.id}`} label="Soft edge" value={shape.softEdge} min={0} max={SOFT_EDGE_MAX} step={1} unit=" px" disabled={locked} onCommit={px => map.dispatch({ type: 'setSoftEdge', shapeId: shape.id, px })} />
+      {!shape.blocker && <>
+        <SliderField key={`border-${shape.id}`} label="Border" value={border.width} min={0} max={BORDER_MAX} step={1} unit=" px" disabled={locked} onCommit={width => setBorder({ width })} />
+        {border.width > 0 && <>
+          <label className="map-field">Border colour<select aria-label="Border colour" value={borderMode} disabled={locked}
+            onChange={e => setBorder({ colour: e.target.value === 'fixed' ? shape.colour : e.target.value })}>
+            <option value="shape">Shape colour</option>
+            <option value="palette">Instrument palette</option>
+            <option value="fixed">Fixed colour</option>
+          </select></label>
+          {borderMode === 'fixed' && <label className="map-field">Border fixed colour<input type="color" aria-label="Border hex" value={border.colour} disabled={locked} onChange={e => setBorder({ colour: e.target.value.toLowerCase() })} /></label>}
+          <SliderField key={`glow-${shape.id}`} label="Glow" value={border.glow} min={0} max={GLOW_MAX} step={1} unit=" px" disabled={locked} onCommit={glow => setBorder({ glow })} />
+        </>}
+      </>}
+    </Section>
+
+    <Section id="shape" title="Shape" summary={[shape.visible ? '' : 'hidden', shape.locked ? 'locked' : ''].filter(Boolean).join(' · ')}>
+      <div className="map-toggles">
+        <button className="text-button" aria-pressed={shape.visible} onClick={() => map.dispatch({ type: 'setVisible', shapeId: shape.id, visible: !shape.visible })}>{shape.visible ? 'Shown' : 'Hidden'}</button>
+        <button className="text-button" aria-pressed={shape.locked} onClick={() => map.dispatch({ type: 'setLocked', shapeId: shape.id, locked: !shape.locked })}>{shape.locked ? 'Locked' : 'Unlocked'}</button>
+        <button className="text-button" title="Copy this shape · ⌘D, or Alt-drag it" onClick={() => act.duplicate([shape.id])}>Duplicate</button>
+      </div>
+      <ShapeTools act={act} ids={[shape.id]} locked={locked} />
+      <details className="map-grid-tool">
+        <summary>Make a grid</summary>
+        {gridReady ? <>
+          <p className="muted-text">Splits this shape into rows and columns of separate shapes, in a group, following its perspective.</p>
+          <div className="map-grid-fields">
+            <label className="map-field">Rows<input aria-label="Grid rows" type="number" min={1} max={16} value={grid.rows} onChange={e => setGrid({ ...grid, rows: e.target.value })} /></label>
+            <label className="map-field">Columns<input aria-label="Grid columns" type="number" min={1} max={16} value={grid.cols} onChange={e => setGrid({ ...grid, cols: e.target.value })} /></label>
+            <label className="map-field">Gap px<input aria-label="Grid gap" type="number" min={0} max={100} value={grid.gap} onChange={e => setGrid({ ...grid, gap: e.target.value })} /></label>
+          </div>
+          <label className="map-check" title="On: every cell plays this shape's instrument, laid across the whole grid, so the picture runs from cell to cell. Off: each cell gets its own copy to change on its own.">
+            <input type="checkbox" aria-label="One picture across the cells" checked={grid.spread} onChange={e => setGrid({ ...grid, spread: e.target.checked })} />One picture across the cells</label>
+          <button className="text-button" disabled={locked} onClick={makeGrid}>Make grid</button>
+        </> : <p className="muted-text">Only a shape with four corners, no curves and no holes can be made into a grid.</p>}
+      </details>
+      <button className="text-button danger-button" disabled={locked} title={locked ? 'Unlock the shape to delete it' : 'Delete this shape · ⌫'} onClick={() => act.remove([shape.id])}>Delete shape</button>
+    </Section>
+    {!point && <p className="muted-text map-hint">Click a point on the stage to set its exact position. Double-click a side to add a point.</p>}
   </>;
+}
+
+/** Which sections are open, kept while the app is open (and between launches, where the browser allows). */
+const openSections = new Set<string>((() => { try { return JSON.parse(localStorage.getItem('map-open-sections') ?? '[]') as string[]; } catch { return []; } })());
+
+/** A folding section of the Details panel; closed, it shows a one-line summary. */
+function Section({ id, title, summary, children }: { id: string; title: string; summary: React.ReactNode; children: React.ReactNode }) {
+  const [open, setOpen] = useState(openSections.has(id));
+  return <details className="map-section" data-section={id} open={open} onToggle={e => {
+    const now = e.currentTarget.open;
+    if (now === open) return;
+    setOpen(now);
+    if (now) openSections.add(id); else openSections.delete(id);
+    try { localStorage.setItem('map-open-sections', JSON.stringify([...openSections])); } catch { /* remembered for this session only */ }
+  }}>
+    <summary><span>{title}</span><span className="map-section-summary">{summary}</span></summary>
+    <div className="map-section-body">{children}</div>
+  </details>;
 }
 
 function ShapeTools({ act, ids, locked }: { act: ReturnType<typeof mapActions>; ids: string[]; locked: boolean }) {

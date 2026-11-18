@@ -10,6 +10,22 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 
+// The look browser and the Details panel's folding sections (Map UI pass).
+const playLook = async (page, value) => {
+  await page.getByRole('button', { name: 'Change look' }).click();
+  await page.locator(`[data-look="${value}"]`).click();
+  // A person presses Escape well after the click; pressed within milliseconds it can arrive before the page settles.
+  await new Promise(r => setTimeout(r, 150));
+  await page.keyboard.press('Escape');
+  // If the key was lost, the panel's own close button.
+  await page.locator('.look-browser').waitFor({ state: 'detached', timeout: 2000 }).catch(async () => {
+    await page.getByRole('button', { name: 'Close looks' }).click();
+    await page.locator('.look-browser').waitFor({ state: 'detached' });
+  });
+};
+const openSection = (page, id) => page.evaluate(id => { const d = document.querySelector(`details[data-section="${id}"]`); if (d && !d.open) d.open = true; }, id);
+
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'work/map');
 const userData = path.join(out, 'user-data');
@@ -101,7 +117,7 @@ try {
     assert.ok(lit >= 5 && dim >= 200, `grid pattern: ${lit} probes on a line, ${dim} dim between lines`);
     await fs.writeFile(path.join(out, 'output-grid-pattern.png'), Buffer.from(g.png, 'base64'));
     // The rest of the checks use a plain colour.
-    await studio.getByLabel('Plays').selectOption('colour');
+    await playLook(studio, 'colour');
     let s;
     for (let i = 0; i < 30; i++) { s = await sample(output, [...INSIDE, ...OUTSIDE]); if (near(s.colours[0], RED)) break; await sleep(100); }
     assert.deepEqual(s.size, [1920, 1080]);
@@ -194,6 +210,7 @@ try {
     await studio.getByRole('button', { name: 'Shape 1', exact: true }).click();
     await studio.keyboard.press(process.platform === 'darwin' ? 'Meta+d' : 'Control+d');
     await studio.waitForFunction(() => document.querySelectorAll('.map-shape-list li').length === 2);
+    await openSection(studio, 'shape');
     await studio.getByRole('button', { name: 'Delete shape' }).click();
     assert.equal(await items().count(), 1);
     // Right-clicking empty stage gives the stage menu.
@@ -223,7 +240,7 @@ try {
   const insideFirst = [.425, .425];
   await check('a shape plays an instrument on the wall: moving inside, black outside, never a black frame while it starts', async () => {
     await studio.getByRole('button', { name: 'Shape 1', exact: true }).click();
-    await studio.getByLabel('Plays').selectOption('preset:porcelain-shutters');
+    await playLook(studio, 'preset:porcelain-shutters');
     // From the moment of the change, the inside of the shape is never black: red until the instrument is ready, then the instrument.
     const seen = [];
     for (let i = 0; i < 40; i++) { seen.push((await sample(output, [insideFirst])).colours[0]); await sleep(40); }
@@ -249,7 +266,7 @@ try {
     const at = (fx, fy) => [rect.left + fx * rect.width, rect.top + fy * rect.height];
     await studio.mouse.move(...at(.68, .1)); await studio.mouse.down(); await studio.mouse.move(...at(.9, .22), { steps: 6 }); await studio.mouse.up();
     await studio.getByRole('button', { name: 'Select', exact: true }).click();
-    await studio.getByLabel('Plays').selectOption('preset:salt-mandala');
+    await playLook(studio, 'preset:salt-mandala');
     await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 2, null, { timeout: 10000 });
     const before = (await wallStats()).prepares;
     await studio.getByRole('button', { name: 'Vary', exact: true }).click();
@@ -325,7 +342,7 @@ try {
   };
   const shapeCount = () => studio.locator('.map-shape-list li:not(.map-group-row)').count();
   /** The selected shape plays its plain colour, not the grid pattern new shapes start with. */
-  const asColour = () => studio.getByLabel('Plays').selectOption('colour');
+  const asColour = () => playLook(studio, 'colour');
 
   await check('an ellipse projects a round shape; a hole cut with Alt is black on the wall, and Undo takes it away', async () => {
     await clearStage();
@@ -374,7 +391,7 @@ try {
     await clearStage();
     await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
     await tool('Select'); await asColour();
-    const slider = async (label, value) => { const s = studio.getByLabel(label, { exact: true }); await s.fill(String(value)); await s.dispatchEvent('pointerup'); };
+    const slider = async (label, value) => { await openSection(studio, 'edge'); const s = studio.getByLabel(label, { exact: true }); await s.fill(String(value)); await s.dispatchEvent('pointerup'); };
     await slider('Soft edge', 80);
     // 6 px inside the left side, the fade has barely begun; the middle is full colour.
     const [edge, middle] = await wallUntil([[.2 + 6 / 1920, .4], [.4, .4]], c => coloured(c[1]) && c[0].reduce((a, b) => a + b) < c[1].reduce((a, b) => a + b) / 3, 'soft edge');
@@ -388,7 +405,7 @@ try {
     await tool('Rectangle'); await dragOn([.1, .1], [.3, .3]); await asColour();
     await tool('Rectangle'); await dragOn([.5, .5], [.7, .7]); await asColour();
     await tool('Select');
-    const names = await studio.locator('.map-shape-list li .map-shape-name').allTextContents();
+    const names = await studio.locator('.map-shape-list li .map-row-name').allTextContents();
     await studio.getByRole('button', { name: `Solo ${names[0]}`, exact: true }).click();
     await wallUntil([[.2, .2], [.6, .6]], c => coloured(c[0]) && near(c[1], BLACK), 'solo');
     await studio.getByRole('button', { name: 'Solo on · Clear' }).click();
@@ -424,6 +441,7 @@ try {
     await clearStage();
     await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
     await tool('Select'); await asColour();
+    await openSection(studio, 'shape');
     await studio.locator('.map-grid-tool summary').click();
     await studio.getByLabel('Grid gap', { exact: true }).fill('60');
     await studio.getByRole('button', { name: 'Make grid', exact: true }).click();
@@ -452,7 +470,7 @@ try {
   });
 
   // ---- Stage 4: placement ----
-  const placement = value => studio.getByLabel('Placement', { exact: true }).selectOption(value);
+  const placement = async value => { await openSection(studio, 'placement'); await studio.getByLabel('Placement', { exact: true }).selectOption(value); };
 
   await check('Pin: a trapezoid’s grid pattern bunches up towards its narrow side, as a grid on an angled surface does', async () => {
     await clearStage();
@@ -483,11 +501,11 @@ try {
     await clearStage();
     await tool('Rectangle'); await dragOn([.1, .3], [.3, .6]);
     await tool('Select');
-    await studio.getByLabel('Plays').selectOption('preset:porcelain-shutters');
+    await playLook(studio, 'preset:porcelain-shutters');
     await placement('across-stage');
     await tool('Rectangle'); await dragOn([.3 + 3 / 1920, .3], [.5, .6]);
     await tool('Select');
-    const names = await studio.locator('.map-shape-list li .map-shape-name').allTextContents();
+    const names = await studio.locator('.map-shape-list li .map-row-name').allTextContents();
     await studio.getByLabel('Share with', { exact: true }).selectOption({ label: names[0] });
     await placement('across-stage');
     await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
@@ -506,6 +524,7 @@ try {
     await tool('Rectangle'); await dragOn([.2, .2], [.5, .5]);
     await tool('Select'); await asColour();
     const [full] = await wallUntil([[.35, .35]], c => coloured(c[0]), 'full');
+    await openSection(studio, 'look');
     const b = studio.getByLabel('Brightness', { exact: true }); await b.fill('0.5'); await b.dispatchEvent('pointerup');
     const [half] = await wallUntil([[.35, .35]], c => Math.abs(c[0][0] - full[0] / 2) <= 12, 'half brightness');
     assert.ok(Math.abs(half[0] - full[0] / 2) <= 12, `${half} against ${full}`);
@@ -554,7 +573,7 @@ try {
     await clearStage();
     await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
     await tool('Select');
-    await studio.getByLabel('Plays').selectOption('preset:porcelain-shutters');
+    await playLook(studio, 'preset:porcelain-shutters');
     await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
     await sleep(800);
     // Frozen, the square's picture holds still: split into cells, the cells together must show exactly that picture.
@@ -562,6 +581,7 @@ try {
     await freeze.click(); await sleep(400);
     const points = Array.from({ length: 64 }, (_, i) => [.21 + (i % 8) * .054, .21 + Math.floor(i / 8) * .054]);
     const before = await sample(output, points);
+    await openSection(studio, 'shape');
     await studio.locator('.map-grid-tool summary').click();
     assert.equal(await studio.getByLabel('One picture across the cells', { exact: true }).isChecked(), true);
     await studio.getByLabel('Grid gap', { exact: true }).fill('0');

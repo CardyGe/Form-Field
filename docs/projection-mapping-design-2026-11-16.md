@@ -555,6 +555,22 @@ Made 18 November 2026, before building stage 4. Greg handed over the how; each o
   - If the graphics card resets, the projector shows black until it comes back by itself, usually within a second. The operator is told.
   - The picture is kept after each frame (preserveDrawingBuffer), so a frame with nothing new, the operator screen and the scripted checks all see the last picture. This costs a little graphics-card time.
 
+**Shape screen pass (18 November, at Greg's request)**
+
+- **Shape list:**
+  - One slim row per shape: colour, name, and what it plays.
+  - Shown, Lock and Solo are small icons that appear on hover and stay when they are not at rest.
+  - A group is a folder row with its members indented below, and "Group selected" is an icon at the top of the list.
+- **Look browser:**
+  - Change… on a shape opens it, with a search box, a chip for each kind of instrument, and a tile for each of the 91 Library presets plus the grid pattern and plain colour.
+  - Each tile shows a still preview, rendered the first time it comes into view and kept while the app is open. Hovering a tile plays its preview.
+  - A click plays the look in the shape, and the browser stays open to try others. Esc, ✕ or a click outside closes it.
+- **Details panel:**
+  - The shape's colour and name at the top.
+  - A Content card: what it plays, with Change…, Vary, Edit in Studio, palette, speed, sharing and Blocker.
+  - The chosen point's exact position.
+  - Placement, Look, Edge and Shape fold away, each showing a one-line summary when closed, and are remembered open or closed.
+
 ## Stage 4 results
 
 Measured 18 November 2026 with `scripts/measure-map.mjs` (eight shapes, four instruments, 1920 × 1080, at the display's 120 Hz).

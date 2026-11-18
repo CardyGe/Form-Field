@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { useMap, type MapTool } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
 import MapShapeList from './MapShapeList';
+import MapIcon from './mapIcons';
 import MapDetails from './MapDetails';
+import MapLookBrowser from './MapLookBrowser';
+import { PRESETS } from '../core/project';
 import { mapActions, newId, newSourceId } from './mapActions';
 import { paint, ringPx, shownOnWall, traceRing } from '../map/draw';
 import { applyEdit, attemptEdit, type EditAction } from '../map/editor';
@@ -127,6 +130,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const [hover, setHover] = useState<Point | null>(null);
   const [marquee, setMarquee] = useState<{ a: Point; b: Point } | null>(null);
   // Stage corners: while on, the four corner handles are shown and the shape tools rest; the last one touched takes the arrow keys.
+  // The look browser, open for the selected shape.
+  const [looksOpen, setLooksOpen] = useState(false);
   const [cornersMode, setCornersMode] = useState(false);
   const [cornerIndex, setCornerIndex] = useState(0);
   const [snapMark, setSnapMark] = useState<SnapTarget | null>(null);
@@ -504,7 +509,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
 
   // Shortcuts work from anywhere in Map, unless the key press belongs to a text box.
   const onKeyDown = (e: globalThis.KeyboardEvent) => {
-    if (menu) return; // the open menu handles its own keys
+    if (menu || looksOpen) return; // the open menu, or the look browser, handles its own keys
     const target = e.target as HTMLElement | null;
     // Delete, Backspace, Tab and Enter act on shapes only while the stage has focus (or nothing does), never from a button.
     const onStage = !target || target === document.body || !!target.closest?.('.map-stage');
@@ -670,6 +675,15 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const cornersHint = cornersMode ? `Stage corners: drag a numbered corner, or use the arrow keys on corner ${cornerIndex + 1} (Shift for 10 pixels, Tab for the next corner). This screen stays flat; the projector bends.` : null;
   const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? cornersHint ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
+  // The browser follows the single selected shape; it closes when there is none, or a Blocker or locked shape is picked.
+  const lookShape = map.selectedIds.length === 1 ? map.show.shapes.find(s => s.id === map.selectedId && !s.blocker && !isShapeLocked(map.show, s)) ?? null : null;
+  /** What the shape plays, as the browser names it: a preset's id when its instrument is still that one-layer preset. */
+  const currentLook = (shape: typeof lookShape & {}) => {
+    if (!shape.sourceId) return shape.fill;
+    const project = map.show.sources.find(s => s.id === shape.sourceId)?.project;
+    const preset = project && project.layers.length === 1 ? PRESETS.find(p => p.name === project.name) : undefined;
+    return preset ? `preset:${preset.id}` : '';
+  };
 
   return <section className="live-shell map-shell" role="region" aria-label="Map">
     <header className="app-header">{header}<div className="live-actions">
@@ -691,12 +705,10 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     </div></header>
     <div className="map-body">
       <aside className="live-column map-shapes" aria-label="Shapes">
-        <h2>Shapes</h2>
+        <div className="map-list-head"><h2>Shapes <span className="muted-text">{map.show.shapes.length || ''}</span></h2>
+          <button className="map-icon" disabled={!map.selectedIds.length} aria-label="Group selected shapes" title="Put the selected shapes in a folder · ⌘G" onClick={() => act.group()}><MapIcon name="folderPlus" size={16} /></button></div>
         {map.show.shapes.length === 0 && <p className="muted-text">No shapes yet. Add a photo of the room to trace over (Room photo, or drop one on the stage), then pick a drawing tool above the stage.</p>}
         <MapShapeList map={map} onMenu={(e, id) => openMenu(e.clientX, e.clientY, id)} />
-        {map.selectedIds.length > 0 && <div className="map-toggles map-list-actions">
-          <button className="text-button" title="Put the selected shapes in a folder · ⌘G" onClick={() => act.group()}>Group</button>
-        </div>}
       </aside>
       <div className="map-centre">
         <div className="map-tools" role="toolbar" aria-label="Tools">
@@ -727,10 +739,11 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       </div>
       <aside className="live-column map-inspector" aria-label="Details">
         <h2>Details</h2>
-        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} />
+        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} />
       </aside>
     </div>
     <footer className="map-status" role="status">{status}</footer>
+    {looksOpen && lookShape && <MapLookBrowser current={currentLook(lookShape)} colour={lookShape.colour} onPick={value => act.play(lookShape.id, value)} onClose={() => setLooksOpen(false)} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label={menu.shapeId ? 'Shape' : 'Stage'} entries={menuEntries(menu.shapeId)} onClose={() => setMenu(null)} />}
   </section>;
 }

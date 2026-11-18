@@ -1,5 +1,6 @@
 import { useState, type MouseEvent } from 'react';
 import type { useMap } from './useMap';
+import MapIcon from './mapIcons';
 import type { Shape } from '../map/show';
 
 type Map = ReturnType<typeof useMap>;
@@ -16,13 +17,16 @@ function items(shapes: Shape[]): ({ kind: 'shape'; shape: Shape } | { kind: 'gro
   return out;
 }
 
+/** Folders closed on this screen, kept while the app is open. */
+const closedFolders = new Set<string>();
+
 /**
- * The shapes, as a single list: groups are folders with their members indented below them. Clicking a name selects;
- * Shift-click adds to the selection; clicking a group selects its members. Shown, Locked and Solo for each.
+ * The shapes as one compact list: a row per shape (colour, name, what it plays) with Shown, Lock and Solo as small
+ * icons that show on hover, or stay when they are not at rest; groups are folders with their members below.
+ * Clicking a name selects; Shift-click adds to the selection; clicking a folder selects its members.
  */
 export default function MapShapeList({ map, onMenu }: { map: Map; onMenu: (e: MouseEvent, shapeId: string) => void }) {
-  // Which folders are closed: for this screen only.
-  const [closed, setClosed] = useState<string[]>([]);
+  const [, redraw] = useState(0);
   const select = (e: MouseEvent, ids: string[]) => {
     if (e.shiftKey) {
       const all = ids.every(id => map.selectedIds.includes(id));
@@ -32,30 +36,43 @@ export default function MapShapeList({ map, onMenu }: { map: Map; onMenu: (e: Mo
   };
   const soloShape = (id: string) => map.setSolo({ ...map.solo, shapes: map.solo.shapes.includes(id) ? map.solo.shapes.filter(s => s !== id) : [...map.solo.shapes, id] });
   const soloGroup = (id: string) => map.setSolo({ ...map.solo, groups: map.solo.groups.includes(id) ? map.solo.groups.filter(g => g !== id) : [...map.solo.groups, id] });
+  /** What a shape plays, in a word or two. */
+  const plays = (shape: Shape) => shape.blocker ? 'Blocker' : shape.sourceId ? map.show.sources.find(s => s.id === shape.sourceId)?.project.name ?? '' : shape.fill === 'grid' ? 'Grid' : 'Colour';
+  const toggles = (label: string, shown: boolean, locked: boolean, soloed: boolean, on: { show: () => void; lock: () => void; solo: () => void }) => <span className="map-row-icons">
+    <button className={`map-icon ${!shown ? 'set' : ''}`} aria-pressed={shown} aria-label={`${shown ? 'Hide' : 'Show'} ${label}`} title={shown ? 'Shown · click to hide' : 'Hidden · click to show'} onClick={on.show}><MapIcon name={shown ? 'eye' : 'eyeOff'} /></button>
+    <button className={`map-icon ${locked ? 'set' : ''}`} aria-pressed={locked} aria-label={`${locked ? 'Unlock' : 'Lock'} ${label}`} title={locked ? 'Locked · click to unlock' : 'Click to lock'} onClick={on.lock}><MapIcon name={locked ? 'lock' : 'unlock'} /></button>
+    <button className={`map-icon ${soloed ? 'set solo' : ''}`} aria-pressed={soloed} aria-label={`Solo ${label}`} title="Solo: show only soloed shapes, on the projector too" onClick={on.solo}><MapIcon name="solo" /></button>
+  </span>;
 
-  const shapeRow = (shape: Shape, member: boolean) => <li key={shape.id} className={`${map.selectedIds.includes(shape.id) ? 'selected' : ''} ${member ? 'map-member' : ''}`}
+  const shapeRow = (shape: Shape, member: boolean) => <li key={shape.id} className={`map-row ${map.selectedIds.includes(shape.id) ? 'selected' : ''} ${member ? 'member' : ''} ${shape.visible ? '' : 'hidden'}`}
     onContextMenu={e => { e.preventDefault(); if (map.loaded) onMenu(e, shape.id); }}>
-    <button className="map-shape-name" aria-pressed={map.selectedIds.includes(shape.id)} title={shape.blocker ? 'Blocker: blacks out everything beneath it' : undefined} onClick={e => select(e, [shape.id])}>
-      <span className={`map-swatch ${shape.blocker ? 'blocker' : ''}`} style={{ background: shape.blocker ? undefined : shape.colour }} />{shape.name}</button>
-    <button className="text-button" aria-pressed={shape.visible} aria-label={`${shape.visible ? 'Hide' : 'Show'} ${shape.name}`} onClick={() => map.dispatch({ type: 'setVisible', shapeId: shape.id, visible: !shape.visible })}>{shape.visible ? 'Shown' : 'Hidden'}</button>
-    <button className="text-button" aria-pressed={shape.locked} aria-label={`${shape.locked ? 'Unlock' : 'Lock'} ${shape.name}`} onClick={() => map.dispatch({ type: 'setLocked', shapeId: shape.id, locked: !shape.locked })}>{shape.locked ? 'Locked' : 'Unlocked'}</button>
-    <button className="text-button" aria-pressed={map.solo.shapes.includes(shape.id)} aria-label={`Solo ${shape.name}`} title="Show only soloed shapes, on the projector too" onClick={() => soloShape(shape.id)}>Solo</button>
+    <button className="map-shape-name" aria-pressed={map.selectedIds.includes(shape.id)} aria-label={shape.name} title={shape.blocker ? 'Blocker: blacks out everything beneath it' : undefined} onClick={e => select(e, [shape.id])}>
+      <span className={`map-swatch ${shape.blocker ? 'blocker' : ''}`} style={{ background: shape.blocker ? undefined : shape.colour }} /><span className="map-row-name">{shape.name}</span>
+      <span className="map-row-plays">{plays(shape)}</span></button>
+    {toggles(shape.name, shape.visible, shape.locked, map.solo.shapes.includes(shape.id), {
+      show: () => map.dispatch({ type: 'setVisible', shapeId: shape.id, visible: !shape.visible }),
+      lock: () => map.dispatch({ type: 'setLocked', shapeId: shape.id, locked: !shape.locked }),
+      solo: () => soloShape(shape.id),
+    })}
   </li>;
 
   return <ul className="map-shape-list">{items(map.show.shapes).flatMap(item => {
     if (item.kind === 'shape') return [shapeRow(item.shape, false)];
     const group = map.show.groups.find(g => g.id === item.groupId);
     if (!group) return item.members.map(m => shapeRow(m, false));
-    const open = !closed.includes(group.id);
+    const open = !closedFolders.has(group.id);
     const ids = item.members.map(m => m.id);
     const allSelected = ids.every(id => map.selectedIds.includes(id));
     return [
-      <li key={`group-${group.id}`} className={`map-group-row ${allSelected ? 'selected' : ''}`} onContextMenu={e => { e.preventDefault(); if (map.loaded) onMenu(e, ids[0]); }}>
-        <button className="map-folder" aria-expanded={open} aria-label={`${open ? 'Close' : 'Open'} ${group.name}`} onClick={() => setClosed(c => open ? [...c, group.id] : c.filter(g => g !== group.id))}>{open ? '▾' : '▸'}</button>
-        <button className="map-shape-name" aria-pressed={allSelected} title="Select every shape in this group" onClick={e => select(e, ids)}>{group.name} <span className="muted-text">({ids.length})</span></button>
-        <button className="text-button" aria-pressed={group.visible} aria-label={`${group.visible ? 'Hide' : 'Show'} group ${group.name}`} onClick={() => map.dispatch({ type: 'setGroupVisible', groupId: group.id, visible: !group.visible })}>{group.visible ? 'Shown' : 'Hidden'}</button>
-        <button className="text-button" aria-pressed={group.locked} aria-label={`${group.locked ? 'Unlock' : 'Lock'} group ${group.name}`} onClick={() => map.dispatch({ type: 'setGroupLocked', groupId: group.id, locked: !group.locked })}>{group.locked ? 'Locked' : 'Unlocked'}</button>
-        <button className="text-button" aria-pressed={map.solo.groups.includes(group.id)} aria-label={`Solo group ${group.name}`} title="Show only soloed shapes, on the projector too" onClick={() => soloGroup(group.id)}>Solo</button>
+      <li key={`group-${group.id}`} className={`map-row map-group-row ${allSelected ? 'selected' : ''} ${group.visible ? '' : 'hidden'}`} onContextMenu={e => { e.preventDefault(); if (map.loaded) onMenu(e, ids[0]); }}>
+        <button className="map-folder" aria-expanded={open} aria-label={`${open ? 'Close' : 'Open'} ${group.name}`} onClick={() => { if (open) closedFolders.add(group.id); else closedFolders.delete(group.id); redraw(n => n + 1); }}><MapIcon name={open ? 'chevronDown' : 'chevronRight'} size={12} /></button>
+        <button className="map-shape-name" aria-pressed={allSelected} title="Select every shape in this group" onClick={e => select(e, ids)}>
+          <MapIcon name="folder" size={13} /><span className="map-row-name">{group.name}</span><span className="map-row-plays">{ids.length}</span></button>
+        {toggles(`group ${group.name}`, group.visible, group.locked, map.solo.groups.includes(group.id), {
+          show: () => map.dispatch({ type: 'setGroupVisible', groupId: group.id, visible: !group.visible }),
+          lock: () => map.dispatch({ type: 'setGroupLocked', groupId: group.id, locked: !group.locked }),
+          solo: () => soloGroup(group.id),
+        })}
       </li>,
       ...(open ? item.members.map(m => shapeRow(m, true)) : []),
     ];

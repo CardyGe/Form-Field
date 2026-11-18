@@ -136,7 +136,7 @@ const MAX_GRID_SIDE = 16;
 const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => show.shapes.some(s => s.sourceId === src.id)); };
 
 /** A one-layer composition of a Library preset, in the canonical form a file would load as. */
-function presetComposition(presetId: string, seed: number): Project | null {
+export function presetComposition(presetId: string, seed: number): Project | null {
   const preset = PRESETS.find(p => p.id === presetId);
   if (!preset) return null;
   const project = createProject();
