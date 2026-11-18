@@ -72,7 +72,8 @@ export function patternPicture(shape: Shape, path: Path2D, box: Box): OffscreenC
 
 /** The grid pattern flat, for a pinned shape: the perspective bends it. landed: the size it lands at on the stage. */
 export function flatPatternPicture(shape: Shape, landed: { w: number; h: number }): OffscreenCanvas {
-  const w = Math.max(64, Math.min(2048, Math.ceil(landed.w))), h = Math.max(64, Math.min(2048, Math.ceil(landed.h)));
+  const side = (v: number) => Number.isFinite(v) ? Math.max(64, Math.min(2048, Math.ceil(v))) : 64;
+  const w = side(landed.w), h = side(landed.h);
   const canvas = new OffscreenCanvas(w, h);
   drawFlatPattern(canvas.getContext('2d')!, w, h, shape.colour, landed);
   return canvas;

@@ -40,6 +40,8 @@ export default function MapOutput() {
       if (compositor.frame(now)) changed = true;
       if (reading) {
         const picture = compositor.collectPreview();
+        // A readback lost with the graphics context never arrives: start again.
+        if (!picture && !compositor.previewPending) { reading = false; busy = false; }
         if (picture) {
           reading = false;
           createImageBitmap(picture).then(bitmap => encoder.postMessage(bitmap, [bitmap])).catch(() => { busy = false; });

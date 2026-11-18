@@ -54,8 +54,8 @@ interface Pictures {
   shape: Shape;
   geometry: string; path: Path2D; box: Box;
   coverageKey: string; coverage: Texture | null;
-  decorKey: string; decor: Texture | null;
-  ownKey: string; own: Texture | null;
+  decorKey: string; decor: Texture | null; borderColour: string;
+  ownKey: string; own: Texture | null; ownFor: { shape: Shape; pinned: boolean; w: number; h: number } | null;
 }
 
 export interface CompositorStats {
@@ -111,6 +111,10 @@ export class MapCompositor {
   /** Something changed since the stage was last drawn: the show, the overlays, Freeze, or an instrument became ready. */
   private dirty = true;
   private optionsKey = '';
+  /** Fades run on their own clock, which stands still while frozen, so Freeze holds a fade where it is. */
+  private fadeClock = 0;
+  private drawnShapes = new Set<string>();
+  private overlayFor: { show: PlayShow; options: string } | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
@@ -123,7 +127,8 @@ export class MapCompositor {
       this.gpu.setUp();
       this.pictures.clear(); this.overlay = null;
       for (const slot of this.slots.values()) slot.texture = null;
-      for (const [id, fade] of this.fades) if (typeof fade.from !== 'string') this.fades.set(id, { ...fade, from: '#000000' });
+      // The old pictures were on the lost card: those fades end, and the shapes show what they play now.
+      for (const [id, fade] of [...this.fades]) if (typeof fade.from !== 'string') this.fades.delete(id);
       this.lost = false; this.dirty = true;
     });
   }
@@ -135,7 +140,6 @@ export class MapCompositor {
     this.dirty = true;
     // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
-    const now = performance.now();
     for (const shape of show.shapes) {
       const next: Playing = { sourceId: shape.sourceId, kinds: kindsOf(shape.sourceId ? this.projects.get(shape.sourceId) : null) };
       const before = this.playing.get(shape.id);
@@ -145,7 +149,7 @@ export class MapCompositor {
         // Changing again before the last change was ready keeps fading from what is on the wall, not from the colour.
         const from = old ? this.gpu.copy(old) : held ? held.from : shape.colour;
         if (held && held.from !== from && typeof held.from !== 'string') this.gpu.free(held.from);
-        this.fades.set(shape.id, { from, start: shape.sourceId === null ? now : null });
+        this.fades.set(shape.id, { from, start: shape.sourceId === null ? this.fadeClock : null });
       }
       this.playing.set(shape.id, next);
     }
@@ -176,6 +180,8 @@ export class MapCompositor {
   /** The operator's picture of the wall: started after a drawn frame, collected on a later one, never waited for. */
   requestPreview(): boolean { return !this.lost && this.gpu.requestPreview(); }
   collectPreview(): ImageData | null { return this.lost ? null : this.gpu.collectPreview(); }
+  /** Whether a preview is still on its way; false after a lost context, when it never will arrive. */
+  get previewPending(): boolean { return !this.lost && this.gpu.previewPending; }
 
   /**
    * Advances the clock, draws every source that is due, and composites the stage. Returns whether the stage was drawn:
@@ -186,6 +192,7 @@ export class MapCompositor {
     const started = performance.now();
     const seconds = this.last === null ? 0 : (now - this.last) / 1000;
     this.last = now;
+    if (!this.frozen) this.fadeClock += seconds * 1000;
     const scale = GOVERNOR_SCALES[this.governor.level];
     const draw = !this.frozen && drawsThisFrame(this.governor.level, this.frameIndex);
 
@@ -214,7 +221,7 @@ export class MapCompositor {
     }
 
     const drawn = this.dirty || rendered || this.fades.size > 0;
-    if (drawn) { this.composite(now); this.dirty = false; }
+    if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
     this.frameIndex++;
     const work = performance.now() - started;
     // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
@@ -317,6 +324,7 @@ export class MapCompositor {
 
   private composite(now: number): void {
     const gpu = this.gpu;
+    this.drawnShapes.clear();
     gpu.begin();
     if (!this.options.blackout) {
       // The test grid shows outlines, names and numbers instead of content.
@@ -327,10 +335,15 @@ export class MapCompositor {
       if (overlay) gpu.layer(overlay);
     }
     gpu.finish(this.corners);
+    // A fade on a shape that is not being drawn (hidden, a Blocker, test grid, blackout) has nothing to show: it ends,
+    // so a still show stops being redrawn.
+    for (const id of [...this.fades.keys()]) if (!this.drawnShapes.has(id)) this.endFade(id);
   }
 
   /** The overlays drawn in 2D, and given to the graphics card only when they change. Null when there are none. */
   private overlayPicture(): Texture | null {
+    if (this.overlay && this.overlayFor?.show === this.show && this.overlayFor.options === this.optionsKey) return this.overlay.empty ? null : this.overlay.texture;
+    this.overlayFor = { show: this.show, options: this.optionsKey };
     const commands = stageCommands(this.show, this.options).filter(c => c.kind !== 'fill' && c.kind !== 'pattern');
     const key = commands.length ? JSON.stringify(commands, (k, v) => (k === 'shape' ? undefined : v)) : '';
     if (this.overlay && this.overlay.key === key) return this.overlay.empty ? null : this.overlay.texture;
@@ -346,14 +359,15 @@ export class MapCompositor {
   /** The shape's cached pictures, made again only for what changed. */
   private picturesFor(shape: Shape, palette: string[] | null): Pictures {
     let p = this.pictures.get(shape.id);
-    if (p && p.shape === shape && p.decorKey === this.decorKey(shape, palette)) return p;
+    const colour = shape.border.width > 0 ? borderColour(shape, palette) : '';
+    if (p && p.shape === shape && p.borderColour === colour) return p;
     const geometry = JSON.stringify([shape.points, shape.holes]);
     if (!p || p.geometry !== geometry) {
       const b = ringBounds([shape.points]);
       const box = { x: b.x0 * STAGE_SIZE.width, y: b.y0 * STAGE_SIZE.height, w: (b.x1 - b.x0) * STAGE_SIZE.width, h: (b.y1 - b.y0) * STAGE_SIZE.height };
-      p = { shape, geometry, path: outlinePath(shape), box, coverageKey: '', coverage: p?.coverage ?? null, decorKey: '', decor: p?.decor ?? null, ownKey: '', own: p?.own ?? null };
+      p = { shape, geometry, path: outlinePath(shape), box, coverageKey: '', coverage: p?.coverage ?? null, decorKey: '', decor: p?.decor ?? null, borderColour: '', ownKey: '', own: p?.own ?? null, ownFor: null };
     }
-    p.shape = shape;
+    p.shape = shape; p.borderColour = colour;
     const coverageKey = `${fadeKey(shape)}|${geometry}`;
     if (p.coverageKey !== coverageKey) {
       p.coverage = this.gpu.upload(coveragePicture(shape, p.path, p.box), p.coverage);
@@ -377,6 +391,8 @@ export class MapCompositor {
   private own(shape: Shape, p: Pictures, land: Landing): ShapeDraw['content'] {
     if (shape.fill !== 'grid') return { kind: 'colour', rgba: opaque(shape.colour) };
     const pinned = shape.placement.kind === 'pin' && land.perspective;
+    // Unchanged shape: the picture and its key are as they were (a pinned landing depends only on the shape).
+    if (p.own && p.ownFor && p.ownFor.shape === shape && p.ownFor.pinned === pinned) return { kind: 'picture', texture: p.own, inv: pinned ? inverseOf(land) : boxInverse(p.box) };
     const corner = (u: number, v: number) => apply(land.h, { x: u, y: v });
     const landed = { w: Math.hypot(corner(1, 0).x - corner(0, 0).x, corner(1, 0).y - corner(0, 0).y), h: Math.hypot(corner(0, 1).x - corner(0, 0).x, corner(0, 1).y - corner(0, 0).y) };
     const key = pinned ? JSON.stringify(['pin', shape.colour, Math.round(landed.w / 16), Math.round(landed.h / 16)]) : JSON.stringify(['box', p.geometry, shape.colour, shape.name]);
@@ -384,6 +400,7 @@ export class MapCompositor {
       p.own = this.gpu.upload(pinned ? flatPatternPicture(shape, landed) : patternPicture(shape, p.path, p.box), p.own);
       p.ownKey = key;
     }
+    p.ownFor = { shape, pinned, w: landed.w, h: landed.h };
     return { kind: 'picture', texture: p.own!, inv: pinned ? inverseOf(land) : boxInverse(p.box) };
   }
 
@@ -413,6 +430,7 @@ export class MapCompositor {
       from = typeof fade.from === 'string' ? { kind: 'colour', rgba: opaque(fade.from) } : { kind: 'picture', texture: fade.from, inv };
       if (mix >= 1) { this.endFade(shape.id); from = null; }
     }
+    if (!shape.blocker) this.drawnShapes.add(shape.id);
     const tint = rgb(shape.tint), b = shape.blocker ? 1 : shape.brightness;
     this.gpu.shape({
       rect: p.box, coverage: p.coverage, content, from, mix,

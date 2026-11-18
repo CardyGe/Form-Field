@@ -34,12 +34,13 @@ uniform mat3 uInv;          // stage pixels to picture coordinates
 uniform int uFromKind;      // -1 none, 0 colour, 1 picture
 uniform vec4 uFromColour;
 uniform sampler2D uFrom;
+uniform mat3 uFromInv;      // the old picture keeps its own placement
 uniform float uMix;
 uniform vec3 uLook;         // brightness times tint
 uniform int uDecor;
 uniform sampler2D uDecorTex;
-vec4 picture(sampler2D t) {
-  vec3 q = uInv * vec3(vStage, 1.);
+vec4 picture(sampler2D t, mat3 inv) {
+  vec3 q = inv * vec3(vStage, 1.);
   if (q.z <= 0.) return vec4(0.);
   vec2 uv = q.xy / q.z;
   if (uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1.) return vec4(0.);
@@ -51,8 +52,8 @@ void main() {
   // The border picture is already cut to the outline: it sits crisp on top of the (soft-edged) content.
   vec4 d = uDecor == 1 ? texture(uDecorTex, cu) : vec4(0.);
   if (cover <= 0. && d.a <= 0.) discard;
-  vec4 c = uKind == 1 ? picture(uPicture) : uColour;
-  if (uFromKind >= 0) c = mix(uFromKind == 1 ? picture(uFrom) : uFromColour, c, uMix);
+  vec4 c = uKind == 1 ? picture(uPicture, uInv) : uColour;
+  if (uFromKind >= 0) c = mix(uFromKind == 1 ? picture(uFrom, uFromInv) : uFromColour, c, uMix);
   c.rgb *= uLook;
   c *= cover;
   o = d + c * (1. - d.a);
@@ -96,7 +97,8 @@ export interface ShapeDraw {
 }
 
 type Program = { program: WebGLProgram; u: Record<string, WebGLUniformLocation | null> };
-const PREVIEW = { width: 480, height: 270 };
+/** Read back at twice the preview's size, so the worker can shrink it smoothly and thin lines do not drop out. */
+const PREVIEW = { width: 960, height: 540 };
 
 /** Row major to the column-major order WebGL reads. */
 const columns = (m: H3) => new Float32Array([m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]);
@@ -115,6 +117,10 @@ export class Gpu {
   private blank!: Texture;
   private readback: { buffer: WebGLBuffer; sync: WebGLSync } | null = null;
   private readbackBuffer: WebGLBuffer | null = null;
+  /** Goes up whenever the context is set up again: a readback started before it will never arrive. */
+  generation = 0;
+  /** Whether a preview is on its way. */
+  get previewPending(): boolean { return this.readback !== null; }
 
   /**
    * The picture is kept after it is shown (preserveDrawingBuffer), so a frame that draws nothing new leaves the wall
@@ -143,7 +149,7 @@ export class Gpu {
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'program');
       return { program, u: Object.fromEntries(uniforms.map(n => [n, gl.getUniformLocation(program, n)])) };
     };
-    this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uMix', 'uLook', 'uDecor', 'uDecorTex']);
+    this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uLook', 'uDecor', 'uDecorTex']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
     this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex']);
     this.quad = gl.createVertexArray()!;
@@ -169,6 +175,7 @@ export class Gpu {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
     this.blank = { tex: blank, width: 1, height: 1 };
     this.readback = null; this.readbackBuffer = null;
+    this.generation++;
   }
 
   private texture(): WebGLTexture {
@@ -186,7 +193,9 @@ export class Gpu {
     const gl = this.gl;
     const t = into ?? { tex: this.texture(), width: 0, height: 0 };
     gl.bindTexture(gl.TEXTURE_2D, t.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    // The same size again (an instrument every frame) refills the texture in place instead of making it anew.
+    if (into && into.width === source.width && into.height === source.height) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
     t.width = source.width; t.height = source.height;
     return t;
   }
@@ -198,6 +207,8 @@ export class Gpu {
     gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, source.tex, 0);
     gl.bindTexture(gl.TEXTURE_2D, t.tex);
     gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 0, 0, source.width, source.height, 0);
+    // Let go of the source, so a texture deleted later is not kept alive by this framebuffer.
+    gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
     return t;
   }
@@ -227,8 +238,7 @@ export class Gpu {
     if (!d.from) { gl.uniform1i(u.uFromKind, -1); bind(2, 'uFrom', null); }
     else if (d.from.kind === 'picture') {
       gl.uniform1i(u.uFromKind, 1); bind(2, 'uFrom', d.from.texture);
-      // The old picture sits where the new one does.
-      if (d.content.kind !== 'picture') gl.uniformMatrix3fv(u.uInv, false, columns(d.from.inv));
+      gl.uniformMatrix3fv(u.uFromInv, false, columns(d.from.inv));
     } else { gl.uniform1i(u.uFromKind, 0); gl.uniform4fv(u.uFromColour, d.from.rgba); bind(2, 'uFrom', null); }
     gl.uniform1f(u.uMix, d.mix);
     gl.uniform3f(u.uLook, ...d.look);

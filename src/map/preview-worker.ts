@@ -6,6 +6,8 @@
  */
 const canvas = new OffscreenCanvas(480, 270);
 const context = canvas.getContext('2d')!;
+// The wall is read back at twice this size and shrunk smoothly here, so thin lines and borders stay visible.
+context.imageSmoothingQuality = 'high';
 self.onmessage = async (event: MessageEvent<ImageBitmap>) => {
   const picture = event.data;
   try {

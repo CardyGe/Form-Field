@@ -154,7 +154,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     const picture = d.refused?.show ?? d.shown;
     const options = { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: d.selectedId, selectedIndex: null,
       outlinesOnly: !!background, invalidIds: d.refused ? d.refused.ids : [], solo: d.soloed, operator: true };
-    const local = compositor.current && !d.outputOpen && picture.sources.length > 0 ? compositor.current : null;
+    const local = compositor.current && !d.outputOpen && picture.sources.length > 0 && !compositor.current.stats().contextLost ? compositor.current : null;
     if (local) {
       if (playedShow.current !== picture) { local.setShow(picture, new Map(picture.sources.map(s => [s.id, s.project]))); playedShow.current = picture; }
       local.setOptions(options);
