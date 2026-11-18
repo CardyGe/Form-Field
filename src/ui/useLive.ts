@@ -3,6 +3,8 @@ import { Stage } from '../live/Stage';
 import { chooseDisplay, defaultLiveSettings, validateLiveSettings, type LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
+import { reactivity, type ReactivityEngine } from '../react/engine';
+import type { Signals } from '../react/signals';
 
 export interface Display { id: number; label: string; primary: boolean }
 
@@ -113,6 +115,29 @@ export function useLive(onError: (message: string) => void) {
   useEffect(() => () => { if (unsaved.current) void bridge?.saveSettings(unsaved.current).catch(() => {}); }, []);
   useEffect(() => { if (stage.current) stage.current.renderer.view = view; }, [view, outputOpen, canvas, ready]);
 
+  // Sound, the beat, tempo and MIDI: heard only while a link needs them or the operator has the sound panel open.
+  const links = settings?.links ?? [];
+  const reacts = links.some(l => l.on);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [engine, setEngine] = useState<ReactivityEngine | null>(null);
+  const [signals, setSignals] = useState<Signals>({});
+  useEffect(() => { if ((reacts || panelOpen) && !engine) setEngine(reactivity()); }, [reacts, panelOpen, engine]);
+  const usedInputs = [...new Set(links.map(l => l.input))].sort().join(' ');
+  useEffect(() => {
+    if (!engine || !(reacts || panelOpen)) return;
+    const used = new Set(usedInputs.split(' ').filter(Boolean));
+    let shown = 0;
+    const off = engine.subscribe(now => {
+      const only = Object.fromEntries(Object.entries(now).filter(([k]) => used.has(k)));
+      if (stage.current) stage.current.renderer.signals = only;
+      if (outputOpen && reacts) bridge?.send({ type: 'signals', signals: only });
+      const t = performance.now();
+      if (panelOpen && t - shown > 100) { shown = t; setSignals(now); }
+    });
+    // With nothing driving them, the looks go back to their sliders as set.
+    return () => { off(); if (stage.current) stage.current.renderer.signals = {}; if (outputOpen) bridge?.send({ type: 'signals', signals: {} }); };
+  }, [engine, reacts, panelOpen, outputOpen, usedInputs]);
+
   const update = useCallback((change: (value: LiveSettings) => LiveSettings) => setSettings(value => value && validateLiveSettings(change(value))), []);
   const setBlackout = (on: boolean) => { setBlackoutState(on); if (stage.current) stage.current.renderer.blackout = on; if (outputOpen) bridge?.send({ type: 'blackout', on }); };
   const clear = () => { stage.current?.renderer.clear(); if (outputOpen) bridge?.send({ type: 'clear' }); };
@@ -130,5 +155,6 @@ export function useLive(onError: (message: string) => void) {
   const chooseFile = (chosen: File) => { setFile(chosen); update(s => ({ ...s, source: { kind: 'file', deviceId: s.source.deviceId } })); };
 
   return { settings: settings ?? defaultLiveSettings(), ready, access, update, sourceState, cameras, displays, outputOpen, blackout, setBlackout, clear,
-    openOutput, closeOutput, view, setView, people, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge };
+    openOutput, closeOutput, view, setView, people, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge,
+    engine, startEngine: () => setEngine(e => e ?? reactivity()), signals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen };
 }

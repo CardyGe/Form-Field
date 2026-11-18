@@ -4,6 +4,8 @@
  * field by field, so Live always starts.
  */
 import { HOT_SIGNAL, NEON_STRATA } from '../core/palettes';
+import type { Link } from '../react/links';
+import { readLiveLink, MAX_LIVE_LINKS } from './modulate';
 import { validateReliefPalette, type ReliefPaletteName } from './relief-palettes';
 
 /** The part of the camera view that paints. 0..1, origin bottom-left. */
@@ -48,6 +50,8 @@ export interface PeopleSettings { ignoreStillSeconds: number | null; useEmptyRoo
 export interface LiveSettings {
   version: 1;
   source: { kind: 'camera' | 'file' | 'test'; deviceId: string | null };
+  /** What sound, the beat, tempo and MIDI drive here (stage 5). */
+  links: Link[];
   mirror: boolean;
   box: Box;
   sensitivity: number;
@@ -151,6 +155,7 @@ export function defaultLiveSettings(): LiveSettings {
     signal: { ...Object.fromEntries(SIGNAL_CONTROLS.map(c => [c.key, c.default])) as Record<SignalKey, number>, hold: false, removeBackground: true, keepStill: true, palette: [...NEON_STRATA] },
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
+    links: [],
   };
 }
 
@@ -160,6 +165,16 @@ function choice<K extends string>(value: unknown, labels: Record<K, string>, fal
 }
 const ranged = (v: unknown, min: number, max: number, fallback: number) =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
+
+function readLiveLinks(raw: unknown): Link[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Link[] = [], ids = new Set<string>();
+  for (const item of raw.slice(0, MAX_LIVE_LINKS)) {
+    const link = readLiveLink(item);
+    if (link && !ids.has(link.id)) { ids.add(link.id); out.push(link); }
+  }
+  return out;
+}
 
 export function validateLiveSettings(value: unknown): LiveSettings {
   const d = defaultLiveSettings(), v = record(value), source = record(v.source), box = record(v.box), paint = record(v.paint);
@@ -194,6 +209,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, ranged(smoke[c.key], c.min, c.max, c.default)])) as Record<SmokeKey, number>,
       palette: [...(isPalette(smoke.palette) ? smoke.palette : d.smoke.palette)], forever: smoke.forever === true },
     people: { ignoreStillSeconds: still, useEmptyRoom: typeof people.useEmptyRoom === 'boolean' ? people.useEmptyRoom : false },
+    links: readLiveLinks(v.links),
   };
 }
 

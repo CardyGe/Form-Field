@@ -50,3 +50,19 @@ export function fire(triggers: Trigger[], prev: Signals, now: Signals): TriggerA
   }
   return out;
 }
+
+const SIGNAL_NAME = /^[a-z]+(\.[a-z0-9]+){1,3}$/;
+const num = (v: unknown, lo: number, hi: number, fallback: number) => typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback;
+/** A link read field by field; null when it cannot be read or `targetOk` refuses its target. */
+export function readLinkWith(raw: unknown, targetOk: (target: string) => boolean, maxId = 64, maxName = 40): Link | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.id !== 'string' || r.id === '' || r.id.length > maxId) return null;
+  if (typeof r.input !== 'string' || !SIGNAL_NAME.test(r.input) || r.input.length > 32 || typeof r.target !== 'string' || !targetOk(r.target)) return null;
+  return {
+    id: r.id, input: r.input, target: r.target, mode: r.mode === 'control' ? 'control' : 'modulate',
+    amount: num(r.amount, -1, 1, 0.5), low: num(r.low, 0, 1, 0), high: num(r.high, 0, 1, 1),
+    attackMs: num(r.attackMs, 0, 5000, 20), releaseMs: num(r.releaseMs, 0, 5000, 200), on: r.on !== false,
+    name: typeof r.name === 'string' ? r.name.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, maxName) : '',
+  };
+}

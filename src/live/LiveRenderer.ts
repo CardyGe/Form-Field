@@ -18,6 +18,8 @@ import { Smoke } from './Smoke';
 import { Relief } from './Relief';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
+import { LiveModulator } from './modulate';
+import type { Signals } from '../react/signals';
 
 const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal };
 
@@ -48,6 +50,9 @@ void main() {
 export class LiveRenderer {
   settings: LiveSettings = defaultLiveSettings();
   blackout = false;
+  /** This frame's sound, beat, tempo and MIDI; the settings' links read them. */
+  signals: Signals = {};
+  private readonly modulator = new LiveModulator();
   /** 'tracking' and 'people' are the operator's setup views. The artwork window never uses them. */
   view: 'art' | 'tracking' | 'people' = 'art';
 
@@ -108,7 +113,9 @@ export class LiveRenderer {
     const step = capStep(seconds);
     this.time += step;
     this.resize();
-    this.tracking.update(this.source, this.settings, step);
+    // The settings as set, with this frame's links applied to a copy. Everything below draws from the copy.
+    const settings = this.modulator.apply(this.settings, this.signals, step);
+    this.tracking.update(this.source, settings, step);
     if (this.lookKind !== this.settings.look) {
       // Switching looks starts the new one fresh; each keeps its own settings.
       this.look?.dispose();
@@ -118,7 +125,7 @@ export class LiveRenderer {
     if (!this.look) return;
     if (this.settings.look === 'signal' && this.signalSource !== this.source.element) this.look.clear();
     this.signalSource = this.source.element;
-    this.look.step(step, this.time, this.tracking, this.settings);
+    this.look.step(step, this.time, this.tracking, settings);
     let image: THREE.Texture = this.look.output, encode = 1;
     if (this.view === 'tracking') {
       const u = this.trackingView.uniforms, box = this.settings.box;

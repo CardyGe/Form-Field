@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Stage } from '../live/Stage';
 import { validateLiveSettings } from '../live/settings';
+import { acceptSignals } from '../react/signals';
 
 const PREVIEW = [480, 270] as const;
 const PREVIEW_EVERY_MS = 100;
@@ -25,6 +26,7 @@ export default function LiveOutput() {
       else if (message.type === 'blackout') stage.renderer.blackout = message.on === true;
       else if (message.type === 'clear') stage.renderer.clear();
       else if (message.type === 'retry') stage.retry(latest);
+      else if (message.type === 'signals') { if (acceptSignals(message.signals)) stage.renderer.signals = message.signals; }
       else if (message.type === 'captureRoom') { stage.renderer.captureRoom(); setTimeout(report, 200); }
     });
     // A small picture for the operator, taken straight after a frame is drawn, ten times a second.

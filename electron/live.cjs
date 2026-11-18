@@ -45,7 +45,7 @@ const path = require('node:path');
 
 const MESSAGE_LIMIT = 16 * 1024;
 const PREVIEW_LIMIT = 512 * 1024;
-const MESSAGE_TYPES = new Set(['settings', 'blackout', 'clear', 'retry', 'captureRoom']);
+const MESSAGE_TYPES = new Set(['settings', 'blackout', 'clear', 'retry', 'captureRoom', 'signals']);
 const PEOPLE_STATES = new Set(['loading', 'running', 'failed', 'behind']);
 const SOURCE_STATES = new Set(['idle', 'starting', 'running', 'refused', 'none', 'lost', 'error']);
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
