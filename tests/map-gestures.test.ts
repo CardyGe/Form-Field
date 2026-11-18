@@ -66,3 +66,14 @@ test('a dragged box selects the shapes wholly inside it', () => {
   assert.deepEqual(marqueeSelect(s, { x: .1, y: .1 }, { x: .35, y: .35 }), ['a']);
   assert.deepEqual(marqueeSelect(s, { x: .6, y: .6 }, { x: .1, y: .1 }), ['a', 'b']);
 });
+
+test('a pinned shape without four corners offers its four pin handles, after its points and before the box', () => {
+  const tri = shape('t', [{ x: .4, y: .2 }, { x: .6, y: .6 }, { x: .2, y: .6 }], { placement: { kind: 'pin', zoom: 1, offset: { x: 0, y: 0 }, turn: 0, pin: [{ x: .25, y: .25 }, { x: .55, y: .2 }, { x: .6, y: .6 }, { x: .2, y: .6 }] } });
+  const s = show(tri), sel: Selection = { ids: ['t'], ring: -1, index: null };
+  assert.deepEqual(pick(px(.25 * W + 3, .25 * H), s, sel, reach), { kind: 'pin', shapeId: 't', index: 0 });
+  // A point on the same spot as a pin handle wins.
+  assert.deepEqual(pick(px(.6 * W, .6 * H), s, sel, reach), { kind: 'point', shapeId: 't', ring: -1, index: 1 });
+  // Not while it plays Fit.
+  const fit = shape('t', tri.points, { placement: { ...tri.placement, kind: 'fit' } });
+  assert.notEqual(pick(px(.25 * W + 3, .25 * H), show(fit), sel, reach).kind, 'pin');
+});

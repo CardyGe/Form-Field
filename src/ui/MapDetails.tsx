@@ -4,7 +4,8 @@ import { mapActions, newSourceId, randomSeed } from './mapActions';
 import { parsePixelField } from '../map/geometry';
 import { isCurved } from '../map/outline';
 import { shouldCommit } from '../map/keys';
-import { BORDER_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, isShapeLocked } from '../map/show';
+import { BORDER_MAX, BRIGHTNESS_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, ZOOM_RANGE, isShapeLocked, type Placement, type PlacementKind } from '../map/show';
+import { ownCornersPinnable } from '../map/placement';
 import { PRESETS } from '../core/project';
 import { KIND_LABELS } from '../core/library';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, POUR, SOLAR } from '../core/palettes';
@@ -20,6 +21,8 @@ const PALETTES: [string, string[]][] = [
   ['Neon strata', NEON_STRATA], ['Acid drip', ACID_DRIP], ['Pop portal', POP_PORTAL], ['Hot signal', HOT_SIGNAL], ['Lime violet', LIME_VIOLET],
   ['Electric', ELECTRIC], ['Candy', CANDY], ['Solar', SOLAR], ['Cyan yellow', CYAN_YELLOW], ['Pour', POUR],
 ];
+/** Tints for evening out surfaces: none, warm, cool, and a few stronger ones. */
+const TINTS: [string, string][] = [['None', '#ffffff'], ['Warm', '#ffe2c4'], ['Cool', '#d6e6ff'], ['Rose', '#ffd0dc'], ['Green', '#d8ffd0'], ['Dim amber', '#ffc070']];
 const paletteName = (palette: string[]) => PALETTES.find(([, colours]) => colours.join() === palette.join())?.[0] ?? '';
 
 /** A text box that keeps its own draft and hands it over on blur or Enter. */
@@ -57,6 +60,11 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
   const group = shape?.groupId ? map.show.groups.find(g => g.id === shape.groupId) ?? null : null;
   const ring = shape && map.selectedIndex !== null ? (map.selectedRing < 0 ? shape.points : shape.holes[map.selectedRing]) : null;
   const point = ring && map.selectedIndex !== null ? ring[map.selectedIndex] ?? null : null;
+  // Shapes playing this shape's instrument, and other shapes whose instrument it could share.
+  const sharers = source ? map.show.shapes.filter(s => s.sourceId === source.id) : [];
+  const playing = shape ? map.show.shapes.filter(s => s.id !== shape.id && s.sourceId !== null && s.sourceId !== shape.sourceId) : [];
+  const place = shape?.placement ?? { kind: 'fit' as PlacementKind, zoom: 1, offset: { x: 0, y: 0 }, turn: 0, pin: null };
+  const setPlacement = (change: Partial<Placement>) => { if (shape) map.dispatch({ type: 'setPlacement', shapeId: shape.id, placement: change }); };
 
   if (many) {
     const ids = act.selected();
@@ -131,7 +139,46 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
         </select></label>
         <SliderField key={`speed-${source.id}`} label="Speed" value={source.speed} min={SPEED_RANGE.min} max={SPEED_RANGE.max} step={0.05} disabled={locked} format={v => `${v.toFixed(2)}×`}
           onCommit={speed => map.dispatch({ type: 'setSourceSpeed', sourceId: source.id, speed })} />
+        {sharers.length > 1 && <p className="muted-text">{sharers.length} shapes play this instrument: Vary, palette and speed change them all.</p>}
+        {sharers.length > 1 && <button className="text-button" disabled={locked} title="Give this shape its own copy of the instrument, to change on its own" onClick={() => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() })}>Make separate</button>}
       </>}
+      {playing.length > 0 && <label className="map-field">Share with<select aria-label="Share with" value="" disabled={locked}
+        onChange={e => { if (e.target.value) map.dispatch({ type: 'shareSource', shapeId: shape.id, withShapeId: e.target.value }); }}>
+        <option value="">Play another shape's instrument…</option>
+        {playing.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select></label>}
+    </>}
+
+    <h3>Placement</h3>
+    <label className="map-field">Picture<select aria-label="Placement" value={place.kind} disabled={locked} onChange={e => setPlacement({ kind: e.target.value as PlacementKind })}>
+      <option value="fit">Fit: fills the shape</option>
+      <option value="pin">Pin: in perspective on four corners</option>
+      <option value="across-group">Across group: one picture over the group</option>
+      <option value="across-stage">Across stage: one picture over the stage</option>
+    </select></label>
+    {place.kind === 'pin' && <p className="muted-text">{shape.placement.pin && !ownCornersPinnable(shape) ? 'Drag the four diamond handles on the stage onto the surface\'s corners.' : 'The picture is laid on this shape\'s four corners in perspective: drag the corners onto the surface\'s corners.'}</p>}
+    {place.kind === 'across-group' && !group && <p className="muted-text">This shape is in no group, so its picture spreads over the whole stage.</p>}
+    {place.kind !== 'pin' && <>
+      <SliderField key={`zoom-${shape.id}`} label="Zoom" value={place.zoom} min={ZOOM_RANGE.min} max={ZOOM_RANGE.max} step={0.01} disabled={locked} format={v => `${Math.round(v * 100)} %`} onCommit={zoom => setPlacement({ zoom })} />
+      <SliderField key={`movex-${shape.id}`} label="Move across" value={place.offset.x * STAGE_SIZE.width} min={-STAGE_SIZE.width / 2} max={STAGE_SIZE.width / 2} step={1} unit=" px" disabled={locked} onCommit={x => setPlacement({ offset: { x: x / STAGE_SIZE.width, y: place.offset.y } })} />
+      <SliderField key={`movey-${shape.id}`} label="Move up and down" value={place.offset.y * STAGE_SIZE.height} min={-STAGE_SIZE.height / 2} max={STAGE_SIZE.height / 2} step={1} unit=" px" disabled={locked} onCommit={y => setPlacement({ offset: { x: place.offset.x, y: y / STAGE_SIZE.height } })} />
+      <SliderField key={`turn-${shape.id}`} label="Turn" value={place.turn} min={-180} max={180} step={1} unit="°" disabled={locked} onCommit={turn => setPlacement({ turn })} />
+    </>}
+    <div className="map-toggles">
+      {place.kind !== 'pin' && <button className="text-button" disabled={locked || (place.zoom === 1 && place.turn === 0 && place.offset.x === 0 && place.offset.y === 0)} onClick={() => setPlacement({ zoom: 1, turn: 0, offset: { x: 0, y: 0 } })}>Reset picture</button>}
+      {place.kind === 'pin' && shape.placement.pin && !ownCornersPinnable(shape) && <button className="text-button" disabled={locked} title="Put the four handles back at the shape's box" onClick={() => setPlacement({ pin: null })}>Reset pin</button>}
+    </div>
+
+    {!shape.blocker && <>
+      <h3>Look</h3>
+      <SliderField key={`bright-${shape.id}`} label="Brightness" value={shape.brightness} min={0} max={BRIGHTNESS_MAX} step={0.01} disabled={locked} format={v => `${Math.round(v * 100)} %`} onCommit={brightness => map.dispatch({ type: 'setLook', shapeId: shape.id, brightness })} />
+      <div className="map-field">Tint<div className="map-tints" role="group" aria-label="Tint">{TINTS.map(([name, colour]) =>
+        <button key={colour} type="button" className="map-tint" aria-pressed={shape.tint === colour} aria-label={`Tint ${name}`} title={name} disabled={locked} style={{ background: colour }}
+          onClick={() => map.dispatch({ type: 'setLook', shapeId: shape.id, tint: colour })} />)}</div></div>
+      <CommitField label="Tint hex" value={shape.tint} narrow disabled={locked} onCommit={text => {
+        if (!/^#[0-9a-f]{6}$/i.test(text.trim())) { setNote('Colour must look like #rrggbb'); return; }
+        setNote(null); map.dispatch({ type: 'setLook', shapeId: shape.id, tint: text.trim().toLowerCase() });
+      }} />
     </>}
 
     <h3>Edge</h3>

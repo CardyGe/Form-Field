@@ -62,3 +62,6 @@
 .map-shape-list li.map-member { padding-left: 14px; }
 .map-shape-list .text-button { padding: 2px 4px; }
 .map-photo-button { margin-left: 12px; }
+.map-tints { display: flex; gap: 6px; margin-top: 4px; }
+.map-tint { width: 22px; height: 22px; padding: 0; border: 1px solid #484848; border-radius: 4px; }
+.map-tint[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }

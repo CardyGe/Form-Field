@@ -11,6 +11,7 @@ import { shortcutFor } from '../map/keys';
 import { ellipseRing, hitShape, isCurved, squareBox, triangleRing } from '../map/outline';
 import { joinedAnchors, snapMove, snapPoint, type SnapTarget } from '../map/snap';
 import { boxHandles, marqueeSelect, pick, selectionBox, transformFor, type Box, type BoxHandle } from '../map/gestures';
+import { ownCornersPinnable } from '../map/placement';
 import { MAX_NAME_LENGTH, STAGE_SIZE, isShapeLocked, isShapeShown, type CurvePoint, type Point, type ShowDocument } from '../map/show';
 import { MapCompositor } from '../map/compositor';
 import { GOVERNOR_SCALES } from '../map/playout';
@@ -26,6 +27,9 @@ const REASONS: Record<string, string> = {
   'name-too-long': `Names can be at most ${MAX_NAME_LENGTH} characters`,
   'too-many-sources': 'Too many instruments in this show', 'needs-source-id': 'That shape could not be copied',
   'unknown-preset': 'That look is not in the Library', 'bad-palette': 'That palette could not be used',
+  'pin-folded': 'Those four corners fold over: the picture cannot be laid on them', 'pin-flat': 'Those four corners are too close to a line to carry a picture',
+  'pin-own-corners': 'This shape pins by its own four corners: drag those', 'not-pinned': 'Choose Pin first', 'nothing-to-share': 'That shape plays no instrument to share',
+  'corners-folded': 'The stage corners would fold over', 'corners-outside': 'Stage corners can go at most half a stage past the edge',
   'too-many-layers': 'A shape\'s composition can have at most four layers', 'bad-composition': 'That composition could not be read',
 };
 const COLOURS = ['#ff3b30', '#34c759', '#0a84ff', '#ffcc00', '#bf5af2', '#ff9f0a'];
@@ -49,12 +53,17 @@ type Drag =
   | { kind: 'point'; shapeId: string; ring: number; index: number; start: Point; alt: boolean }
   | { kind: 'handle'; shapeId: string; ring: number; index: number; which: 'in' | 'out' }
   | { kind: 'box'; handle: BoxHandle; start: Point; box: Box; shapeIds: string[] }
+  | { kind: 'pin'; shapeId: string; index: number; start: Point }
+  | { kind: 'corner'; index: number; start: Point }
   | { kind: 'marquee'; start: Point; now: Point; additive: boolean }
   | { kind: 'pen-handle' };
 /** A Pen outline being drawn: its points so far, and the shape it will cut a hole in, if any. */
 type Pen = { points: CurvePoint[]; hole: string | null };
 
 const stagePx = (p: Point) => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height });
+const CORNER_PX = 16;        // stage-corner handle radius (pixels on screen)
+/** Where the stage's corners go on the projector: the show's stage corners, or the stage's own. */
+const stageCornerPoints = (show: { stageCorners: Point[] | null }): Point[] => show.stageCorners ?? [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
 const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
 /** The photo, decoded once per picture, and the rectangle it fills: as large as fits on the stage, centred. */
@@ -105,6 +114,9 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const setPen = (next: Pen | null) => { penRef.current = next; setPenState(next); };
   const [hover, setHover] = useState<Point | null>(null);
   const [marquee, setMarquee] = useState<{ a: Point; b: Point } | null>(null);
+  // Stage corners: while on, the four corner handles are shown and the shape tools rest; the last one touched takes the arrow keys.
+  const [cornersMode, setCornersMode] = useState(false);
+  const [cornerIndex, setCornerIndex] = useState(0);
   const [snapMark, setSnapMark] = useState<SnapTarget | null>(null);
   const [inspectorNote, setInspectorNote] = useState<string | null>(null);
   const shown = map.shown;
@@ -125,7 +137,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     try { compositor.current = new MapCompositor(document.createElement('canvas')); } catch { compositor.current = null; }
     return () => { compositor.current?.dispose(); compositor.current = null; };
   }, []);
-  const drawInputs = { shown, refused, selectedId: map.selectedId, selectedIds: map.selectedIds, selectedIndex: map.selectedIndex, selectedRing: map.selectedRing, outputOpen: map.outputOpen, wallPicture: map.wallPicture,
+  const drawInputs = { cornersMode, cornerIndex, shown, refused, selectedId: map.selectedId, selectedIds: map.selectedIds, selectedIndex: map.selectedIndex, selectedRing: map.selectedRing, outputOpen: map.outputOpen, wallPicture: map.wallPicture,
     freeze: map.freeze, soloed: map.soloed, pen, hover, marquee, snapMark, photo: map.photoShown && map.show.photo && photo?.complete ? { image: photo, opacity: map.show.photo.opacity } : null, tool: map.tool };
   const inputs = useRef(drawInputs);
   inputs.current = drawInputs;
@@ -217,6 +229,27 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       pts.forEach((p, i) => { ctx.fillStyle = i === 0 ? '#00e0ff' : '#ffffff'; ctx.fillRect(p.x - handle / 2, p.y - handle / 2, handle, handle); });
       ctx.strokeStyle = '#00e0ff'; ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, REACH_PX * k, 0, Math.PI * 2); ctx.stroke();
     }
+    // A pinned shape's own pin handles: diamonds joined by a dashed line.
+    if (selected && d.selectedIds.length === 1 && selected.placement.kind === 'pin' && selected.placement.pin && !ownCornersPinnable(selected)) {
+      const pin = selected.placement.pin.map(stagePx);
+      ctx.save(); ctx.setLineDash([8 * k, 6 * k]); ctx.strokeStyle = '#ff7ad9'; ctx.lineWidth = 1.5 * k;
+      ctx.beginPath(); pin.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.closePath(); ctx.stroke(); ctx.restore();
+      for (const q of pin) {
+        ctx.beginPath(); ctx.moveTo(q.x, q.y - handle * .7); ctx.lineTo(q.x + handle * .7, q.y); ctx.lineTo(q.x, q.y + handle * .7); ctx.lineTo(q.x - handle * .7, q.y); ctx.closePath();
+        ctx.fillStyle = '#ff7ad9'; ctx.fill(); ctx.strokeStyle = '#000000'; ctx.lineWidth = 2 * k; ctx.stroke();
+      }
+    }
+    // Stage corners: where the stage's corners go on the projector, numbered, joined by a dashed line.
+    if (d.cornersMode) {
+      const corners = stageCornerPoints(picture).map(stagePx);
+      ctx.save(); ctx.setLineDash([10 * k, 6 * k]); ctx.strokeStyle = '#00e0ff'; ctx.lineWidth = 2 * k;
+      ctx.beginPath(); corners.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.closePath(); ctx.stroke(); ctx.restore();
+      corners.forEach((q, i) => {
+        ctx.beginPath(); ctx.arc(q.x, q.y, CORNER_PX * k, 0, Math.PI * 2);
+        ctx.fillStyle = i === d.cornerIndex ? '#00e0ff' : 'rgba(0,224,255,0.35)'; ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2 * k; ctx.stroke();
+        ctx.fillStyle = '#000000'; ctx.font = `600 ${14 * k}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i + 1), q.x, q.y);
+      });
+    }
     if (d.marquee) {
       const a = stagePx(d.marquee.a), b = stagePx(d.marquee.b);
       ctx.save(); ctx.setLineDash([6 * k, 4 * k]); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1 * k; ctx.fillStyle = 'rgba(255,255,255,0.08)';
@@ -227,7 +260,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 2 * k; ctx.beginPath(); ctx.arc(c.x, c.y, 7 * k, 0, Math.PI * 2); ctx.stroke();
     }
   }, []);
-  useEffect(() => { drawStage(performance.now()); }, [shown, refused, map.selectedIds, map.selectedIndex, map.selectedRing, map.outputOpen, map.wallPicture, redrawTick, pen, hover, marquee, snapMark, map.soloed.join(), map.photoShown, map.tool, drawStage]);
+  useEffect(() => { drawStage(performance.now()); }, [cornersMode, cornerIndex, shown, refused, map.selectedIds, map.selectedIndex, map.selectedRing, map.outputOpen, map.wallPicture, redrawTick, pen, hover, marquee, snapMark, map.soloed.join(), map.photoShown, map.tool, drawStage]);
   // Instruments move, so while they play here the stage is drawn every frame.
   const playsHere = !map.outputOpen && (refused?.show ?? shown).sources.length > 0;
   useEffect(() => {
@@ -266,6 +299,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         const exclude = [d.shapeId, ...(joined && from ? joinedAnchors(map.show, d.shapeId, from).map(j => j.shapeId) : [])];
         return { type: 'movePoint', shapeId: d.shapeId, ring: d.ring, index: d.index, to: snapped(raw, e, exclude), joined };
       }
+      case 'pin': setSnapMark(null); return { type: 'movePin', shapeId: d.shapeId, index: d.index, to: snapped(raw, e, [d.shapeId]) };
+      case 'corner': setSnapMark(null); return { type: 'moveStageCorner', index: d.index, to: raw };
       case 'handle': setSnapMark(null); return { type: 'moveHandle', shapeId: d.shapeId, ring: d.ring, index: d.index, which: d.which, to: raw, mirror: !e.altKey };
       case 'box': {
         const m = transformFor(d.handle, d.start, stagePx(raw), d.box, e.shiftKey);
@@ -310,6 +345,13 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     const raw = pointerAt(e);
     map.setLastRefusal(null); setDragNote(null);
     const tool = map.tool;
+    // Stage corners: only the four corner handles answer, and the corner keeps pointing at the projector's picture.
+    if (cornersMode) {
+      const here = stagePx(raw), r = CORNER_PX * 1.5 * screenScale();
+      const i = stageCornerPoints(map.show).findIndex(q => { const c = stagePx(q); return Math.hypot(c.x - here.x, c.y - here.y) <= r; });
+      if (i >= 0) { setCornerIndex(i); drag.current = { kind: 'corner', index: i, start: raw }; e.currentTarget.setPointerCapture(e.pointerId); }
+      return;
+    }
     if (tool === 'pen') {
       const p = penRef.current;
       const at = snapped(raw, e, []);
@@ -330,7 +372,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       drag.current = { kind: 'draw', tool, start: snapped(raw, e, []), id: newId(), hole: holeTarget(raw, e.altKey) };
     } else {
       const picked = pick(raw, map.show, selection(), reach());
-      if (picked.kind === 'handle') drag.current = { kind: 'handle', shapeId: picked.shapeId, ring: picked.ring, index: picked.index, which: picked.which };
+      if (picked.kind === 'pin') drag.current = { kind: 'pin', shapeId: picked.shapeId, index: picked.index, start: raw };
+      else if (picked.kind === 'handle') drag.current = { kind: 'handle', shapeId: picked.shapeId, ring: picked.ring, index: picked.index, which: picked.which };
       else if (picked.kind === 'point') {
         map.setSelection(picked.shapeId, picked.index, picked.ring);
         drag.current = { kind: 'point', shapeId: picked.shapeId, ring: picked.ring, index: picked.index, start: raw, alt: e.altKey };
@@ -405,7 +448,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       if (point) map.dispatch({ type: 'setCurve', shapeId: d.shapeId, ring: d.ring, index: d.index, curved: !isCurved(point) });
       return;
     }
-    if ((d.kind === 'point' || d.kind === 'move' || d.kind === 'box') && !moved) return; // a plain click only selects
+    if ((d.kind === 'point' || d.kind === 'move' || d.kind === 'box' || d.kind === 'pin' || d.kind === 'corner') && !moved) return; // a plain click only selects
     const action = editFor(d, raw, e);
     if (!action) return;
     if (!map.dispatch(action)) return;
@@ -449,7 +492,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       case 'redo': e.preventDefault(); map.redo(); break;
       case 'select': case 'rectangle': case 'triangle': case 'ellipse': case 'pen': chooseTool(action); break;
       case 'close': if (penRef.current) { e.preventDefault(); closePen(); } break;
-      case 'deselect': if (penRef.current) { setPen(null); setHover(null); } else map.setSelection(null); break;
+      case 'deselect': if (cornersMode) setCornersMode(false); else if (penRef.current) { setPen(null); setHover(null); } else map.setSelection(null); break;
       case 'select-all': e.preventDefault(); map.selectMany(map.show.shapes.filter(s => isShapeShown(map.show, s)).map(s => s.id)); break;
       case 'group': e.preventDefault(); act.group(); break;
       case 'ungroup': e.preventDefault(); act.ungroup(shape?.groupId ?? null); break;
@@ -466,6 +509,14 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         break;
       }
       case 'arrow': {
+        if (cornersMode) {
+          const step = ARROWS[e.key], q = stageCornerPoints(map.show)[cornerIndex];
+          if (!step) return;
+          e.preventDefault();
+          const size = e.shiftKey ? 10 : 1;
+          map.dispatch({ type: 'moveStageCorner', index: cornerIndex, to: { x: q.x + step[0] * size / STAGE_SIZE.width, y: q.y + step[1] * size / STAGE_SIZE.height } });
+          break;
+        }
         const step = ARROWS[e.key];
         if (!step || !map.selectedIds.length) return;
         e.preventDefault();
@@ -537,6 +588,13 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       { kind: 'item', label: 'Mirror copy, left to right', onSelect: () => act.mirror('vertical', ids) },
       { kind: 'item', label: 'Mirror copy, top to bottom', onSelect: () => act.mirror('horizontal', ids) },
       ...(single ? [{ kind: 'item', label: 'Make a grid…', disabled: locked, onSelect: openGrid } as const] : []),
+      ...(single ? [
+        { kind: 'separator' } as const,
+        ...([['fit', 'Fit'], ['pin', 'Pin in perspective'], ['across-group', 'Across group'], ['across-stage', 'Across stage']] as const).map(([kind, label]) =>
+          ({ kind: 'item', label, checked: shape.placement.kind === kind, disabled: locked, onSelect: () => map.dispatch({ type: 'setPlacement', shapeId: shape.id, placement: { kind } }) }) as const),
+        { kind: 'item', label: 'Share with…', disabled: locked || shape.blocker, onSelect: () => requestAnimationFrame(() => document.querySelector<HTMLSelectElement>('.map-inspector select[aria-label="Share with"]')?.focus()) } as const,
+        ...(shape.sourceId && map.show.shapes.some(s => s !== shape && s.sourceId === shape.sourceId) ? [{ kind: 'item', label: 'Make separate', disabled: locked, onSelect: () => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() }) } as const] : []),
+      ] : []),
       { kind: 'separator' },
       { kind: 'item', label: 'Group', shortcut: '⌘G', disabled: locked, onSelect: () => act.group(ids) },
       ...(shape.groupId ? [{ kind: 'item', label: 'Ungroup', shortcut: '⇧⌘G', disabled: locked, onSelect: () => act.ungroup(shape.groupId) } as const] : []),
@@ -574,7 +632,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const wallText = wall ? `Showing on the projector · ${wall.fps} fps${wall.level ? ` · instruments drawn at ${Math.round(GOVERNOR_SCALES[wall.level] * 100)} %${wall.level === 3 ? ', every other frame' : ''}` : ''}` : 'Showing on the projector';
   const failing = wall?.failing[0] ? `An instrument could not start, so its shape plays its colour: ${wall.failing[0].reason}` : null;
   const penHint = pen ? `Pen: ${pen.points.length} point${pen.points.length === 1 ? '' : 's'}${pen.hole ? ' (a hole)' : ''} · click the first point or press Enter to close · Backspace takes back a point · Esc abandons` : null;
-  const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
+  const cornersHint = cornersMode ? `Stage corners: drag a numbered corner, or use the arrow keys on corner ${cornerIndex + 1} (Shift for 10 pixels). This screen stays flat; the projector bends.` : null;
+  const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? cornersHint ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
 
   return <section className="live-shell map-shell" role="region" aria-label="Map">
@@ -588,6 +647,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       <button className={`text-button live-toggle ${map.blackout ? 'on' : ''}`} aria-pressed={map.blackout} onClick={() => map.setBlackout(!map.blackout)}>Blackout</button>
       <button className={`text-button live-toggle ${map.freeze ? 'on' : ''}`} aria-pressed={map.freeze} title="Hold the picture: the instruments stop where they are" onClick={() => map.setFreeze(!map.freeze)}>Freeze</button>
       <button className="text-button" aria-pressed={map.testGrid} onClick={() => map.setTestGrid(!map.testGrid)}>Test grid</button>
+      <button className={`text-button live-toggle ${cornersMode ? 'on' : ''}`} aria-pressed={cornersMode} title="Fix a projector that was nudged: drag the four numbered corners (or use the arrow keys) until the picture lands where it did" onClick={() => { setCornersMode(!cornersMode); clearDrag(); }}>Stage corners</button>
+      {(cornersMode || map.show.stageCorners) && <button className="text-button" disabled={!map.show.stageCorners} title="Put the stage corners back at the projector's corners" onClick={() => map.dispatch({ type: 'setStageCorners', corners: null })}>Reset corners</button>}
       {soloOn && <button className="text-button live-toggle on" title="Only soloed shapes are shown, on the projector too · click to show everything" onClick={() => map.setSolo({ shapes: [], groups: [] })}>Solo on · Clear</button>}
       <button className="text-button" disabled={!map.selectedId || !map.desktop} title="Flash the selected shape on the projector" onClick={map.identify}>Identify</button>
       <button className="text-button" disabled={!map.canUndo} title="Undo · ⌘Z" onClick={map.undo}>Undo</button>

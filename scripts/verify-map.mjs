@@ -451,6 +451,86 @@ try {
     await studio.getByRole('button', { name: 'Remove photo' }).click();
   });
 
+  // ---- Stage 4: placement ----
+  const placement = value => studio.getByLabel('Placement', { exact: true }).selectOption(value);
+
+  await check('Pin: a trapezoid’s grid pattern bunches up towards its narrow side, as a grid on an angled surface does', async () => {
+    await clearStage();
+    await tool('Pen');
+    for (const p of [[.4, .2], [.6, .2], [.75, .8], [.25, .8]]) await clickOn(p);
+    await focusStage(); await studio.keyboard.press('Enter');
+    await tool('Select');
+    const column = Array.from({ length: 400 }, (_, i) => [.515, .205 + i * (.79 - .205) / 399]);
+    /** Centres of the lit horizontal lines down the column, in stage fractions. */
+    const lines = colours => {
+      const lit = colours.map(c => c[0] > 180), centres = [];
+      for (let i = 0; i < lit.length; i++) if (lit[i] && !lit[i - 1]) { let j = i; while (lit[j + 1]) j++; centres.push(column[(i + j) >> 1][1]); }
+      return centres;
+    };
+    const gaps = ys => ys.slice(1).map((y, i) => y - ys[i]);
+    let fit;
+    for (let i = 0; i < 30; i++) { fit = lines((await sample(output, column)).colours); if (fit.length >= 4) break; await sleep(100); }
+    await placement('pin');
+    let pin, g;
+    for (let i = 0; i < 30; i++) { await sleep(100); pin = lines((await sample(output, column)).colours); g = gaps(pin); if (pin.length >= 3 && g[0] < g.at(-1) * .8) break; }
+    assert.ok(pin.length >= 3, `only ${pin.length} lines found on the pinned shape`);
+    assert.ok(g[0] < g.at(-1) * .8, `pinned gaps ${g.map(v => (v * 1080).toFixed(0)).join(', ')} px do not narrow towards the top (fit: ${gaps(fit).map(v => (v * 1080).toFixed(0)).join(', ')})`);
+    const fg = gaps(fit);
+    assert.ok(fg[0] > fg.at(-1) * .8, `fit gaps already narrow: ${fg.map(v => (v * 1080).toFixed(0)).join(', ')}`);
+  });
+
+  await check('Across stage with a shared instrument: two neighbouring shapes show one continuous picture, played once', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.1, .3], [.3, .6]);
+    await tool('Select');
+    await studio.getByLabel('Plays').selectOption('preset:porcelain-shutters');
+    await placement('across-stage');
+    await tool('Rectangle'); await dragOn([.3 + 3 / 1920, .3], [.5, .6]);
+    await tool('Select');
+    const names = await studio.locator('.map-shape-list li .map-shape-name').allTextContents();
+    await studio.getByLabel('Share with', { exact: true }).selectOption({ label: names[0] });
+    await placement('across-stage');
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
+    await sleep(1200);
+    // Pixels a few pixels either side of the shared edge, down its length: one picture, so they nearly match.
+    const pairs = Array.from({ length: 12 }, (_, i) => [[.3 - 4 / 1920, .32 + i * .022], [.3 + 8 / 1920, .32 + i * .022]]).flat();
+    const s = await sample(output, pairs);
+    let close = 0;
+    for (let i = 0; i < s.colours.length; i += 2) if (near(s.colours[i], s.colours[i + 1], 40)) close++;
+    assert.ok(close >= 9, `only ${close} of 12 pairs match across the edge`);
+    assert.ok(s.colours.some(c => !near(c, BLACK, 30)), 'the picture is black');
+  });
+
+  await check('Brightness at 50 % halves a shape’s colour on the wall', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.5, .5]);
+    await tool('Select'); await asColour();
+    const [full] = await wallUntil([[.35, .35]], c => coloured(c[0]), 'full');
+    const b = studio.getByLabel('Brightness', { exact: true }); await b.fill('0.5'); await b.dispatchEvent('pointerup');
+    const [half] = await wallUntil([[.35, .35]], c => Math.abs(c[0][0] - full[0] / 2) <= 12, 'half brightness');
+    assert.ok(Math.abs(half[0] - full[0] / 2) <= 12, `${half} against ${full}`);
+  });
+
+  await check('Stage corners bend the projector’s picture; Blackout stays black; this screen stays flat; Reset brings it back', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([0, 0], [.4, .4]);
+    await tool('Select'); await asColour();
+    await wallUntil([[.02, .02]], c => coloured(c[0]), 'before');
+    await studio.getByRole('button', { name: 'Stage corners', exact: true }).click();
+    await dragOn([0, 0], [.1, .1]);
+    await wallUntil([[.02, .02], [.18, .18]], c => near(c[0], BLACK) && coloured(c[1]), 'corner moved');
+    // The operator screen keeps the stage flat: its preview of the wall is taken before the corners bend it.
+    let flat;
+    for (let i = 0; i < 30; i++) { flat = await operatorAt(stage, .02, .2); if (!near(flat, BLACK, 40)) break; await sleep(100); }
+    assert.ok(!near(flat, BLACK, 40), `the operator screen is rgb(${flat}) where the flat stage has the shape`);
+    await studio.getByRole('button', { name: 'Blackout', exact: true }).click();
+    await wallUntil([[.02, .02], [.18, .18], [.5, .5]], c => c.every(x => near(x, BLACK, 2)), 'blackout');
+    await studio.getByRole('button', { name: 'Blackout', exact: true }).click();
+    await studio.getByRole('button', { name: 'Reset corners', exact: true }).click();
+    await wallUntil([[.02, .02]], c => coloured(c[0]), 'after reset');
+    await studio.getByRole('button', { name: 'Stage corners', exact: true }).click();
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
