@@ -91,7 +91,7 @@ function ReactsSection({ map, shape, setNote }: { map: Map; shape: Shape; setNot
 }
 
 /** The Details panel: the selected shape's name, colour, what it plays, its edge, shape tools and its chosen point. */
-export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, linked, setLinked }: { map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void; onOpenLooks: () => void; linked: boolean; setLinked: (on: boolean) => void }) {
+export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, linked, setLinked, liveStatus = null }: { liveStatus?: { running: boolean; state: string } | null; map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void; onOpenLooks: () => void; linked: boolean; setLinked: (on: boolean) => void }) {
   const act = mapActions(map);
   const [grid, setGrid] = useState({ rows: '2', cols: '2', gap: '0', spread: true });
   const many = map.selectedIds.length > 1;
@@ -170,7 +170,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
       <button className="text-button" disabled={group.locked} title="Dissolve this group; its shapes stay · ⇧⌘G" onClick={() => act.ungroup(group.id)}>Ungroup</button></div>}
 
     <ContentCard map={map} shape={shape} locked={locked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked={linked} setLinked={setLinked} />
-    {shape.sourceId === LIVE_SOURCE_ID && !shape.blocker && <Section id="live" title="Live" summary={map.live ? LOOK_LABELS[map.live.look] : ''}><MapLiveCard map={map} locked={locked} onError={text => setNote(text)} /></Section>}
+    {shape.sourceId === LIVE_SOURCE_ID && !shape.blocker && <Section id="live" title="Live" summary={map.live ? LOOK_LABELS[map.live.look] : ''}><MapLiveCard map={map} locked={locked} onError={text => setNote(text)} localStatus={liveStatus} /></Section>}
 
     {point && map.selectedIndex !== null && <div className="map-point">
       <h3>{map.selectedRing >= 0 ? `Hole ${map.selectedRing + 1}, ${isCurved(point) ? 'curve point' : 'corner'}` : isCurved(point) ? 'Curve point' : 'Corner'} {map.selectedIndex + 1}</h3>

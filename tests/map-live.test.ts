@@ -166,14 +166,21 @@ test('review fix: a new look on one of several Live shapes gives them all one ne
 
 test('review fix: Live is waited for only while it is starting; a camera that cannot play lets the shapes show their fill', async () => {
   const { liveReadiness } = await import('../src/map/liveReady');
-  assert.equal(liveReadiness({ status: 'starting' }, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0 }), 'wait');
-  assert.equal(liveReadiness({ status: 'idle' }, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0 }), 'wait');
+  assert.equal(liveReadiness({ status: 'starting' }, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0, hasPicture: false }), 'wait');
+  assert.equal(liveReadiness({ status: 'idle' }, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0, hasPicture: false }), 'wait');
   for (const status of ['refused', 'none', 'lost', 'error'] as const)
-    assert.equal(liveReadiness({ status } as never, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0 }), 'cannot', status);
-  assert.equal(liveReadiness({ status: 'running' } as never, { file: true, needsPeople: false, peopleLoading: false, drawnSinceRunning: 5 }), 'cannot', 'a video file plays on the Live screen only');
+    assert.equal(liveReadiness({ status } as never, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0, hasPicture: false }), 'cannot', status);
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: true, needsPeople: false, peopleLoading: false, drawnSinceRunning: 5, hasPicture: false }), 'cannot', 'a video file plays on the Live screen only');
   // Running, but nothing drawn since the camera came up: a frame from before could be no camera picture at all.
-  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0 }), 'wait');
-  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: true, peopleLoading: true, drawnSinceRunning: 5 }), 'wait', 'people-finding still loading');
-  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: true, peopleLoading: false, drawnSinceRunning: 5 }), 'play');
-  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: false, peopleLoading: true, drawnSinceRunning: 1 }), 'play');
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0, hasPicture: false }), 'wait');
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: true, peopleLoading: true, drawnSinceRunning: 5, hasPicture: false }), 'wait', 'people-finding still loading');
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: true, peopleLoading: false, drawnSinceRunning: 5, hasPicture: false }), 'play');
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: false, peopleLoading: true, drawnSinceRunning: 1, hasPicture: false }), 'play');
+});
+
+test('final review fix: switching to a look that finds people holds the last Live picture while people-finding loads', async () => {
+  const { liveReadiness } = await import('../src/map/liveReady');
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: true, peopleLoading: true, drawnSinceRunning: 50, hasPicture: true }), 'hold');
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: true, peopleLoading: true, drawnSinceRunning: 50, hasPicture: false }), 'wait', 'before the first picture it still waits');
+  assert.equal(liveReadiness({ status: 'lost' } as never, { file: false, needsPeople: true, peopleLoading: true, drawnSinceRunning: 50, hasPicture: true }), 'cannot', 'a lost camera is not held');
 });

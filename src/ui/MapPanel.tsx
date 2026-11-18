@@ -157,6 +157,16 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   // Signals reach this screen's compositor directly.
   map.onSignals.current = signals => compositor.current?.setSignals(signals);
   // Live's Clear and Capture empty room reach this screen's Live directly.
+  // This screen's own Live, as the Live card's status line shows it while the output is closed.
+  const [localLive, setLocalLive] = useState<{ running: boolean; state: string } | null>(null);
+  useEffect(() => {
+    if (map.outputOpen) { setLocalLive(null); return; }
+    const timer = setInterval(() => {
+      const next = compositor.current?.stats().live ?? null;
+      setLocalLive(old => old?.running === next?.running && old?.state === next?.state ? old : next);
+    }, 500);
+    return () => clearInterval(timer);
+  }, [map.outputOpen]);
   map.onLiveAction.current = action => { if (action === 'clear') compositor.current?.liveClear(); else if (action === 'retry') compositor.current?.liveRetry(); else compositor.current?.liveCaptureRoom(); };
   useEffect(() => {
     if (!canvas.current) return;
@@ -769,7 +779,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
           <button role="tab" aria-selected={inspectorTab === 'react'} onClick={() => setInspectorTab('react')}>Sound &amp; MIDI{map.show.links.length + map.show.triggers.length ? <small> {map.show.links.length + map.show.triggers.length}</small> : null}</button>
         </div>
         {inspectorTab === 'details'
-          ? <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} />
+          ? <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges}  liveStatus={localLive} />
           : <MapReactivity map={map} />}
       </aside>
     </div>

@@ -792,13 +792,14 @@ Built 18 November 2026 on `map-stage-5`, from [the Live in Map design](superpowe
 
 Live costs a few slow frames in the heaviest mix, but the show holds 110–121 fps.
 
-**Checked in the app** (`npm run test:map`, 37 checks, 5 of them new; two clean runs in a row):
+**Checked in the app** (`npm run test:map`, 38 checks, 6 of them new; two clean runs in a row after the final review):
 - **Starting:** a shape set to Live shows its colour, then Live, with no black frame in between.
 - **Across stage:** two shapes playing Live show one continuous picture.
 - **Scenes:** a scene switches a shape from an instrument to Live with no black frame.
 - **The Live section:**
   - ∿ on Spread, with the test beat, moves the look on the wall
   - a slider moved there reaches the wall, and the Live screen shows it afterwards
+- **Switching the look mid-show** (Paint to Smoke): the shapes keep the last Live picture while people-finding loads, never their own colour.
 - **The camera:** with nothing using Live, the wall lets Live and its camera go.
 
 **A review of the first three tasks** found ten problems, all fixed. Among them:
@@ -812,6 +813,12 @@ Live costs a few slow frames in the heaviest mix, but the show holds 110–121 f
 - A fade away from Live uses Live's picture uncropped for that one crossfade.
 - With the output closed, the operator screen runs its own Live with the camera. Opening the output hands the camera to the projector.
 - Live is not counted in the 24-instrument limit. It is one context at most, given back at once.
+- The checks cannot unplug a camera. "Try the camera again" and the camera-down status lines are checked by reading the code only.
+- Deferred from the final review:
+  - On a locked Live shape, the look controls look active, and Signal's Start from still clears the picture.
+  - The camera-off note can show twice with the output open.
+  - A missing camera or an error says only "Live is not running yet".
+  - Closing a shape's card with Sound & MIDI for Live open leaves the meters running.
 - Not yet seen with a real camera on the projector. That needs Greg and the room.
 
 ## Stage 0 results

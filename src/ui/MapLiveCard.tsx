@@ -13,7 +13,8 @@ const TEST = '__test';
 const CAMERA_OFF = 'Camera access is off. Allow Form & Field in System Settings › Privacy & Security › Camera, then reopen the app.';
 const FILE_NOTE = 'Video files play on the Live screen only. Choose a camera or the test pattern to show Live here.';
 
-export default function MapLiveCard({ map, locked, onError }: { map: Map; locked: boolean; onError: (message: string) => void }) {
+/** localStatus: this screen's own Live, while the output is closed (with it open, the wall's is used). */
+export default function MapLiveCard({ map, locked, onError, localStatus = null }: { map: Map; locked: boolean; onError: (message: string) => void; localStatus?: { running: boolean; state: string } | null }) {
   const s = map.live;
   const [cameras, setCameras] = useState<{ deviceId: string; label: string }[]>([]);
   const [access, setAccess] = useState<'granted' | 'refused' | null>(null);
@@ -32,7 +33,7 @@ export default function MapLiveCard({ map, locked, onError }: { map: Map; locked
   const update = (change: (value: LiveSettings) => LiveSettings) => { if (!locked) map.updateLive(change); };
   const links = liveLinks(s, update, map.engine, map.startEngine, onError);
   const sourceValue = s.source.kind === 'test' ? TEST : s.source.kind === 'file' ? '__file' : s.source.deviceId ?? '';
-  const live = map.outputOpen ? map.wallState?.live : undefined;
+  const live = map.outputOpen ? map.wallState?.live : localStatus;
   const refused = s.source.kind === 'camera' && access === 'refused';
   return <div className="map-live-card">
     <label className="map-field">Camera<select aria-label="Live camera" value={sourceValue} disabled={locked} onChange={e => {

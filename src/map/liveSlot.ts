@@ -64,13 +64,15 @@ export class LiveSlot {
   get readiness(): LiveReadiness {
     const settings = this.stage.renderer.settings, people = this.stage.renderer.peopleDiagnostics();
     return liveReadiness(this.state, { file: this.fileChosen, needsPeople: usesPeople(settings), peopleLoading: people.status === 'loading' || (people.status as { state?: string } | null)?.state === 'loading',
-      drawnSinceRunning: this.stage.renderer.framesDrawn - this.runningSince });
+      drawnSinceRunning: this.stage.renderer.framesDrawn - this.runningSince, hasPicture: this.texture !== null });
   }
 
   /** The picture to draw this frame: uploaded when Live has drawn a new one, else the last; null until Live can play. */
   frame(): Texture | null {
     this.fresh = false;
-    if (this.broken || this.readiness !== 'play') return null;
+    const readiness = this.broken ? 'cannot' : this.readiness;
+    if (readiness === 'hold') return this.texture;
+    if (readiness !== 'play') return null;
     const drawn = this.stage.renderer.framesDrawn;
     if (drawn !== this.uploaded && this.canvas.width > 0) {
       this.texture = this.gpu.upload(this.canvas, this.texture);
@@ -80,7 +82,7 @@ export class LiveSlot {
     return this.texture;
   }
   /** The picture on the wall now, for a fade away from Live. */
-  get current(): Texture | null { return this.readiness === 'play' ? this.texture : null; }
+  get current(): Texture | null { const r = this.readiness; return r === 'play' || r === 'hold' ? this.texture : null; }
 
   dispose(): void {
     // Its canvas is never used again: the context goes back now, not when collected, so making Live again later never

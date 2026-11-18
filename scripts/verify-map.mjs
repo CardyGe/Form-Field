@@ -754,9 +754,12 @@ try {
     await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length >= 1, null, { timeout: 15000 });
     await sleep(1500);
     await sceneButtons().nth(before).click();  // back to Live
+    // A black frame blacks out the whole shape; one point can fall on dark artwork (the instrument's black shutters).
+    const spots = [[.25, .25], [.3, .4], [.35, .35], [.4, .3], [.45, .45], [.28, .45], [.45, .27]];
     const during = [];
-    for (let i = 0; i < 25; i++) { during.push((await sample(output, [[.35, .35]])).colours[0]); await sleep(100); }
-    assert.ok(during.every(c => !near(c, BLACK, 20)), `a black frame switching to Live: ${during.map(c => `rgb(${c})`).join(' ')}`);
+    for (let i = 0; i < 25; i++) { during.push((await sample(output, spots)).colours); await sleep(100); }
+    const black = during.findIndex(frame => frame.every(c => near(c, BLACK, 20)));
+    assert.ok(black < 0, `a black frame switching to Live, sample ${black}: ${JSON.stringify(during[black])}`);
     assert.equal(await studio.locator('.map-shape-list li .map-row-plays').first().textContent(), 'Live');
     await sceneButtons().nth(before + 1).click();
     await studio.waitForFunction(() => document.querySelector('.map-shape-list li .map-row-plays')?.textContent !== 'Live', null, { timeout: 5000 });
@@ -779,6 +782,17 @@ try {
     const response = studio.getByLabel('Movement response', { exact: true });
     await response.fill('2.5');
     await output.waitForFunction(() => Math.abs(window.__studioTest.liveDrawn().paint.response - 2.5) < 0.01, null, { timeout: 5000 });
+  });
+
+  await check('switching the Live look mid-show (Paint to Smoke) keeps Live on the wall, never the shape’s own colour', async () => {
+    await openSection(studio, 'live');
+    await wallUntil([[.35, .35]], c => !near(c[0], RED, 30), 'Live before the switch');
+    await studio.getByLabel('Look', { exact: true }).selectOption('smoke');
+    const during = [];
+    for (let i = 0; i < 30; i++) { during.push((await sample(output, [[.35, .35]])).colours[0]); await sleep(100); }
+    assert.ok(during.every(c => !near(c, RED, 30)), `the shape fell back to its colour while Smoke started: ${during.map(c => `rgb(${c})`).join(' ')}`);
+    assert.equal((await liveStats())?.running, true);
+    await studio.getByLabel('Look', { exact: true }).selectOption('paint');
   });
 
   await check('with nothing using Live, the wall lets Live (and its camera) go', async () => {
