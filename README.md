@@ -357,6 +357,8 @@ Check it with `node scripts/verify-liquid.mjs` (add `--quick` for stills only).
 
 ## Oscilloscope controls
 
+**Ember Pulse** is an Oscilloscope look with a hollow red filament bloom, outward-travelling rings and amber accents. Find it in Studio's Looks or Map's look browser. Opening, Turbulence, Pulse depth, Ring strength and Heat shape the motion and colour independently. In Map's Sound & MIDI panel, link bass to Opening, the beat to Ring strength or highs to Heat. For a four-bar loop, set Phrases per loop to four in Studio and Loop with the tempo to 16 beats in Map.
+
 **Oscilloscope** draws one glowing line the way an oscilloscope does in X-Y mode: the beam is steered by three oscillators, one each for across, up and depth. The figure is not an object that turns. It moves because the oscillators slip against each other, so it folds, opens and collapses. The core burns to white, the halo keeps the line colour, and parts the beam crosses slowly are brighter. Looks: **Twin Orbit**, **Atom**, **Ember Ring**, **Cyan Tangle**, **Signal Burst** and **Morse Weave**.
 
 - **Figure** picks the frequency ratio of the oscillators (Ellipse 1:1, Eight 1:2, Pretzel 3:2, Trefoil 1:3, Knot 3:4, Weave 5:3, Star 5:4, Tangle 7:5). Simple ratios are calm; larger ones are dense. **Overtones** bends the oscillators away from a pure sine for lopsided, less regular figures.

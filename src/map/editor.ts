@@ -168,6 +168,10 @@ export function presetComposition(presetId: string, seed: number): Project | nul
   const layer = applyPreset(createLayer(preset.kind), preset.id);
   layer.params.seed = seed;
   Object.assign(project, { name: preset.name, seed, layers: [layer] });
+  if (preset.id === 'ember-pulse') {
+    project.background = '#000000';
+    project.transparent = true;
+  }
   return validateProject(project);
 }
 

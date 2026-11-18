@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SCOPE_FIGURES, SCOPE_PLAIN, scopeWave, scopeCurve, scopeDash, scopeFigurePoint, scopeLine, scopeMorphWeight, scopePerspective, scopeRotation } from '../src/rendering/scope-curve';
-import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions, validateProject } from '../src/core/project';
+import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
+
+import { emberPhrase, SCOPE_POINT_STRIDE, writeEmberPoints } from '../src/rendering/scope-ember';
 
 const TAU = Math.PI * 2;
 const motion = { tilt: .4, tumbleX: 1, tumbleY: 2 };
@@ -157,4 +159,69 @@ test('float changes the pace of the tumble but still closes the loop', () => {
   // It still rocks when the tumble is off.
   const rest = { tilt: 0, tumbleX: 0, tumbleY: 0, float: 1 };
   assert.ok(scopeRotation(rest, 1).some((v, i) => Math.abs(v - scopeRotation(rest, 2.5)[i]) > .1));
+});
+
+const emberLayer = () => applyPreset(createLayer('scope'), 'ember-pulse');
+
+test('older Oscilloscope layers open in Classic and the Ember mode has its own persisted controls', () => {
+  const layer = createLayer('scope');
+  for (const key of Object.keys(layer.params)) if (key === 'scopeMode' || key.startsWith('ember')) delete layer.params[key];
+  const classic = validateProject({ ...createProject(), layers: [layer] }).layers[0];
+  assert.equal(classic.params.scopeMode, 0);
+  assert.ok(visibleParameterDefinitions(classic).some(d => d.key === 'figure'));
+  assert.ok(!visibleParameterDefinitions(classic).some(d => d.key === 'emberOpening'));
+
+  const ember = emberLayer();
+  assert.equal(ember.params.scopeMode, 1);
+  assert.ok(visibleParameterDefinitions(ember).some(d => d.key === 'emberOpening'));
+  assert.ok(!visibleParameterDefinitions(ember).some(d => d.key === 'figure'));
+  assert.deepEqual(validateProject({ ...createProject(), layers: [ember] }).layers[0], ember);
+  const varied = varyLayer(ember, .6, { palette: false, structure: false, motion: false, material: false }, 90);
+  assert.equal(varied.params.scopeMode, 1);
+  assert.equal(varied.params.emberPhrases, ember.params.emberPhrases);
+  assert.deepEqual(varied.palette, ember.palette);
+});
+
+function emberFrame(params: Record<string, number>, phase: number, aspect = 9 / 16) {
+  const buffer = new Float32Array(8000 * SCOPE_POINT_STRIDE).fill(NaN);
+  const frame = writeEmberPoints(buffer, params, phase, aspect);
+  assert.ok(frame.points > 0 && frame.points <= 8000);
+  const samples = buffer.slice(0, frame.points * SCOPE_POINT_STRIDE);
+  assert.ok(samples.every(Number.isFinite));
+  return { ...frame, samples };
+}
+
+test('Ember geometry has bounded, closed paths and a deterministic loop including afterglow', () => {
+  const params = { ...emberLayer().params, emberDensity: 1, afterglow: 1 };
+  const start = emberFrame(params, 0);
+  assert.deepEqual(start, emberFrame(params, TAU));
+  for (const phase of [0, .1, .65, 1.1, 2.7, 4.4, TAU - .001]) {
+    const { samples } = emberFrame(params, phase);
+    let start = 0;
+    for (let index = 0; index < samples.length; index += SCOPE_POINT_STRIDE) {
+      if (samples[index + 3] !== 0) continue;
+      assert.deepEqual(samples.slice(index, index + 3), samples.slice(start, start + 3));
+      start = index + SCOPE_POINT_STRIDE;
+    }
+    assert.equal(start, samples.length);
+  }
+  assert.notDeepEqual(start.samples, emberFrame(params, TAU / 5).samples, 'later phrases evolve in shape');
+  assert.deepEqual(start, emberFrame(params, 0), 'seeking gives the same frame');
+});
+
+test('Ember phrase separates the hollow and hot accents, and rings leave the moving body intact', () => {
+  const params = emberLayer().params, phase = (bar: number) => TAU * bar / params.emberPhrases;
+  const open = emberPhrase(phase(.255), params.emberPhrases);
+  const crest = emberPhrase(phase(.78), params.emberPhrases);
+  assert.ok(open.opening > crest.opening && crest.heat > open.heat);
+
+  const bodyOnly = emberFrame({ ...params, emberRings: 0, emberOuter: 0 }, phase(.8));
+  const rings = emberFrame({ ...params, emberOuter: 0 }, phase(.8));
+  assert.ok(rings.points > bodyOnly.points);
+  assert.deepEqual(rings.samples.slice(0, bodyOnly.samples.length), bodyOnly.samples);
+  const outer = emberFrame({ ...params, emberRings: 0 }, phase(.8));
+  assert.ok(outer.points > bodyOnly.points);
+  const portrait = emberFrame(params, phase(.8));
+  const landscape = emberFrame(params, phase(.8), 16 / 9);
+  assert.ok(Math.abs(portrait.radius / (9 / 16) - landscape.radius) < 1e-10);
 });

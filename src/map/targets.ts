@@ -5,7 +5,8 @@
  *   source.<id>.param.<layer>.<setting>
  * A target's range comes from the shape's own rules, or from the instrument's parameter definitions.
  */
-import { readParameterDefinitions } from '../core/project';
+import { readParameterDefinitions, scopeParameterVisible } from '../core/project';
+import type { Layer } from '../shared/types';
 import { BRIGHTNESS_MAX, SPEED_RANGE, ZOOM_RANGE, type ShowDocument } from './show';
 import type { Link } from '../react/links';
 
@@ -31,6 +32,15 @@ export function parseTarget(target: string): Target | null {
   return null;
 }
 
+export function canLinkParameter(layer: Layer, key: string): boolean {
+  return layer.kind !== 'scope' || key !== 'scopeMode' && key !== 'emberPhrases';
+}
+
+/** A saved link for another Scope mode stays in the show until that mode is used again. */
+export function activeParameterLink(layer: Layer, key: string): boolean {
+  return canLinkParameter(layer, key) && (layer.kind !== 'scope' || scopeParameterVisible(layer.params, key));
+}
+
 /** The target's range, or null when what it names is not in the show. */
 export function targetRange(show: Pick<ShowDocument, 'shapes' | 'sources'>, target: string): { min: number; max: number; label: string } | null {
   const t = parseTarget(target);
@@ -45,7 +55,7 @@ export function targetRange(show: Pick<ShowDocument, 'shapes' | 'sources'>, targ
   if (!source) return null;
   if (t.kind === 'speed') return { min: SPEED_RANGE.min, max: SPEED_RANGE.max, label: `${source.project.name} · Speed` };
   const layer = source.project.layers[t.layer];
-  if (!layer) return null;
+  if (!layer || !canLinkParameter(layer, t.key)) return null;
   const def = readParameterDefinitions(layer.kind).find(d => d.key === t.key);
   if (!def || typeof layer.params[t.key] !== 'number') return null;
   return { min: def.min, max: def.max, label: `${source.project.name} · ${def.label}` };
@@ -77,8 +87,9 @@ export function reactionLinks(show: Pick<ShowDocument, 'shapes' | 'sources'>, re
     const source = shape.sourceId ? show.sources.find(s => s.id === shape.sourceId) : undefined;
     if (!source) return 'needs-instrument';
     const layer = source.project.layers[0];
-    const defs = readParameterDefinitions(layer.kind).filter(d => typeof layer.params[d.key] === 'number' && d.max > d.min && d.key !== 'seed' && !d.preparation);
-    const def = defs.find(d => d.section === 'Motion' && !d.preparation) ?? defs[0];
+    const defs = readParameterDefinitions(layer.kind).filter(d => activeParameterLink(layer, d.key) && typeof layer.params[d.key] === 'number' && d.max > d.min && d.key !== 'seed' && !d.preparation);
+    const preferred = layer.kind === 'scope' && layer.params.scopeMode === 1 ? 'emberOpening' : null;
+    const def = defs.find(d => preferred ? d.key === preferred : d.section === 'Motion') ?? defs[0];
     if (!def) return 'needs-instrument';
     target = `source.${source.id}.param.0.${def.key}`;
   }
@@ -93,7 +104,7 @@ export function targetOptions(show: Pick<ShowDocument, 'shapes' | 'sources'>): {
     out.push({ target: `source.${source.id}.speed`, label: `${source.project.name} · Speed` });
     source.project.layers.forEach((layer, i) => {
       for (const d of readParameterDefinitions(layer.kind)) {
-        if (typeof layer.params[d.key] !== 'number' || !(d.max > d.min) || d.key === 'seed' || d.preparation) continue;
+        if (!activeParameterLink(layer, d.key) || typeof layer.params[d.key] !== 'number' || !(d.max > d.min) || d.key === 'seed' || d.preparation) continue;
         out.push({ target: `source.${source.id}.param.${i}.${d.key}`, label: `${source.project.name}${source.project.layers.length > 1 ? ` (layer ${i + 1})` : ''} · ${d.label}` });
       }
     });

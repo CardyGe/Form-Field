@@ -7,7 +7,7 @@ import { readParameterDefinitions } from '../core/project';
 import type { Project } from '../shared/types';
 import { evaluate, type Link } from '../react/links';
 import type { Signals } from '../react/signals';
-import { parseTarget, type ShapeProp } from './targets';
+import { activeParameterLink, parseTarget, type ShapeProp } from './targets';
 import { BRIGHTNESS_MAX, SPEED_RANGE, ZOOM_RANGE, type Shape } from './show';
 
 export interface ModShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null }[]; groups: { id: string }[]; links?: Link[] }
@@ -75,7 +75,7 @@ export class Modulator {
         if (source) out.speed.set(source.id, evaluate(source.speed, SPEED_RANGE, group, signals, this.state, dt));
       } else {
         const project = projects.get(t.sourceId), layer = project?.layers[t.layer];
-        const def = layer && readParameterDefinitions(layer.kind).find(d => d.key === t.key);
+        const def = layer && activeParameterLink(layer, t.key) && readParameterDefinitions(layer.kind).find(d => d.key === t.key);
         const base = layer?.params[t.key];
         if (!def || typeof base !== 'number') continue;
         const value = evaluate(base, { min: def.min, max: def.max }, group, signals, this.state, dt);

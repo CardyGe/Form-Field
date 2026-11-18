@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Modulator, withParams, tempoPhase } from '../src/map/modulate';
 import { applyEdit, type EditAction } from '../src/map/editor';
 import { createShow, type CurvePoint, type ShowDocument } from '../src/map/show';
+import { reactionLinks, targetOptions, targetRange } from '../src/map/targets';
 import type { Link } from '../src/react/links';
 
 const sq = (x0: number, y0: number, x1: number, y1: number): CurvePoint[] => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
@@ -59,4 +60,32 @@ test('a fade of no time is a cut, never 0 / 0', async () => {
   assert.equal(fadeAlpha(100, 100, 0), 1);
   assert.equal(fadeAlpha(100, 50, 0), 1);
   assert.equal(fadeAlpha(0, 200, 400), 0.5);
+});
+
+test('Map plays the Ember preset and routes bass, beat and MIDI to independent controls', () => {
+  let show = ok(base(), { type: 'setContent', shapeId: 'a', content: { kind: 'preset', presetId: 'ember-pulse', sourceId: 'ember', seed: 7 } });
+  const target = (key: string) => `source.ember.param.0.${key}`;
+  const targets = targetOptions(show).map(option => option.target);
+  assert.ok(targets.includes(target('emberOpening')));
+  for (const key of ['figure', 'scopeMode', 'emberPhrases']) assert.ok(!targets.includes(target(key)));
+  assert.equal(targetRange(show, target('emberPhrases')), null);
+  const bass = reactionLinks(show, 'instrument-bass', 'a', ['bass']);
+  assert.ok(Array.isArray(bass));
+  assert.equal(bass[0].target, target('emberOpening'));
+  for (const l of [bass[0], link({ id: 'rings', input: 'beat.pulse', target: target('emberRings') }),
+    link({ id: 'heat', input: 'midi.cc.1.4', target: target('emberHeat') }),
+    link({ id: 'classic', target: target('sway') })]) {
+    show = ok(show, { type: 'addLink', link: l });
+  }
+  const source = show.sources[0].project;
+  assert.equal(source.background, '#000000');
+  assert.equal(source.transparent, true);
+  const modulator = new Modulator();
+  const on = modulator.apply(show, projects(show), { 'audio.bass': 1, 'beat.pulse': 1, 'midi.cc.1.4': 1 }, 1);
+  const overrides = on.params.get('ember')!;
+  assert.deepEqual(overrides.map(param => param.key), ['emberOpening', 'emberRings', 'emberHeat']);
+  const driven = withParams(source, overrides).layers[0].params;
+  for (const key of ['emberOpening', 'emberRings', 'emberHeat']) assert.ok(driven[key] > source.layers[0].params[key]);
+  const quiet = modulator.apply(show, projects(show), {}, 1);
+  assert.deepEqual(withParams(source, quiet.params.get('ember')), source);
 });

@@ -3,6 +3,7 @@ import type { Layer } from '../shared/types';
 import { sourceViewMatrix } from './source-view';
 import { fullscreenVertex } from './shaders';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, lightTarget } from './bloom';
+import { SCOPE_POINT_STRIDE as STRIDE, writeEmberPoints } from './scope-ember';
 import { SCOPE_WAVE, scopeDash, scopeLine, scopePerspective, scopeWave, type ScopeMotion, type ScopeShape } from './scope-curve';
 
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
@@ -12,8 +13,6 @@ const POINTS = SEGMENTS + 1 + RING + 1;
 /** Afterglow: fainter copies of the line where it was a moment ago. */
 const GHOSTS = 8, GHOST_SEGMENTS = 1536;
 const ALL_POINTS = POINTS + GHOSTS * (GHOST_SEGMENTS + 1);
-/** Values per point: x, y, depth, brightness, colour mix. */
-const STRIDE = 5;
 const TAU = Math.PI * 2;
 const DEFAULT_PALETTE = ['#ff2a8a', '#ff2060', '#ff8a00', '#ffffff', '#20e0ff', '#000000'];
 
@@ -95,7 +94,7 @@ export class ScopeRenderer {
       uniform sampler2D uLight, uBloom0, uBloom1, uBloom2, uBloom3, uBloom4;
       uniform vec3 uLine, uSecond, uHaloTint, uBloomTint, uHot;
       uniform float uWeights[5];
-      uniform vec2 uCentre; uniform float uAspect, uRadius, uFringe;
+      uniform vec2 uCentre; uniform float uAspect, uRadius, uFringe, uEmber, uHeat;
       float glow(sampler2D level) { vec3 b=texture2D(level,vUv).rgb; return b.r+b.g*.6; }
       void main() {
         // Red and blue are read a little apart, more so towards the edge of the sphere.
@@ -106,6 +105,12 @@ export class ScopeRenderer {
         vec3 line=mix(uLine,uSecond,light.r>1e-5?clamp(light.b/light.r,0.,1.):0.);
         float bloom=uWeights[0]*glow(uBloom0)+uWeights[1]*glow(uBloom1)+uWeights[2]*glow(uBloom2)+uWeights[3]*glow(uBloom3)+uWeights[4]*glow(uBloom4);
         vec3 sum=core*(line+uHot*.5)+uHaloTint*light.g+uBloomTint*bloom;
+        if (uEmber > .5) {
+          float ridge=clamp(light.b/max(light.r,1e-5),0.,1.);
+          float heat=uHeat*smoothstep(.12,.75,light.r)*(.38+.62*ridge);
+          vec3 ember=mix(uLine,uSecond,.7*ridge);
+          sum=light.r*(ember+uHot*heat)+uHaloTint*light.g+uBloomTint*bloom;
+        }
         // Roll off towards 1 per channel: bright light loses its colour and burns white.
         vec3 c=1.-exp(-max(sum,0.));
         gl_FragColor=vec4(c,max(c.r,max(c.g,c.b)));
@@ -115,6 +120,7 @@ export class ScopeRenderer {
       uLine: { value: new THREE.Color() }, uSecond: { value: new THREE.Color() }, uHaloTint: { value: new THREE.Color() },
       uBloomTint: { value: new THREE.Color() }, uHot: { value: new THREE.Color() },
       uWeights: { value: [0, 0, 0, 0, 0] }, uCentre: { value: new THREE.Vector2(.5, .5) }, uAspect: { value: 1 }, uRadius: { value: .3 }, uFringe: { value: 0 },
+      uEmber: { value: 0 }, uHeat: { value: 0 },
     },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
@@ -132,8 +138,8 @@ export class ScopeRenderer {
     this.scene.add(mesh);
   }
 
-  draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw): void {
-    const p = layer.params, aspect = width / height, radius = p.radius, points = this.points;
+  private writeClassic(p: Layer['params'], phase: number, radius: number): number {
+    const points = this.points;
     const motion: ScopeMotion = { tilt: p.tilt, tumbleX: p.tumbleX, tumbleY: p.tumbleY, float: p.float ?? 0 };
     const shape: ScopeShape = { figure: p.figure, figureB: p.figureB ?? 0, morph: p.morph ?? 0, hold: p.hold ?? 0, drift: p.drift ?? 1, overtones: p.overtones ?? 0, sway: p.sway ?? 0,
       wiggle: p.wiggle ?? 0, wiggleFrequency: p.wiggleFrequency ?? 36, wiggleBursts: p.wiggleBursts ?? 0 };
@@ -176,13 +182,28 @@ export class ScopeRenderer {
     this.geometry.instanceCount = (afterglow > 0 ? ALL_POINTS : POINTS) - 1;
     this.buffer.needsUpdate = true;
 
+    return length / SEGMENTS;
+  }
+
+  draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw): void {
+    const p = layer.params, aspect = width / height;
+    const ember = p.scopeMode === 1 ? writeEmberPoints(this.points, p, phase, aspect) : null;
+    const radius = ember?.radius ?? p.radius;
+    let gain = p.intensity;
+    if (ember) {
+      this.geometry.instanceCount = ember.points - 1;
+      this.buffer.needsUpdate = true;
+    } else {
+      // An average segment peaks at Intensity; slower ones are brighter.
+      gain *= this.writeClassic(p, phase, radius);
+    }
+
     const u = this.beam.uniforms, view = sourceViewMatrix(layer.transform, aspect), inverse = u.uInverse.value as THREE.Matrix3;
     // Never thinner than about two thirds of a pixel, or the line would shimmer.
     const sigma = Math.max(p.beamWidth * .0013, .65 / height * layer.transform.scale);
     u.uSigma.value = sigma; u.uReach.value = sigma * 4.5 * 3;
     u.uHalo.value = p.halo; u.uDepthFade.value = p.depthFade;
-    // An average segment peaks at Intensity; slower ones are brighter.
-    u.uGain.value = p.intensity * (length / SEGMENTS);
+    u.uGain.value = gain;
     (u.uField.value as THREE.Vector2).set(aspect, 1);
     inverse.copy(view).invert();
 
@@ -201,7 +222,8 @@ export class ScopeRenderer {
     // Where the sphere's centre lands on screen, for the fringe.
     const centre = new THREE.Vector3(.5, .5, 1).applyMatrix3(inverse);
     (r.uCentre.value as THREE.Vector2).set(centre.x, centre.y);
-    r.uAspect.value = aspect; r.uRadius.value = radius * layer.transform.scale; r.uFringe.value = p.fringe;
+    r.uAspect.value = aspect; r.uRadius.value = radius * layer.transform.scale; r.uFringe.value = ember ? 0 : p.fringe;
+    r.uEmber.value = Number(!!ember); r.uHeat.value = ember?.heat ?? 0;
     draw(this.resolve, target);
   }
 
