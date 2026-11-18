@@ -4,8 +4,7 @@ import MapMenu, { type MenuEntry } from './MapMenu';
 import MapShapeList from './MapShapeList';
 import MapIcon from './mapIcons';
 import MapDetails from './MapDetails';
-import MapReactivity from './MapReactivity';
-import MapScenes from './MapScenes';
+import MapSoundStrip from './MapSoundStrip';
 import MapLookBrowser from './MapLookBrowser';
 import { PRESETS } from '../core/project';
 import { mapActions, newId, newSourceId } from './mapActions';
@@ -534,8 +533,6 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const chooseTool = (tool: MapTool) => { if (tool === 'pen' && penRef.current) return; setPen(null); setHover(null); map.setTool(tool); };
 
   // The Details panel or the Sound & MIDI panel; the meters run only while the second is open.
-  const [inspectorTab, setInspectorTab] = useState<'details' | 'react'>('details');
-  useEffect(() => { map.setReactivityPanel(inspectorTab === 'react'); }, [inspectorTab]);
 
   // Shortcuts work from anywhere in Map, unless the key press belongs to a text box.
   const onKeyDown = (e: globalThis.KeyboardEvent) => {
@@ -750,19 +747,9 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
           {TOOLS.map(t => <button key={t.tool} className="text-button" aria-pressed={map.tool === t.tool} title={`${t.title} · ${t.key}`} onClick={() => chooseTool(t.tool)}>{t.label}</button>)}
           <button className="text-button map-photo-button" disabled={!map.loaded} title="A photograph of the room or object you are mapping, to trace over. Only on this screen: it never reaches the projector. You can also drop a picture on the stage." onClick={() => photoInput.current?.click()}>{map.show.photo ? 'Room photo ✓' : 'Room photo…'}</button>
           <span className="muted-text map-tool-hint">{map.tool === 'select' ? 'Alt-drag copies · double-click a side to add a point' : map.tool === 'pen' ? 'Alt on the first click inside the selected shape cuts a hole' : 'Alt-drag inside the selected shape cuts a hole'}</span>
-        </div>
-        <main className="map-stage" tabIndex={0} aria-label="Stage area" style={{ cursor: map.tool === 'select' && !cornersMode ? 'default' : 'crosshair', touchAction: 'none' }}
-          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} onLostPointerCapture={e => { if (drag.current) finishDrag(e, false); }} onPointerLeave={() => setHover(null)}
-          onDragOver={e => { if ([...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); }}
-          onDrop={e => { e.preventDefault(); const file = [...e.dataTransfer.files].find(f => /^image\/(jpeg|png)$/.test(f.type)); if (file) void choosePhoto(file); else setInspectorNote('Drop a JPEG or PNG photo of the room.'); }}><canvas ref={canvas} aria-label="Stage" data-wall={map.outputOpen && map.wallPicture ? 'picture' : 'local'}
-          onDoubleClick={onDoubleClick} onContextMenu={onStageMenu} width={STAGE_SIZE.width} height={STAGE_SIZE.height} />
-          <canvas ref={handles} className="map-handles" aria-hidden="true" /></main>
-        <div className="map-stage-bar">
+          <span className="map-bar-gap" />
           <label className="map-check" title="Points join other shapes' points and sides, and the stage's edges and centre. Corners on the same spot move together. Hold Ctrl to switch it off for a moment.">
             <input type="checkbox" aria-label="Snap" checked={map.snap} onChange={e => map.setSnap(e.target.checked)} />Snap</label>
-          <span className="map-bar-gap" />
-          <span className="muted-text">Room photo (this screen only)</span>
-          <button className="text-button" disabled={!map.loaded} title="A photograph of the scene to trace over. It never reaches the projector." onClick={() => photoInput.current?.click()}>{map.show.photo ? 'Change…' : 'Choose…'}</button>
           <input ref={photoInput} type="file" accept="image/jpeg,image/png" hidden aria-label="Photo file" onChange={e => { void choosePhoto(e.target.files?.[0]); e.target.value = ''; }} />
           {map.show.photo && <>
             <label className="map-check"><input type="checkbox" aria-label="Show photo" checked={map.photoShown} onChange={e => map.setPhotoShown(e.target.checked)} />Shown</label>
@@ -771,16 +758,16 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
             <button className="text-button" onClick={() => map.dispatch({ type: 'setPhoto', photo: null })}>Remove photo</button>
           </>}
         </div>
-        <MapScenes map={map} />
+        <main className="map-stage" tabIndex={0} aria-label="Stage area" style={{ cursor: map.tool === 'select' && !cornersMode ? 'default' : 'crosshair', touchAction: 'none' }}
+          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} onLostPointerCapture={e => { if (drag.current) finishDrag(e, false); }} onPointerLeave={() => setHover(null)}
+          onDragOver={e => { if ([...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); }}
+          onDrop={e => { e.preventDefault(); const file = [...e.dataTransfer.files].find(f => /^image\/(jpeg|png)$/.test(f.type)); if (file) void choosePhoto(file); else setInspectorNote('Drop a JPEG or PNG photo of the room.'); }}><canvas ref={canvas} aria-label="Stage" data-wall={map.outputOpen && map.wallPicture ? 'picture' : 'local'}
+          onDoubleClick={onDoubleClick} onContextMenu={onStageMenu} width={STAGE_SIZE.width} height={STAGE_SIZE.height} />
+          <canvas ref={handles} className="map-handles" aria-hidden="true" /></main>
+        <MapSoundStrip map={map} />
       </div>
-      <aside className="live-column map-inspector" aria-label={inspectorTab === 'details' ? 'Details' : 'Sound and MIDI'}>
-        <div className="map-inspector-tabs" role="tablist">
-          <button role="tab" aria-selected={inspectorTab === 'details'} onClick={() => setInspectorTab('details')}>Details</button>
-          <button role="tab" aria-selected={inspectorTab === 'react'} onClick={() => setInspectorTab('react')}>Sound &amp; MIDI{map.show.links.length + map.show.triggers.length ? <small> {map.show.links.length + map.show.triggers.length}</small> : null}</button>
-        </div>
-        {inspectorTab === 'details'
-          ? <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges}  liveStatus={localLive} />
-          : <MapReactivity map={map} />}
+      <aside className="live-column map-inspector" aria-label="Details">
+        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} liveStatus={localLive} />
       </aside>
     </div>
     <footer className="map-status" role="status">{status}</footer>

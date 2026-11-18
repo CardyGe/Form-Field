@@ -37,7 +37,7 @@ function Meter({ label, value }: { label: string; value: number }) {
 }
 
 /** The sound input, MIDI and tempo, with meters. With no engine yet, a single button starts it. */
-export function ReactDevices({ engine, meter, onStart }: { engine: ReactivityEngine | null; meter: MeterStore; onStart: () => void }) {
+export function ReactDevices({ engine, meter, onStart, layout = 'column' }: { engine: ReactivityEngine | null; meter: MeterStore; onStart: () => void; layout?: 'column' | 'strip' }) {
   useEngine(engine);
   // Only this part re-renders with the meters.
   const signals: Signals = useSyncExternalStore(meter.subscribe, meter.get);
@@ -50,13 +50,13 @@ export function ReactDevices({ engine, meter, onStart }: { engine: ReactivityEng
     const off = engine.onChange(refresh);
     return () => { navigator.mediaDevices?.removeEventListener?.('devicechange', refresh); off(); };
   }, [engine]);
-  if (!engine) return <div className="react-devices"><p className="muted-text">Sound and MIDI are off until something uses them.</p>
+  if (!engine) return <div className={`react-devices ${layout}`}><p className="muted-text">Sound and MIDI are off until something uses them.</p>
     <button className="text-button" onClick={onStart}>Turn on sound and MIDI</button></div>;
   const p = engine.prefs, midi = engine.midi.status;
   const audioOk = engine.audio.status.state === 'on' || engine.audio.status.state === 'off' || engine.audio.status.state === 'starting';
   const beat = Math.floor(signals['tempo.beat'] ?? 0) % 4, bpm = signals['tempo.bpm'] ?? p.bpm;
   const midiActive = performance.now() - engine.midi.lastMessage < 250;
-  return <div className="react-devices">
+  return <div className={`react-devices ${layout}`}>
     <label className="map-field">Sound input<select aria-label="Sound input" value={p.audioDevice ?? ''} onChange={e => engine.setPrefs({ audioDevice: e.target.value || null })}>
       <option value="">Off</option>
       {inputs.map(i => <option key={i.id} value={i.id}>{i.label}</option>)}

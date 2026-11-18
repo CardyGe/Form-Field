@@ -1,13 +1,13 @@
 /**
- * Map's Sound & MIDI panel: the devices and tempo, every link in the show, and the triggers that switch scenes, vary
- * instruments, black out, freeze or tap the tempo.
+ * Map's Show popover (from the sound strip): the triggers that switch scenes, vary effects, black out, freeze or tap
+ * the tempo, and the reactions only a scene not on screen uses (every other reaction is in its shape's Sound tab).
  */
 import { useMemo } from 'react';
 import type { useMap } from './useMap';
-import { InputSelect, LinkRow, ReactDevices, linkFor } from './ReactControls';
+import { InputSelect, LinkRow } from './ReactControls';
 import { newItemId } from './mapActions';
-import { targetOptions, targetRange } from '../map/targets';
-import { MAX_LINKS, MAX_TRIGGERS } from '../map/show';
+import { offScreenLinks, targetOptions, targetRange } from '../map/targets';
+import { MAX_TRIGGERS } from '../map/show';
 import type { Trigger, TriggerAction } from '../react/links';
 
 type Map = ReturnType<typeof useMap>;
@@ -24,29 +24,23 @@ export default function MapReactivity({ map }: { map: Map }) {
   const show = map.show, engine = map.engine;
   // Remade only when the show changes.
   const targets = useMemo(() => targetOptions(show), [show]);
-  const addLink = () => {
-    const target = map.selectedId ? `shape.${map.selectedId}.brightness` : targets[0]?.target;
-    if (!target) return;
-    map.startEngine();
-    map.dispatch({ type: 'addLink', link: linkFor(newItemId('link'), 'audio.bass', target, '') });
-  };
   const addTrigger = () => {
     map.startEngine();
     const trigger: Trigger = { id: newItemId('trigger'), input: 'tempo.beat', when: 'beats', every: 16, action: { kind: 'next-scene' }, on: true };
     map.dispatch({ type: 'addTrigger', trigger });
   };
+  const offScreen = offScreenLinks(show);
   return <div className="react-panel">
-    <ReactDevices engine={engine} meter={map.signals} onStart={map.startEngine} />
-
-    <div className="map-list-head"><h3>Links <span className="muted-text">{show.links.length || ''}</span></h3>
-      <button className="text-button" disabled={!targets.length || show.links.length >= MAX_LINKS} title="Make a setting move with sound or MIDI" onClick={addLink}>+ Link</button></div>
-    {!show.links.length && <p className="muted-text">Nothing reacts yet. Use ∿ beside a slider in Details, a reaction in Details › Reacts, or + Link.</p>}
-    {show.links.map(link => <LinkRow key={link.id} link={link} engine={engine} targets={targets} targetLabel={targetRange(show, link.target)?.label ?? 'Missing'}
-      onChange={change => map.dispatch({ type: 'updateLink', linkId: link.id, change })} onRemove={() => map.dispatch({ type: 'removeLink', linkId: link.id })} />)}
-
     <div className="map-list-head"><h3>Triggers <span className="muted-text">{show.triggers.length || ''}</span></h3>
       <button className="text-button" disabled={show.triggers.length >= MAX_TRIGGERS} title="Do something on a note, a control, the beat, or every few beats" onClick={addTrigger}>+ Trigger</button></div>
     {show.triggers.map(t => <TriggerRow key={t.id} trigger={t} map={map} />)}
+    {!show.triggers.length && <p className="muted-text">A trigger switches scenes, varies an effect, blacks out, freezes or taps the tempo on a note, a control or every few beats.</p>}
+    {offScreen.length > 0 && <>
+      <div className="map-list-head"><h3>Reactions in other scenes <span className="muted-text">{offScreen.length}</span></h3></div>
+      <p className="muted-text">On effects only a scene that is not on screen plays.</p>
+      {offScreen.map(link => <LinkRow key={link.id} link={link} engine={engine} targets={targets} targetLabel={targetRange(show, link.target)?.label ?? 'Missing'}
+        onChange={change => map.dispatch({ type: 'updateLink', linkId: link.id, change })} onRemove={() => map.dispatch({ type: 'removeLink', linkId: link.id })} />)}
+    </>}
   </div>;
 }
 
