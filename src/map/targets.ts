@@ -84,3 +84,19 @@ export function reactionLinks(show: Pick<ShowDocument, 'shapes' | 'sources'>, re
   }
   return [{ id: ids[0], input: r.link.input, target, mode: 'modulate', amount: r.link.amount, low: 0, high: 1, attackMs: r.link.attackMs, releaseMs: r.link.releaseMs, on: true, name: r.label }];
 }
+
+/** Every target in the show, for the links list: each shape's settings, then each instrument's speed and settings. */
+export function targetOptions(show: Pick<ShowDocument, 'shapes' | 'sources'>): { target: string; label: string }[] {
+  const out: { target: string; label: string }[] = [];
+  for (const shape of show.shapes) for (const prop of Object.keys(SHAPE_PROPS)) out.push({ target: `shape.${shape.id}.${prop}`, label: `${shape.name} · ${SHAPE_PROPS[prop as ShapeProp]}` });
+  for (const source of show.sources) {
+    out.push({ target: `source.${source.id}.speed`, label: `${source.project.name} · Speed` });
+    source.project.layers.forEach((layer, i) => {
+      for (const d of readParameterDefinitions(layer.kind)) {
+        if (typeof layer.params[d.key] !== 'number' || !(d.max > d.min) || d.key === 'seed' || d.preparation) continue;
+        out.push({ target: `source.${source.id}.param.${i}.${d.key}`, label: `${source.project.name}${source.project.layers.length > 1 ? ` (layer ${i + 1})` : ''} · ${d.label}` });
+      }
+    });
+  }
+  return out;
+}

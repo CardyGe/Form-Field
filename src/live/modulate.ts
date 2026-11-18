@@ -56,3 +56,8 @@ export function liveReactionLinks(settings: LiveSettings, reaction: LiveReaction
   const target = liveTargetRange(preferred) ? preferred : `live.${section}.${controls(section)[0].key}`;
   return [{ id: ids[0], input: r.input, target, mode: 'modulate', amount: r.amount, low: 0, high: 1, attackMs: r.attackMs, releaseMs: r.releaseMs, on: true, name: r.label }];
 }
+
+/** The targets for the links list: the look on screen's sliders, then sensitivity. */
+export function liveTargetOptions(look: LiveSettings['look']): { target: string; label: string }[] {
+  return [...controls(look as Section).map(c => ({ target: `live.${look}.${c.key}`, label: `${LABELS[look as Section]} · ${c.label}` })), { target: 'live.sensitivity', label: 'Sensitivity' }];
+}

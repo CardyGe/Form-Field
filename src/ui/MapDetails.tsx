@@ -9,6 +9,11 @@ import { shouldCommit } from '../map/keys';
 import type { Shape } from '../map/show';
 import { BORDER_MAX, BRIGHTNESS_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, ZOOM_RANGE, isShapeLocked, type Placement, type PlacementKind } from '../map/show';
 import { ownCornersPinnable } from '../map/placement';
+import { REACTIONS, reactionLinks, targetRange, type Reaction } from '../map/targets';
+import { TEMPO_SYNC_BEATS } from '../map/show';
+import { ReactTo, linkFor } from './ReactControls';
+import { newItemId } from './mapActions';
+import { signalLabel } from '../react/signals';
 import { PRESETS } from '../core/project';
 import { KIND_LABELS } from '../core/library';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, POUR, SOLAR } from '../core/palettes';
@@ -43,13 +48,44 @@ export function CommitField({ label, value, onCommit, narrow, maxLength, disable
 }
 
 /** A slider that shows its value while it moves and commits once, when let go: one undo step per change. */
-function SliderField({ label, value, min, max, step, unit, disabled, onCommit, format }: { label: string; value: number; min: number; max: number; step: number; unit?: string; disabled?: boolean; onCommit: (value: number) => void; format?: (v: number) => string }) {
+function SliderField({ label, value, min, max, step, unit, disabled, onCommit, format, react }: { label: string; value: number; min: number; max: number; step: number; unit?: string; disabled?: boolean; onCommit: (value: number) => void; format?: (v: number) => string; react?: { map: Map; target: string } }) {
   const [draft, setDraft] = useState<number | null>(null);
   const commit = () => { if (draft !== null && draft !== value) onCommit(draft); setDraft(null); };
   const shown = draft ?? value;
-  return <label className="map-field">{label} · {format ? format(shown) : `${Math.round(shown)}${unit ?? ''}`}
+  const field = <label className="map-field">{label} · {format ? format(shown) : `${Math.round(shown)}${unit ?? ''}`}
     <input aria-label={label} type="range" min={min} max={max} step={step} value={shown} disabled={disabled}
       onChange={e => setDraft(Number(e.target.value))} onPointerUp={commit} onKeyUp={commit} onBlur={commit} /></label>;
+  return react ? <div className="map-react-field">{field}<ReactButton map={react.map} target={react.target} label={label} /></div> : field;
+}
+
+/** ∿ beside a slider: make that setting react to sound or MIDI, or stop it reacting. */
+function ReactButton({ map, target, label }: { map: Map; target: string; label: string }) {
+  const links = map.show.links.filter(l => l.target === target);
+  return <ReactTo label={label} linked={links.length} engine={map.engine} onStart={map.startEngine}
+    onAdd={input => map.dispatch({ type: 'addLink', link: linkFor(newItemId('link'), input, target, '') })}
+    onStop={() => { for (const l of links) map.dispatch({ type: 'removeLink', linkId: l.id }); }} />;
+}
+
+/** What makes this shape (and its instrument) move with sound and MIDI: the ready-made reactions, and its links. */
+function ReactsSection({ map, shape, setNote }: { map: Map; shape: Shape; setNote: (text: string | null) => void }) {
+  const mine = map.show.links.filter(l => l.target.startsWith(`shape.${shape.id}.`) || (shape.sourceId !== null && l.target.startsWith(`source.${shape.sourceId}.`)));
+  const add = (reaction: Reaction) => {
+    const links = reactionLinks(map.show, reaction, shape.id, [newItemId('link')]);
+    if (typeof links === 'string') { setNote(links === 'needs-instrument' ? 'This reaction needs the shape to play an instrument with a motion setting' : 'That shape is gone'); return; }
+    setNote(null);
+    map.startEngine();
+    map.dispatch({ type: 'addReaction', reaction, shapeId: shape.id, ids: links.map(l => l.id) });
+  };
+  return <Section id="reacts" title="Reacts" summary={mine.length ? `${mine.length} ${mine.length === 1 ? 'link' : 'links'}` : 'no'}>
+    <label className="map-field">Add a reaction<select aria-label="Add a reaction" value="" onChange={e => { if (e.target.value) add(e.target.value as Reaction); }}>
+      <option value="">Choose…</option>
+      {(Object.keys(REACTIONS) as Reaction[]).map(r => <option key={r} value={r} disabled={r === 'instrument-bass' && !shape.sourceId}>{REACTIONS[r].label}</option>)}
+    </select></label>
+    {mine.map(l => <div key={l.id} className="map-react-line">
+      <span>{l.name || signalLabel(l.input)} → {targetRange(map.show, l.target)?.label.split(' · ').slice(1).join(' · ') ?? '?'}</span>
+      <button className="map-icon" aria-label="Remove reaction" title="Remove" onClick={() => map.dispatch({ type: 'removeLink', linkId: l.id })}>×</button></div>)}
+    {mine.length > 0 && <p className="muted-text">Fine-tune these in Sound &amp; MIDI.</p>}
+  </Section>;
 }
 
 /** The Details panel: the selected shape's name, colour, what it plays, its edge, shape tools and its chosen point. */
@@ -155,10 +191,10 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
       {place.kind === 'pin' && <p className="muted-text">{shape.placement.pin && !ownCornersPinnable(shape) ? 'Drag the four diamond handles on the stage onto the surface’s corners.' : 'The picture is laid on this shape’s four corners in perspective: drag the corners onto the surface’s corners.'}</p>}
       {place.kind === 'across-group' && !group && <p className="muted-text">This shape is in no group, so its picture spreads over the whole stage.</p>}
       {place.kind !== 'pin' && <>
-        <SliderField key={`zoom-${shape.id}`} label="Zoom" value={place.zoom} min={ZOOM_RANGE.min} max={ZOOM_RANGE.max} step={0.01} disabled={locked} format={pct} onCommit={zoom => setPlacement({ zoom })} />
-        <SliderField key={`movex-${shape.id}`} label="Move across" value={place.offset.x * STAGE_SIZE.width} min={-STAGE_SIZE.width / 2} max={STAGE_SIZE.width / 2} step={1} unit=" px" disabled={locked} onCommit={x => setPlacement({ offset: { x: x / STAGE_SIZE.width, y: place.offset.y } })} />
-        <SliderField key={`movey-${shape.id}`} label="Move up and down" value={place.offset.y * STAGE_SIZE.height} min={-STAGE_SIZE.height / 2} max={STAGE_SIZE.height / 2} step={1} unit=" px" disabled={locked} onCommit={y => setPlacement({ offset: { x: place.offset.x, y: y / STAGE_SIZE.height } })} />
-        <SliderField key={`turn-${shape.id}`} label="Turn" value={place.turn} min={-180} max={180} step={1} unit="°" disabled={locked} onCommit={turn => setPlacement({ turn })} />
+        <SliderField key={`zoom-${shape.id}`} label="Zoom" value={place.zoom} min={ZOOM_RANGE.min} max={ZOOM_RANGE.max} step={0.01} disabled={locked} format={pct} onCommit={zoom => setPlacement({ zoom })} react={{ map, target: `shape.${shape.id}.zoom` }} />
+        <SliderField key={`movex-${shape.id}`} label="Move across" value={place.offset.x * STAGE_SIZE.width} min={-STAGE_SIZE.width / 2} max={STAGE_SIZE.width / 2} step={1} unit=" px" disabled={locked} onCommit={x => setPlacement({ offset: { x: x / STAGE_SIZE.width, y: place.offset.y } })} react={{ map, target: `shape.${shape.id}.movex` }} />
+        <SliderField key={`movey-${shape.id}`} label="Move up and down" value={place.offset.y * STAGE_SIZE.height} min={-STAGE_SIZE.height / 2} max={STAGE_SIZE.height / 2} step={1} unit=" px" disabled={locked} onCommit={y => setPlacement({ offset: { x: place.offset.x, y: y / STAGE_SIZE.height } })} react={{ map, target: `shape.${shape.id}.movey` }} />
+        <SliderField key={`turn-${shape.id}`} label="Turn" value={place.turn} min={-180} max={180} step={1} unit="°" disabled={locked} onCommit={turn => setPlacement({ turn })} react={{ map, target: `shape.${shape.id}.turn` }} />
       </>}
       <div className="map-toggles">
         {place.kind !== 'pin' && <button className="text-button" disabled={locked || (place.zoom === 1 && place.turn === 0 && place.offset.x === 0 && place.offset.y === 0)} onClick={() => setPlacement({ zoom: 1, turn: 0, offset: { x: 0, y: 0 } })}>Reset picture</button>}
@@ -167,12 +203,14 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
     </Section>}
 
     {!shape.blocker && <Section id="look" title="Look" summary={<>{pct(shape.brightness)} {shape.tint !== '#ffffff' && <i className="map-dot" style={{ background: shape.tint }} />}</>}>
-      <SliderField key={`bright-${shape.id}`} label="Brightness" value={shape.brightness} min={0} max={BRIGHTNESS_MAX} step={0.01} disabled={locked} format={pct} onCommit={brightness => map.dispatch({ type: 'setLook', shapeId: shape.id, brightness })} />
+      <SliderField key={`bright-${shape.id}`} label="Brightness" value={shape.brightness} min={0} max={BRIGHTNESS_MAX} step={0.01} disabled={locked} format={pct} onCommit={brightness => map.dispatch({ type: 'setLook', shapeId: shape.id, brightness })} react={{ map, target: `shape.${shape.id}.brightness` }} />
       <div className="map-field">Tint<div className="map-tints" role="group" aria-label="Tint">{TINTS.map(([name, colour]) =>
         <button key={colour} type="button" className="map-tint" aria-pressed={shape.tint === colour} aria-label={`Tint ${name}`} title={name} disabled={locked} style={{ background: colour }}
           onClick={() => map.dispatch({ type: 'setLook', shapeId: shape.id, tint: colour })} />)}
         <label className="map-tint custom" title="Any tint"><input type="color" aria-label="Tint colour" value={shape.tint} disabled={locked} onChange={e => map.dispatch({ type: 'setLook', shapeId: shape.id, tint: e.target.value.toLowerCase() })} /></label></div></div>
     </Section>}
+
+    {!shape.blocker && <ReactsSection map={map} shape={shape} setNote={setNote} />}
 
     <Section id="edge" title="Edge" summary={edgeSummary}>
       <SliderField key={`soft-${shape.id}`} label="Soft edge" value={shape.softEdge} min={0} max={SOFT_EDGE_MAX} step={1} unit=" px" disabled={locked} onCommit={px => map.dispatch({ type: 'setSoftEdge', shapeId: shape.id, px })} />
@@ -249,8 +287,11 @@ function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, 
           <option value="" disabled>As made</option>
           {PALETTES.map(([name]) => <option key={name} value={name}>{name}</option>)}
         </select></label>
-        <SliderField key={`speed-${source.id}`} label="Speed" value={source.speed} min={SPEED_RANGE.min} max={SPEED_RANGE.max} step={0.05} disabled={locked} format={v => `${v.toFixed(2)}×`}
-          onCommit={speed => map.dispatch({ type: 'setSourceSpeed', sourceId: source.id, speed })} />
+        <SliderField key={`speed-${source.id}`} label="Speed" value={source.speed} min={SPEED_RANGE.min} max={SPEED_RANGE.max} step={0.05} disabled={locked || source.tempoSync !== null} format={v => `${v.toFixed(2)}×`}
+          onCommit={speed => map.dispatch({ type: 'setSourceSpeed', sourceId: source.id, speed })} react={{ map, target: `source.${source.id}.speed` }} />
+        <label className="map-field">Loop with the tempo<select aria-label="Loop with the tempo" value={source.tempoSync ?? ''} disabled={locked} title="Off: the instrument runs at its own speed. A number: one loop of it every that many beats of the tempo."
+          onChange={e => { map.startEngine(); map.dispatch({ type: 'setTempoSync', sourceId: source.id, beats: e.target.value ? Number(e.target.value) : null }); }}>
+          <option value="">Off</option>{TEMPO_SYNC_BEATS.map(n => <option key={n} value={n}>Every {n} {n === 1 ? 'beat' : 'beats'}</option>)}</select></label>
         {sharers.length > 1 && !whole && <button className="text-button" disabled={locked} title="Unlink: give this shape its own copy of the instrument, to change on its own" onClick={() => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() })}>Make separate</button>}
       </>}
       {!shape.blocker && !whole && playing.length > 0 && <label className="map-field">Share with<select aria-label="Share with" value="" disabled={locked}

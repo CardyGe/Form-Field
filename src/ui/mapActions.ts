@@ -9,6 +9,7 @@ const stamp = () => `${Date.now().toString(36)}-${Math.random().toString(36).sli
 export const newId = () => `shape-${stamp()}`;
 export const newSourceId = () => `source-${stamp()}`;
 export const newGroupId = () => `group-${stamp()}`;
+export const newItemId = (kind: 'link' | 'trigger' | 'scene') => `${kind}-${stamp()}`;
 export const randomSeed = () => Math.floor(Math.random() * 1e6);
 const several = (n: number, make: () => string) => Array.from({ length: n }, make);
 

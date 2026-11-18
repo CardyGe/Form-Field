@@ -152,3 +152,48 @@
 .map-row-name { min-width: 48px; }
 .map-row-plays { max-width: 74px; }
 .map-row-count { color: var(--muted); font-weight: 400; font-size: 10px; }
+
+/* Stage 5: scenes, and sound and MIDI. */
+.map-scenes { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 8px; border-top: 1px solid var(--line); font-size: 11px; }
+.map-scene { display: inline-flex; align-items: center; gap: 5px; }
+.map-scene[aria-pressed="true"] { background: var(--raised); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.map-scene kbd { font: inherit; font-size: 10px; color: var(--muted); }
+.map-scene-name { width: 110px; }
+.map-inspector-tabs { display: flex; gap: 2px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.map-inspector-tabs button { flex: 1; padding: 6px 4px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.map-inspector-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.map-inspector-tabs small { color: var(--accent); font-weight: 400; }
+.map-react-field, .live-react-field { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 4px; }
+.react-to { position: relative; }
+.react-to summary { list-style: none; display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border-radius: 4px; color: var(--muted); cursor: pointer; font-size: 13px; user-select: none; }
+.react-to summary::-webkit-details-marker { display: none; }
+.react-to summary:hover { color: var(--ink); background: rgba(255,255,255,0.06); }
+.react-to.on summary { color: var(--accent); }
+.react-to-menu { position: absolute; right: 0; top: 24px; z-index: 30; display: grid; min-width: 150px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 6px 24px rgba(0,0,0,.45); }
+.react-to-menu .text-button { justify-content: flex-start; text-align: left; }
+.react-panel { display: grid; gap: 8px; }
+.react-devices { display: grid; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.react-status { margin: 0; font-size: 11px; color: var(--muted); }
+.react-status.warn { color: #f0b060; }
+.react-meters { display: grid; gap: 3px; }
+.react-meter { display: grid; grid-template-columns: 38px 1fr; align-items: center; gap: 6px; font-size: 10px; color: var(--muted); }
+.react-meter i { display: block; height: 6px; border-radius: 3px; background: var(--accent); transform-origin: left; transition: transform 60ms linear; }
+.react-light { display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; background: var(--line); }
+.react-light.on { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.react-tempo { display: flex; align-items: end; gap: 6px; flex-wrap: wrap; }
+.react-bpm { font-size: 12px; font-variant-numeric: tabular-nums; padding-bottom: 4px; }
+.react-beats { display: inline-flex; gap: 4px; padding-bottom: 7px; }
+.react-beats i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.react-beats i.on { background: var(--accent); }
+.react-input { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 4px; }
+.react-link, .react-trigger { border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+.react-link summary { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px; list-style: none; cursor: pointer; font-size: 11px; }
+.react-link summary::-webkit-details-marker { display: none; }
+.react-link-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.react-link-body { display: grid; gap: 4px; padding-top: 6px; }
+.react-trigger { display: grid; gap: 4px; }
+.react-trigger-head { display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 6px; }
+.map-react-line { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; }
+.live-react { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 8px; }
+.live-react > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.live-react .react-to-menu { right: 0; }

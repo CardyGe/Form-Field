@@ -11,7 +11,7 @@ export function shouldCommit(startText: string, draft: string): boolean {
 }
 
 export type Shortcut = 'undo' | 'redo' | 'delete' | 'duplicate' | 'select' | 'rectangle' | 'triangle' | 'ellipse' | 'pen' | 'close'
-  | 'select-all' | 'group' | 'ungroup' | 'deselect' | 'arrow' | 'next-corner' | 'previous-corner';
+  | 'select-all' | 'group' | 'ungroup' | 'deselect' | 'arrow' | 'next-corner' | 'previous-corner' | 'scene' | 'tap';
 
 /**
  * What a key press asks the Map screen to do, or null when it asks nothing or belongs to a text box.
@@ -35,6 +35,9 @@ export function shortcutFor(e: { key: string; metaKey: boolean; ctrlKey: boolean
   if (key === 't') return 'triangle';
   if (key === 'e') return 'ellipse';
   if (key === 'p') return 'pen';
+  // Stage 5: 1 to 9 switch to that scene; B taps the tempo (T is the triangle).
+  if (/^[1-9]$/.test(e.key)) return 'scene';
+  if (key === 'b') return 'tap';
   // Enter closes a Pen outline, only from the stage: on a button it presses the button.
   if (e.key === 'Enter') return e.onStage ? 'close' : null;
   if (e.key === 'Escape') return 'deselect';

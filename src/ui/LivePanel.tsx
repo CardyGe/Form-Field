@@ -1,4 +1,7 @@
-import { useRef, type ReactNode } from 'react';
+import { useRef, type ComponentProps, type ReactNode } from 'react';
+import { LinkRow, ReactDevices, ReactTo, linkFor } from './ReactControls';
+import { LIVE_REACTIONS, MAX_LIVE_LINKS, liveReactionLinks, liveTargetOptions, liveTargetRange, type LiveReaction } from '../live/modulate';
+import { newItemId } from './mapActions';
 import { useLive } from './useLive';
 import { IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SIGNAL_STARTS, SMOKE_CONTROLS, SMOKE_STARTS, usesPeople, type Box, type LiveSettings, type SignalKey } from '../live/settings';
 import { RELIEF_PALETTES, validateReliefPalette } from '../live/relief-palettes';
@@ -20,9 +23,10 @@ function peopleLine(status: PeopleStatus | null): string {
 }
 const CAMERA_OFF = 'Camera access is off. Allow Form & Field in System Settings › Privacy & Security › Camera, then reopen the app.';
 
-function Slider({ label, value, min, max, step, unit = '', shown, disabled = false, onChange }: { label: string; value: number; min: number; max: number; step: number; unit?: string; shown?: string; disabled?: boolean; onChange: (value: number) => void }) {
-  return <label className="live-control"><span>{label}<output>{shown ?? `${step >= 1 ? value : value.toFixed(2)}${unit}`}</output></span>
+function Slider({ label, value, min, max, step, unit = '', shown, disabled = false, onChange, react }: { label: string; value: number; min: number; max: number; step: number; unit?: string; shown?: string; disabled?: boolean; onChange: (value: number) => void; react?: Omit<ComponentProps<typeof ReactTo>, 'label'> }) {
+  const field = <label className="live-control"><span>{label}<output>{shown ?? `${step >= 1 ? value : value.toFixed(2)}${unit}`}</output></span>
     <input aria-label={label} type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={e => onChange(Number(e.target.value))} /></label>;
+  return react ? <div className="live-react-field">{field}<ReactTo label={label} {...react} /></div> : field;
 }
 
 /** The Live screen. `header` is the app's own mode switch, so both screens share it. */
@@ -57,6 +61,15 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
   const setSmoke = (change: Partial<LiveSettings['smoke']>) => live.update(v => ({ ...v, smoke: { ...v.smoke, ...change } }));
   const setSignal = (change: Partial<LiveSettings['signal']>) => live.update(v => ({ ...v, signal: { ...v.signal, ...change } }));
   const setPeople = (change: Partial<LiveSettings['people']>) => live.update(v => ({ ...v, people: { ...v.people, ...change } }));
+  // Sound and MIDI: links live in the settings, so they are saved with them and reach the artwork window.
+  const setLinks = (change: (links: LiveSettings['links']) => LiveSettings['links']) => live.update(v => ({ ...v, links: change(v.links) }));
+  const reactFor = (target: string) => {
+    const linked = s.links.filter(l => l.target === target);
+    return { linked: linked.length, engine: live.engine, onStart: live.startEngine,
+      onAdd: (input: string) => setLinks(links => links.length >= MAX_LIVE_LINKS ? links : [...links, linkFor(newItemId('link'), input, target, '')]),
+      onStop: () => setLinks(links => links.filter(l => l.target !== target)) };
+  };
+  const addReaction = (reaction: LiveReaction) => { live.startEngine(); setLinks(links => links.length >= MAX_LIVE_LINKS ? links : [...links, ...liveReactionLinks(s, reaction, [newItemId('link')])]); };
 
   return <section className="live-shell" role="region" aria-label="Live">
     <header className="app-header">{header}<div className="live-actions">
@@ -86,7 +99,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         <p className={`live-status ${refused || ['none', 'lost', 'error'].includes(state.status) ? 'warn' : ''}`} role="status">{status}</p>
         {(state.status === 'lost' || state.status === 'none') && <button className="secondary-button live-wide" onClick={live.retry}>Try the camera again</button>}
         <label className="live-check"><input aria-label="Mirror" type="checkbox" checked={s.mirror} onChange={e => set({ mirror: e.target.checked })} />Mirror<small>On when the camera faces the people</small></label>
-        <Slider label="Sensitivity" value={s.sensitivity} min={SENSITIVITY.min} max={SENSITIVITY.max} step={.05} onChange={sensitivity => set({ sensitivity })} />
+        <Slider label="Sensitivity" value={s.sensitivity} min={SENSITIVITY.min} max={SENSITIVITY.max} step={.05} onChange={sensitivity => set({ sensitivity })} react={reactFor('live.sensitivity')} />
         <Slider label="Camera noise floor" value={s.noiseFloor} min={NOISE_FLOOR.min} max={NOISE_FLOOR.max} step={.005} onChange={noiseFloor => set({ noiseFloor })} />
         <h3>Interaction area</h3>
         <Slider label="Area left" value={s.box.left} min={0} max={1} step={.01} onChange={v => setBox('left', v)} />
@@ -109,6 +122,15 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
           {roomMissing && <p className="live-status warn">Capture the empty room again</p>}
         </section>}
         <label className="stacked-label">Output quality<select aria-label="Output quality" value={s.quality} onChange={e => set({ quality: Number(e.target.value) === 720 ? 720 : 1080 })}><option value={1080}>1920 × 1080</option><option value={720}>1280 × 720 · lighter</option></select></label>
+        <details className="live-react" open={live.reactivityPanel} onToggle={e => live.setReactivityPanel(e.currentTarget.open)}>
+          <summary>Sound &amp; MIDI{s.links.length ? <small> · {s.links.length} {s.links.length === 1 ? 'link' : 'links'}</small> : null}</summary>
+          <ReactDevices engine={live.engine} signals={live.signals} onStart={live.startEngine} />
+          <div className="live-starts" role="group" aria-label="Reactions">{(Object.keys(LIVE_REACTIONS) as LiveReaction[]).map(r =>
+            <button key={r} className="text-button" title={`Adds a link for ${LOOK_LABELS[s.look]}; adjust it below`} onClick={() => addReaction(r)}>{LIVE_REACTIONS[r].label}</button>)}</div>
+          {s.links.map(link => <LinkRow key={link.id} link={link} engine={live.engine} targets={liveTargetOptions(s.look)} targetLabel={liveTargetRange(link.target)?.label ?? 'Missing'}
+            onChange={change => setLinks(links => links.map(l => l.id === link.id ? { ...l, ...change } : l))} onRemove={() => setLinks(links => links.filter(l => l.id !== link.id))} />)}
+          {!s.links.length && <p className="live-note">Nothing reacts yet. Use ∿ beside a slider, or a reaction above.</p>}
+        </details>
       </aside>
       <div className="live-stage">
         {live.outputOpen ? (live.preview ? <img alt="Output preview" src={live.preview} /> : <p className="live-status">Waiting for the output…</p>)
@@ -147,7 +169,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
             {RELIEF_PALETTES[s.reliefPalette].colours.map((colour, i) => <i key={i} style={{ background: colour }} />)}
           </div>}
           {RELIEF_CONTROLS.map(c => <Slider key={c.key} label={c.label} value={s.relief[c.key]} min={c.min} max={c.max} step={c.step}
-            unit={c.key === 'settle' ? ' s' : c.key === 'lightAngle' ? '°' : ''} onChange={value => setRelief({ [c.key]: value })} />)}
+            unit={c.key === 'settle' ? ' s' : c.key === 'lightAngle' ? '°' : ''} onChange={value => setRelief({ [c.key]: value })} react={reactFor(`live.relief.${c.key}`)} />)}
         </> : signal ? <>
           <p className="live-note">Sweep an arm to leave coloured outlines of earlier poses. Hold still to build light, then move to release it.</p>
           <div className="live-starts" role="group" aria-label="Start from">{SIGNAL_STARTS.map(start =>
@@ -162,13 +184,13 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
               label={c.label} value={s.signal[c.key]} min={c.min} max={c.max} step={c.step}
               unit={c.key === 'poseSpacing' ? ' s' : ''}
               disabled={!s.signal.removeBackground || (c.key !== 'poseEcho' && s.signal.poseEcho === 0)}
-              onChange={value => setSignal({ [c.key]: value })} />)}
+              onChange={value => setSignal({ [c.key]: value })} react={reactFor(`live.signal.${c.key}`)} />)}
           </div>
           {SIGNAL_CONTROLS.filter(c => !POSE_CONTROLS.includes(c.key) && !['maskThreshold', 'maskSoftness', 'focus', 'blockSize', 'mix'].includes(c.key)).map(c => <Slider key={c.key}
             label={c.label} value={s.signal[c.key]} min={c.min} max={c.max} step={c.step}
             unit={['memorySeconds', 'chargeSeconds'].includes(c.key) ? ' s' : ''}
-            onChange={value => setSignal({ [c.key]: value })} />)}
-          <details><summary>Cutout and detail</summary>{SIGNAL_CONTROLS.filter(c => ['maskThreshold','maskSoftness','focus','blockSize','mix'].includes(c.key)).map(c => <Slider key={c.key} label={c.label} value={s.signal[c.key]} min={c.min} max={c.max} step={c.step} onChange={value => setSignal({ [c.key]: value })} />)}</details>
+            onChange={value => setSignal({ [c.key]: value })} react={reactFor(`live.signal.${c.key}`)} />)}
+          <details><summary>Cutout and detail</summary>{SIGNAL_CONTROLS.filter(c => ['maskThreshold','maskSoftness','focus','blockSize','mix'].includes(c.key)).map(c => <Slider key={c.key} label={c.label} value={s.signal[c.key]} min={c.min} max={c.max} step={c.step} onChange={value => setSignal({ [c.key]: value })} react={reactFor(`live.signal.${c.key}`)} />)}</details>
           <label className="live-check"><input aria-label="Hold frame memory" type="checkbox" checked={s.signal.hold} onChange={e => setSignal({ hold: e.target.checked })} />Hold frame memory<small>Stops new frames and poses from being captured. Movement still bends the frame memory.</small></label>
           <p className="live-note">Depth relief uses brightness as a depth map. Depth focus chooses the brightness plane that stays in place.</p>
         </> : smoke ? <>
@@ -179,14 +201,14 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
             <Slider label={c.label} value={s.smoke.lifeSeconds} min={c.min} max={c.max} step={c.step} unit=" s" shown={s.smoke.forever ? 'Forever' : undefined} disabled={s.smoke.forever} onChange={value => setSmoke({ lifeSeconds: value })} />
             <label className="live-check"><input aria-label="Forever" type="checkbox" checked={s.smoke.forever} onChange={e => setSmoke({ forever: e.target.checked })} />Forever
               <small>Smoke never fades and stays in the picture: people move it around. Turn Emit down once it is full; Clear empties it.</small></label>
-          </div> : <Slider key={c.key} label={c.label} value={s.smoke[c.key]} min={c.min} max={c.max} step={c.step} onChange={value => setSmoke({ [c.key]: value })} />)}
+          </div> : <Slider key={c.key} label={c.label} value={s.smoke[c.key]} min={c.min} max={c.max} step={c.step} onChange={value => setSmoke({ [c.key]: value })} react={reactFor(`live.smoke.${c.key}`)} />)}
           <label className="stacked-label">Palette<select aria-label="Palette" value={smokePaletteName} onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) setSmoke({ palette: [...found[1]] }); }}>
             {!smokePaletteName && <option value="">Custom</option>}{PALETTES.map(([name]) => <option key={name}>{name}</option>)}</select></label>
           <div className="live-swatches" title="Darkest to brightest, as people are coloured">{rampHex(s.smoke.palette).map((c, i) => <i key={i} style={{ background: c }} />)}</div>
         </> : <>
           <p className="live-note">Movement lays down paint. Standing still lets it fade.</p>
           {PAINT_CONTROLS.filter(c => c.key !== 'ground').map(c => <Slider key={c.key} label={c.label} value={s.paint[c.key]} min={c.min} max={c.max} step={c.step} unit={c.key === 'fadeSeconds' ? ' s' : ''}
-            onChange={value => live.update(v => ({ ...v, paint: { ...v.paint, [c.key]: value } }))} />)}
+            onChange={value => live.update(v => ({ ...v, paint: { ...v.paint, [c.key]: value } }))} react={reactFor(`live.paint.${c.key}`)} />)}
           <label className="stacked-label">Palette<select aria-label="Palette" value={paletteName} onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) set({ palette: [...found[1]] }); }}>
             {!paletteName && <option value="">Custom</option>}{PALETTES.map(([name]) => <option key={name}>{name}</option>)}</select></label>
           <div className="live-swatches">{s.palette.slice(0, 5).map((c, i) => <i key={i} style={{ background: c }} />)}</div>

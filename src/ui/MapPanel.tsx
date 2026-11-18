@@ -4,6 +4,8 @@ import MapMenu, { type MenuEntry } from './MapMenu';
 import MapShapeList from './MapShapeList';
 import MapIcon from './mapIcons';
 import MapDetails from './MapDetails';
+import MapReactivity from './MapReactivity';
+import MapScenes from './MapScenes';
 import MapLookBrowser from './MapLookBrowser';
 import { PRESETS } from '../core/project';
 import { mapActions, newId, newSourceId } from './mapActions';
@@ -518,6 +520,10 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   /** Changing tool abandons an open Pen outline; choosing the Pen again keeps it. */
   const chooseTool = (tool: MapTool) => { if (tool === 'pen' && penRef.current) return; setPen(null); setHover(null); map.setTool(tool); };
 
+  // The Details panel or the Sound & MIDI panel; the meters run only while the second is open.
+  const [inspectorTab, setInspectorTab] = useState<'details' | 'react'>('details');
+  useEffect(() => { map.setReactivityPanel(inspectorTab === 'react'); }, [inspectorTab]);
+
   // Shortcuts work from anywhere in Map, unless the key press belongs to a text box.
   const onKeyDown = (e: globalThis.KeyboardEvent) => {
     if (menu || looksOpen) return; // the open menu, or the look browser, handles its own keys
@@ -537,6 +543,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     // In Stage corners only the corner keys, Escape, undo and redo act: the shapes cannot be grabbed in this mode.
     if (cornersMode && !['arrow', 'next-corner', 'previous-corner', 'deselect', 'undo', 'redo'].includes(action)) return;
     switch (action) {
+      case 'scene': { const scene = map.show.scenes[Number(e.key) - 1]; if (scene) { e.preventDefault(); map.switchScene(scene.id); } break; }
+      case 'tap': e.preventDefault(); map.startEngine(); map.engine?.tap(); break;
       case 'undo': e.preventDefault(); map.undo(); break;
       case 'redo': e.preventDefault(); map.redo(); break;
       case 'select': case 'rectangle': case 'triangle': case 'ellipse': case 'pen': chooseTool(action); break;
@@ -749,10 +757,16 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
             <button className="text-button" onClick={() => map.dispatch({ type: 'setPhoto', photo: null })}>Remove photo</button>
           </>}
         </div>
+        <MapScenes map={map} />
       </div>
-      <aside className="live-column map-inspector" aria-label="Details">
-        <h2>Details</h2>
-        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} />
+      <aside className="live-column map-inspector" aria-label={inspectorTab === 'details' ? 'Details' : 'Sound and MIDI'}>
+        <div className="map-inspector-tabs" role="tablist">
+          <button role="tab" aria-selected={inspectorTab === 'details'} onClick={() => setInspectorTab('details')}>Details</button>
+          <button role="tab" aria-selected={inspectorTab === 'react'} onClick={() => setInspectorTab('react')}>Sound &amp; MIDI{map.show.links.length + map.show.triggers.length ? <small> {map.show.links.length + map.show.triggers.length}</small> : null}</button>
+        </div>
+        {inspectorTab === 'details'
+          ? <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} />
+          : <MapReactivity map={map} />}
       </aside>
     </div>
     <footer className="map-status" role="status">{status}</footer>
