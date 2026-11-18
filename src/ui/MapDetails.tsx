@@ -10,7 +10,9 @@ import type { Shape } from '../map/show';
 import { BORDER_MAX, BRIGHTNESS_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, ZOOM_RANGE, isShapeLocked, type Placement, type PlacementKind } from '../map/show';
 import { ownCornersPinnable } from '../map/placement';
 import { REACTIONS, reactionLinks, targetRange, type Reaction } from '../map/targets';
-import { TEMPO_SYNC_BEATS } from '../map/show';
+import { LIVE_SOURCE_ID, TEMPO_SYNC_BEATS } from '../map/show';
+import MapLiveCard from './MapLiveCard';
+import { LOOK_LABELS } from '../live/settings';
 import { ReactTo, linkFor } from './ReactControls';
 import { newItemId } from './mapActions';
 import { signalLabel } from '../react/signals';
@@ -168,6 +170,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
       <button className="text-button" disabled={group.locked} title="Dissolve this group; its shapes stay · ⇧⌘G" onClick={() => act.ungroup(group.id)}>Ungroup</button></div>}
 
     <ContentCard map={map} shape={shape} locked={locked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked={linked} setLinked={setLinked} />
+    {shape.sourceId === LIVE_SOURCE_ID && !shape.blocker && <Section id="live" title="Live" summary={map.live ? LOOK_LABELS[map.live.look] : ''}><MapLiveCard map={map} locked={locked} onError={text => setNote(text)} /></Section>}
 
     {point && map.selectedIndex !== null && <div className="map-point">
       <h3>{map.selectedRing >= 0 ? `Hole ${map.selectedRing + 1}, ${isCurved(point) ? 'curve point' : 'corner'}` : isCurved(point) ? 'Curve point' : 'Corner'} {map.selectedIndex + 1}</h3>
@@ -263,16 +266,18 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
  */
 function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, setLinked, whole = false }: { map: Map; shape: Shape; locked: boolean; onOpenLooks: () => void; onEditInStudio?: (sourceId: string, shapeId: string) => void; linked: boolean; setLinked: (on: boolean) => void; whole?: boolean }) {
   const source = shape.sourceId ? map.show.sources.find(s => s.id === shape.sourceId) ?? null : null;
-  const sharers = source ? map.show.shapes.filter(s => s.sourceId === source.id) : [];
+  // Shapes playing the same thing (an instrument, or Live) are one: a new look reaches them all.
+  const sharers = shape.sourceId ? map.show.shapes.filter(s => s.sourceId === shape.sourceId) : [];
+  const isLive = shape.sourceId === LIVE_SOURCE_ID;
   const playing = map.show.shapes.filter(s => s.id !== shape.id && s.sourceId !== null && s.sourceId !== shape.sourceId);
   const presetId = source?.project.layers.length === 1 ? PRESETS.find(p => p.name === source.project.name)?.id : undefined;
   const thumb = presetId ? LookPreviews.known(presetId) ?? kindArt(PRESETS.find(p => p.id === presetId)!.kind) : source ? kindArt(source.project.layers[0]?.kind ?? '') : undefined;
-  const playsName = shape.blocker ? 'Blocker' : source ? source.project.name : shape.fill === 'grid' ? 'Grid pattern' : 'Its colour';
+  const playsName = shape.blocker ? 'Blocker' : isLive ? 'Live' : source ? source.project.name : shape.fill === 'grid' ? 'Grid pattern' : 'Its colour';
   return <div className="map-content-card">
       <div className="map-content-top">
-        <span className={`map-content-thumb ${shape.blocker ? 'blocker' : !source ? (shape.fill === 'grid' ? 'grid' : 'colour') : ''}`} style={{ ['--shape-colour' as string]: shape.colour }}>{thumb && !shape.blocker && <img src={thumb} alt="" />}</span>
+        <span className={`map-content-thumb ${shape.blocker ? 'blocker' : isLive ? 'live' : !source ? (shape.fill === 'grid' ? 'grid' : 'colour') : ''}`} style={{ ['--shape-colour' as string]: shape.colour }}>{thumb && !shape.blocker && <img src={thumb} alt="" />}</span>
         <div className="map-content-name"><strong>{playsName}</strong>
-          {sharers.length > 1 && <small>One instrument across {sharers.length} shapes</small>}</div>
+          {sharers.length > 1 && <small>{isLive ? 'Live' : 'One instrument'} across {sharers.length} shapes</small>}</div>
       </div>
       <div className="map-toggles">
         <button className="text-button" data-opens-looks disabled={locked || shape.blocker} aria-label="Change look" title="Choose what this shape plays" onClick={onOpenLooks}>Change…</button>

@@ -51,9 +51,9 @@ export function mapActions(map: Map) {
       const ids = several(n, newId);
       if (map.dispatch({ type: 'makeGrid', shapeId, rows, cols, gapPx, ids, sourceIds: several(n, newSourceId), groupId: newGroupId(), spread })) map.selectMany(ids);
     },
-    /** What a shape plays: 'grid', 'colour' or 'preset:<id>'. linked: shapes sharing its instrument change with it. */
+    /** What a shape plays: 'grid', 'colour', 'live' or 'preset:<id>'. linked: shapes sharing its instrument change with it. */
     play(shapeId: string, value: string, linked = true) {
-      if (value === 'colour' || value === 'grid') map.dispatch({ type: 'setContent', shapeId, content: { kind: value, linked } });
+      if (value === 'colour' || value === 'grid' || value === 'live') map.dispatch({ type: 'setContent', shapeId, content: { kind: value, linked } });
       else if (value.startsWith('preset:')) map.dispatch({ type: 'setContent', shapeId, content: { kind: 'preset', presetId: value.slice('preset:'.length), sourceId: newSourceId(), seed: randomSeed(), linked } });
     },
     toggleSolo(shapeId: string) {

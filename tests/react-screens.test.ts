@@ -25,3 +25,12 @@ test('the link target list names every shape setting and each instrument’s spe
   assert.ok(opts.some(o => o.target === 'shape.a.opacity'));
   assert.equal(opts.filter(o => o.target.startsWith('shape.a.')).length, 6);
 });
+
+test('the look browser offers Live, beside the shape’s own fills', async () => {
+  const { OWN_LOOKS } = await import('../src/ui/mapLooks');
+  const live = OWN_LOOKS.find(l => l.value === 'live');
+  assert.ok(live, 'a Live tile');
+  assert.equal(live!.group, 'Live');
+  assert.equal(live!.description, 'The Live screen’s look, from the camera');
+  assert.deepEqual(OWN_LOOKS.map(l => l.value), ['grid', 'colour', 'live']);
+});

@@ -17,7 +17,7 @@ import { ellipseRing, hitShape, isCurved, squareBox, triangleRing } from '../map
 import { joinedAnchors, snapMove, snapPoint, type SnapTarget } from '../map/snap';
 import { boxHandles, marqueeSelect, pick, selectionBox, transformFor, type Box, type BoxHandle } from '../map/gestures';
 import { ownCornersPinnable } from '../map/placement';
-import { MAX_NAME_LENGTH, STAGE_SIZE, isShapeLocked, isShapeShown, type CurvePoint, type Point, type ShowDocument } from '../map/show';
+import { LIVE_SOURCE_ID, MAX_NAME_LENGTH, STAGE_SIZE, isShapeLocked, isShapeShown, type CurvePoint, type Point, type ShowDocument } from '../map/show';
 import { MapCompositor } from '../map/compositor';
 import { GOVERNOR_SCALES } from '../map/playout';
 
@@ -639,7 +639,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     const reorder = (to: 'front' | 'back' | 'forward' | 'backward') => () => map.dispatch({ type: 'reorder', shapeId: shape.id, to });
     return [
       { kind: 'item', label: single ? 'Duplicate' : `Duplicate ${ids.length} shapes`, shortcut: '⌘D', onSelect: () => act.duplicate(ids) },
-      ...(single && shape.sourceId ? [
+      ...(single && shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID ? [
         { kind: 'item', label: 'Vary', disabled: locked, onSelect: () => map.dispatch({ type: 'varySource', sourceId: shape.sourceId!, entropy: Math.floor(Math.random() * 1e6) }) } as const,
         ...(onEditInStudio ? [{ kind: 'item', label: 'Edit in Studio', disabled: locked, onSelect: () => onEditInStudio(shape.sourceId!, shape.id) } as const] : []),
       ] : []),
@@ -655,7 +655,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         ...([['fit', 'Fit'], ['pin', 'Pin in perspective'], ['across-group', 'Across group'], ['across-stage', 'Across stage']] as const).map(([kind, label]) =>
           ({ kind: 'item', label, checked: shape.placement.kind === kind, disabled: locked, onSelect: () => map.dispatch({ type: 'setPlacement', shapeId: shape.id, placement: { kind } }) }) as const),
         { kind: 'item', label: 'Share with…', disabled: locked || shape.blocker || !map.show.shapes.some(s => s !== shape && s.sourceId !== null && s.sourceId !== shape.sourceId), onSelect: () => requestAnimationFrame(() => document.querySelector<HTMLSelectElement>('.map-inspector select[aria-label="Share with"]')?.focus()) } as const,
-        ...(shape.sourceId && map.show.shapes.some(s => s !== shape && s.sourceId === shape.sourceId) ? [{ kind: 'item', label: 'Make separate', disabled: locked, onSelect: () => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() }) } as const] : []),
+        ...(shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID && map.show.shapes.some(s => s !== shape && s.sourceId === shape.sourceId) ? [{ kind: 'item', label: 'Make separate', disabled: locked, onSelect: () => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() }) } as const] : []),
       ] : []),
       { kind: 'separator' },
       { kind: 'item', label: 'Group', shortcut: '⌘G', disabled: locked, onSelect: () => act.group(ids) },
@@ -704,6 +704,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   /** What the shape plays, as the browser names it: a preset's id when its instrument is still that one-layer preset. */
   const currentLook = (shape: typeof lookShape & {}) => {
     if (!shape.sourceId) return shape.fill;
+    if (shape.sourceId === LIVE_SOURCE_ID) return 'live';
     const project = map.show.sources.find(s => s.id === shape.sourceId)?.project;
     const preset = project && project.layers.length === 1 ? PRESETS.find(p => p.name === project.name) : undefined;
     return preset ? `preset:${preset.id}` : '';

@@ -4,15 +4,9 @@ import { kindArt } from './kindArt';
 import { LookPreviews } from './lookPreviews';
 import { PRESETS } from '../core/project';
 import { KIND_LABELS } from '../core/library';
+import { OWN_LOOKS, type Look } from './mapLooks';
 
-/** A look as the browser offers it: the shape's own fill, or a Library preset. value is what choosing it asks for. */
-interface Look { value: string; name: string; kind: string; group: string; description: string }
-
-const FILLS: Look[] = [
-  { value: 'grid', name: 'Grid pattern', kind: 'fill', group: 'Fill', description: 'Lines in the shape’s colour, for lining up' },
-  { value: 'colour', name: 'Its colour', kind: 'fill', group: 'Fill', description: 'The shape’s plain colour' },
-];
-const LOOKS: Look[] = [...FILLS, ...PRESETS.map(p => ({ value: `preset:${p.id}`, name: p.name, kind: p.kind, group: KIND_LABELS[p.kind] ?? p.kind, description: p.description }))];
+const LOOKS: Look[] = [...OWN_LOOKS, ...PRESETS.map(p => ({ value: `preset:${p.id}`, name: p.name, kind: p.kind, group: KIND_LABELS[p.kind] ?? p.kind, description: p.description }))];
 const GROUPS = ['All', ...new Set(LOOKS.map(l => l.group))];
 /** The chip last chosen, kept while the app is open. */
 let lastGroup = 'All';
@@ -44,7 +38,7 @@ function Tile({ look, previews, current, onPick }: { look: Look; previews: LookP
   const art = preset ? still ?? kindArt(look.kind) : undefined;
   return <button ref={tile} type="button" className={`look-tile ${current ? 'current' : ''}`} data-look={look.value} aria-label={`Play ${look.name}`} aria-pressed={current} title={look.description}
     onClick={() => onPick(look.value)} onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
-    <span className={`look-art ${look.value === 'grid' ? 'grid' : look.value === 'colour' ? 'colour' : ''}`}>
+    <span className={`look-art ${look.value === 'grid' ? 'grid' : look.value === 'colour' ? 'colour' : look.value === 'live' ? 'live' : ''}`}>
       {art && <img src={art} alt="" />}
       {preset && <canvas ref={live} width={192} height={108} className={hover ? 'playing' : ''} />}
     </span>
