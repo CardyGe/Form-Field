@@ -456,6 +456,65 @@ Measured 17 November 2026 on this Mac with `scripts/measure-map.mjs` (eight shap
 
 **Not shown.** Whether tracing about 20 pieces from a photo, and lining them up with a projector, really works in one sitting. That needs Greg, a projector and a real scene.
 
+## Stage 4 decisions
+
+Made 18 November 2026, before building stage 4. Greg handed over the how; each of these is my call and can be changed.
+
+**How Pin is drawn: a perspective helper beside the Canvas 2D compositor, not a whole new compositor.**
+
+| Route | Trade-off |
+|---|---|
+| **Keep Canvas 2D; add one small WebGL "warp" helper** that draws a picture through a perspective transform. Pinned shapes and the stage corners use it; everything else is drawn as now. | Stage 3's soft edges, borders, Blockers and grid patterns stay as they are and keep their measured cost. Pinned shapes cost one extra copy each. **My pick.** |
+| Replace the compositor with WebGL throughout | Exact and fast for everything, but every stage 3 drawing feature must be rewritten and measured again, and the risk falls on the wall. |
+| Canvas 2D only, approximating perspective with many small triangles | No new graphics context, but seams between triangles and a cost that grows with how fine the triangles are. |
+
+Task 1 measures the warp helper before anything is built on it. If its copies are too slow, the plan falls back to the full WebGL route.
+
+**Placement.**
+- Each shape gets a placement:
+  - **Fit** (the default, as now), with **Zoom**, **Move** and **Turn** for the picture inside the shape
+  - **Pin**
+  - **Across group**
+  - **Across stage**
+- **Pin.** The picture is laid on four pin corners with correct perspective.
+  - A shape with exactly four points uses its own corners and follows them as they move; curved sides don't matter.
+  - Any other shape gets four pin handles of its own, starting at its box's corners and dragged on the stage while Pin is chosen.
+- **Across group and Across stage.** The picture covers the group's or the stage's box, and each shape shows its own piece of it. Across group on a shape with no group acts as Across stage.
+- **The grid pattern follows the placement.** A pinned shape's grid is drawn in true perspective, so the lines meet at a vanishing point instead of being evenly spaced. That is what makes "a pinned grid looks square on an angled box face" something you can see.
+
+**Sharing.**
+- **Share with…** lists the other shapes; choosing one makes this shape play that shape's instrument.
+- **Make separate** gives a shape its own copy again.
+- Stage 2's rule stays: shapes are separate by default, and duplicates and grid cells get their own copy.
+- A shared instrument is drawn once, at the size of the largest place it lands. That is the bounding box of a group or the stage for the Across placements.
+
+**Stage corners.**
+- Four handles warp the whole picture on the projector, for when the projector has been nudged.
+- They are saved in the show, and they act last, after blackout and every shape.
+- The operator screen keeps showing the stage flat, so shape outlines still line up with the picture behind them. The projector's preview is captured before the warp for the same reason.
+- A **Stage corners** switch in the header shows the four handles, and **Reset** puts them back at the corners.
+- Holding Shift while nudging a stage corner moves it 10 pixels, as with shape points.
+
+**Look per shape.**
+- **Brightness**, 0 to 200 %, default 100 %.
+- **Tint**: a colour the picture is multiplied by, white for none.
+- Both are for evening out surfaces of different colours. They apply to instruments, the grid pattern and plain colours alike, and not to Blockers.
+
+**Show format, version 4.**
+- Each shape gains `placement`:
+  - its `kind`
+  - `zoom` (0.25 to 4)
+  - `offset`, in stage fractions
+  - `turn`, in degrees
+  - `pin`: four points, or null to use the shape's own corners
+- Each shape also gains `brightness` and `tint`.
+- The show gains `stageCorners`: four points, or null for none.
+- Version 1 to 3 files open with Fit, no adjustment and no stage corners. That is not counted as a repair.
+
+**Not in stage 4:**
+- Double-click to adjust the picture inside a shape on the stage. Stage 4 adjusts it with sliders in the Details panel.
+- A pin or stage-corner grid finer than four corners. That is the "curved objects" design.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
