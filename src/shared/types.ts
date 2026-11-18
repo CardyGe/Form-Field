@@ -163,6 +163,7 @@ export interface LiveBridge {
   loadSettings(): Promise<unknown>;
   saveSettings(settings: LiveSettings): Promise<void>;
   cameraAccess(): Promise<'granted' | 'refused'>;
+  microphoneAccess(): Promise<'granted' | 'refused'>;
   displays(): Promise<{ id: number; label: string; primary: boolean }[]>;
   openOutput(displayId: number): Promise<void>;
   closeOutput(): Promise<void>;

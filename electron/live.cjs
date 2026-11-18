@@ -5,14 +5,30 @@
 // through here; only settings and a small preview picture do.
 
 /** A permission request: only camera video, only from this app's own windows. */
-function allowPermission(permission, details, isOurWindow) {
+function allowPermission(permission, details, isOurWindow, isStudioWindow = false) {
+  if (isOurWindow !== true) return false;
   const types = details?.mediaTypes;
-  return isOurWindow === true && permission === 'media' && Array.isArray(types) && types.length === 1 && types[0] === 'video';
+  if (permission === 'media' && Array.isArray(types) && types.length === 1 && types[0] === 'video') return true;
+  // Sound and MIDI (never system-exclusive) for the reactivity engine, which listens in the studio window only.
+  if (isStudioWindow !== true) return false;
+  if (permission === 'media') return Array.isArray(types) && types.length === 1 && types[0] === 'audio';
+  return permission === 'midi';
 }
 
 /** A permission check (made before and while the camera is used): the same rule. */
-function allowPermissionCheck(permission, details, isOurWindow) {
-  return isOurWindow === true && permission === 'media' && details?.mediaType === 'video';
+function allowPermissionCheck(permission, details, isOurWindow, isStudioWindow = false) {
+  if (isOurWindow !== true) return false;
+  if (permission === 'media' && details?.mediaType === 'video') return true;
+  if (isStudioWindow !== true) return false;
+  return (permission === 'media' && details?.mediaType === 'audio') || permission === 'midi';
+}
+
+/** Asks macOS for the microphone the first time only, for the reactivity engine. */
+async function ensureMicrophoneAccess(systemPreferences) {
+  const status = typeof systemPreferences.getMediaAccessStatus === 'function' ? systemPreferences.getMediaAccessStatus('microphone') : 'granted';
+  if (status === 'granted') return 'granted';
+  if (status !== 'not-determined' || typeof systemPreferences.askForMediaAccess !== 'function') return 'refused';
+  return await systemPreferences.askForMediaAccess('microphone') ? 'granted' : 'refused';
 }
 
 /** Asks macOS for the camera the first time only. A refusal can only be changed in System Settings. */
@@ -92,6 +108,7 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSav
   handle('loadSettings', () => loadSettings(settingsFile));
   handle('saveSettings', settings => saveSettings(settingsFile, settings));
   handle('cameraAccess', () => ensureCameraAccess(systemPreferences));
+  handle('microphoneAccess', () => ensureMicrophoneAccess(systemPreferences));
   handle('displays', () => {
     const primary = screen.getPrimaryDisplay().id;
     return screen.getAllDisplays().map((display, index) => ({ id: display.id, primary: display.id === primary,
@@ -129,4 +146,4 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSav
   return { closeOutput, isOutput: contents => alive(output) && contents === output.webContents };
 }
 
-module.exports = { allowPermission, allowPermissionCheck, ensureCameraAccess, loadSettings, saveSettings, acceptMessage, acceptState, acceptPreview, pickDisplay, setupLive };
+module.exports = { allowPermission, allowPermissionCheck, ensureCameraAccess, ensureMicrophoneAccess, loadSettings, saveSettings, acceptMessage, acceptState, acceptPreview, pickDisplay, setupLive };

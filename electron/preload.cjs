@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
     loadSettings: () => invoke('live:loadSettings'),
     saveSettings: settings => invoke('live:saveSettings', settings),
     cameraAccess: () => invoke('live:cameraAccess'),
+    microphoneAccess: () => invoke('live:microphoneAccess'),
     displays: () => invoke('live:displays'),
     openOutput: displayId => invoke('live:openOutput', displayId),
     closeOutput: () => invoke('live:closeOutput'),

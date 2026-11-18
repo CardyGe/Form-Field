@@ -13,6 +13,19 @@ test('only our windows may use the camera, and only its video', () => {
   assert.equal(live.allowPermission('media', { mediaTypes: ['video'] }, false), false);
   for (const other of ['geolocation', 'notifications', 'display-capture', 'clipboard-read', 'midi']) assert.equal(live.allowPermission(other, { mediaTypes: ['video'] }, true), false, other);
 });
+test('the studio window alone may listen to sound (its audio only) and to MIDI without system-exclusive messages', () => {
+  assert.equal(live.allowPermission('media', { mediaTypes: ['audio'] }, true, true), true);
+  assert.equal(live.allowPermission('media', { mediaTypes: ['audio'] }, true, false), false, 'not an output window');
+  assert.equal(live.allowPermission('media', { mediaTypes: ['video', 'audio'] }, true, true), false);
+  assert.equal(live.allowPermission('midi', {}, true, true), true);
+  assert.equal(live.allowPermission('midiSysex', {}, true, true), false);
+  assert.equal(live.allowPermission('midi', {}, true, false), false);
+  assert.equal(live.allowPermission('midi', {}, false, true), false);
+  assert.equal(live.allowPermissionCheck('media', { mediaType: 'audio' }, true, true), true);
+  assert.equal(live.allowPermissionCheck('media', { mediaType: 'audio' }, true, false), false);
+  assert.equal(live.allowPermissionCheck('midi', {}, true, true), true);
+  assert.equal(live.allowPermissionCheck('midiSysex', {}, true, true), false);
+});
 test('permission checks follow the same rule', () => {
   assert.equal(live.allowPermissionCheck('media', { mediaType: 'video' }, true), true);
   assert.equal(live.allowPermissionCheck('media', { mediaType: 'audio' }, true), false);
