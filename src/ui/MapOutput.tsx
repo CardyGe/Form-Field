@@ -9,6 +9,7 @@ const PREVIEW_EVERY_MS = 200;
 const REPORT_EVERY_MS = 1000;
 
 /** The wall window: nothing but the picture. It is told what to show by the studio window, and plays the instruments itself. */
+const STALE_SIGNALS_MS = 500;
 export default function MapOutput() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [failure, setFailure] = useState('');
@@ -20,6 +21,8 @@ export default function MapOutput() {
     try { compositor = new MapCompositor(element); }
     catch (error) { setFailure((error as Error).message); return; }
     let state = initialWall();
+    // Signals stop arriving if the studio stops sending them: after half a second the targets go back to their set values.
+    let heard = 0;
     const apply = (fadeMs?: number) => {
       compositor.setShow(state.show, new Map([...state.projects].map(([id, held]) => [id, held.project])), fadeMs);
       compositor.setSignals(state.signals);
@@ -32,7 +35,7 @@ export default function MapOutput() {
       const kind = (message as { type?: string })?.type;
       state = applyMapMessage(state, message);
       // Signals come every frame: only they are passed on, not the whole show again.
-      if (kind === 'signals') { compositor.setSignals(state.signals); return; }
+      if (kind === 'signals') { heard = performance.now(); compositor.setSignals(state.signals); return; }
       if (kind === 'fade') return;
       // A show after a fade message is a scene switch, crossfading over the scene's time.
       if (kind === 'show' && state.fadeMs !== null) { const ms = state.fadeMs; state = { ...state, fadeMs: null }; apply(ms); return; }
@@ -47,6 +50,7 @@ export default function MapOutput() {
     encoder.onmessage = (event: MessageEvent<ArrayBuffer | null>) => { busy = false; if (event.data) bridge.sendPreview(event.data); };
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
+      if (heard && now - heard > STALE_SIGNALS_MS) { heard = 0; state = { ...state, signals: {} }; compositor.setSignals({}); }
       if (compositor.frame(now)) changed = true;
       if (reading) {
         const picture = compositor.collectPreview();

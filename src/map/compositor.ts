@@ -177,6 +177,8 @@ export class MapCompositor {
       this.playing.set(shape.id, next);
     }
     for (const id of [...this.playing.keys()]) if (!show.shapes.some(s => s.id === id)) { this.playing.delete(id); this.endFade(id); }
+    // A shape removed mid-glide takes its glide with it, or the stage would be redrawn every frame from then on.
+    for (const id of [...this.glides.keys()]) if (!show.shapes.some(s => s.id === id)) this.glides.delete(id);
     for (const id of [...this.pictures.keys()]) if (!show.shapes.some(s => s.id === id)) this.dropPictures(id);
     const live = new Set(show.sources.map(s => s.id));
     for (const [id, slot] of this.slots) if (!live.has(id)) this.release(id, slot);
@@ -192,9 +194,12 @@ export class MapCompositor {
   /** The latest signals. A show that reacts is drawn again with them. */
   setSignals(signals: Signals): void {
     this.signals = signals;
+    // Freeze holds the picture: links stay where they were until it is let go.
+    if (this.frozen) return;
     if (this.show.links?.length || this.show.sources.some(s => s.tempoSync)) this.dirty = true;
   }
-  setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.dirty = true; } }
+  setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.frozenSignals = this.signals; this.dirty = true; } }
+  private frozenSignals: Signals = {};
   /** Where the stage's corners go on the projector (stage fractions), or null for none. The wall uses this; the operator screen never does. */
   setCorners(corners: Point[] | null): void {
     const to = corners?.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }));
@@ -227,7 +232,8 @@ export class MapCompositor {
     this.overLimit.clear();
     let rendered = false;
     // The links applied for this frame (for drawing only); with none, the show itself.
-    this.drawn = this.modulator.apply(this.show, this.projects, this.signals, seconds);
+    // Frozen, the links are held at the signals of the moment Freeze went on, and their smoothing stands still.
+    this.drawn = this.modulator.apply(this.show, this.projects, this.frozen ? this.frozenSignals : this.signals, this.frozen ? 0 : seconds);
     const show = this.drawn.show;
     for (const source of this.show.sources) {
       const project = this.projects.get(source.id);
@@ -247,7 +253,8 @@ export class MapCompositor {
       }
       if (!draw) continue;
       // Drawn once, at the size of the largest place it lands on the stage.
-      const size = sourceSizeFor(users.map(s => landing(s, show)), scale);
+      // Sized from the shapes as set, not as links move them: a zoom on the bass would otherwise resize the instrument many times a second.
+      const size = sourceSizeFor(users.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), scale);
       try {
         slot.renderer.render(withParams(slot.project, this.drawn.params.get(source.id)), slot.phase, size.width, size.height);
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);

@@ -621,6 +621,82 @@ try {
     await studio.getByLabel('Change all linked shapes', { exact: true }).check();
   });
 
+  // Stage 5: scenes, sound and MIDI.
+  const sceneButtons = () => studio.getByRole('toolbar', { name: 'Scenes' }).locator('.map-scene');
+  const currentScene = () => studio.getByRole('toolbar', { name: 'Scenes' }).locator('.map-scene[aria-pressed="true"]').textContent();
+  const react = (fn, arg) => studio.evaluate(([fn, arg]) => window.__studioTest.react[fn](arg), [fn, arg]);
+  const reactReady = () => studio.waitForFunction(() => !!window.__studioTest?.react, null, { timeout: 5000 });
+
+  await check('scenes: keys 1 and 2 switch between a full and a half-bright shape, fading on the wall without a black frame', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.5, .5]);
+    await tool('Select'); await asColour();
+    await wallUntil([[.35, .35]], c => near(c[0], RED, 30), 'full colour');
+    const add = studio.getByRole('button', { name: '+ Scene' });
+    await add.click(); await add.click();
+    assert.equal(await sceneButtons().count(), 2);
+    assert.match(await currentScene(), /Scene 2/);
+    await openSection(studio, 'look');
+    const b = studio.getByLabel('Brightness', { exact: true }); await b.fill('0.5'); await b.dispatchEvent('pointerup');
+    const [half] = await wallUntil([[.35, .35]], c => Math.abs(c[0][0] - 128) <= 14, 'half brightness in scene 2');
+    await focusStage(); await studio.keyboard.press('1');
+    // A two-second fade: sampled through it, the shape is never black and ends at full colour.
+    const during = [];
+    for (let i = 0; i < 12; i++) { during.push((await sample(output, [[.35, .35]])).colours[0][0]); await sleep(120); }
+    assert.ok(during.every(r => r > 90), `a dark frame during the fade: ${during.join(', ')}`);
+    await wallUntil([[.35, .35]], c => near(c[0], RED, 30), 'scene 1 at full colour');
+    assert.ok(during.some(r => r > half[0] + 10 && r < 245) || during.at(-1) >= 245, `no fade seen: ${during.join(', ')}`);
+    assert.match(await currentScene(), /Scene 1/);
+    await focusStage(); await studio.keyboard.press('2');
+    await wallUntil([[.35, .35]], c => Math.abs(c[0][0] - 128) <= 14, 'back to half in scene 2');
+  });
+
+  await check('sound: with the test beat, Pulse on the beat makes the shape brighten and dim on the wall', async () => {
+    await openSection(studio, 'reacts');
+    await studio.getByLabel('Add a reaction', { exact: true }).selectOption('pulse');
+    await reactReady();
+    await react('testBeat', true);
+    const reds = [];
+    for (let i = 0; i < 40; i++) { reds.push((await sample(output, [[.35, .35]])).colours[0][0]); await sleep(60); }
+    const pulse = await studio.evaluate(() => window.__studioTest.react.signals()['beat.pulse']);
+    assert.ok(Math.max(...reds) - Math.min(...reds) > 30, `the wall did not pulse: red ${Math.min(...reds)} to ${Math.max(...reds)} (beat ${pulse})`);
+    assert.ok(Math.min(...reds) > 60, `the pulse went dark: ${Math.min(...reds)}`);
+    await react('testBeat', false);
+  });
+
+  await check('MIDI: Learn on the Brightness slider takes a control; turning it sets the shape’s brightness on the wall', async () => {
+    await openSection(studio, 'look');
+    await studio.getByLabel('React to… Brightness', { exact: true }).click();
+    await studio.getByRole('menuitem', { name: /MIDI: Learn/ }).click();
+    await studio.getByRole('menuitem', { name: 'Move a control…' }).waitFor({ timeout: 3000 });
+    await react('midi', [0xb0, 7, 0]);
+    await wallUntil([[.35, .35]], c => c[0][0] < 30, 'control 7 at 0 (dark)');
+    await react('midi', [0xb0, 7, 127]);
+    await wallUntil([[.35, .35]], c => c[0][0] > 240, 'control 7 at full (bright)');
+    const lit = await studio.locator('.react-to.on').count();
+    assert.ok(lit >= 1, 'the ∿ beside Brightness is not lit');
+  });
+
+  await check('a MIDI note learned for a trigger switches to the next scene', async () => {
+    await studio.getByRole('tab', { name: /Sound & MIDI/ }).click();
+    await studio.getByRole('button', { name: '+ Trigger' }).click();
+    const row = studio.locator('.react-trigger').last();
+    await row.getByLabel('When', { exact: true }).selectOption('on');
+    await row.getByRole('button', { name: 'Learn' }).click();
+    await react('midi', [0x90, 60, 100]);
+    await studio.waitForFunction(() => [...document.querySelectorAll('.react-trigger select[aria-label="Goes on"] option:checked')].some(o => /note 60/.test(o.textContent)), null, { timeout: 3000 })
+      .catch(async () => { throw new Error(`the note was not learned: ${await row.getByLabel('Goes on', { exact: true }).inputValue()}`); });
+    // A person lets go of the key, and presses it again a moment later: each is seen in its own frame.
+    await react('midi', [0x80, 60, 0]); await sleep(200);
+    const before = await currentScene();
+    await react('midi', [0x90, 60, 100]);
+    await studio.waitForFunction(b => document.querySelector('.map-scene[aria-pressed="true"]')?.textContent !== b, before, { timeout: 3000 })
+      .catch(async () => { throw new Error(`still on ${before}; triggers: ${JSON.stringify(await studio.evaluate(() => [...document.querySelectorAll('.react-trigger select')].map(s => s.value)))}`); });
+    assert.notEqual(await currentScene(), before);
+    await react('midi', [0x80, 60, 0]);
+    await studio.getByRole('tab', { name: 'Details' }).click();
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
@@ -648,6 +724,26 @@ try {
     await studio.getByRole('region', { name: 'Map' }).waitFor({ state: 'detached' });
     assert.equal(await projectName(), ownTitle);
     await studio.getByRole('button', { name: 'Map', exact: true }).click();
+  });
+
+  await check('Live: Glow on the beat moves the look’s setting with the test beat; the saved setting stays as set', async () => {
+    await studio.getByRole('region', { name: 'Map' }).getByRole('button', { name: 'Live', exact: true }).click();
+    const liveRegion = studio.getByRole('region', { name: 'Live' });
+    await liveRegion.waitFor();
+    await studio.getByLabel('Source', { exact: true }).selectOption({ label: 'Test pattern' });
+    await studio.locator('details.live-react > summary').click();
+    await studio.getByRole('button', { name: 'Glow on the beat' }).click();
+    await reactReady();
+    await react('testBeat', true);
+    await studio.waitForFunction(() => !!window.__studioTest?.liveDrawn, null, { timeout: 5000 });
+    const values = [];
+    for (let i = 0; i < 30; i++) { values.push(await studio.evaluate(() => window.__studioTest.liveDrawn().paint.spread)); await sleep(60); }
+    const set = await studio.getByLabel('Spread', { exact: true }).inputValue().catch(() => null);
+    assert.ok(Math.max(...values) - Math.min(...values) > 0.02, `Spread did not move with the beat: ${values.map(v => v.toFixed(3)).join(', ')}`);
+    if (set !== null) assert.ok(values.some(v => Math.abs(v - Number(set)) > 0.01) && Number.isFinite(Number(set)), 'the slider follows the link');
+    await react('testBeat', false);
+    await liveRegion.getByRole('button', { name: 'Map', exact: true }).click();
+    await studio.getByRole('region', { name: 'Map' }).waitFor();
   });
 
   await check('no page errors', async () => { assert.deepEqual(errors, []); });

@@ -37,7 +37,7 @@ export class Stage {
       this.raf = requestAnimationFrame(tick);
     };
     // Read-only status for the scripted checks and for support: never any picture.
-    window.__studioTest = { ...window.__studioTest, livePeople: () => this.renderer.peopleDiagnostics(),
+    window.__studioTest = { ...window.__studioTest, livePeople: () => this.renderer.peopleDiagnostics(), liveDrawn: () => this.renderer.drawn,
       liveFrames: { mark: () => { this.gaps = []; }, read: () => frameStats(this.gaps) } };
     this.raf = requestAnimationFrame(tick);
     this.renderer.start();

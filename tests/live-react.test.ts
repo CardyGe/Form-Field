@@ -41,3 +41,12 @@ test('ready-made Live reactions make ordinary links for the look on screen', () 
     assert.ok(Array.isArray(links) && links.every(l => liveTargetRange(l.target)), r);
   }
 });
+
+test('Live links stop at a byte budget, so the settings always fit the 16 KB message and file limits', async () => {
+  const { validateLiveSettings, defaultLiveSettings, LINKS_BUDGET } = await import('../src/live/settings');
+  const many = Array.from({ length: 64 }, (_, i) => ({ id: `link-${'x'.repeat(50)}-${i}`, input: 'audio.bass', target: 'live.paint.spread', mode: 'modulate', amount: 0.35000000000000003, low: 0, high: 1, attackMs: 20, releaseMs: 200, on: true, name: 'n'.repeat(40) }));
+  const s = validateLiveSettings({ ...defaultLiveSettings(), links: many });
+  assert.ok(s.links.length > 10 && s.links.length < 64, `${s.links.length} links kept`);
+  assert.ok(JSON.stringify(s.links).length <= LINKS_BUDGET);
+  assert.ok(JSON.stringify(s).length < 16 * 1024);
+});

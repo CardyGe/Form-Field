@@ -53,3 +53,10 @@ test('tempo sync: the loop position follows the beats of the clock', () => {
   assert.ok(Math.abs(tempoPhase({ 'tempo.beat': 5, 'tempo.phase': 0.5 }, 2)! - Math.PI * 0.75 * 2) < 1e-9);
   assert.equal(tempoPhase({}, 4), null);
 });
+
+test('a fade of no time is a cut, never 0 / 0', async () => {
+  const { fadeAlpha } = await import('../src/map/playout');
+  assert.equal(fadeAlpha(100, 100, 0), 1);
+  assert.equal(fadeAlpha(100, 50, 0), 1);
+  assert.equal(fadeAlpha(0, 200, 400), 0.5);
+});

@@ -80,6 +80,8 @@ export const drawsThisFrame = (level: Governor['level'], frameIndex: number) => 
 
 /** How far a crossfade has gone, 0 to 1. */
 export function fadeAlpha(startedMs: number, nowMs: number, durationMs = 400): number {
+  // A fade of no time is a cut: done at once (never 0 / 0).
+  if (!(durationMs > 0)) return 1;
   return Math.min(1, Math.max(0, (nowMs - startedMs) / durationMs));
 }
 

@@ -166,12 +166,16 @@ function choice<K extends string>(value: unknown, labels: Record<K, string>, fal
 const ranged = (v: unknown, min: number, max: number, fallback: number) =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
 
+export const LINKS_BUDGET = 8 * 1024;
 function readLiveLinks(raw: unknown): Link[] {
   if (!Array.isArray(raw)) return [];
   const out: Link[] = [], ids = new Set<string>();
   for (const item of raw.slice(0, MAX_LIVE_LINKS)) {
     const link = readLiveLink(item);
-    if (link && !ids.has(link.id)) { ids.add(link.id); out.push(link); }
+    if (!link || ids.has(link.id)) continue;
+    // Settings travel to the artwork window and to disk under 16 KB: links get at most half of that.
+    if (JSON.stringify([...out, link]).length > LINKS_BUDGET) break;
+    ids.add(link.id); out.push(link);
   }
   return out;
 }

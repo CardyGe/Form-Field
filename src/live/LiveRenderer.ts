@@ -53,6 +53,8 @@ export class LiveRenderer {
   /** This frame's sound, beat, tempo and MIDI; the settings' links read them. */
   signals: Signals = {};
   private readonly modulator = new LiveModulator();
+  /** The settings the last frame was drawn with (links applied), for the scripted checks. */
+  drawn: LiveSettings = this.settings;
   /** 'tracking' and 'people' are the operator's setup views. The artwork window never uses them. */
   view: 'art' | 'tracking' | 'people' = 'art';
 
@@ -114,7 +116,7 @@ export class LiveRenderer {
     this.time += step;
     this.resize();
     // The settings as set, with this frame's links applied to a copy. Everything below draws from the copy.
-    const settings = this.modulator.apply(this.settings, this.signals, step);
+    const settings = this.drawn = this.modulator.apply(this.settings, this.signals, step);
     this.tracking.update(this.source, settings, step);
     if (this.lookKind !== this.settings.look) {
       // Switching looks starts the new one fresh; each keeps its own settings.

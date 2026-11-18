@@ -337,9 +337,9 @@ export function useMap(onError: (message: string) => void) {
     if (after.show !== before.show) { saver.save(after.show); setNotice(null); }
     return after;
   }, []);
-  const dispatch = useCallback((action: EditAction) => {
+  const dispatch = useCallback((action: EditAction, merge?: string) => {
     if (!canEdit(loadedRef.current)) { setLastRefusal('Loading the show…'); return false; }
-    const after = step({ type: 'edit', action });
+    const after = step({ type: 'edit', action, merge });
     setLastRefusal(after.refusal);
     return after.refusal === null;
   }, [step]);
@@ -355,20 +355,22 @@ export function useMap(onError: (message: string) => void) {
   /** This screen's own compositor is told of a scene switch's fade through this, as the wall is through a message. */
   const pendingFade = useRef<number | null>(null);
   /** Switches scene: the wall and this screen crossfade over the scene's own fade time, or the show's. */
-  const switchScene = (sceneId: string) => {
+  const switchScene = (sceneId: string, merge?: string) => {
     const s = stateRef.current.show, scene = s.scenes.find(sc => sc.id === sceneId);
     if (!scene || s.sceneId === sceneId) return false;
     const ms = Math.round((scene.fadeSeconds ?? s.sceneFade) * 1000);
+    if (!dispatch({ type: 'switchScene', sceneId }, merge)) return false;
+    // Only once the switch is made: the new show reaches the wall after this (it is sent once the screen updates).
     if (outputOpen) bridge?.send({ type: 'fade', ms });
-    pendingFade.current = ms;
-    return dispatch({ type: 'switchScene', sceneId });
+    else pendingFade.current = ms;
+    return true;
   };
-  const stepScene = (by: 1 | -1) => {
+  const stepScene = (by: 1 | -1, merge?: string) => {
     const s = stateRef.current.show;
     if (!s.scenes.length) return;
     const at = s.scenes.findIndex(sc => sc.id === s.sceneId);
     const next = s.scenes[((at < 0 ? (by > 0 ? -1 : 0) : at) + by + s.scenes.length) % s.scenes.length];
-    switchScene(next.id);
+    switchScene(next.id, merge);
   };
   const [engine, setEngine] = useState<ReactivityEngine | null>(null);
   const [signals, setSignals] = useState<Signals>({});
@@ -381,20 +383,27 @@ export function useMap(onError: (message: string) => void) {
   const triggerAct = useRef<(action: TriggerAction) => void>(() => {});
   triggerAct.current = action => {
     switch (action.kind) {
-      case 'scene': switchScene(action.sceneId); break;
-      case 'next-scene': stepScene(1); break;
-      case 'previous-scene': stepScene(-1); break;
-      case 'vary': dispatch({ type: 'varySource', sourceId: action.sourceId, entropy: Math.floor(Math.random() * 1e6) }); break;
+      // What triggers do is one undo step however often they fire, so the beat never pushes the operator's edits out.
+      case 'scene': switchScene(action.sceneId, 'trigger'); break;
+      case 'next-scene': stepScene(1, 'trigger'); break;
+      case 'previous-scene': stepScene(-1, 'trigger'); break;
+      case 'vary': dispatch({ type: 'varySource', sourceId: action.sourceId, entropy: Math.floor(Math.random() * 1e6) }, 'trigger'); break;
       case 'blackout': setBlackout(!latest.current.blackout); break;
       case 'freeze': setFreeze(!latest.current.freeze); break;
       case 'tap': engine?.tap(); break;
     }
   };
+  const listening = useRef({ panelOpen, outputOpen, reacts });
+  listening.current = { panelOpen, outputOpen, reacts };
+  const active = !!engine && (reacts || panelOpen);
   useEffect(() => {
-    if (!engine || !(reacts || panelOpen)) return;
+    if (!engine || !active) return;
     // Triggers compare with the signals as they were, so a control already past halfway does not fire at once.
     let prev: Signals = { ...engine.signals }, shown = 0;
-    return engine.subscribe(now => {
+    // One subscription while anything reacts; the panel and the output are read as they are now, so opening either
+    // never restarts the sound input.
+    const off = engine.subscribe(now => {
+      const { panelOpen, outputOpen, reacts } = listening.current;
       // The wall gets only the signals the show uses, so a controller with many knobs never makes the message too large.
       if (outputOpen && reacts) {
         const s = stateRef.current.show, used = new Set([...s.links.map(l => l.input), 'tempo.beat', 'tempo.phase']);
@@ -407,7 +416,9 @@ export function useMap(onError: (message: string) => void) {
       const t = performance.now();
       if (panelOpen && t - shown > 100) { shown = t; setSignals(now); }
     });
-  }, [engine, reacts, panelOpen, outputOpen]);
+    // Leaving Map, or nothing reacting any more: the wall goes back to the set values at once.
+    return () => { off(); if (listening.current.outputOpen) bridge?.send({ type: 'signals', signals: {} }); };
+  }, [engine, active]);
   const openOutput = async () => {
     if (display === null) return;
     try { await bridge?.openOutput(display); }

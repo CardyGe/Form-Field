@@ -38,6 +38,7 @@ export class ReactivityEngine {
   private listeners = new Set<(signals: Signals) => void>();
   private changes = new Set<() => void>();
   private raf = 0;
+  private stopping: ReturnType<typeof setTimeout> | undefined;
   private last = 0;
 
   constructor() {
@@ -50,9 +51,15 @@ export class ReactivityEngine {
   /** Called with fresh signals every frame while subscribed. Returns the unsubscribe. */
   subscribe(listener: (signals: Signals) => void): () => void {
     this.listeners.add(listener);
-    if (this.listeners.size === 1) { this.run(); if (this.audio.status.state === 'off') void this.applyAudio(); }
-    // With nothing listening the device is let go, so the Mac's microphone light goes out.
-    return () => { this.listeners.delete(listener); if (!this.listeners.size) { cancelAnimationFrame(this.raf); this.audio.stop(); } };
+    clearTimeout(this.stopping);
+    if (this.listeners.size === 1) { cancelAnimationFrame(this.raf); this.run(); if (this.audio.status.state === 'off') void this.applyAudio(); }
+    // With nothing listening the device is let go, so the Mac's microphone light goes out: a second later, so a screen
+    // that re-subscribes (a panel opening, a new link) keeps the device and its smoothing.
+    return () => {
+      if (!this.listeners.delete(listener) || this.listeners.size) return;
+      cancelAnimationFrame(this.raf);
+      this.stopping = setTimeout(() => { if (!this.listeners.size) this.audio.stop(); }, 1000);
+    };
   }
   /** Told when devices, status or preferences change (for the panel). */
   onChange(listener: () => void): () => void { this.changes.add(listener); return () => this.changes.delete(listener); }

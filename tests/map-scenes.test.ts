@@ -119,3 +119,16 @@ test('review fix: a scene bringing back a Pin whose own corners no longer carry 
   // Switching to the live scene, or renaming to the same name, is no step at all.
   assert.equal(applyEdit(back, { type: 'switchScene', sceneId: 'a' }).ok && (applyEdit(back, { type: 'switchScene', sceneId: 'a' }) as { show: ShowDocument }).show, back);
 });
+
+test('edits made by triggers are one undo step however often they fire', async () => {
+  const { mapReducer, initialMapState } = await import('../src/map/state');
+  const { createShow } = await import('../src/map/show');
+  let state = initialMapState(createShow());
+  state = mapReducer(state, { type: 'edit', action: { type: 'addScene', sceneId: 'a', name: 'A' } });
+  state = mapReducer(state, { type: 'edit', action: { type: 'addScene', sceneId: 'b', name: 'B' } });
+  const before = state.past.length;
+  for (let i = 0; i < 20; i++) state = mapReducer(state, { type: 'edit', action: { type: 'switchScene', sceneId: i % 2 ? 'b' : 'a' }, merge: 'trigger' });
+  assert.equal(state.past.length, before + 1);
+  state = mapReducer(state, { type: 'undo' });
+  assert.equal(state.show.sceneId, 'b');
+});
