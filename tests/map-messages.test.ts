@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { applyEdit } from '../src/map/editor';
 import { createShow, validateWireShow, type ShowDocument } from '../src/map/show';
-import { acceptMapMessage, toWire, sourcesToSend, MAP_MESSAGE_LIMIT, SOURCE_MESSAGE_LIMIT } from '../src/map/messages';
+import { acceptMapMessage, toWire, sourcesToSend, wallInputs, MAP_MESSAGE_LIMIT, SOURCE_MESSAGE_LIMIT } from '../src/map/messages';
 import { applyMapMessage, initialWall } from '../src/map/wall';
 
 const mainProcess = createRequire(import.meta.url)('../electron/map.cjs') as { acceptMapMessage: (value: unknown) => boolean };
@@ -188,4 +188,17 @@ test('a shape that rounding would make touch itself goes to the wall at full pre
   }] };
   const wire = toWire(show);
   assert.equal(wire.shapes[0].holes[0][0].y, top);
+});
+
+test('Ember preset smoke receives the live kick and bands on the wall without a manual link', () => {
+  const result = applyEdit(showWithInstruments(1), { type: 'setContent', shapeId: 's0',
+    content: { kind: 'preset', presetId: 'ember-glacier', sourceId: 'ember', seed: 67 } });
+  assert.ok(result.ok);
+  assert.equal(result.show.links.length, 0);
+  assert.equal(result.show.sources[0].project.transparent, true);
+  const inputs = wallInputs(result.show, null);
+  const signals = { 'beat.count': 4, 'beat.pulse': .9, 'audio.bass': .6, 'audio.highs': .4 };
+  assert.ok(Object.keys(signals).every(key => inputs.has(key)));
+  assert.ok(acceptMapMessage({type: 'signals', signals}));
+  assert.ok(mainProcess.acceptMapMessage({type: 'signals', signals}));
 });

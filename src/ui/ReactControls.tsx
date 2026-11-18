@@ -37,7 +37,7 @@ function Meter({ label, value }: { label: string; value: number }) {
 }
 
 /** The sound input, MIDI and tempo, with meters. With no engine yet, a single button starts it. */
-export function ReactDevices({ engine, meter, onStart }: { engine: ReactivityEngine | null; meter: MeterStore; onStart: () => void }) {
+export function ReactDevices({ engine, meter, onStart, audioOnly = false }: { engine: ReactivityEngine | null; meter: MeterStore; onStart: () => void; audioOnly?: boolean }) {
   useEngine(engine);
   // Only this part re-renders with the meters.
   const signals: Signals = useSyncExternalStore(meter.subscribe, meter.get);
@@ -50,8 +50,9 @@ export function ReactDevices({ engine, meter, onStart }: { engine: ReactivityEng
     const off = engine.onChange(refresh);
     return () => { navigator.mediaDevices?.removeEventListener?.('devicechange', refresh); off(); };
   }, [engine]);
-  if (!engine) return <div className="react-devices"><p className="muted-text">Sound and MIDI are off until something uses them.</p>
-    <button className="text-button" onClick={onStart}>Turn on sound and MIDI</button></div>;
+  if (!engine) return <div className="react-devices">
+    {!audioOnly && <p className="muted-text">Sound and MIDI are off until something uses them.</p>}
+    <button className="text-button" onClick={onStart}>{audioOnly ? 'Choose a sound input' : 'Turn on sound and MIDI'}</button></div>;
   const p = engine.prefs, midi = engine.midi.status;
   const audioOk = engine.audio.status.state === 'on' || engine.audio.status.state === 'off' || engine.audio.status.state === 'starting';
   const beat = Math.floor(signals['tempo.beat'] ?? 0) % 4, bpm = signals['tempo.bpm'] ?? p.bpm;
@@ -69,7 +70,7 @@ export function ReactDevices({ engine, meter, onStart }: { engine: ReactivityEng
       <Meter label="Highs" value={signals['audio.highs'] ?? 0} /><Meter label="Level" value={signals['audio.level'] ?? 0} />
       <Meter label="Beat" value={signals['beat.pulse'] ?? 0} />
     </div>
-    <label className="map-check"><input type="checkbox" aria-label="MIDI controllers" checked={p.midi} onChange={e => engine.setPrefs({ midi: e.target.checked })} />MIDI controllers
+    {!audioOnly && <><label className="map-check"><input type="checkbox" aria-label="MIDI controllers" checked={p.midi} onChange={e => engine.setPrefs({ midi: e.target.checked })} />MIDI controllers
       <i className={`react-light ${midiActive ? 'on' : ''}`} title="Lights when a MIDI message arrives" /></label>
     {p.midi && <p className={`react-status ${midi.state === 'unavailable' ? 'warn' : ''}`}>{midi.state === 'on' ? (midi.devices.length ? midi.devices.join(', ') : 'No MIDI device connected') : midi.state === 'unavailable' ? `MIDI is unavailable: ${midi.reason}` : 'Starting…'}</p>}
     <div className="react-tempo">
@@ -82,7 +83,7 @@ export function ReactDevices({ engine, meter, onStart }: { engine: ReactivityEng
         : <output className="react-bpm" aria-label="BPM">{Math.round(bpm)} BPM</output>}
       <button className="text-button" title="Tap on the beat · B" onClick={() => engine.tap()}>Tap</button>
       <span className="react-beats" aria-hidden="true">{[0, 1, 2, 3].map(i => <i key={i} className={i === beat ? 'on' : ''} />)}</span>
-    </div>
+    </div></>}
   </div>;
 }
 

@@ -1,6 +1,6 @@
 /**
  * Signals: what the sound, the beat, the tempo clock and MIDI are doing this frame, as numbers by name:
- * audio.level, audio.bass, audio.mids, audio.highs (0..1); beat.pulse (0..1); tempo.phase (0..1), tempo.beat (count),
+ * audio.level, audio.bass, audio.mids, audio.highs (0..1); beat.pulse (0..1), beat.count (detected onsets); tempo.phase (0..1), tempo.beat (count),
  * tempo.bpm; midi.cc.<channel>.<number> (0..1); midi.note.<channel>.<number> (velocity 0..1, 0 when off).
  */
 export type Signals = Record<string, number>;

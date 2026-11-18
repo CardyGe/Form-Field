@@ -1,3 +1,5 @@
+import { EmberSmokeAudio, usesEmberSmokeAudio, type SmokeAudioFrame } from '../react/ember-smoke';
+import type { Signals } from '../react/signals';
 import {FINISH_PARAMETERS} from '../core/finishing';
 import { InstrumentRenderer } from './InstrumentRenderer';
 import { isInstrument } from '../core/instruments';
@@ -134,6 +136,7 @@ function number(layer: Layer, key: string, fallback: number): number {
  * The EXR cache deliberately contains no transfer function or display metadata guess.
  */
 export class StudioRenderer {
+  private emberAudio?: EmberSmokeAudio;
   /** Reused by render() to read the canvas size without allocating. */
   private readonly canvasSize = new THREE.Vector2();
   private readonly renderer: THREE.WebGLRenderer;
@@ -613,7 +616,7 @@ export class StudioRenderer {
     return texture;
   }
 
-  private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10): THREE.Texture {
+  private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10, smokeAudio?: SmokeAudioFrame): THREE.Texture {
     const aspect = this.width / this.height;
     const surface = this.tiling ? this.tiledSurface ??= tiledSurfaceMaterial() : this.surface;
     const uniforms=layer.kind==='surface'?surface.uniforms:layer.kind==='fractal'?this.fractal.uniforms:
@@ -644,7 +647,7 @@ export class StudioRenderer {
       return this.drawOil(layer, original, phase);
     } else if (layer.kind === 'scope') {
       this.scope ??= new ScopeRenderer();
-      this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t));
+      this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t), smokeAudio);
     } else if (layer.kind === 'liquid') {
       const u = this.liquid.uniforms;
       u.uAspect.value = aspect; u.uPhase.value = localPhase;
@@ -759,7 +762,7 @@ export class StudioRenderer {
     return this.source.texture;
   }
 
-  private renderFrame(project: Project, phase: number, width: number, height: number): void {
+  private renderFrame(project: Project, phase: number, width: number, height: number, smokeAudio?: SmokeAudioFrame): void {
     this.assertUsable();
     if (!Number.isFinite(phase)) throw new Error('Frame phase must be finite.');
     if (project.layers.length > 4) throw new Error('This version supports at most four composition layers.');
@@ -786,7 +789,7 @@ export class StudioRenderer {
       if (layer.opacity <= 0) continue;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
-        : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration);
+        : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
       const u = this.composite.uniforms;
       u.uBelow.value = below.texture; u.uSource.value = sourceTexture;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
@@ -1088,11 +1091,14 @@ export class StudioRenderer {
     }
   }
 
-  render(project: Project, phase: number, width?: number, height?: number): void {
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }): void {
     if (this.exporting) return;
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
-    this.renderFrame(project, phase, w, h);
+    if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();
+    else this.emberAudio = undefined;
+    const smoke = sound ? this.emberAudio?.advance(sound.signals, sound.now) : undefined;
+    this.renderFrame(project, phase, w, h, smoke);
     // Resizing a canvas, even to the size it already has, resets it and re-allocates its drawing buffer:
     // only when the size changes.
     const canvasSize = this.renderer.getSize(this.canvasSize);

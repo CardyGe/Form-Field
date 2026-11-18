@@ -357,7 +357,9 @@ Check it with `node scripts/verify-liquid.mjs` (add `--quick` for stills only).
 
 ## Oscilloscope controls
 
-**Ember Pulse** is an Oscilloscope look with a hollow red filament bloom, outward-travelling rings and amber accents. Find it in Studio's Looks or Map's look browser. Opening, Turbulence, Pulse depth, Ring strength and Heat shape the motion and colour independently. Smoke controls the red vapour around the filaments. Smoke spread under Advanced Motion controls how far it drifts. In Map's Sound & MIDI panel, link bass to Opening, the beat to Ring strength or highs to Heat. For a four-bar loop, set Phrases per loop to four in Studio and Loop with the tempo to 16 beats in Map.
+**Ember Pulse** is an Oscilloscope look with a hollow filament bloom, outward-travelling rings and rolling smoke. Find Ember Pulse, Glacier Vapour, Orchid Static, Acid Plume and Silver Ash in Studio's Looks or Map's look browser. The Colour scheme menu changes the palette independently of the effect settings.
+
+Smoke controls the amount of vapour. Use Smoke curl and Smoke lift for its movement, Smoke spread and Smoke persistence for its reach and wake, and Smoke thickness, Smoke detail and Smoke lighting for its appearance. Use **Smoke audio input** in Studio or **Sound & MIDI** in Map. Detected kicks emit new plumes, sustained bass gives them body, and highs brighten fine wisps. Smoke audio response sets how much they react. Exports use the repeating authored smoke phrase. For a four-bar loop, set Phrases per loop to four in Studio and Loop with the tempo to 16 beats in Map.
 
 **Oscilloscope** draws one glowing line the way an oscilloscope does in X-Y mode: the beam is steered by three oscillators, one each for across, up and depth. The figure is not an object that turns. It moves because the oscillators slip against each other, so it folds, opens and collapses. The core burns to white, the halo keeps the line colour, and parts the beam crosses slowly are brighter. Looks: **Twin Orbit**, **Atom**, **Ember Ring**, **Cyan Tangle**, **Signal Burst** and **Morse Weave**.
 

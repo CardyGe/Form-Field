@@ -11,9 +11,10 @@ import { reactivity, type ReactivityEngine } from '../react/engine';
 import { fire, type TriggerAction } from '../react/links';
 import type { Signals } from '../react/signals';
 import { MeterStore } from '../react/meter';
+import { usesEmberSmokeAudio } from '../react/ember-smoke';
 
 /** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
-export const showReacts = (show: ShowDocument) => show.links.length > 0 || show.triggers.length > 0 || show.sources.some(s => s.tempoSync !== null);
+export const showReacts = (show: ShowDocument) => show.links.length > 0 || show.triggers.length > 0 || show.sources.some(s => s.tempoSync !== null || s.project.layers.some(usesEmberSmokeAudio));
 
 export type MapTool = 'select' | 'rectangle' | 'triangle' | 'ellipse' | 'pen';
 /** The shapes soloed, directly or through their group, that are still in the show. */

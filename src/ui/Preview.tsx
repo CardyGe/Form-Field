@@ -6,12 +6,13 @@ import { playbackPhase } from '../core/playback';
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import { useCanvasInteraction } from './useCanvasInteraction';
 import { previewSize } from '../rendering/preview-size';
+import type { ReactivityEngine } from '../react/engine';
 
 const TAU = Math.PI * 2;
 const actualDuration = (p: Project) => frameCount(p) * p.fps.den / p.fps.num;
 
-export function Preview({ tiled, project, playing, phase, rendererRef, onError, onEnded, checker, layer, locks, blocked, onChange, onVary, onNotice }: {
-  tiled: boolean; project: Project; playing: boolean; phase: RefObject<number>; rendererRef: RefObject<StudioRenderer | null>; onError: (s: string) => void; onEnded?:()=>void; checker: boolean;
+export function Preview({ tiled, project, playing, phase, rendererRef, smokeSound, onError, onEnded, checker, layer, locks, blocked, onChange, onVary, onNotice }: {
+  tiled: boolean; project: Project; playing: boolean; phase: RefObject<number>; rendererRef: RefObject<StudioRenderer | null>; onError: (s: string) => void; onEnded?:()=>void; checker: boolean; smokeSound?: ReactivityEngine | null;
   layer: Layer | undefined; locks: VariationLocks; blocked: boolean;
   onChange: (layer: Layer, record: boolean) => void; onVary: (id: string) => void; onNotice: (message: string) => void;
 }) {
@@ -19,9 +20,9 @@ export function Preview({ tiled, project, playing, phase, rendererRef, onError, 
   const helpId = useId();
   const { control, feedback, axes } = useCanvasInteraction({ canvas, layer, locks, blocked, onChange, onVary, onNotice });
   const enabled = !blocked && !tiled && layer?.visible;
-  const current = useRef({ project, playing,onEnded,tiled }), invalidate = useRef(true);
+  const current = useRef({ project, playing,onEnded,tiled,smokeSound }), invalidate = useRef(true);
   const prepared = useRef<Project | null>(null);
-  current.current = { project, playing,onEnded,tiled };
+  current.current = { project, playing,onEnded,tiled,smokeSound };
   useEffect(() => { invalidate.current = true; }, [tiled]);
   useEffect(() => {
     if (!canvas.current || !host.current) return;
@@ -46,7 +47,8 @@ export function Preview({ tiled, project, playing, phase, rendererRef, onError, 
         const ratio = state.project.width / state.project.height;
         const size=previewSize(box.width,box.height,ratio,density);
         canvas.current!.style.width=`${size.cssWidth}px`;canvas.current!.style.height=`${size.cssHeight}px`;
-        try { engine.render(state.project, phase.current, size.width,size.height); 
+        try { engine.render(state.project, phase.current, size.width, size.height,
+          state.playing && state.smokeSound ? { signals: state.smokeSound.signals, now } : undefined);
           const overlay = tileCanvas.current;
           if (state.tiled && overlay) {
             // Drawn in the same frame as the render, while the WebGL buffer is still valid.

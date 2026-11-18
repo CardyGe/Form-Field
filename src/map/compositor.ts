@@ -283,7 +283,7 @@ export class MapCompositor {
       // Sized from the shapes as set, not as links move them: a zoom on the bass would otherwise resize the instrument many times a second.
       const size = sourceSizeFor(users.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), scale);
       try {
-        slot.renderer.render(withParams(slot.project, this.drawn.params.get(source.id)), slot.phase, size.width, size.height);
+        slot.renderer.render(withParams(slot.project, this.drawn.params.get(source.id)), slot.phase, size.width, size.height, { signals: this.signals, now });
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);
         rendered = true;
         if (slot.failedProject === null) slot.failed = null;

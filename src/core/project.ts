@@ -44,6 +44,13 @@ const EMBER_PARAMETERS = [
   { ...parameter('emberHeat', 'Heat', 0, 1, .01, .62, 'Material'), description: 'Brings orange and gold into the brightest filaments.' },
   { ...parameter('emberSmoke', 'Smoke', 0, 1, .01, .70, 'Material'), description: 'Adds smoke that curls out of the filament body and thins between accents.' },
   { ...parameter('emberSmokeSpread', 'Smoke spread', 0, 1, .01, .44, 'Motion'), advanced: true, description: 'Sets how far the smoke drifts from the bloom before dispersing.' },
+  { ...parameter('emberSmokeCurl', 'Smoke curl', 0, 1, .01, .67, 'Motion'), description: 'Controls how strongly the smoke rolls over itself.' },
+  { ...parameter('emberSmokeResponse', 'Smoke audio response', 0, 1, .01, .72, 'Motion'), description: 'Lets beats launch fresh plumes, bass add body and highs bring out fine wisps.' },
+  { ...parameter('emberSmokeLift', 'Smoke lift', -1, 1, .01, .26, 'Motion'), advanced: true, description: 'Adds upward or downward drift as the smoke ages.' },
+  { ...parameter('emberSmokeLife', 'Smoke persistence', 0, 1, .01, .55, 'Motion'), advanced: true, description: 'Sets how long the wake hangs before it thins.' },
+  { ...parameter('emberSmokeBody', 'Smoke thickness', 0, 1, .01, .61, 'Material'), description: 'Adds depth and hides some of the filaments behind denser smoke.' },
+  { ...parameter('emberSmokeDetail', 'Smoke detail', 0, 1, .01, .60, 'Material'), advanced: true, description: 'Reveals finer folds and ragged edges.' },
+  { ...parameter('emberSmokeLight', 'Smoke lighting', 0, 1, .01, .72, 'Material'), advanced: true, description: 'Sets how much the filaments light the surrounding smoke.' },
   { ...parameter('emberDensity', 'Filament density', 0, 1, .01, .62, 'Shape'), advanced: true, description: 'Fades more fine strands into the central body.' },
   { ...parameter('emberOuter', 'Outer contours', 0, 1, .01, .30, 'Shape'), advanced: true, description: 'Sets the strength of the broad traces around the frame.' },
   { ...parameter('emberPhrases', 'Phrases per loop', 1, 16, 1, 5, 'Motion'), advanced: true, description: 'Sets how many four-beat phrases play in one composition loop.' },
@@ -57,6 +64,16 @@ export function scopeParameterVisible(params: Layer['params'], key: string): boo
     ? EMBER_KEYS.has(key) || SHARED_SCOPE_KEYS.has(key)
     : !EMBER_KEYS.has(key);
 }
+
+const EMBER_BASE = { scopeMode: 1, radius: .43, beamWidth: .51, intensity: 1.60, halo: .48, bloom: .43, bloomSize: .29, depthFade: .74, afterglow: .16 };
+
+export const EMBER_PALETTES = [
+  { id: 'ember-pulse', name: 'Ember Pulse', palette: ['#b90b14', '#820008', '#a30f03', '#ffd074', '#fa3e14', '#be261d'] },
+  { id: 'ember-glacier', name: 'Glacier Vapour', palette: ['#6bf9fc', '#17718a', '#2466cd', '#e9fcff', '#35a7ff', '#4385b2'] },
+  { id: 'ember-orchid', name: 'Orchid Static', palette: ['#f658ee', '#782c9e', '#6314cf', '#ffc8e7', '#a47dff', '#8f38ac'] },
+  { id: 'ember-acid', name: 'Acid Plume', palette: ['#bafa32', '#487018', '#53a60f', '#fff9a1', '#32ff8b', '#5e9c2a'] },
+  { id: 'ember-silver', name: 'Silver Ash', palette: ['#d4e5f3', '#626f83', '#8393ad', '#fbfdff', '#a5c2df', '#8594a9'] },
+];
 
 const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
   ...INSTRUMENT_PARAMETERS,
@@ -440,9 +457,7 @@ export const PRESETS: Preset[] = [
   preset('cyan-tangle', 'Cyan Tangle', 'A dense weave of cyan line that never stops folding, with a white-hot core and a blue glow.', 'scope', ['#2ad8ff', '#1a90ff', '#1228ff', '#ffffff', '#40ffb4', '#000000'], { figure: 7, ring: 0, radius: 0.36, tilt: 0.4, drift: 1, tumbleY: 1, overtones: 0.3, wiggle: 0.1, wiggleFrequency: 64, wiggleBursts: 0.5, afterglow: 0.35, intensity: 1.5, halo: 0.9, bloom: 1.3, bloomSize: 0.45, fringe: 0.7, hueDrift: 0.35, depthFade: 0.75 }),
   preset('signal-burst', 'Signal Burst', 'A calm trace that breaks into bursts of signal, trailing light.', 'scope', ['#ff2aa8', '#b020ff', '#5a10e0', '#ffffff', '#ffb040', '#000000'], { figure: 0, figureB: 1, morph: 0.35, hold: 0.4, ring: 0.6, radius: 0.36, tilt: 0.3, drift: 1, sway: 0.3, wiggle: 0.7, wiggleFrequency: 30, wiggleBursts: 0.85, afterglow: 0.6, intensity: 2.4, halo: 1.1, bloom: 1.2, bloomSize: 0.55, fringe: 0.5, hueDrift: 0.5 }),
   preset('morse-sphere', 'Morse Weave', 'Bright dashes race round a knot that unfolds into a star and back.', 'scope', ['#7dff5a', '#18c060', '#087048', '#ffffff', '#e8ff40', '#000000'], { figure: 4, figureB: 6, morph: 1, hold: 0.5, ring: 0, radius: 0.36, tilt: 0.5, drift: 1, dash: 1, dashCount: 28, dashLength: 0.35, dashSpeed: 3, afterglow: 0.45, intensity: 1.7, halo: 1, bloom: 1.1, bloomSize: 0.4, fringe: 0.35, hueDrift: 0.4, depthFade: 0.7 }),
-  preset('ember-pulse', 'Ember Pulse', 'Red filaments open into a hollow bloom as gold-edged rings travel outward.', 'scope',
-    ['#b90b14', '#820008', '#a30f03', '#ffd074', '#fa3e14', '#000000'],
-    { scopeMode: 1, radius: .43, beamWidth: .51, intensity: 1.60, halo: .48, bloom: .43, bloomSize: .29, depthFade: .74, afterglow: .16 }),
+  ...EMBER_PALETTES.map(look => preset(look.id, look.name, 'Rolling smoke and outward-travelling filaments.', 'scope', look.palette, EMBER_BASE)),
   preset('acid-slide', 'Acid Slide', 'Fluorescent yellow paint, cellular black ink and a glossy lens over cyan.', 'oil', OIL_PALETTE, {}),
   preset('cobalt-tide', 'Cobalt Tide', 'Electric blue paint and coral ink flowing over luminous turquoise.', 'oil', ['#234dff', '#05bdf5', '#2b0927', '#42f2b4', '#111044', '#e7b4ff'], { layout: 1, travel: 0.38, relativeRotation: 0.65, drag: 0.78, coverage: 0.64, lensSize: 0.24, deformation: 0.85, cellComplexity: 0.85, dispersion: 0.35 }),
   preset('acrylic-pour', 'Acrylic Pour', 'Yellow paint poured over cyan, opening into laced cells that swell and close.', 'oil', ['#ffe600', '#ffc400', '#0a0a12', '#00b8ff', '#00508f', '#ffffff'], { layout: 1, dome: 0, coverage: 0.55, cellSize: 1.1, ink: 0.85, thickness: 0.7, travel: 0.18, relativeRotation: 0.1, wetness: 0.9 }),

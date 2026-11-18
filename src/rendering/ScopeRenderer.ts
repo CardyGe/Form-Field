@@ -5,6 +5,7 @@ import { fullscreenVertex } from './shaders';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, lightTarget } from './bloom';
 import { SCOPE_POINT_STRIDE as STRIDE, writeEmberPoints } from './scope-ember';
 import { EMBER_SMOKE_SOURCES, emberSmokeFragment, emberSmokeFrame } from './scope-ember-smoke';
+import type { SmokeAudioFrame } from '../react/ember-smoke';
 import { SCOPE_WAVE, scopeDash, scopeLine, scopePerspective, scopeWave, type ScopeMotion, type ScopeShape } from './scope-curve';
 
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
@@ -49,7 +50,8 @@ export class ScopeRenderer {
     uniforms: {
       uView: { value: new THREE.Matrix3() }, uClock: { value: new THREE.Vector2() },
       uAspect: { value: 1 }, uRadius: { value: 1 }, uSpread: { value: 0 },
-      uOpening: { value: 0 }, uSeed: { value: 0 },
+      uOpening: { value: 0 }, uSeed: { value: 0 }, uCurl: { value: 0 }, uLift: { value: 0 },
+      uDetail: { value: 0 }, uBass: { value: 0 },
       uPuffs: { value: Array.from({ length: EMBER_SMOKE_SOURCES }, () => new THREE.Vector4()) },
     },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
@@ -104,9 +106,9 @@ export class ScopeRenderer {
     fragmentShader: /* glsl */`
       precision highp float; varying vec2 vUv;
       uniform sampler2D uLight, uBloom0, uBloom1, uBloom2, uBloom3, uBloom4, uSmoke;
-      uniform vec3 uLine, uSecond, uHaloTint, uBloomTint, uHot;
+      uniform vec3 uLine, uSecond, uHaloTint, uBloomTint, uHot, uSmokeTint;
       uniform float uWeights[5];
-      uniform vec2 uCentre; uniform float uAspect, uRadius, uFringe, uEmber, uHeat, uSmokeGain;
+      uniform vec2 uCentre; uniform float uAspect, uRadius, uFringe, uEmber, uHeat, uSmokeGain, uSmokeBody, uSmokeLighting;
       float glow(sampler2D level) { vec3 b=texture2D(level,vUv).rgb; return b.r+b.g*.6; }
       void main() {
         // Red and blue are read a little apart, more so towards the edge of the sphere.
@@ -115,7 +117,8 @@ export class ScopeRenderer {
         vec3 light=texture2D(uLight,vUv).rgb;
         vec3 core=vec3(texture2D(uLight,vUv-shift).r,light.r,texture2D(uLight,vUv+shift).r);
         vec3 line=mix(uLine,uSecond,light.r>1e-5?clamp(light.b/light.r,0.,1.):0.);
-        float bloom=uWeights[0]*glow(uBloom0)+uWeights[1]*glow(uBloom1)+uWeights[2]*glow(uBloom2)+uWeights[3]*glow(uBloom3)+uWeights[4]*glow(uBloom4);
+        float tight=glow(uBloom1), mids=glow(uBloom2), broad=glow(uBloom3);
+        float bloom=uWeights[0]*glow(uBloom0)+uWeights[1]*tight+uWeights[2]*mids+uWeights[3]*broad+uWeights[4]*glow(uBloom4);
         vec3 sum=core*(line+uHot*.5)+uHaloTint*light.g+uBloomTint*bloom;
         if (uEmber > .5) {
           float ridge=clamp(light.b/max(light.r,1e-5),0.,1.);
@@ -123,10 +126,14 @@ export class ScopeRenderer {
           vec3 ember=mix(uLine,uSecond,.7*ridge);
           sum=light.r*(ember+uHot*heat)+uHaloTint*light.g+uBloomTint*bloom;
           if (uSmokeGain > 0.) {
-            vec2 smoke=texture2D(uSmoke,vUv).rg*uSmokeGain;
-            float warm=uHeat*.065;
-            vec3 scattering=mix(uHaloTint,uLine,.70)+uHot*warm;
-            sum=sum*exp(-.42*smoke.x)+smoke.x*scattering+smoke.y*mix(uLine,uSecond,.55)*.42;
+            vec3 smoke=texture2D(uSmoke,vUv).rgb*uSmokeGain;
+            float nearby=1.-exp(-(.62*tight+1.45*mids+.50*broad+.13*light.r));
+            float lightLevel=uSmokeLighting*nearby;
+            float transmission=exp(-smoke.x*mix(.32,2.12,uSmokeBody));
+            vec3 scattered=uSmokeTint*(.24+lightLevel*.88)+uHot*(.15*lightLevel*uHeat);
+            vec3 behind=(1.-exp(-smoke.y*1.24))*scattered*.51;
+            vec3 inFront=(1.-transmission)*scattered;
+            sum=(sum+behind)*transmission+inFront+smoke.z*scattered*(.27+.42*lightLevel);
           }
         }
         // Roll off towards 1 per channel: bright light loses its colour and burns white.
@@ -139,6 +146,7 @@ export class ScopeRenderer {
       uBloomTint: { value: new THREE.Color() }, uHot: { value: new THREE.Color() },
       uWeights: { value: [0, 0, 0, 0, 0] }, uCentre: { value: new THREE.Vector2(.5, .5) }, uAspect: { value: 1 }, uRadius: { value: .3 }, uFringe: { value: 0 },
       uEmber: { value: 0 }, uHeat: { value: 0 }, uSmoke: { value: null }, uSmokeGain: { value: 0 },
+      uSmokeTint: { value: new THREE.Color() }, uSmokeBody: { value: 0 }, uSmokeLighting: { value: 0 },
     },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
@@ -203,8 +211,10 @@ export class ScopeRenderer {
     return length / SEGMENTS;
   }
 
-  private drawSmoke(p: Layer['params'], phase: number, view: THREE.Matrix3, radius: number, width: number, height: number, draw: Draw): number {
-    const seed = p.seed ?? 1729, frame = emberSmokeFrame(phase, p.emberPhrases, seed);
+  private drawSmoke(p: Layer['params'], phase: number, view: THREE.Matrix3, radius: number, width: number, height: number, draw: Draw, audio?: SmokeAudioFrame): number {
+    const seed = p.seed ?? 1729, response = p.emberSmokeResponse;
+    const frame = emberSmokeFrame(phase, p.emberPhrases, seed, p.emberSmokeLife, audio, response);
+    const bass = (audio?.bass ?? 0) * response, highs = (audio?.highs ?? 0) * response;
     const aspect = width / height;
     const u = this.smoke.uniforms;
     (u.uView.value as THREE.Matrix3).copy(view);
@@ -212,18 +222,29 @@ export class ScopeRenderer {
     u.uAspect.value = aspect; u.uRadius.value = radius; u.uSpread.value = p.emberSmokeSpread;
     u.uOpening.value = Math.min(1, p.emberOpening * frame.opening * 1.65);
     u.uSeed.value = (seed >>> 0) % 881 * .073;
-    frame.puffs.forEach(({ x, y, age, gain }, i) => (u.uPuffs.value[i] as THREE.Vector4).set(x, y, age, gain));
+    u.uCurl.value = p.emberSmokeCurl;
+    u.uLift.value = p.emberSmokeLift;
+    u.uDetail.value = THREE.MathUtils.lerp(p.emberSmokeDetail, 1, highs);
+    u.uBass.value = bass;
+    (u.uPuffs.value as THREE.Vector4[]).forEach((slot, i) => {
+      const puff = frame.puffs[i];
+      if (puff) slot.set(puff.x, puff.y, puff.age, puff.gain);
+      else slot.set(0, 0, 0, 0);
+    });
     // The broad density field needs fewer samples than the fine beam geometry.
-    const scale = Math.min(.5, 640 / Math.max(width, height));
+    const scale = Math.min(.5, 528 / Math.max(width, height));
     const w = Math.max(1, Math.round(width * scale));
     const h = Math.max(1, Math.round(height * scale));
     if (this.smokeTarget.width !== w || this.smokeTarget.height !== h) this.smokeTarget.setSize(w, h);
     draw(this.smoke, this.smokeTarget);
     const exposure = 1 - p.emberPulse * (1 - frame.body) * (1 - p.emberRest);
-    return p.emberSmoke * (.28 + .36 * p.intensity) * (.12 + .88 * exposure * exposure);
+    const authored = .12 + .88 * exposure * exposure;
+    // Add light from active live plumes without tying their launch or age to the authored bar.
+    const live = (audio?.beats ?? []).reduce((peak, beat) => Math.max(peak, Math.exp(-2.6 * beat.age) * beat.strength), 0) * response;
+    return p.emberSmoke * (.32 + .37 * p.intensity) * Math.min(1.4, authored + bass * .39 + live * .57);
   }
 
-  draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw): void {
+  draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, audio?: SmokeAudioFrame): void {
     const p = layer.params, aspect = width / height;
     const ember = p.scopeMode === 1 ? writeEmberPoints(this.points, p, phase, aspect) : null;
     const radius = ember?.radius ?? p.radius;
@@ -262,8 +283,16 @@ export class ScopeRenderer {
     (r.uCentre.value as THREE.Vector2).set(centre.x, centre.y);
     r.uAspect.value = aspect; r.uRadius.value = radius * layer.transform.scale; r.uFringe.value = ember ? 0 : p.fringe;
     r.uEmber.value = Number(!!ember); r.uHeat.value = ember?.heat ?? 0;
-    r.uSmokeGain.value = ember && p.emberSmoke > 0 ? this.drawSmoke(p, phase, view, radius, width, height, draw) : 0;
+    r.uSmokeGain.value = ember && p.emberSmoke > 0 ? this.drawSmoke(p, phase, view, radius, width, height, draw, audio) : 0;
     r.uSmoke.value = r.uSmokeGain.value > 0 ? this.smokeTarget.texture : null;
+    if (r.uSmokeGain.value > 0) {
+      const tint = r.uSmokeTint.value as THREE.Color;
+      // Black in an older palette was the unused sixth swatch.
+      if (layer.palette[5] === '#000000') tint.copy(r.uHaloTint.value).lerp(r.uLine.value, .74);
+      else tint.set(layer.palette[5]);
+      r.uSmokeBody.value = p.emberSmokeBody;
+      r.uSmokeLighting.value = p.emberSmokeLight;
+    }
     draw(this.resolve, target);
   }
 

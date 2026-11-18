@@ -1,3 +1,4 @@
+import { EMBER_LIVE_PUFFS, type SmokeAudioFrame } from '../react/ember-smoke';
 import { emberPhrase } from './scope-ember';
 
 const TAU = Math.PI * 2;
@@ -9,29 +10,36 @@ const SOURCES = [
   { beat: .72, life: .63, angle: .26, strength: .83 },
 ];
 
-export const EMBER_SMOKE_SOURCES = SOURCES.length;
+export const EMBER_SMOKE_SOURCES = SOURCES.length + EMBER_LIVE_PUFFS;
 const fract = (x: number) => x - Math.floor(x);
 const smooth = (x: number) => {
   const t = Math.max(0, Math.min(1, x));
   return t * t * (3 - 2 * t);
 };
 
-/** Reconstruct the surviving puffs and their launch directions at any point in the loop. */
-export function emberSmokeFrame(phase: number, phrases: number, seed: number) {
-  const turn = fract(phase / TAU);
-  const clock = turn * TAU;
+/** Birth positions are fixed per event, including across the authored loop seam. */
+export function emberSmokeFrame(phase: number, phrases: number, seed: number, persistence = .55, audio?: SmokeAudioFrame, response = .72) {
+  const clock = fract(phase / TAU) * TAU;
   const { bar, body, opening } = emberPhrase(clock, phrases);
   const angleSeed = (seed >>> 0) / 4294967296 * TAU + (seed % 257) * .095;
+  const puff = (angle: number, age: number, strength: number) => ({
+    x: Math.cos(angle), y: Math.sin(angle), age,
+    gain: strength * smooth(age / .088) * (1 - smooth((age - .19) / .81)),
+  });
   const puffs = SOURCES.map(source => {
     const elapsed = fract(bar - source.beat);
-    const age = Math.min(1, elapsed / source.life);
+    const lifetime = source.life * (.68 + .43 * persistence);
+    const age = Math.min(1, elapsed / lifetime);
     const launch = clock - elapsed * TAU / phrases;
     const angle = source.angle + .35 * Math.sin(angleSeed)
       + .45 * Math.sin(2 * launch + source.angle)
       + .22 * Math.sin(3 * launch + angleSeed - source.angle);
-    const gain = source.strength * smooth(age / .115) * (1 - smooth((age - .26) / .74));
-    return { x: Math.cos(angle), y: Math.sin(angle), age, gain };
+    return puff(angle, age, source.strength);
   });
+  if (audio && response > 0) {
+    for (const beat of audio.beats) puffs.push(puff(beat.id * 2.39996 + angleSeed,
+      Math.min(1, beat.age / (.65 + 1.55 * persistence)), beat.strength * response * 1.5));
+  }
   return { puffs, body, opening, clock };
 }
 
@@ -41,7 +49,7 @@ varying vec2 vUv;
 
 uniform mat3 uView;
 uniform vec2 uClock;
-uniform float uAspect, uRadius, uSpread, uOpening, uSeed;
+uniform float uAspect,uRadius,uSpread,uOpening,uSeed,uCurl,uLift,uDetail,uBass;
 uniform vec4 uPuffs[${EMBER_SMOKE_SOURCES}];
 
 float smokeHash(vec2 p) {
@@ -57,46 +65,61 @@ float smokeNoise(vec2 p) {
     mix(smokeHash(cell+vec2(0.,1.)),smokeHash(cell+1.),f.x),f.y);
 }
 
-void main() {
-  // Work in bloom-radius units so the smoke follows the beam through layer pan, zoom and rotate.
-  vec2 p=((uView*vec3(vUv,1.)).xy-.5)*vec2(uAspect,1.)/max(uRadius,.0001);
-  if (dot(p,p)>7.29) { gl_FragColor=vec4(0.); return; }
+// Each vortex is a radial rotation. Backtracing through two opposing vortices
+// rolls the density field with no radial compression at the centre of either roll.
+vec2 backtraceRoll(vec2 p,vec2 centre,float twist) {
+  vec2 d=p-centre;
+  float core=1./(1.+dot(d,d)*7.5);
+  float angle=twist*core*core;
+  float c=cos(angle),s=sin(angle);
+  return centre+mat2(c,s,-s,c)*d;
+}
 
-  vec2 noiseUV=p*3.4+uClock*.59+uSeed;
-  vec2 bend=vec2(smokeNoise(noiseUV),smokeNoise(noiseUV+vec2(7.9,19.7)))-.5;
-  vec2 q=p+.19*bend;
-  float density=0., veins=0.;
+void main() {
+  vec2 p=((uView*vec3(vUv,1.)).xy-.5)*vec2(uAspect,1.)/max(uRadius,.0001);
+  if (dot(p,p)>10.24) { gl_FragColor=vec4(0.); return; }
+
+  vec2 noiseUV=p*3.65+uClock*.48+uSeed;
+  vec2 drift=vec2(smokeNoise(noiseUV),smokeNoise(noiseUV+vec2(7.9,19.7)))-.5;
+  vec2 q=p+.14*drift;
+  vec3 density=vec3(0.);
 
   for (int i=0; i<${EMBER_SMOKE_SOURCES}; ++i) {
     vec4 puff=uPuffs[i];
     if (puff.w<=0.) continue;
     float age=puff.z;
     vec2 axis=puff.xy, side=vec2(-axis.y,axis.x);
-    vec2 local=vec2(dot(q,axis),dot(q,side));
-    // As the puff moves off the bloom, it spreads, curls sideways and leaves a narrow wake.
-    float reach=.37+mix(.64,1.27,uSpread)*age;
-    vec2 size=vec2(.55+.22*age,.23+.37*age);
-    if (abs(local.x-reach)>size.x*1.07 || abs(local.y)>size.y*1.07+.16) continue;
-    local.y-=.16*sin(4.5*local.x-5.5*age+float(i)*1.8)*smoothstep(0.,.45,age);
-    local.x-=reach;
-    vec2 shape=local/size;
-    float envelope=1.-smoothstep(.20,1.14,dot(shape,shape));
-    if (envelope<=0.) continue;
+    vec2 origin=q-vec2(.035*sin(float(i)*2.4),uLift*age*age*.85);
+    vec2 local=vec2(dot(origin,axis),dot(origin,side));
+    float reach=.33+mix(.56,1.42,uSpread)*age;
+    vec2 size=vec2(.52+.28*age,.24+.33*age)*(1.+.25*uBass);
+    vec2 shape=(local-vec2(reach,0.))/size;
+    float radius2=dot(shape,shape);
+    if (radius2>1.62) continue;
+    float rim=smoothstep(.27,1.38,radius2);
+    float mass=puff.w*(1.-smoothstep(.30,1.62,radius2));
 
-    vec2 flow=local*vec2(7.,11.)+bend*vec2(2.9,4.4)+vec2(-2.9*age,1.8*age+float(i)*6.1);
-    float curl=smokeNoise(flow*.55+uClock*.57);
-    flow.y+=2.*(curl-.5);
-    float grain=smokeNoise(flow*4.1+2.*age);
-    float folds=.88*smokeNoise(flow)+.48*smokeNoise(flow*2.11+curl)+.25*grain;
-    float cloud=smoothstep(.38,1.12,folds)*mix(.46,1.,smoothstep(.16,.82,grain));
-    float ridges=smoothstep(.55,.75,folds)*(1.-smoothstep(.78,.97,folds));
-    float mass=puff.w*envelope;
-    density+=mass*cloud;
-    veins+=mass*ridges*cloud;
+    // The jet rolls up at its shear edges, then relaxes as it travels away.
+    float turn=uCurl*mix(.27,1.27,smoothstep(.05,.53,age))*(1.-.31*smoothstep(.62,1.,age));
+    float shear=sin(float(i)*2.399+uSeed);
+    vec2 roll=backtraceRoll(shape,vec2(-.22+.16*shear,.45),4.2*turn);
+    roll=backtraceRoll(roll,vec2(.22,-.34-.14*shear),-3.58*turn);
+    vec2 flow=roll*vec2(2.85,3.4)+drift*1.2+vec2(-2.1*age, float(i)*8.3);
+    float large=smokeNoise(flow);
+    float middle=smokeNoise(flow*2.12+large);
+    float fine=smokeNoise(flow*4.57+vec2(.7,-2.6)*age);
+    float body=.72*large+.46*middle+(.12+.18*uDetail)*fine;
+    float erosion=rim*(.14+.10*age);
+    float front=smoothstep(.39+erosion,1.01,body);
+    // The rear slab has its own folds so the thicker parts can overlap.
+    float behind=.74*smokeNoise(flow*.84+vec2(1.42,4.13))+.38*middle+.16*fine;
+    float rear=smoothstep(.34+erosion,1.0,behind);
+    float edges=smoothstep(.43+erosion,.68+erosion,body)*(1.-smoothstep(.73,.98,body));
+    float strands=mix(.65,1.28,smoothstep(.20,.79,fine));
+    density+=mass*vec3(front*strands,rear,edges*mix(.30,1.,uDetail)*fine);
   }
 
-  // Leave the cavity readable as it opens. This sink tracks the same pulse as the filaments.
-  float cavity=mix(1.,smoothstep(.18,.49,length(p)),uOpening);
-  gl_FragColor=vec4(vec2(density,veins)*cavity,0.,1.);
+  float cavity=mix(1.,smoothstep(.16,.46,length(p)),uOpening);
+  gl_FragColor=vec4(density*cavity,1.);
 }
 `;
