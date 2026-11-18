@@ -542,7 +542,8 @@ Made 18 November 2026, before building stage 4. Greg handed over the how; each o
 - **Across group** covers the box of every member of the group, hidden ones and Blockers included.
 - **Stage corners.**
   - They bend the projector's picture only. The operator screen stays flat, and its picture of the projector is taken before the bend.
-  - The corners may go at most half a stage past the edge. A corner past the edge is shown, and can be grabbed, at the edge. Tab steps between the four corners for the arrow keys.
+  - The corners may go at most half a stage past the edge. They are shown and grabbed in the margin around the stage on the operator screen (a corner further out shows at the margin's edge). Tab steps between the four corners for the arrow keys.
+- **Handles beside the stage.** The selection's scale and turn handles, and the stage corners, are drawn on a layer over the whole stage area, so a shape against the stage's edge keeps handles that can be grabbed.
   - Each drag is one undo step, and so is each arrow nudge.
 - **Sharing.** A shared instrument is drawn once, at the largest place it lands. Vary, palette and speed change every shape that shares it, and Make separate gives a shape its own copy.
 - **Brightness and tint** apply to everything a shape shows, its own grid pattern included, but not to Blockers.

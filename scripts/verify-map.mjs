@@ -531,6 +531,25 @@ try {
     await studio.getByRole('button', { name: 'Stage corners', exact: true }).click();
   });
 
+  await check('a shape against the stage’s corner keeps its scale handle, beside the stage, where it can be grabbed', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.7, .7], [1, 1]);
+    await tool('Select'); await asColour();
+    await clickOn([.85, .85]);
+    await wallUntil([[.97, .97]], c => coloured(c[0]), 'shape in the corner');
+    const r = await stage.evaluate(c => { const b = c.getBoundingClientRect(); return { right: b.right, bottom: b.bottom }; });
+    // The bottom-right handle sits 14 screen pixels out from the corner: outside the stage itself.
+    const handle = await studio.evaluate(({ x, y }) => {
+      const layer = document.querySelector('.map-handles'), b = layer.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+      return Array.from(layer.getContext('2d').getImageData(Math.round((x - b.left) * dpr), Math.round((y - b.top) * dpr), 1, 1).data.slice(0, 3));
+    }, { x: r.right + 14, y: r.bottom + 14 });
+    assert.ok(handle[0] > 200 && handle[1] > 150 && handle[2] < 80, `the handle beside the stage is rgb(${handle}), not drawn`);
+    const at = await geo();
+    await studio.mouse.move(r.right + 14, r.bottom + 14); await studio.mouse.down();
+    await studio.mouse.move(...at(.85, .85), { steps: 8 }); await studio.mouse.up();
+    await wallUntil([[.97, .97], [.75, .75]], c => near(c[0], BLACK) && coloured(c[1]), 'shrunk by its handle');
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
