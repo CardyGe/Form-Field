@@ -446,6 +446,8 @@ try {
     // Pick the second rectangle and its top-left corner: it moved with the first.
     await clickOn([.27, .17]);
     await clickOn([.22, .08]);
+    // The point's position is in the Shape tab.
+    await openSection(studio, 'shape');
     const x = Number(await studio.getByLabel('X', { exact: true }).inputValue()), y = Number(await studio.getByLabel('Y', { exact: true }).inputValue());
     assert.ok(Math.abs(x - .22 * 1920) <= 3 && Math.abs(y - .08 * 1080) <= 3, `the joined corner is at ${x}, ${y}`);
     void at;
