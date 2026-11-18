@@ -5,7 +5,8 @@ import { acceptSignals, type Signals } from '../react/signals';
 import { ownCornersPinnable } from './placement';
 
 export type MapMessage =
-  | { type: 'show'; show: WireShow }
+  /** fadeMs: this show is a scene switch, crossfading over that long. */
+  | { type: 'show'; show: WireShow; fadeMs?: number }
   /** One source's composition, sent once per revision. */
   | { type: 'source'; id: string; revision: number; project: Project }
   | { type: 'blackout'; on: boolean }
@@ -90,7 +91,7 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
   if (!plain(value)) return false;
   if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MAP_MESSAGE_LIMIT)) return false;
   switch (value.type) {
-    case 'show': return plain(value.show);
+    case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && (value.fadeMs as number) >= 0 && (value.fadeMs as number) <= 30000));
     case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && (value.revision as number) >= 0 && plain(value.project);
     case 'blackout':
     case 'testGrid':

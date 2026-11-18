@@ -37,8 +37,9 @@ export default function MapOutput() {
       // Signals come every frame: only they are passed on, not the whole show again.
       if (kind === 'signals') { heard = performance.now(); compositor.setSignals(state.signals); return; }
       if (kind === 'fade') return;
-      // A show after a fade message is a scene switch, crossfading over the scene's time.
-      if (kind === 'show' && state.fadeMs !== null) { const ms = state.fadeMs; state = { ...state, fadeMs: null }; apply(ms); return; }
+      // A show carrying a fade time is a scene switch, crossfading over the scene's time.
+      const fadeMs = (message as { fadeMs?: unknown }).fadeMs;
+      if (kind === 'show' && typeof fadeMs === 'number') { apply(fadeMs); return; }
       apply();
     });
 

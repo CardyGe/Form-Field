@@ -79,7 +79,8 @@ test('triggers and tempo sync', () => {
   assert.equal(show.sources[0].tempoSync, 4);
   refused(show, { type: 'setTempoSync', sourceId: 'sa', beats: 3 }, 'bad-tempo');
   show = ok(show, { type: 'deleteScene', sceneId: 's1' });
-  assert.deepEqual(show.triggers.map(t => t.id), ['t2'], 'a trigger for a deleted scene goes');
+  // A trigger for a deleted scene is kept, off, as Next scene, so the operator sees it rather than losing it.
+  assert.deepEqual(show.triggers.map(t => [t.id, t.on, t.action.kind]), [['t1', false, 'next-scene'], ['t2', true, 'next-scene']]);
 });
 
 test('version 5 round-trips; older shows open with no scenes, links or triggers, unrepaired; damaged links are dropped', () => {
@@ -131,4 +132,22 @@ test('edits made by triggers are one undo step however often they fire', async (
   assert.equal(state.past.length, before + 1);
   state = mapReducer(state, { type: 'undo' });
   assert.equal(state.show.sceneId, 'b');
+});
+
+test('Stop reacting removes every link on a setting in one step; a locked shape cannot be made to react', () => {
+  const link = (id: string, target: string) => ({ id, input: 'audio.bass', target, mode: 'modulate' as const, amount: .3, low: 0, high: 1, attackMs: 0, releaseMs: 100, on: true, name: '' });
+  let show = ok(ok(base(), { type: 'addLink', link: link('l1', 'shape.a.brightness') }), { type: 'addLink', link: link('l2', 'shape.a.brightness') });
+  show = ok(show, { type: 'addLink', link: link('l3', 'shape.b.zoom') });
+  const stopped = ok(show, { type: 'removeLinks', target: 'shape.a.brightness' });
+  assert.deepEqual(stopped.links.map(l => l.id), ['l3']);
+  const locked = ok(show, { type: 'setLocked', shapeId: 'b', locked: true });
+  refused(locked, { type: 'addLink', link: link('l4', 'shape.b.brightness') }, 'locked');
+  const lockedA = ok(show, { type: 'setLocked', shapeId: 'a', locked: true });
+  refused(lockedA, { type: 'addLink', link: link('l5', 'source.sa.speed') }, 'locked');
+});
+
+test('a trigger whose instrument goes is kept, switched off, set to Next scene', () => {
+  let show = ok(base(), { type: 'addTrigger', trigger: { id: 't', input: 'tempo.beat', when: 'beats', every: 4, action: { kind: 'vary', sourceId: 'sa' }, on: true } });
+  show = ok(show, { type: 'setContent', shapeId: 'a', content: { kind: 'colour' } });
+  assert.deepEqual(show.triggers, [{ id: 't', input: 'tempo.beat', when: 'beats', every: 4, action: { kind: 'next-scene' }, on: false }]);
 });

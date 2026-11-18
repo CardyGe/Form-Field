@@ -3,7 +3,7 @@ import { LinkRow, ReactDevices, ReactTo, linkFor } from './ReactControls';
 import { LIVE_REACTIONS, MAX_LIVE_LINKS, liveReactionLinks, liveTargetOptions, liveTargetRange, type LiveReaction } from '../live/modulate';
 import { newItemId } from './mapActions';
 import { useLive } from './useLive';
-import { IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SIGNAL_STARTS, SMOKE_CONTROLS, SMOKE_STARTS, usesPeople, type Box, type LiveSettings, type SignalKey } from '../live/settings';
+import { LINKS_BUDGET, IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SIGNAL_STARTS, SMOKE_CONTROLS, SMOKE_STARTS, usesPeople, type Box, type LiveSettings, type SignalKey } from '../live/settings';
 import { RELIEF_PALETTES, validateReliefPalette } from '../live/relief-palettes';
 import { rampHex } from '../live/colour';
 import type { PeopleStatus } from '../live/MaskProvider';
@@ -26,7 +26,7 @@ const CAMERA_OFF = 'Camera access is off. Allow Form & Field in System Settings 
 function Slider({ label, value, min, max, step, unit = '', shown, disabled = false, onChange, react }: { label: string; value: number; min: number; max: number; step: number; unit?: string; shown?: string; disabled?: boolean; onChange: (value: number) => void; react?: Omit<ComponentProps<typeof ReactTo>, 'label'> }) {
   const field = <label className="live-control"><span>{label}<output>{shown ?? `${step >= 1 ? value : value.toFixed(2)}${unit}`}</output></span>
     <input aria-label={label} type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={e => onChange(Number(e.target.value))} /></label>;
-  return react ? <div className="live-react-field">{field}<ReactTo label={label} {...react} /></div> : field;
+  return react ? <div className="live-react-field">{field}<ReactTo label={label} {...react} disabled={disabled || react.disabled} /></div> : field;
 }
 
 /** The Live screen. `header` is the app's own mode switch, so both screens share it. */
@@ -62,14 +62,19 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
   const setSignal = (change: Partial<LiveSettings['signal']>) => live.update(v => ({ ...v, signal: { ...v.signal, ...change } }));
   const setPeople = (change: Partial<LiveSettings['people']>) => live.update(v => ({ ...v, people: { ...v.people, ...change } }));
   // Sound and MIDI: links live in the settings, so they are saved with them and reach the artwork window.
-  const setLinks = (change: (links: LiveSettings['links']) => LiveSettings['links']) => live.update(v => ({ ...v, links: change(v.links) }));
+  // Links must fit the settings' size limit; a change that would not is refused with a note rather than losing a link.
+  const setLinks = (change: (links: LiveSettings['links']) => LiveSettings['links']) => {
+    const next = change(s.links);
+    if (JSON.stringify(next).length > LINKS_BUDGET || next.length > MAX_LIVE_LINKS) { onError('Live has as many links as it can hold. Remove one to add another.'); return; }
+    live.update(v => ({ ...v, links: change(v.links) }));
+  };
   const reactFor = (target: string) => {
     const linked = s.links.filter(l => l.target === target);
-    return { linked: linked.length, engine: live.engine, onStart: live.startEngine,
-      onAdd: (input: string) => setLinks(links => links.length >= MAX_LIVE_LINKS ? links : [...links, linkFor(newItemId('link'), input, target, '')]),
+    return { target, linked: linked.length, engine: live.engine, onStart: live.startEngine,
+      onAdd: (input: string) => setLinks(links => [...links, linkFor(newItemId('link'), input, target, '')]),
       onStop: () => setLinks(links => links.filter(l => l.target !== target)) };
   };
-  const addReaction = (reaction: LiveReaction) => { live.startEngine(); setLinks(links => links.length >= MAX_LIVE_LINKS ? links : [...links, ...liveReactionLinks(s, reaction, [newItemId('link')])]); };
+  const addReaction = (reaction: LiveReaction) => { live.startEngine(); setLinks(links => [...links, ...liveReactionLinks(s, reaction, [newItemId('link')])]); };
 
   return <section className="live-shell" role="region" aria-label="Live">
     <header className="app-header">{header}<div className="live-actions">
@@ -124,7 +129,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         <label className="stacked-label">Output quality<select aria-label="Output quality" value={s.quality} onChange={e => set({ quality: Number(e.target.value) === 720 ? 720 : 1080 })}><option value={1080}>1920 × 1080</option><option value={720}>1280 × 720 · lighter</option></select></label>
         <details className="live-react" open={live.reactivityPanel} onToggle={e => live.setReactivityPanel(e.currentTarget.open)}>
           <summary>Sound &amp; MIDI{s.links.length ? <small> · {s.links.length} {s.links.length === 1 ? 'link' : 'links'}</small> : null}</summary>
-          <ReactDevices engine={live.engine} signals={live.signals} onStart={live.startEngine} />
+          <ReactDevices engine={live.engine} meter={live.signals} onStart={live.startEngine} />
           <div className="live-starts" role="group" aria-label="Reactions">{(Object.keys(LIVE_REACTIONS) as LiveReaction[]).map(r =>
             <button key={r} className="text-button" title={`Adds a link for ${LOOK_LABELS[s.look]}; adjust it below`} onClick={() => addReaction(r)}>{LIVE_REACTIONS[r].label}</button>)}</div>
           {s.links.map(link => <LinkRow key={link.id} link={link} engine={live.engine} targets={liveTargetOptions(s.look)} targetLabel={liveTargetRange(link.target)?.label ?? 'Missing'}

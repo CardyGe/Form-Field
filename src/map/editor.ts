@@ -7,7 +7,7 @@ import { clampToStage, nudge, rectangleFromDrag } from './geometry';
 import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
 import { joinedAnchors } from './snap';
 import { capture, withState, MAX_SCENES, FADE_RANGE } from './scenes';
-import { reactionLinks, type Reaction } from './targets';
+import { parseTarget, reactionLinks, type Reaction } from './targets';
 import type { Link, Trigger } from '../react/links';
 import { isPinnable } from './homography';
 import { ownCornersPinnable, pinCorners } from './placement';
@@ -89,6 +89,8 @@ export type EditAction =
   | { type: 'addLink'; link: Link }
   | { type: 'updateLink'; linkId: string; change: Partial<Omit<Link, 'id'>> }
   | { type: 'removeLink'; linkId: string }
+  /** Every link driving one setting, as one undo step (Stop reacting). */
+  | { type: 'removeLinks'; target: string }
   | { type: 'addTrigger'; trigger: Trigger }
   | { type: 'updateTrigger'; triggerId: string; change: Partial<Omit<Trigger, 'id'>> }
   | { type: 'removeTrigger'; triggerId: string }
@@ -310,9 +312,16 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (action.type === 'updateLink' && !old) return { reason: 'not-found' };
       if (action.type === 'addLink' && (next.links.length >= MAX_LINKS)) return { reason: 'too-many-links' };
       if (action.type === 'addLink' && next.links.some(l => l.id === action.link.id)) return { reason: 'duplicate-id' };
+      // A locked shape (or an instrument a locked shape plays) cannot be made to move.
+      if (targetLocked(next, action.type === 'addLink' ? action.link.target : action.change.target ?? '')) return { reason: 'locked' };
       const link = readLink(action.type === 'addLink' ? action.link : { ...old, ...action.change, id: old!.id }, next);
       if (!link) return { reason: 'bad-target' };
       next.links = action.type === 'addLink' ? [...next.links, link] : next.links.map(l => l.id === link.id ? link : l);
+      return done();
+    }
+    case 'removeLinks': {
+      if (!next.links.some(l => l.target === action.target)) return { reason: 'not-found' };
+      next.links = next.links.filter(l => l.target !== action.target);
       return done();
     }
     case 'removeLink': {
@@ -340,6 +349,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (typeof links === 'string') return { reason: links };
       if (next.links.length + links.length > MAX_LINKS) return { reason: 'too-many-links' };
       if (links.some(l => next.links.some(x => x.id === l.id))) return { reason: 'duplicate-id' };
+      if (links.some(l => targetLocked(next, l.target))) return { reason: 'locked' };
       next.links = [...next.links, ...links];
       return done();
     }
@@ -721,6 +731,13 @@ function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'add
  * After every edit: scenes forget shapes that have gone, and links and triggers that name something gone are dropped.
  * The same show comes back when nothing needed tidying.
  */
+/** True when the target is a locked shape, or an instrument a locked shape plays. */
+function targetLocked(show: ShowDocument, target: string): boolean {
+  const t = parseTarget(target);
+  if (!t) return false;
+  return t.kind === 'shape' ? show.shapes.some(s => s.id === t.shapeId && isShapeLocked(show, s)) : show.shapes.some(s => s.sourceId === t.sourceId && isShapeLocked(show, s));
+}
+
 function tidy(show: ShowDocument): ShowDocument {
   const ids = new Set(show.shapes.map(s => s.id));
   const scenesOk = show.scenes.every(sc => Object.keys(sc.shapes).every(id => ids.has(id)));
@@ -729,8 +746,15 @@ function tidy(show: ShowDocument): ShowDocument {
   const sources = base.sources.filter(src => playedBy(base, src.id));
   const withSources = sources.length === base.sources.length ? base : { ...base, sources };
   const links = withSources.links.filter(l => readLink(l, withSources));
-  const triggers = withSources.triggers.filter(t => readTrigger(t, withSources));
-  if (links.length === withSources.links.length && triggers.length === withSources.triggers.length) return withSources;
+  // A trigger whose scene or instrument has gone is kept, switched off and set to Next scene, for the operator to see.
+  let changedTriggers = false;
+  const triggers = withSources.triggers.flatMap(t => {
+    if (readTrigger(t, withSources)) return [t];
+    const kept = readTrigger({ ...t, action: { kind: 'next-scene' }, on: false }, withSources);
+    changedTriggers = true;
+    return kept ? [kept] : [];
+  });
+  if (links.length === withSources.links.length && !changedTriggers) return withSources;
   return { ...withSources, links, triggers };
 }
 

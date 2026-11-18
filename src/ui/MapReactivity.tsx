@@ -2,6 +2,7 @@
  * Map's Sound & MIDI panel: the devices and tempo, every link in the show, and the triggers that switch scenes, vary
  * instruments, black out, freeze or tap the tempo.
  */
+import { useMemo } from 'react';
 import type { useMap } from './useMap';
 import { InputSelect, LinkRow, ReactDevices, linkFor } from './ReactControls';
 import { newItemId } from './mapActions';
@@ -21,7 +22,8 @@ function actionFrom(value: string): TriggerAction {
 
 export default function MapReactivity({ map }: { map: Map }) {
   const show = map.show, engine = map.engine;
-  const targets = targetOptions(show);
+  // Remade only when the show changes.
+  const targets = useMemo(() => targetOptions(show), [show]);
   const addLink = () => {
     const target = map.selectedId ? `shape.${map.selectedId}.brightness` : targets[0]?.target;
     if (!target) return;
@@ -34,7 +36,7 @@ export default function MapReactivity({ map }: { map: Map }) {
     map.dispatch({ type: 'addTrigger', trigger });
   };
   return <div className="react-panel">
-    <ReactDevices engine={engine} signals={map.signals} onStart={map.startEngine} />
+    <ReactDevices engine={engine} meter={map.signals} onStart={map.startEngine} />
 
     <div className="map-list-head"><h3>Links <span className="muted-text">{show.links.length || ''}</span></h3>
       <button className="text-button" disabled={!targets.length || show.links.length >= MAX_LINKS} title="Make a setting move with sound or MIDI" onClick={addLink}>+ Link</button></div>

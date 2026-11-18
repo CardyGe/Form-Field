@@ -55,15 +55,15 @@ function SliderField({ label, value, min, max, step, unit, disabled, onCommit, f
   const field = <label className="map-field">{label} · {format ? format(shown) : `${Math.round(shown)}${unit ?? ''}`}
     <input aria-label={label} type="range" min={min} max={max} step={step} value={shown} disabled={disabled}
       onChange={e => setDraft(Number(e.target.value))} onPointerUp={commit} onKeyUp={commit} onBlur={commit} /></label>;
-  return react ? <div className="map-react-field">{field}<ReactButton map={react.map} target={react.target} label={label} /></div> : field;
+  return react ? <div className="map-react-field">{field}<ReactButton map={react.map} target={react.target} label={label} disabled={disabled} /></div> : field;
 }
 
 /** ∿ beside a slider: make that setting react to sound or MIDI, or stop it reacting. */
-function ReactButton({ map, target, label }: { map: Map; target: string; label: string }) {
+function ReactButton({ map, target, label, disabled }: { map: Map; target: string; label: string; disabled?: boolean }) {
   const links = map.show.links.filter(l => l.target === target);
-  return <ReactTo label={label} linked={links.length} engine={map.engine} onStart={map.startEngine}
+  return <ReactTo label={label} target={target} linked={links.length} engine={map.engine} disabled={disabled} onStart={map.startEngine}
     onAdd={input => map.dispatch({ type: 'addLink', link: linkFor(newItemId('link'), input, target, '') })}
-    onStop={() => { for (const l of links) map.dispatch({ type: 'removeLink', linkId: l.id }); }} />;
+    onStop={() => map.dispatch({ type: 'removeLinks', target })} />;
 }
 
 /** What makes this shape (and its instrument) move with sound and MIDI: the ready-made reactions, and its links. */

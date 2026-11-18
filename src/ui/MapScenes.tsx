@@ -45,7 +45,7 @@ export default function MapScenes({ map }: { map: Map }) {
           onBlur={e => rename(scene.id, e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { e.stopPropagation(); setRenaming(null); } }} />
       : <button key={scene.id} className="text-button map-scene" aria-pressed={show.sceneId === scene.id}
           title={`${i < 9 ? `Key ${i + 1} · ` : ''}fade ${seconds(scene.fadeSeconds ?? show.sceneFade)} · right-click to rename, set its fade or delete`}
-          onClick={() => map.switchScene(scene.id)} onDoubleClick={() => setRenaming(scene.id)}
+          onClick={() => map.switchScene(scene.id)}
           onContextMenu={e => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, id: scene.id }); }}>
           {i < 9 && <kbd>{i + 1}</kbd>}{scene.name}</button>)}
     <button className="text-button" disabled={show.scenes.length >= MAX_SCENES} title={show.scenes.length ? 'Keep the stage as it is now as a new scene' : 'Keep the stage as it is now as scene 1; change it, then + again for scene 2'} onClick={add}>+ Scene</button>

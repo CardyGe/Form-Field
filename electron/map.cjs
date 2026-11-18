@@ -60,7 +60,7 @@ function acceptMapMessage(value) {
   if (!plain(value)) return false;
   if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MESSAGE_LIMIT)) return false;
   switch (value.type) {
-    case 'show': return plain(value.show);
+    case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && value.fadeMs >= 0 && value.fadeMs <= 30000));
     case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && value.revision >= 0 && plain(value.project);
     case 'blackout':
     case 'testGrid':

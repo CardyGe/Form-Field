@@ -544,7 +544,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     if (cornersMode && !['arrow', 'next-corner', 'previous-corner', 'deselect', 'undo', 'redo'].includes(action)) return;
     switch (action) {
       case 'scene': { const scene = map.show.scenes[Number(e.key) - 1]; if (scene) { e.preventDefault(); map.switchScene(scene.id); } break; }
-      case 'tap': e.preventDefault(); map.startEngine(); map.engine?.tap(); break;
+      case 'tap': e.preventDefault(); map.startEngine().tap(); break;
       case 'undo': e.preventDefault(); map.undo(); break;
       case 'redo': e.preventDefault(); map.redo(); break;
       case 'select': case 'rectangle': case 'triangle': case 'ellipse': case 'pen': chooseTool(action); break;

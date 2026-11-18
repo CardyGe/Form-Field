@@ -18,6 +18,8 @@ export function startLearning(engine: ReactivityEngine, key: string, take: (sign
   changed();
 }
 export function stopLearning(): void { current?.cancel(); }
+/** Stops learning only if `key` is the one learning. */
+export function stopLearningFor(key: string): void { if (current?.key === key) current.cancel(); }
 
 /** Which key is learning now (or null), kept current. */
 export function useLearning(): string | null {
@@ -27,7 +29,5 @@ export function useLearning(): string | null {
     watchers.add(watch);
     return () => { watchers.delete(watch); };
   }, []);
-  // Leaving the screen while learning stops it.
-  useEffect(() => () => { if (current && !watchers.size) current.cancel(); }, []);
   return key;
 }

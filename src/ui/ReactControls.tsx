@@ -2,13 +2,14 @@
  * The sound and MIDI controls shared by Map and Live: the devices with their meters, the tempo with Tap, one row per
  * link, and the small "React to…" button beside a slider.
  */
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
+import type { MeterStore } from '../react/meter';
 import type { ReactivityEngine } from '../react/engine';
 import { listAudioInputs, TEST_TONE } from '../react/audio';
 import { BPM_RANGE, type TempoSource } from '../react/tempo';
 import { SOUND_SIGNALS, signalLabel, type Signals } from '../react/signals';
 import type { Link } from '../react/links';
-import { startLearning, stopLearning, useLearning } from './react-learn';
+import { startLearning, stopLearning, stopLearningFor, useLearning } from './react-learn';
 
 /** Re-renders when the engine's devices, status or preferences change. */
 function useEngine(engine: ReactivityEngine | null): void {
@@ -36,8 +37,10 @@ function Meter({ label, value }: { label: string; value: number }) {
 }
 
 /** The sound input, MIDI and tempo, with meters. With no engine yet, a single button starts it. */
-export function ReactDevices({ engine, signals, onStart }: { engine: ReactivityEngine | null; signals: Signals; onStart: () => void }) {
+export function ReactDevices({ engine, meter, onStart }: { engine: ReactivityEngine | null; meter: MeterStore; onStart: () => void }) {
   useEngine(engine);
+  // Only this part re-renders with the meters.
+  const signals: Signals = useSyncExternalStore(meter.subscribe, meter.get);
   const [inputs, setInputs] = useState<{ id: string; label: string }[]>([]);
   useEffect(() => {
     if (!engine) return;
@@ -86,6 +89,7 @@ export function ReactDevices({ engine, signals, onStart }: { engine: ReactivityE
 /** What a link or trigger listens to: the sound signals, MIDI heard so far, or Learn. */
 export function InputSelect({ value, engine, learnKey, onChange, label = 'Listens to', extra = [] }: { value: string; engine: ReactivityEngine | null; learnKey: string; onChange: (input: string) => void; label?: string; extra?: [string, string][] }) {
   const learning = useLearning() === learnKey;
+  useEffect(() => () => stopLearningFor(learnKey), [learnKey]);
   const heard = engine ? Object.keys(engine.midi.values).sort() : [];
   const options: [string, string][] = [...extra, ...SOUND_SIGNALS.map(([k, l]) => [k, l] as [string, string]), ...heard.map(k => [k, signalLabel(k)] as [string, string])];
   if (!options.some(([k]) => k === value)) options.push([value, signalLabel(value)]);
@@ -136,22 +140,25 @@ export function LinkRow({ link, targetLabel, targets, engine, onChange, onRemove
  * The small button beside a slider: React to the bass, mids, highs, level, the beat, or a MIDI control (Learn).
  * Lit when something already drives the setting; then it also offers to stop.
  */
-export function ReactTo({ label, linked, engine, onStart, onAdd, onStop }: { label: string; linked: number; engine: ReactivityEngine | null; onStart: () => void; onAdd: (input: string) => void; onStop: () => void }) {
+export function ReactTo({ label, target, linked, engine, disabled = false, onStart, onAdd, onStop }: { label: string; target: string; linked: number; engine: ReactivityEngine | null; disabled?: boolean; onStart: () => ReactivityEngine | void; onAdd: (input: string) => void; onStop: () => void }) {
   const box = useRef<HTMLDetailsElement>(null);
-  const learnKey = `react-to:${label}`;
+  const learnKey = `react-to:${target}`;
   const learning = useLearning() === learnKey;
-  const close = () => { if (box.current) box.current.open = false; };
+  // Closing the menu, by any means, stops a Learn it started: nothing waits unseen for a knob to turn.
+  const close = () => { if (box.current) box.current.open = false; stopLearningFor(learnKey); };
+  useEffect(() => () => stopLearningFor(learnKey), [learnKey]);
   useEffect(() => {
     const away = (e: PointerEvent) => { if (box.current?.open && !box.current.contains(e.target as Node)) close(); };
     window.addEventListener('pointerdown', away);
     return () => window.removeEventListener('pointerdown', away);
   }, []);
-  return <details ref={box} className={`react-to ${linked ? 'on' : ''}`} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } }}>
+  if (disabled) return <span className={`react-to disabled ${linked ? 'on' : ''}`} title={`${label} is locked`} aria-hidden="true"><span className="react-to-icon">∿</span></span>;
+  return <details ref={box} className={`react-to ${linked ? 'on' : ''}`} onToggle={e => { if (!e.currentTarget.open) stopLearningFor(learnKey); }} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } }}>
     <summary aria-label={`React to… ${label}`} title={linked ? `${label}: driven by sound or MIDI` : `Make ${label} react to sound or MIDI`}>∿{linked > 1 ? linked : ''}</summary>
     <div className="react-to-menu" role="menu">
       {SOUND_SIGNALS.filter(([k]) => k !== 'tempo.phase').map(([k, l]) => <button key={k} role="menuitem" className="text-button" onClick={() => { onStart(); onAdd(k); close(); }}>{l}</button>)}
       <button role="menuitem" className={`text-button ${learning ? 'live-toggle on' : ''}`}
-        onClick={() => { onStart(); if (!engine) return; if (learning) stopLearning(); else startLearning(engine, learnKey, input => { onAdd(input); close(); }); }}>{learning ? 'Move a control…' : engine ? 'MIDI: Learn' : 'MIDI: Learn (starting…)'}</button>
+        onClick={() => { const e = onStart() ?? engine; if (!e) return; if (learning) stopLearning(); else startLearning(e, learnKey, input => { onAdd(input); close(); }); }}>{learning ? 'Move a control…' : 'MIDI: Learn'}</button>
       {linked > 0 && <button role="menuitem" className="text-button danger-button" onClick={() => { onStop(); close(); }}>Stop reacting</button>}
     </div>
   </details>;
