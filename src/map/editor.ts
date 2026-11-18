@@ -59,7 +59,11 @@ export type EditAction =
   | { type: 'setPhoto'; photo: Photo | null }
   | { type: 'setPhotoOpacity'; opacity: number }
   /** What a shape plays: its own colour, or a Library preset in a new source of its own. */
-  | { type: 'setContent'; shapeId: string; content: { kind: 'colour' } | { kind: 'grid' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number } }
+  /**
+   * linked (the default): when the shape shares its instrument with others, they are one instrument and all change;
+   * false changes this shape only (a new look gets an instrument of its own).
+   */
+  | { type: 'setContent'; shapeId: string; content: ({ kind: 'colour' } | { kind: 'grid' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number }) & { linked?: boolean } }
   | { type: 'varySource'; sourceId: string; entropy: number }
   | { type: 'setSourcePalette'; sourceId: string; palette: string[] }
   | { type: 'setSourceSpeed'; sourceId: string; speed: number }
@@ -397,7 +401,19 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     case 'delete': next.shapes = next.shapes.filter(s => s !== shape); dropUnplayed(next); return { show: normaliseGroups(next), touched: [] };
     case 'setContent': {
       const content = action.content;
-      if (content.kind === 'colour' || content.kind === 'grid') { shape.sourceId = null; shape.fill = content.kind; dropUnplayed(next); return done(); }
+      // Shapes sharing this shape's instrument are one instrument: a change reaches them all, unless asked otherwise.
+      const linked = content.linked !== false && shape.sourceId !== null ? next.shapes.filter(s => s.sourceId === shape.sourceId) : [shape];
+      if (linked.some(s => isShapeLocked(next, s))) return { reason: 'locked' };
+      if (content.kind === 'colour' || content.kind === 'grid') { for (const s of linked) { s.sourceId = null; s.fill = content.kind; } dropUnplayed(next); return done(); }
+      if (linked.length > 1) {
+        if (shape.blocker) return { reason: 'blocker' };
+        const project = presetComposition(content.presetId, content.seed);
+        if (!project) return { reason: 'unknown-preset' };
+        const i = next.sources.findIndex(s => s.id === shape.sourceId);
+        // The shared instrument takes the new look in place, so every linked shape plays it (and fades to it).
+        next.sources[i] = { ...next.sources[i], project, revision: next.sources[i].revision + 1 };
+        return done();
+      }
       if (shape.blocker) return { reason: 'blocker' };
       if (next.sources.some(s => s.id === content.sourceId)) return { reason: 'duplicate-id' };
       const project = presetComposition(content.presetId, content.seed);

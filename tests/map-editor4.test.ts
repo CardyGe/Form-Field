@@ -147,3 +147,31 @@ test('Make a grid with one picture across the cells: every cell plays the shapeâ
   const copies = ok(play(add(createShow(), 'a', sq(.1, .1, .5, .5)), 'a', 'sa'), { type: 'makeGrid', shapeId: 'a', rows: 1, cols: 2, gapPx: 0, ids: ['x', 'y'], sourceIds: ['sx', 'sy'], groupId: 'g' });
   assert.deepEqual(copies.shapes.map(s => s.sourceId), ['sx', 'sy']);
 });
+
+test('linked shapes are one instrument: a new look on one changes them all, unless asked for that shape only', () => {
+  let show = play(add(createShow(), 'a', sq(.1, .1, .5, .5)), 'a', 'sa');
+  const ids = ['c1', 'c2', 'c3', 'c4'];
+  show = ok(show, { type: 'makeGrid', shapeId: 'a', rows: 2, cols: 2, gapPx: 0, ids, sourceIds: ids.map(i => `s-${i}`), groupId: 'g', spread: true });
+  const before = show.sources[0];
+  // Linked (the default): the shared instrument becomes the new look, for every cell, keeping its place in the show.
+  const all = ok(show, { type: 'setContent', shapeId: 'c2', content: { kind: 'preset', presetId: 'salt-mandala', sourceId: 'new', seed: 3 } });
+  assert.ok(all.shapes.every(s => s.sourceId === 'sa'));
+  assert.equal(all.sources.length, 1);
+  assert.equal(all.sources[0].revision, before.revision + 1);
+  assert.notEqual(all.sources[0].project.name, before.project.name);
+  // That shape only: it gets its own instrument; the others keep theirs.
+  const one = ok(show, { type: 'setContent', shapeId: 'c2', content: { kind: 'preset', presetId: 'salt-mandala', sourceId: 'new', seed: 3, linked: false } });
+  assert.deepEqual(one.shapes.map(s => s.sourceId), ['sa', 'new', 'sa', 'sa']);
+  // Linked, the grid pattern or plain colour goes to every cell too.
+  const plain = ok(show, { type: 'setContent', shapeId: 'c1', content: { kind: 'colour' } });
+  assert.ok(plain.shapes.every(s => s.sourceId === null && s.fill === 'colour'));
+  const alone = ok(show, { type: 'setContent', shapeId: 'c1', content: { kind: 'colour', linked: false } });
+  assert.deepEqual(alone.shapes.map(s => s.sourceId), [null, 'sa', 'sa', 'sa']);
+});
+
+test('a linked change is refused while any linked shape is locked', () => {
+  let show = play(add(createShow(), 'a', sq(.1, .1, .5, .5)), 'a', 'sa');
+  show = ok(show, { type: 'makeGrid', shapeId: 'a', rows: 1, cols: 2, gapPx: 0, ids: ['x', 'y'], sourceIds: ['sx', 'sy'], groupId: 'g', spread: true });
+  show = ok(show, { type: 'setLocked', shapeId: 'y', locked: true });
+  refused(show, { type: 'setContent', shapeId: 'x', content: { kind: 'preset', presetId: 'salt-mandala', sourceId: 'n', seed: 1 } }, 'locked');
+});

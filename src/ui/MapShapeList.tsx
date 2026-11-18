@@ -63,11 +63,15 @@ export default function MapShapeList({ map, onMenu }: { map: Map; onMenu: (e: Mo
     const open = !closedFolders.has(group.id);
     const ids = item.members.map(m => m.id);
     const allSelected = ids.every(id => map.selectedIds.includes(id));
+    // A group whose shapes all play one instrument shows it, as one instrument.
+    const firstSource = item.members[0].sourceId;
+    const shared = firstSource && item.members.every(m => m.sourceId === firstSource) ? map.show.sources.find(s => s.id === firstSource)?.project.name ?? null : null;
     return [
       <li key={`group-${group.id}`} className={`map-row map-group-row ${allSelected ? 'selected' : ''} ${group.visible ? '' : 'hidden'}`} onContextMenu={e => { e.preventDefault(); if (map.loaded) onMenu(e, ids[0]); }}>
         <button className="map-folder" aria-expanded={open} aria-label={`${open ? 'Close' : 'Open'} ${group.name}`} onClick={() => { if (open) closedFolders.add(group.id); else closedFolders.delete(group.id); redraw(n => n + 1); }}><MapIcon name={open ? 'chevronDown' : 'chevronRight'} size={12} /></button>
         <button className="map-shape-name" aria-pressed={allSelected} title="Select every shape in this group" onClick={e => select(e, ids)}>
-          <MapIcon name="folder" size={13} /><span className="map-row-name">{group.name}</span><span className="map-row-plays">{ids.length}</span></button>
+          <MapIcon name="folder" size={13} /><span className="map-row-name">{group.name} <span className="map-row-count">{ids.length}</span></span>
+          {shared && <span className="map-row-plays" title="One instrument across this group">{shared}</span>}</button>
         {toggles(`group ${group.name}`, group.visible, group.locked, map.solo.groups.includes(group.id), {
           show: () => map.dispatch({ type: 'setGroupVisible', groupId: group.id, visible: !group.visible }),
           lock: () => map.dispatch({ type: 'setGroupLocked', groupId: group.id, locked: !group.locked }),

@@ -6,6 +6,7 @@ import { LookPreviews } from './lookPreviews';
 import { parsePixelField } from '../map/geometry';
 import { isCurved } from '../map/outline';
 import { shouldCommit } from '../map/keys';
+import type { Shape } from '../map/show';
 import { BORDER_MAX, BRIGHTNESS_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, ZOOM_RANGE, isShapeLocked, type Placement, type PlacementKind } from '../map/show';
 import { ownCornersPinnable } from '../map/placement';
 import { PRESETS } from '../core/project';
@@ -52,7 +53,7 @@ function SliderField({ label, value, min, max, step, unit, disabled, onCommit, f
 }
 
 /** The Details panel: the selected shape's name, colour, what it plays, its edge, shape tools and its chosen point. */
-export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks }: { map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void; onOpenLooks: () => void }) {
+export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, linked, setLinked }: { map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void; onOpenLooks: () => void; linked: boolean; setLinked: (on: boolean) => void }) {
   const act = mapActions(map);
   const [grid, setGrid] = useState({ rows: '2', cols: '2', gap: '0', spread: true });
   const many = map.selectedIds.length > 1;
@@ -71,8 +72,12 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks }
   if (many) {
     const ids = act.selected();
     const anyLocked = map.show.shapes.some(s => ids.includes(s.id) && isShapeLocked(map.show, s));
+    // Several shapes playing one instrument are that one instrument: its card, as for a single shape.
+    const first = map.show.shapes.find(s => s.id === map.selectedId);
+    const one = !!first?.sourceId && ids.every(id => map.show.shapes.find(s => s.id === id)?.sourceId === first.sourceId);
     return <>
-      <p>{ids.length} shapes selected</p>
+      <p>{ids.length} shapes selected{one ? ', one instrument' : ''}</p>
+      {one && first && <ContentCard map={map} shape={first} locked={anyLocked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked setLinked={() => {}} whole />}
       <p className="muted-text">Drag any of them to move them all; drag the box corners to scale, the round handle to turn. Shift-click a shape to add or remove it.</p>
       <div className="map-toggles"><button className="text-button" disabled={anyLocked} title="Put these shapes in a folder · ⌘G" onClick={() => act.group(ids)}>Group</button>
         <button className="text-button" title="Copy these shapes · ⌘D" onClick={() => act.duplicate(ids)}>Duplicate</button>
@@ -113,9 +118,6 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks }
     act.makeGrid(shape.id, rows, cols, gap, grid.spread);
   };
 
-  const presetId = source?.project.layers.length === 1 ? PRESETS.find(p => p.name === source.project.name)?.id : undefined;
-  const thumb = presetId ? LookPreviews.known(presetId) ?? kindArt(PRESETS.find(p => p.id === presetId)!.kind) : source ? kindArt(source.project.layers[0]?.kind ?? '') : undefined;
-  const playsName = shape.blocker ? 'Blocker' : source ? source.project.name : shape.fill === 'grid' ? 'Grid pattern' : 'Its colour';
   const pct = (v: number) => `${Math.round(v * 100)} %`;
   const placeLabel = { fit: 'Fit', pin: 'Pin', 'across-group': 'Across group', 'across-stage': 'Across stage' }[place.kind];
   const edgeSummary = [shape.softEdge ? `soft ${Math.round(shape.softEdge)} px` : '', border.width ? `border ${Math.round(border.width)} px` : ''].filter(Boolean).join(' · ') || 'none';
@@ -129,35 +131,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks }
       <CommitField label="Group name" value={group.name} maxLength={MAX_NAME_LENGTH} disabled={group.locked} onCommit={text => { const name = text.trim(); if (name && name !== group.name) map.dispatch({ type: 'renameGroup', groupId: group.id, name }); }} />
       <button className="text-button" disabled={group.locked} title="Dissolve this group; its shapes stay · ⇧⌘G" onClick={() => act.ungroup(group.id)}>Ungroup</button></div>}
 
-    <div className="map-content-card">
-      <div className="map-content-top">
-        <span className={`map-content-thumb ${shape.blocker ? 'blocker' : !source ? (shape.fill === 'grid' ? 'grid' : 'colour') : ''}`} style={{ ['--shape-colour' as string]: shape.colour }}>{thumb && !shape.blocker && <img src={thumb} alt="" />}</span>
-        <div className="map-content-name"><strong>{playsName}</strong>
-          {sharers.length > 1 && <small>{sharers.length} shapes share it</small>}</div>
-      </div>
-      <div className="map-toggles">
-        <button className="text-button" data-opens-looks disabled={locked || shape.blocker} aria-label="Change look" title="Choose what this shape plays" onClick={onOpenLooks}>Change…</button>
-        {source && <button className="text-button" disabled={locked} title="A new variation of this instrument" onClick={() => map.dispatch({ type: 'varySource', sourceId: source.id, entropy: randomSeed() })}>Vary</button>}
-        {source && onEditInStudio && <button className="text-button" disabled={locked} title="Every control, in Studio; changes show on the projector as you make them" onClick={() => onEditInStudio(source.id, shape.id)}>Edit in Studio</button>}
-      </div>
-      {source && !shape.blocker && <>
-        <label className="map-field">Palette<select aria-label="Palette" value={paletteName(source.project.layers[0]?.palette ?? [])} disabled={locked}
-          onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) map.dispatch({ type: 'setSourcePalette', sourceId: source.id, palette: found[1] }); }}>
-          <option value="" disabled>As made</option>
-          {PALETTES.map(([name]) => <option key={name} value={name}>{name}</option>)}
-        </select></label>
-        <SliderField key={`speed-${source.id}`} label="Speed" value={source.speed} min={SPEED_RANGE.min} max={SPEED_RANGE.max} step={0.05} disabled={locked} format={v => `${v.toFixed(2)}×`}
-          onCommit={speed => map.dispatch({ type: 'setSourceSpeed', sourceId: source.id, speed })} />
-        {sharers.length > 1 && <button className="text-button" disabled={locked} title="Give this shape its own copy of the instrument, to change on its own" onClick={() => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() })}>Make separate</button>}
-      </>}
-      {!shape.blocker && playing.length > 0 && <label className="map-field">Share with<select aria-label="Share with" value="" disabled={locked}
-        onChange={e => { if (e.target.value) map.dispatch({ type: 'shareSource', shapeId: shape.id, withShapeId: e.target.value }); }}>
-        <option value="">Play another shape's instrument…</option>
-        {playing.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-      </select></label>}
-      <label className="map-check"><input type="checkbox" aria-label="Blocker" checked={shape.blocker} disabled={locked} onChange={e => map.dispatch({ type: 'setBlocker', shapeId: shape.id, blocker: e.target.checked })} />Blocker
-        <small className="muted-text">blacks out what is beneath</small></label>
-    </div>
+    <ContentCard map={map} shape={shape} locked={locked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked={linked} setLinked={setLinked} />
 
     {point && map.selectedIndex !== null && <div className="map-point">
       <h3>{map.selectedRing >= 0 ? `Hole ${map.selectedRing + 1}, ${isCurved(point) ? 'curve point' : 'corner'}` : isCurved(point) ? 'Curve point' : 'Corner'} {map.selectedIndex + 1}</h3>
@@ -242,6 +216,51 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks }
     </Section>
     {!point && <p className="muted-text map-hint">Click a point on the stage to set its exact position. Double-click a side to add a point.</p>}
   </>;
+}
+
+/**
+ * What a shape plays, as one card: a picture and name, Change…, Vary, Edit in Studio, palette, speed, sharing and Blocker.
+ * Shapes sharing an instrument are one instrument: the card says so, and a change of look reaches them all unless
+ * "Change all" is unticked.
+ */
+function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, setLinked, whole = false }: { map: Map; shape: Shape; locked: boolean; onOpenLooks: () => void; onEditInStudio?: (sourceId: string, shapeId: string) => void; linked: boolean; setLinked: (on: boolean) => void; whole?: boolean }) {
+  const source = shape.sourceId ? map.show.sources.find(s => s.id === shape.sourceId) ?? null : null;
+  const sharers = source ? map.show.shapes.filter(s => s.sourceId === source.id) : [];
+  const playing = map.show.shapes.filter(s => s.id !== shape.id && s.sourceId !== null && s.sourceId !== shape.sourceId);
+  const presetId = source?.project.layers.length === 1 ? PRESETS.find(p => p.name === source.project.name)?.id : undefined;
+  const thumb = presetId ? LookPreviews.known(presetId) ?? kindArt(PRESETS.find(p => p.id === presetId)!.kind) : source ? kindArt(source.project.layers[0]?.kind ?? '') : undefined;
+  const playsName = shape.blocker ? 'Blocker' : source ? source.project.name : shape.fill === 'grid' ? 'Grid pattern' : 'Its colour';
+  return <div className="map-content-card">
+      <div className="map-content-top">
+        <span className={`map-content-thumb ${shape.blocker ? 'blocker' : !source ? (shape.fill === 'grid' ? 'grid' : 'colour') : ''}`} style={{ ['--shape-colour' as string]: shape.colour }}>{thumb && !shape.blocker && <img src={thumb} alt="" />}</span>
+        <div className="map-content-name"><strong>{playsName}</strong>
+          {sharers.length > 1 && <small>One instrument across {sharers.length} shapes</small>}</div>
+      </div>
+      <div className="map-toggles">
+        <button className="text-button" data-opens-looks disabled={locked || shape.blocker} aria-label="Change look" title="Choose what this shape plays" onClick={onOpenLooks}>Change…</button>
+        {source && <button className="text-button" disabled={locked} title="A new variation of this instrument" onClick={() => map.dispatch({ type: 'varySource', sourceId: source.id, entropy: randomSeed() })}>Vary</button>}
+        {source && onEditInStudio && <button className="text-button" disabled={locked} title="Every control, in Studio; changes show on the projector as you make them" onClick={() => onEditInStudio(source.id, shape.id)}>Edit in Studio</button>}
+      </div>
+      {sharers.length > 1 && !whole && <label className="map-check" title="On: a new look, colour or grid pattern changes every linked shape. Off: only this one (it gets its own).">
+        <input type="checkbox" aria-label="Change all linked shapes" checked={linked} onChange={e => setLinked(e.target.checked)} />Change all {sharers.length} linked shapes</label>}
+      {source && !shape.blocker && <>
+        <label className="map-field">Palette<select aria-label="Palette" value={paletteName(source.project.layers[0]?.palette ?? [])} disabled={locked}
+          onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) map.dispatch({ type: 'setSourcePalette', sourceId: source.id, palette: found[1] }); }}>
+          <option value="" disabled>As made</option>
+          {PALETTES.map(([name]) => <option key={name} value={name}>{name}</option>)}
+        </select></label>
+        <SliderField key={`speed-${source.id}`} label="Speed" value={source.speed} min={SPEED_RANGE.min} max={SPEED_RANGE.max} step={0.05} disabled={locked} format={v => `${v.toFixed(2)}×`}
+          onCommit={speed => map.dispatch({ type: 'setSourceSpeed', sourceId: source.id, speed })} />
+        {sharers.length > 1 && !whole && <button className="text-button" disabled={locked} title="Unlink: give this shape its own copy of the instrument, to change on its own" onClick={() => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() })}>Make separate</button>}
+      </>}
+      {!shape.blocker && !whole && playing.length > 0 && <label className="map-field">Share with<select aria-label="Share with" value="" disabled={locked}
+        onChange={e => { if (e.target.value) map.dispatch({ type: 'shareSource', shapeId: shape.id, withShapeId: e.target.value }); }}>
+        <option value="">Play another shape's instrument…</option>
+        {playing.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select></label>}
+      {!whole && <label className="map-check"><input type="checkbox" aria-label="Blocker" checked={shape.blocker} disabled={locked} onChange={e => map.dispatch({ type: 'setBlocker', shapeId: shape.id, blocker: e.target.checked })} />Blocker
+        <small className="muted-text">blacks out what is beneath</small></label>}
+    </div>;
 }
 
 /** Which sections are open, kept while the app is open (and between launches, where the browser allows). */

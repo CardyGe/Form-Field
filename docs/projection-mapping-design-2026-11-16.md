@@ -550,6 +550,11 @@ Made 18 November 2026, before building stage 4. Greg handed over the how; each o
   - The cells share the shape's own instrument, laid Across group, so one picture runs through them all.
   - Off, each cell gets its own copy of the instrument, as stage 3 had it.
   - A shape already in a group keeps its cells in that group, so the picture spreads over the whole group.
+- **Linked shapes are one instrument** (added 18 November, at Greg's request). Shapes sharing an instrument (a grid made with one picture across its cells, or Share with):
+  - A new look, colour or grid pattern on any of them changes them all; "Change all N linked shapes" unticked changes only that one, which gets its own.
+  - Selecting all of them, for instance by clicking their group's folder, shows the one instrument's card.
+  - The folder row names the instrument.
+  - Make separate unlinks a shape for good.
 - **Brightness and tint** apply to everything a shape shows, its own grid pattern included, but not to Blockers.
 - **The projector's drawing is on the graphics card.**
   - If the graphics card resets, the projector shows black until it comes back by itself, usually within a second. The operator is told.

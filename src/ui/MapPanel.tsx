@@ -132,6 +132,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   // Stage corners: while on, the four corner handles are shown and the shape tools rest; the last one touched takes the arrow keys.
   // The look browser, open for the selected shape.
   const [looksOpen, setLooksOpen] = useState(false);
+  // Linked shapes are one instrument: a change of look reaches them all, unless this is turned off.
+  const [linkedChanges, setLinkedChanges] = useState(true);
   const [cornersMode, setCornersMode] = useState(false);
   const [cornerIndex, setCornerIndex] = useState(0);
   const [snapMark, setSnapMark] = useState<SnapTarget | null>(null);
@@ -676,7 +678,9 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? cornersHint ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
   // The browser follows the single selected shape; it closes when there is none, or a Blocker or locked shape is picked.
-  const lookShape = map.selectedIds.length === 1 ? map.show.shapes.find(s => s.id === map.selectedId && !s.blocker && !isShapeLocked(map.show, s)) ?? null : null;
+  // Several shapes playing one instrument count as that one instrument: the browser changes it through the first of them.
+  const sharedSelection = map.selectedIds.length > 1 && (() => { const first = map.show.shapes.find(s => s.id === map.selectedId); return !!first?.sourceId && map.selectedIds.every(id => map.show.shapes.find(s => s.id === id)?.sourceId === first.sourceId); })();
+  const lookShape = map.selectedIds.length === 1 || sharedSelection ? map.show.shapes.find(s => s.id === map.selectedId && !s.blocker && !isShapeLocked(map.show, s)) ?? null : null;
   /** What the shape plays, as the browser names it: a preset's id when its instrument is still that one-layer preset. */
   const currentLook = (shape: typeof lookShape & {}) => {
     if (!shape.sourceId) return shape.fill;
@@ -739,11 +743,11 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       </div>
       <aside className="live-column map-inspector" aria-label="Details">
         <h2>Details</h2>
-        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} />
+        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} />
       </aside>
     </div>
     <footer className="map-status" role="status">{status}</footer>
-    {looksOpen && lookShape && <MapLookBrowser current={currentLook(lookShape)} colour={lookShape.colour} onPick={value => act.play(lookShape.id, value)} onClose={() => setLooksOpen(false)} />}
+    {looksOpen && lookShape && <MapLookBrowser current={currentLook(lookShape)} colour={lookShape.colour} onPick={value => act.play(lookShape.id, value, sharedSelection || linkedChanges)} onClose={() => setLooksOpen(false)} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label={menu.shapeId ? 'Shape' : 'Stage'} entries={menuEntries(menu.shapeId)} onClose={() => setMenu(null)} />}
   </section>;
 }

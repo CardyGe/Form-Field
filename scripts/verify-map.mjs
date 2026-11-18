@@ -598,6 +598,29 @@ try {
     assert.ok(after.colours.filter(c => !near(c, BLACK, 30)).length >= 40, 'the grid is mostly black');
   });
 
+  await check('a grid playing one instrument is one instrument: a new look on one cell changes every cell', async () => {
+    // Follows the grid check above: four cells sharing one instrument.
+    assert.equal(await shapeCount(), 4);
+    // The whole grid is selected after Make grid: that is the group view; one cell is picked on its own here.
+    await focusStage(); await studio.keyboard.press('Escape');
+    await clickOn([.3, .3]);
+    assert.equal(await studio.getByLabel('Change all linked shapes', { exact: true }).isChecked(), true);
+    await playLook(studio, 'preset:salt-mandala');
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1 && Object.values(window.__mapStats.prepares)[0] >= 2, null, { timeout: 15000 });
+    const names = await studio.locator('.map-shape-list li.member .map-row-plays').allTextContents();
+    assert.deepEqual(names, ['Hot Mandala', 'Hot Mandala', 'Hot Mandala', 'Hot Mandala']);
+    // With "Change all" off, a cell gets a look of its own.
+    await studio.getByLabel('Change all linked shapes', { exact: true }).uncheck();
+    await playLook(studio, 'preset:porcelain-shutters');
+    const after = await studio.locator('.map-shape-list li.member .map-row-plays').allTextContents();
+    assert.equal(after.filter(n => n === 'Hot Mandala').length, 3);
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 2, null, { timeout: 15000 });
+    // Back on, from a cell still linked to the others.
+    await focusStage(); await studio.keyboard.press('Escape');
+    await clickOn([.5, .5]);
+    await studio.getByLabel('Change all linked shapes', { exact: true }).check();
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
