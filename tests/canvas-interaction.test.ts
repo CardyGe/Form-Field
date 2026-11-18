@@ -48,6 +48,8 @@ test('every procedural instrument exposes two useful axes and excludes locks and
   assert.deepEqual(canvasAxes(ink, locks).map(d => d.key), ['flow', 'warp']);
   const fractal = createLayer('fractal'); fractal.params.style = 1;
   assert.deepEqual(canvasAxes(fractal, locks).map(d => d.key), ['juliaReal', 'juliaImag']);
+  fractal.params.style = 3;
+  assert.deepEqual(canvasAxes(fractal, locks).map(d => d.key), ['focalX', 'focalY']);
 });
 
 test('drag edits roundtrip every saved look without touching palette, motion, mask or framing', () => {

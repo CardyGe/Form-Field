@@ -18,6 +18,17 @@ const MAX_IMAGE_PIXELS = 64 * 1024 * 1024;
 const DEFAULT_PALETTE = ['#49efd6', '#cbf34a', '#ef62d9', '#7747ef', '#ff826c', '#19112e'];
 const SCULPTURE_PALETTE = CANDY;
 const FRACTAL_PALETTE = ['#5fffe1', '#aff043', '#b77bff', '#f65aa6', '#ffb969', '#09102c'];
+const FRACTAL_EVOLUTION = .82;
+export const FRACTAL_FAMILIES = ['Kaleidoscope', 'Julia Bloom', 'Mandelbox', 'Portal'];
+export const FRACTAL_VARIANTS = [
+  ['Lace', 'Petals', 'Weave'],
+  ['Classic', 'Radial', 'Spiral'],
+  ['Architecture', 'Sphere Fold', 'Lattice'],
+  ['Beaded Tunnel', 'Mosaic Spiral', 'Light Halo'],
+];
+export const FRACTAL_PROJECTION_LOOK_IDS = [
+  'unfolding-rose', 'electric-coast', 'cathedral-passage', 'neon-passage', 'glass-spiral', 'afterlight',
+];
 
 const SUPER8_PALETTE = ['#ff6238', '#f5c842', '#408bba', '#be4266', '#171824', '#eeddb4'];
 // New looks use the projector; absent controls in saved films migrate to neutral.
@@ -140,7 +151,7 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
   ],
   fractal: [
-    parameter('style', 'Pattern', 0, 2, 1, 0, 'Shape'),
+    parameter('style', 'Pattern', 0, FRACTAL_FAMILIES.length - 1, 1, 0, 'Shape'),
     parameter('variant', 'Variant', 0, 2, 1, 0, 'Shape'),
     parameter('scale', 'Scale', 0.5, 5, 0.01, 1.7, 'Shape'),
     parameter('detail', 'Detail', 0, 1, 0.01, 0.6, 'Shape'),
@@ -177,6 +188,17 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('colorMix', 'Coloring amount', 0, 1, 0.01, 1, 'Material'),
     parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
     parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
+    { ...parameter('focalX', 'Focal point X', -.45, .45, .01, 0, 'Shape'), description: 'Place the opening horizontally within the mapped surface.' },
+    { ...parameter('focalY', 'Focal point Y', -.45, .45, .01, 0, 'Shape'), description: 'Place the opening vertically within the mapped surface.' },
+    { ...parameter('cutout', 'Dark-space cutout', 0, 1, .01, 0, 'Material'), description: 'Let the mapped surface or layers below show through the dark gaps.' },
+    { ...parameter('evolution', 'Evolution', 0, 1, .01, 0, 'Motion'), description: 'Sets how strongly the forms open, split, and reveal deeper layers. Zero restores the original motion.' },
+    { ...parameter('reveal', 'Reveal', 0, 1, .01, 0, 'Motion'), description: 'Amount of the staged reveal. The movement follows the project loop.' },
+    { ...parameter('passage', 'Camera passage', 0, 1, .01, 0, 'Camera'), description: 'Move from a held wide view towards a selected opening and ease back out.' },
+    { ...parameter('depth', 'Depth', 0, 1, .01, 0, 'Shape'), description: 'Strength of the perspective and depth separation.' },
+    { ...parameter('bank', 'Bank', -1, 1, .01, 0, 'Camera'), description: 'Set the camera tilt. With Evolution off, this controls the original rocking motion.' },
+    { ...parameter('position', 'Travel position', 0, 1, .01, 0, 'Motion'), description: 'Scrub a still pose in Manual mode or shift the timing in Loop mode.' },
+    parameter('autoTravel', 'Travel mode', 0, 1, 1, 1, 'Motion'),
+    { ...parameter('afterglow', 'Afterglow', 0, 1, .01, .55, 'Material'), description: 'Amount of staggered, expanding light echoes around the halo.' },
   ],
   liquid: [
     parameter('scale', 'Cell size', 0.4, 3, 0.01, 1, 'Shape'),
@@ -357,7 +379,11 @@ export function readParameterDefinitions(kind: LayerKind): readonly Readonly<Par
   return DEFINITIONS[kind];
 }
 
-const FRACTAL_ADDED_FIELDS = ['zoomFlight', 'approach', 'outside', 'variant', 'quality', 'density', 'juliaReal', 'juliaImag', 'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth'];
+const FRACTAL_ADDED_FIELDS = [
+  'zoomFlight', 'approach', 'outside', 'variant', 'quality', 'density', 'juliaReal', 'juliaImag',
+  'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth',
+  'focalX', 'focalY', 'cutout', 'evolution', 'reveal', 'passage', 'depth', 'bank', 'position', 'autoTravel', 'afterglow',
+];
 const GRADING_FIELDS = ['saturation', 'hue', 'exposure'];
 const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
   surface: [...TIMING_KEYS,'anisotropy','sheenAngle','iridescence', 'roundness', 'relief', 'variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', ...GRADING_FIELDS],
@@ -417,12 +443,16 @@ function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const familySpecific: Record<string, number[]> = {
     juliaReal: [1], juliaImag: [1], trap: [1],
     boxScale: [2], boxRadius: [2], radial: [2], roughness: [2], lightAngle: [2],
-    lineWidth: [0, 1], zoomFlight: [0, 1], approach: [2], outside: [1],
+    lineWidth: [0, 1, 3], zoomFlight: [0, 1], approach: [2], outside: [1],
+    morph: [0, 1, 2], reveal: [0, 1, 3], cutout: [0, 1, 3], passage: [2],
+    depth: [2, 3], bank: [2, 3], position: [3], autoTravel: [3], afterglow: [3],
   };
   return definitions.filter((definition) => {
     if (definition.key === 'colorSteps') return layer.params.colorMode === 2;
     if (definition.key === 'colorMix') return layer.params.colorMode > 0;
-    if (definition.key === 'symmetry') return family === 0 || (family === 1 && variant === 1) || (family === 2 && layer.params.radial > 0);
+    if (definition.key === 'symmetry') return family === 0 || family === 3 || (family === 1 && variant === 1) || (family === 2 && layer.params.radial > 0);
+    if (definition.key === 'afterglow' && variant !== 2) return false;
+    if (definition.key === 'cycles' && family === 3 && layer.params.autoTravel === 0) return false;
     return !familySpecific[definition.key] || familySpecific[definition.key].includes(family);
   });
 }
@@ -432,7 +462,7 @@ function defaultParams(kind: LayerKind): Record<string, number> {
 }
 
 function preset(id: string, name: string, description: string, kind: Preset['kind'], palette: string[], params: Record<string, number>): Preset {
-  return { id, name, description, kind, palette, params: { ...defaultParams(kind), ...(kind === 'super8' ? SUPER8_PROJECTOR_LOOK : {}), ...params } };
+  return { id, name, description, kind, palette, params: { ...defaultParams(kind), ...(kind === 'super8' ? SUPER8_PROJECTOR_LOOK : kind === 'fractal' ? { evolution: FRACTAL_EVOLUTION } : {}), ...params } };
 }
 
 export const SUPER8_MODES = ['Chromatic Staircase', 'Paint Destruction', 'Scratched Negative', 'Cut-out Collage', 'Painted Tunnel'];
@@ -474,17 +504,35 @@ export const PRESETS: Preset[] = [
   preset('chrome-dahlia', 'Chrome Dahlia', 'A tightly gathered dahlia with electric highlights and fine folds.', 'sculpture', ELECTRIC, { form: 1, fold: 0.7, ridges: 0.7, opening: 0.3, lobes: 11, thickness: 0.3, curl: 0.8, twist: -0.6, stretch: 0.95, cameraPitch: 0.2, roughness: 0.22, iridescence: 0.5, metallic: 0.65, clearcoat: 0.9, lightAngle: -0.45, shadowStrength: 0.45, shadowSoftness: 0.6, spin: 1, zoom: 2.2, toonMix: 1, toonBands: 5, toonOutline: 2.5 }),
   preset('aurora-ribbon', 'Aurora Ribbon', 'A broad asymmetric ribbon in lime and violet light.', 'sculpture', LIME_VIOLET, { form: 2, fold: 0.9, ridges: 0.8, opening: 0.1, twist: -1, lobes: 5, thickness: 0.7, curl: 0.9, asymmetry: 0.35, stretch: 0.75, foldFrequency: 1.4, cameraPitch: 0.6, cameraYaw: 0.4, roughness: 0.24, iridescence: 1, filmScale: 1.45, metallic: 0.45, clearcoat: 0.9, lightAngle: -0.8, saturation: 1.25, shadowStrength: 0.45, shadowSoftness: 0.6, spin: -1, zoom: 2.2, toonMix: 1, toonBands: 5, toonOutline: 2.5 }),
   preset('liquid-trefoil', 'Liquid Trefoil', 'A smooth looping knot in cyan, magenta and yellow.', 'sculpture', POP_PORTAL, { form: 3, fold: 0.2, ridges: 0.3, opening: 0.55, twist: 0.4, thickness: 0.65, cameraPitch: 0.3, roughness: 0.23, iridescence: 0.62, metallic: 0.45, clearcoat: 0.9, lightAngle: 0.35, shadowStrength: 0.45, shadowSoftness: 0.6, spin: 1, zoom: 2.2, toonMix: 1, toonBands: 5, toonOutline: 2.5 }),
-  preset('prismatic-fold', 'Prismatic Fold', 'Luminous folded geometry arranged into a shifting neon kaleidoscope.', 'fractal', FRACTAL_PALETTE, { style: 0, zoom: 1.8, zoomFlight: 0.5 }),
-  preset('velvet-petals', 'Hot Petals', 'Overlapping petals in hot pink, orange and yellow.', 'fractal', HOT_SIGNAL, { style: 0, variant: 1, scale: 1.8, detail: 0.48, fold: 0.64, symmetry: 8, twist: -0.12, morph: 0.1, travel: 0.18, relief: 0.52, glow: 0.25, density: 0.8, lineWidth: 1.15, zoom: 1.8, zoomFlight: 0.5 }),
-  preset('luminous-weave', 'Luminous Weave', 'Fine interlocking ribbons in electric cyan, blue and violet.', 'fractal', ELECTRIC, { style: 0, variant: 2, scale: 2.2, detail: 0.7, fold: 0.4, symmetry: 6, twist: 0.34, morph: 0.1, travel: 0.3, density: 1.2, lineWidth: 0.8, relief: 0.58, glow: 0.18, zoom: 1.6, zoomFlight: 0.4 }),
-  preset('velvet-julia', 'Lime Julia', 'Intricate Julia filigree in lime, green and cyan.', 'fractal', ['#c6ff00', '#5cff5c', '#00ff9c', '#00e5ff', '#9cff2e', '#04120a'], { style: 1, variant: 0, scale: 1.55, detail: 0.7, fold: 0.42, twist: -0.16, morph: 0.07, travel: 0.08, offset: 0.32, relief: 0.52, glow: 0.16, contrast: 0.5, cameraPitch: 0.12, juliaReal: -0.74543, juliaImag: 0.11301, density: 0.9, trap: 0.55, zoom: 1.6, zoomFlight: 0.4, outside: 0.6 }),
+  preset('prismatic-fold', 'Prismatic Fold', 'Luminous folded geometry arranged into a shifting neon kaleidoscope.', 'fractal', FRACTAL_PALETTE, { style: 0, zoom: 1.17, detail: .65, reveal: .38 }),
+  preset('velvet-petals', 'Hot Petals', 'Overlapping petals in hot pink, orange and yellow.', 'fractal', HOT_SIGNAL, { style: 0, variant: 1, scale: 1.8, detail: 0.48, fold: 0.64, symmetry: 8, twist: -0.12, morph: 0.1, travel: 0.18, relief: 0.52, glow: 0.25, density: 0.8, lineWidth: 1.15, zoom: 1.24, reveal: .54 }),
+  preset('luminous-weave', 'Luminous Weave', 'Fine interlocking ribbons in electric cyan, blue and violet.', 'fractal', ELECTRIC, { style: 0, variant: 2, scale: 2.2, detail: 0.7, fold: 0.4, symmetry: 6, twist: 0.34, morph: 0.1, travel: 0.3, density: 1.2, lineWidth: 0.8, relief: 0.58, glow: 0.18, zoom: 1.19, reveal: .28 }),
+  preset('velvet-julia', 'Lime Julia', 'Intricate Julia filigree in lime, green and cyan.', 'fractal', ['#c6ff00', '#5cff5c', '#00ff9c', '#00e5ff', '#9cff2e', '#04120a'], { style: 1, variant: 0, scale: 1.55, detail: 0.7, fold: 0.42, twist: -0.16, morph: 0.07, travel: 0.08, offset: 0.32, relief: 0.52, glow: 0.16, contrast: 0.5, cameraPitch: 0.12, juliaReal: -0.74543, juliaImag: 0.11301, density: 0.9, trap: 0.55, zoom: 1.46, outside: 0.49 }),
   preset('coral-mandala', 'Coral Mandala', 'Radial Julia branches gathered into an amber, scarlet and magenta mandala.', 'fractal', SOLAR, { style: 1, variant: 1, scale: 1.65, detail: 0.75, fold: 0.45, symmetry: 8, twist: 0.08, morph: 0.08, travel: 0.1, offset: 0.12, relief: 0.42, glow: 0.14, contrast: 0.52, juliaReal: -0.4, juliaImag: 0.6, density: 0.75, trap: 0.62, lineWidth: 1.1, exposure: 1.25, zoom: 1.8, zoomFlight: 0.5 }),
   preset('spiral-garden', 'Spiral Garden', 'Curling Julia tendrils in hot pink, orange and yellow.', 'fractal', ['#ff2e93', '#ff5a1f', '#ffcc00', '#ff4fd8', '#ff8a00', '#14020c'], { style: 1, variant: 2, scale: 1.75, detail: 0.8, fold: 0.55, twist: 0.16, morph: 0.06, travel: 0.08, offset: 0.2, relief: 0.5, glow: 0.12, contrast: 0.55, juliaReal: -0.70176, juliaImag: -0.3842, density: 1.15, trap: 0.48, lineWidth: 0.9, exposure: 1.3, zoom: 1.6, zoomFlight: 0.4, outside: 0.6 }),
   preset('abyssal-cathedral', 'Abyssal Cathedral', 'Folded architecture in cyan light with yellow edges.', 'fractal', CYAN_YELLOW, { style: 2, variant: 0, scale: 1.9, detail: 0.42, fold: 0, twist: 0.08, morph: 0.08, travel: 0.18, offset: 0.02, relief: 0.98, glow: 0.06, contrast: 0.5, cameraYaw: 0.65, cameraPitch: 0.35, boxScale: 2.2, boxRadius: 0.35, roughness: 0.42, density: 0.55, exposure: 1.15, lightAngle: -0.7, approach: 0.7 }),
   preset('ivory-vault', 'Candy Vault', 'Smooth sphere folds in candy pink, cyan and yellow.', 'fractal', CANDY, { style: 2, variant: 1, scale: 1.85, detail: 0.32, fold: 0.12, twist: -0.08, morph: 0.06, travel: 0.08, relief: 0.96, glow: 0.04, contrast: 0.5, cameraYaw: 0.55, cameraPitch: 0.32, boxScale: 1.85, boxRadius: 0.4, roughness: 0.55, density: 0.8, lightAngle: -0.45, exposure: 1.15, approach: 0.7 }),
   preset('chromatic-lattice', 'Chromatic Lattice', 'Open recursive lattice with crisp neon edges.', 'fractal', NEON_STRATA, { style: 2, variant: 2, scale: 2, detail: 0.42, fold: 0, twist: 0.08, morph: 0.08, travel: 0.08, relief: 0.98, glow: 0.05, contrast: 0.5, cameraYaw: -0.35, cameraPitch: 0.3, boxScale: 2.2, boxRadius: 0.35, roughness: 0.32, density: 0.8, lightAngle: -0.8, exposure: 1.15, approach: 0.6 }),
-  preset('ink-lace', 'Ink Lace', 'Fine recursive lace in cyan and yellow on black.', 'fractal', CYAN_YELLOW, { style: 0, variant: 0, colorMode: 1, colorMix: 0.8, scale: 1.9, detail: 0.65, symmetry: 8, fold: 0.5, lineWidth: 0.85, relief: 0.5, glow: 0.12, contrast: 0.48, density: 0.8, zoom: 1.8, zoomFlight: 0.5 }),
-  preset('ember-julia', 'Ember Julia', 'Julia filigree mapped into crisp amber, scarlet and magenta contour bands.', 'fractal', SOLAR, { style: 1, variant: 0, colorMode: 2, colorSteps: 8, colorMix: 0.8, scale: 1.55, detail: 0.7, fold: 0.42, twist: -0.16, morph: 0.07, travel: 0.08, offset: 0.12, relief: 0.52, glow: 0.16, contrast: 0.5, cameraPitch: 0.12, juliaReal: -0.74543, juliaImag: 0.11301, density: 0.9, trap: 0.55, zoom: 1.6, zoomFlight: 0.4, outside: 0.6 }),
+  preset('ink-lace', 'Ink Lace', 'Fine recursive lace in cyan and yellow on black.', 'fractal', CYAN_YELLOW, { style: 0, variant: 0, colorMode: 1, colorMix: 0.8, scale: 1.9, detail: 0.65, symmetry: 8, fold: 0.5, lineWidth: 0.85, relief: 0.5, glow: 0.12, contrast: 0.48, density: 0.8, zoom: 1.25, reveal: .25 }),
+  preset('ember-julia', 'Ember Julia', 'Julia filigree mapped into crisp amber, scarlet and magenta contour bands.', 'fractal', SOLAR, { style: 1, variant: 0, colorMode: 2, colorSteps: 8, colorMix: 0.8, scale: 1.55, detail: 0.7, fold: 0.42, twist: -0.16, morph: 0.07, travel: 0.08, offset: 0.12, relief: 0.52, glow: 0.16, contrast: 0.5, cameraPitch: 0.12, juliaReal: -0.74543, juliaImag: 0.11301, density: 0.9, trap: 0.55, zoom: 1.5, outside: 0.48 }),
+  preset('unfolding-rose', 'Unfolding Rose', 'Scarlet and acid-green lace reorganises into successive petals and inner rosettes.', 'fractal',
+    ['#ffbf3a', '#f83659', '#f332ab', '#7134ed', '#58d943', '#130820'],
+    { style: 0, variant: 1, scale: 2.19, symmetry: 8, fold: .54, detail: .52, twist: -.12, morph: .16, travel: .05, relief: .68, glow: .26, lineWidth: 1.48, zoom: 1.12, reveal: .94, cutout: 1, density: 1.34, exposure: 1.31 }),
+  preset('electric-coast', 'Electric Coast', 'Cyan and ultramarine light runs along branching Julia contours.', 'fractal',
+    ['#a2fff0', '#16e2ef', '#3269ee', '#b388ff', '#d3f9fc', '#05162a'],
+    { style: 1, variant: 2, scale: 1.41, detail: .68, fold: .58, twist: .17, morph: .025, travel: .12, offset: .27, relief: .36, glow: .36, contrast: .53, juliaReal: -.70176, juliaImag: -.3842, trap: .68, lineWidth: 1.65, zoom: 1.44, zoomFlight: .36, outside: .14, reveal: .92, cutout: 1, exposure: 1.65 }),
+  preset('cathedral-passage', 'Cathedral Passage', 'A held view of a folded vault gives way to a close approach through bands of amber and teal light.', 'fractal',
+    ['#46d9ce', '#115668', '#3b2272', '#ba5c37', '#ffc765', '#f5dfad'],
+    { style: 2, variant: 1, scale: 1.8, detail: .52, fold: .09, twist: .035, morph: .015, travel: .1, offset: .32, relief: .96, glow: .28, cameraYaw: .16, cameraPitch: .21, zoom: .91, boxScale: 2.12, boxRadius: .37, roughness: .32, density: .76, lightAngle: -.85, exposure: 1.35, passage: 1, depth: .74 }),
+  preset('neon-passage', 'Neon Passage', 'Twin streams of neon beads accelerate into a single luminous throat.', 'fractal',
+    ['#85fff8', '#1857ff', '#8332ff', '#fa184e', '#ff9b1a', '#b9fa32'],
+    { style: 3, variant: 0, scale: 1.46, symmetry: 8, fold: .7, detail: .6, travel: .29, twist: .37, depth: .76, reveal: .56, density: .85, lineWidth: 1.16, cutout: 1, glow: .44, relief: .64, exposure: 1.23 }),
+  preset('glass-spiral', 'Glass Spiral', 'A small disc of coloured fans grows into the next full mosaic.', 'fractal',
+    ['#f4b72e', '#ee493a', '#c2251d', '#1d68e8', '#12c8c2', '#19a176'],
+    { style: 3, variant: 1, scale: 1.54, symmetry: 7, fold: .62, detail: .48, travel: .04, twist: .58, depth: .42, reveal: .81, density: .86, lineWidth: .91, cutout: 1, glow: .13, relief: .68, exposure: 1.16 }),
+  preset('afterlight', 'Afterlight', 'An upright beam carries expanding crowns and a second bloom below.', 'fractal',
+    ['#ffe5a5', '#ff855c', '#db4f9c', '#534de4', '#3ee7da', '#8bdfdc'],
+    { style: 3, variant: 2, scale: 1.34, symmetry: 10, fold: .55, detail: .7, travel: .09, twist: -.11, offset: .015, depth: .62, reveal: .92, afterglow: .86, density: .74, lineWidth: 1.27, cutout: 1, glow: .55, relief: .55, exposure: 1.28 }),
 ];
 
 
@@ -564,7 +612,7 @@ export function createLayer(kind: LayerKind): Layer {
     kind, visible: true, opacity: 1, blend: 'normal',
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     mask: { kind: 'none', softness: 0.15, invert: false, size: 0.8 },
-    params: { ...defaultParams(kind), ...(isInstrument(kind) ? INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].params : kind === 'graphic' ? GRAPHIC_LOOKS[0].params : kind === 'super8' ? SUPER8_PROJECTOR_LOOK : {}), seed: 1729 },
+    params: { ...defaultParams(kind), ...(isInstrument(kind) ? INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].params : kind === 'graphic' ? GRAPHIC_LOOKS[0].params : kind === 'super8' ? SUPER8_PROJECTOR_LOOK : kind === 'fractal' ? { evolution: FRACTAL_EVOLUTION } : {}), seed: 1729 },
     palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
   };
 }
@@ -639,7 +687,7 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
   for (const d of definitions) {
     const key = d.key, original = layer.params[key];
     const locked = d.section === 'Motion' ? locks.motion : d.section === 'Material' ? locks.material : locks.structure;
-    if (locked || VARIATION_FIXED.has(key) || (locks.palette && ['hue','saturation','vibrance'].includes(key))) continue;
+    if (locked || VARIATION_FIXED.has(key) || layer.kind === 'fractal' && ['focalX', 'focalY', 'cutout', 'autoTravel', 'position', 'passage', 'reveal'].includes(key) || (locks.palette && ['hue','saturation','vibrance'].includes(key))) continue;
     // Preserve artist-authored routes and their baseline values as a unit.
     // Flat colour is an explicit choice: never switch it on, change its palette
     // cycling (which can strobe), or vary its controls while it is off.

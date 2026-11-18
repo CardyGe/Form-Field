@@ -1,6 +1,7 @@
 import { sourceViewGLSL } from './source-view';
 import { juliaFunctions } from './fractal-julia';
 import { boxFunctions } from './fractal-box';
+import { portalFunctions } from './fractal-portal';
 
 // Original instrument shaders. Mandelbox folding follows Tom Lowe's mathematical
 // definition; no artistic shader or third-party implementation is copied.
@@ -15,6 +16,7 @@ uniform float uMorph,uTravel,uOffset,uRelief,uGlow,uContrast,uCameraYaw,uCameraP
 uniform float uVariant,uQuality,uDensity,uJuliaReal,uJuliaImag,uTrap,uLineWidth;
 uniform float uBoxScale,uBoxRadius,uRadial,uRoughness,uLightAngle,uExposure;
 uniform float uZoomFlight,uApproach,uOutside;
+uniform float uFocalX,uFocalY,uCutout,uReveal,uPassage,uDepth,uBank,uPosition,uAutoTravel,uAfterglow,uEvolution;
 // Extra magnification for Zoom flight; 1 leaves the plane unchanged.
 float gZoom=1.;
 const float TAU=6.28318530718;
@@ -33,13 +35,24 @@ vec2 wedge(vec2 p) {
   float angle=abs(mod(atan(p.y,p.x)+sector*.5,sector)-sector*.5);
   return r*vec2(cos(angle),sin(angle));
 }
+vec2 fractalView(vec2 uv) {
+  return (sourceUV(uv)-.5-vec2(uFocalX,uFocalY))*vec2(uAspect,1.);
+}
+float legacyCameraMotion() {
+  return 1.-smoothstep(0.,.30,uEvolution);
+}
+// An arrival, a hold and a release. Both ends are flat at the loop seam.
+float fractalCue(float progress,vec4 timing) {
+  return smoothstep(timing.x,timing.y,progress)*(1.-smoothstep(timing.z,timing.w,progress));
+}
 vec2 planeAt(vec2 offset) {
-  vec2 p=(sourceUV(vUv+offset/uResolution)-.5)*vec2(uAspect,1.);
+  vec2 p=fractalView(vUv+offset/uResolution);
   float denominator=1.+p.y*.18*tan(uCameraPitch);
   p/=(denominator<0.?-1.:1.)*max(abs(denominator),.08);
-  p=turn(uCameraYaw+uTravel*.12*sin(uPhase))*p;
+  float sway=uTravel*legacyCameraMotion();
+  p=turn(uCameraYaw+sway*.12*sin(uPhase))*p;
   p*=2.8*uScale/1.7/max(uZoom,.5)*gZoom;
-  p+=uTravel*.22*vec2(sin(uPhase),cos(uPhase));
+  p+=sway*.22*vec2(sin(uPhase),cos(uPhase));
   return p;
 }
 vec2 plane() {return planeAt(vec2(0.));}
@@ -64,16 +77,42 @@ vec3 glaze(vec3 color,float height,float weight) {
 vec3 kaleidoscopeSample(vec2 offset) {
   vec2 p=planeAt(offset);
   float seed=mod(uSeed,997.)*.0137;
-  vec2 z=wedge(turn(uTwist*.7+uMorph*.18*sin(uPhase))*p);
+  float radius=length(p);
+  float wave=uPhase-radius*(2.5+uTravel*3.);
+  float progress=fract(uPhase/TAU);
+  float unfurl=fractalCue(progress,vec4(.08,.34,.53,.89));
+  float interlace=fractalCue(progress,vec4(.48,.65,.78,.99));
+  float shellRadius=1.24+.64*unfurl+.26*interlace;
+  // The smaller centre becomes a readable rosette before the outer folds open.
+  float reach=smoothstep(.32,1.5,radius);
+  p*=1.+uEvolution*(.27*(1.-reach)-.23*reach)*unfurl;
+  vec2 z=wedge(turn(uTwist*.7+uMorph*.18*sin(uPhase)*legacyCameraMotion())*p);
   float derivative=1.,height=0.;
   vec3 color=uPalette[5]*.025,halo=vec3(0.);
   float pixel=planePixel();
   float growth=1.65+uFold*.52;
   float angle=.24+uTwist*.5+.12*sin(seed)+uMorph*.065*sin(uPhase+seed);
   for(int i=0;i<7;i++) {
-    z=wedge(turn(angle)*z);
-    z=abs(z)-vec2(.64+uFold*.2,.18+uMorph*.045*cos(uPhase));
-    z*=growth;derivative*=growth;
+    float levelIndex=float(i);
+    float stageMix=1.,opening=0.;
+    if(uReveal>0.){
+      float beat=.5-.5*cos(uPhase-.40*levelIndex);
+      opening=uReveal*(smoothstep(.12,.88,beat)-.5);
+      stageMix=mix(1.,mix(.16,1.,smoothstep(.04,.72,beat)),uReveal*min(1.,levelIndex*.50+.18));
+    }
+    // The inner levels change first. Alternating offsets turn the same folded
+    // scaffold through laced rings, pronounced chambers and narrow bridges.
+    float arrival=wave-levelIndex*.79;
+    float crest=cos(arrival),alternate=sin(arrival*2.+levelIndex*.37);
+    float change=uEvolution*(.77+.23*uMorph);
+    float onset=.10+.036*levelIndex+.075*reach;
+    float outward=fractalCue(progress,vec4(onset,onset+.23,.68,.98));
+    vec2 hinge=vec2(.64+uFold*.2+.20*opening,.18+uMorph*.045*cos(uPhase)+.16*opening);
+    hinge+=change*vec2(.31*outward-.19*interlace+.075*crest,.24*interlace-.14*outward+.065*alternate);
+    z=wedge(turn(angle+.16*opening+change*(.20*interlace-.14*outward+.065*crest))*z);
+    z=abs(z)-hinge;
+    float levelGrowth=growth+change*(.20*outward-.13*interlace+.06*cos(arrival+.8));
+    z*=levelGrowth;derivative*=levelGrowth;
     float shape=length(z)-(.34+.12*uFold);
     if(uVariant>.5&&uVariant<1.5) {
       // Elliptical petals with a wider inner body and a fine edge.
@@ -82,10 +121,16 @@ vec3 kaleidoscopeSample(vec2 offset) {
       // Orthogonal woven ribbons, recursively reflected into the radial field.
       shape=min(abs(z.x),abs(z.y))-(.12+.05*uFold);
     }
+    if(uEvolution>0.){
+      float bevel=abs(z.x)*.58+abs(z.y)*1.04-(.39+.11*uFold);
+      float lens=(length(z*vec2(.58,1.48))-(.35+.13*uFold))*.78;
+      shape=mix(shape,lens,change*outward*.72);
+      shape=mix(shape,bevel,change*interlace*.64);
+    }
     float signedDistance=shape/derivative;
     float distance=abs(signedDistance);
     float width=.055*uLineWidth/derivative;
-    float level=smoothstep(-.05,.18,uDetail-float(i)*.16+.18);
+    float level=smoothstep(-.05,.18,uDetail-levelIndex*.16+.18)*stageMix;
     // Integrate both stroke edges. Thin lines preserve their coverage instead
     // of turning into half-opaque pixels or changing thickness with recursion.
     float coverage=clamp((width-signedDistance+pixel*.5)/pixel,0.,1.)
@@ -97,12 +142,32 @@ vec3 kaleidoscopeSample(vec2 offset) {
     coverage*=level;
     float coordinate=uOffset+uDensity*(float(i)*.115+.055*length(z))+uMorph*.035*sin(uPhase);
     vec3 ink=pigment(coordinate,max(.001,uDensity*.055*derivative*pixel));
+    if(uEvolution>0.){
+      float brilliance=.70+.48*smoothstep(.12,.83,outward);
+      float zones=smoothstep(.24,1.75,radius);
+      vec3 enamel=pigment(uOffset+.22*zones+.139*levelIndex+.15*interlace-.14*outward,
+        pixel*derivative*.25);
+      ink=mix(ink,enamel*brilliance,uEvolution*.88);
+    }
     color=mix(color,ink,coverage*.9);
-    height+=coverage/(1.+float(i)*.35);
+    float ridge=exp(-pow(distance/max(width*1.85,pixel),2.));
+    height+=mix(coverage,ridge*level,uEvolution*.88)/(1.+levelIndex*mix(.35,.45,uEvolution));
     float haloWidth=width*2.8;
     halo+=ink*exp(-distance/max(haloWidth,pixel*.6))*min(1.,haloWidth/(pixel*.6))*level*.11;
   }
-  return glaze(color,height,1.)+halo*uGlow;
+  vec3 result=glaze(color,height,1.)+halo*uGlow;
+  if(uEvolution>0.){
+    // A subdued second scale extends into the corners while the main rosette unfolds.
+    float broadcast=1.-smoothstep(shellRadius-.1,shellRadius+.52,radius);
+    float ambient=.38+.17*unfurl+.36*broadcast;
+    result*=mix(1.,ambient,uEvolution);
+  }
+  if(uReveal>0.){
+    float outward=smoothstep(.30,1.48,length(p));
+    float bloom=smoothstep(.04,.77,.5-.5*cos(uPhase-1.2*outward));
+    result*=1.-uReveal*outward*.88*(1.-bloom);
+  }
+  return result;
 }
 vec3 kaleidoscope() {
   if(uQuality<.5)return kaleidoscopeSample(vec2(0.));
@@ -112,9 +177,11 @@ vec3 kaleidoscope() {
 }
 ${juliaFunctions}
 ${boxFunctions}
+${portalFunctions}
 void main() {
   vec4 pixel;
-  if(uStyle>.5&&uStyle<1.5&&juliaCanDive())pixel=vec4(juliaBloom(),1.);
+  if(uStyle>2.5)pixel=fractalPortal();
+  else if(uStyle>.5&&uStyle<1.5&&juliaCanDive())pixel=vec4(juliaBloom(),1.);
   else if(uStyle<1.5&&uZoomFlight>0.) {
     // Zoom flight: two copies one zoom step apart. The nearer one magnifies
     // across the cycle and the farther one replaces it in a short fade at the
@@ -131,6 +198,11 @@ void main() {
   else {
     // Fixed, deterministic subpixel samples also produce associated edge alpha.
     pixel=mandelbox();
+  }
+  if(uStyle<1.5&&uCutout>0.){
+    float peak=max(max(pixel.r,pixel.g),pixel.b);
+    pixel.a=mix(1.,smoothstep(.012,.22,peak),uCutout);
+    pixel.rgb*=pixel.a;
   }
   if(pixel.a>0.) {
     vec3 color=pixel.rgb/pixel.a;

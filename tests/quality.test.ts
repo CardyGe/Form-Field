@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions, varyLayer, validateProject } from '../src/core/project';
+import { FRACTAL_PROJECTION_LOOK_IDS, PRESETS, applyPreset, createLayer, createProject, parameterDefinitions, varyLayer, validateProject } from '../src/core/project';
 const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
-test('the curated library keeps 96 distinct presets on saturated palettes with a dark or light ground', () => {
-  assert.equal(PRESETS.length,96);
-  assert.equal(new Set(PRESETS.map(p=>p.id)).size,96);
+test('the curated library keeps distinct presets on saturated palettes with a dark or light ground', () => {
+  assert.equal(PRESETS.length, 96 + FRACTAL_PROJECTION_LOOK_IDS.length);
+  assert.equal(new Set(PRESETS.map(p=>p.id)).size, PRESETS.length);
   for (const preset of PRESETS) {
     const layer=applyPreset(createLayer(preset.kind),preset.id);
     const project={...createProject(),layers:[layer]};
