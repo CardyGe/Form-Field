@@ -1,11 +1,13 @@
 import {
   BORDER_MAX, GLOW_MAX, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, PHOTO_TEXT_LIMIT, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE,
-  cleanName, isShapeLocked, normaliseGroups, shapeExtras,
-  type Border, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source,
+  BRIGHTNESS_MAX, ZOOM_RANGE, cleanName, isShapeLocked, normaliseGroups, shapeExtras,
+  type Border, type Placement, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source,
 } from './show';
 import { clampToStage, nudge, rectangleFromDrag } from './geometry';
 import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
 import { joinedAnchors } from './snap';
+import { isPinnable } from './homography';
+import { pinCorners } from './placement';
 import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer } from '../core/project';
 import type { Project } from '../shared/types';
 
@@ -58,7 +60,15 @@ export type EditAction =
   | { type: 'varySource'; sourceId: string; entropy: number }
   | { type: 'setSourcePalette'; sourceId: string; palette: string[] }
   | { type: 'setSourceSpeed'; sourceId: string; speed: number }
-  | { type: 'setSourceProject'; sourceId: string; project: Project };
+  | { type: 'setSourceProject'; sourceId: string; project: Project }
+  /** Stage 4: where the picture sits, its pin handles, sharing an instrument, look, and the stage corners. */
+  | { type: 'setPlacement'; shapeId: string; placement: Partial<Placement> }
+  | { type: 'movePin'; shapeId: string; index: number; to: Point }
+  | { type: 'shareSource'; shapeId: string; withShapeId: string }
+  | { type: 'makeSeparate'; shapeId: string; sourceId: string }
+  | { type: 'setLook'; shapeId: string; brightness?: number; tint?: string }
+  | { type: 'setStageCorners'; corners: Point[] | null }
+  | { type: 'moveStageCorner'; index: number; to: Point };
 
 export type EditResult = { ok: true; show: ShowDocument } | { ok: false; reason: string };
 
@@ -94,7 +104,11 @@ const copyRing = (ring: CurvePoint[]): Ring => ring.map(p => {
 const anchors = (shape: Shape): Point[] => [...shape.points, ...shape.holes.flat()];
 /** A ring moved by a fraction of the stage; handles move with their points. */
 const shiftRing = (ring: Ring, dx: number, dy: number): Ring => ring.map(p => ({ ...p, ...clampToStage({ x: p.x + dx, y: p.y + dy }) }));
-const shiftShape = (shape: Shape, dx: number, dy: number) => { shape.points = shiftRing(shape.points, dx, dy); shape.holes = shape.holes.map(h => shiftRing(h, dx, dy)); };
+const shiftShape = (shape: Shape, dx: number, dy: number) => {
+  shape.points = shiftRing(shape.points, dx, dy); shape.holes = shape.holes.map(h => shiftRing(h, dx, dy));
+  // A stored pin moves with its shape (it may reach past the stage, so it is not clamped).
+  if (shape.placement.pin) shape.placement.pin = shape.placement.pin.map(p => ({ x: p.x + dx, y: p.y + dy }));
+};
 
 /** How far a set of shapes may move by (dx, dy) so no anchor leaves the stage: the whole amount, limited at the edge. */
 function limitMove(shapes: Shape[], dx: number, dy: number): { dx: number; dy: number } {
@@ -261,6 +275,22 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       next.photo = action.photo && { data: action.photo.data, opacity: clamp(Number.isFinite(action.photo.opacity) ? action.photo.opacity : .5, 0, 1) };
       return done();
     }
+    case 'setStageCorners': {
+      if (action.corners === null) { next.stageCorners = null; return done(); }
+      const px = action.corners.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }));
+      if (action.corners.length !== 4 || !isPinnable(px).ok) return { reason: 'corners-folded' };
+      next.stageCorners = action.corners.map(p => ({ x: p.x, y: p.y }));
+      return done();
+    }
+    case 'moveStageCorner': {
+      if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3 || !Number.isFinite(action.to.x) || !Number.isFinite(action.to.y)) return { reason: 'not-found' };
+      const corners = (next.stageCorners ?? [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]).map(p => ({ ...p }));
+      // A nudged projector may need a corner a little past the stage.
+      corners[action.index] = { x: clamp(action.to.x, -0.5, 1.5), y: clamp(action.to.y, -0.5, 1.5) };
+      if (!isPinnable(corners.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }))).ok) return { reason: 'corners-folded' };
+      next.stageCorners = corners;
+      return done();
+    }
     case 'setPhotoOpacity': {
       if (!next.photo) return { reason: 'not-found' };
       next.photo = { ...next.photo, opacity: clamp(Number.isFinite(action.opacity) ? action.opacity : .5, 0, 1) };
@@ -277,7 +307,10 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     case 'transformShapes': {
       const shapes = many(action.shapeIds);
       if ('reason' in shapes) return shapes;
-      for (const s of shapes) { s.points = transformRing(s.points, action.matrix); s.holes = s.holes.map(h => transformRing(h, action.matrix)); }
+      for (const s of shapes) {
+        s.points = transformRing(s.points, action.matrix); s.holes = s.holes.map(h => transformRing(h, action.matrix));
+        if (s.placement.pin) s.placement.pin = transformRing(s.placement.pin, action.matrix).map(p => ({ x: p.x, y: p.y }));
+      }
       return done(shapes);
     }
     case 'deleteShapes': {
@@ -374,6 +407,54 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (action.name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
       shape.name = cleanName(action.name); return done();
     case 'setColour': shape.colour = action.colour; return done();
+    case 'setPlacement': {
+      const p = { ...shape.placement, ...action.placement };
+      const finite = (v: number, fallback: number) => Number.isFinite(v) ? v : fallback;
+      const placement: Placement = {
+        kind: ['fit', 'pin', 'across-group', 'across-stage'].includes(p.kind) ? p.kind : 'fit',
+        zoom: clamp(finite(p.zoom, 1), ZOOM_RANGE.min, ZOOM_RANGE.max),
+        offset: { x: clamp(finite(p.offset?.x, 0), -1, 1), y: clamp(finite(p.offset?.y, 0), -1, 1) },
+        turn: clamp(finite(p.turn, 0), -180, 180),
+        pin: p.pin ? p.pin.map(q => ({ x: q.x, y: q.y })) : null,
+      };
+      // Choosing Pin on a shape without four points starts its handles at its box's corners; four points use their own.
+      if (placement.kind === 'pin' && !placement.pin && shape.points.length !== 4) placement.pin = pinCorners(shape).map(q => ({ x: q.x / STAGE_SIZE.width, y: q.y / STAGE_SIZE.height }));
+      shape.placement = placement;
+      return done([shape]);
+    }
+    case 'movePin': {
+      if (!shape.placement.pin) return { reason: 'pin-own-corners' };
+      if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3) return { reason: 'not-found' };
+      const pin = shape.placement.pin.map(q => ({ ...q }));
+      pin[action.index] = { x: clamp(action.to.x, -0.5, 1.5), y: clamp(action.to.y, -0.5, 1.5) };
+      shape.placement = { ...shape.placement, pin };
+      return done([shape]);
+    }
+    case 'shareSource': {
+      if (shape.blocker) return { reason: 'blocker' };
+      const other = next.shapes.find(s => s.id === action.withShapeId);
+      if (!other) return { reason: 'not-found' };
+      if (other.sourceId === null) return { reason: 'nothing-to-share' };
+      shape.sourceId = other.sourceId;
+      dropUnplayed(next);
+      return done();
+    }
+    case 'makeSeparate': {
+      const source = shape.sourceId ? next.sources.find(src => src.id === shape.sourceId) : undefined;
+      // The only player of its instrument is already separate: nothing changes.
+      if (!source || !next.shapes.some(s => s !== shape && s.sourceId === source.id)) return { show, touched: [] };
+      if (next.sources.some(src => src.id === action.sourceId)) return { reason: 'duplicate-id' };
+      if (next.sources.length >= MAX_SOURCES) return { reason: 'too-many-sources' };
+      next.sources.push({ ...source, id: action.sourceId, revision: 0 });
+      shape.sourceId = action.sourceId;
+      return done();
+    }
+    case 'setLook': {
+      if (action.tint !== undefined && !HEX.test(action.tint)) return { reason: 'bad-colour' };
+      if (action.brightness !== undefined) shape.brightness = clamp(Number.isFinite(action.brightness) ? action.brightness : 1, 0, BRIGHTNESS_MAX);
+      if (action.tint !== undefined) shape.tint = action.tint;
+      return done();
+    }
     case 'setBlocker':
       shape.blocker = action.blocker;
       if (action.blocker) { shape.sourceId = null; dropUnplayed(next); }
@@ -478,6 +559,12 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   return { show: normaliseGroups(next), touched: made };
 }
 
+/** A pinned shape's four corners must be able to carry its picture: convex and not flat. */
+function pinValidity(shape: Shape): { ok: true } | { ok: false; reason: string } {
+  if (shape.placement.kind !== 'pin') return { ok: true };
+  return isPinnable(pinCorners(shape));
+}
+
 /** Applies one action to a copy of the show. The input is never changed. */
 export function applyEdit(show: ShowDocument, action: EditAction): EditResult {
   const staged = stage(show, action);
@@ -485,6 +572,8 @@ export function applyEdit(show: ShowDocument, action: EditAction): EditResult {
   for (const shape of staged.touched) {
     const valid = shapeValidity(shape.points, shape.holes);
     if (!valid.ok) return refuse(valid.reason);
+    const pin = pinValidity(shape);
+    if (!pin.ok) return refuse(pin.reason);
   }
   return { ok: true, show: staged.show };
 }

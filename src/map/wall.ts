@@ -14,7 +14,7 @@ export interface WallState {
 
 export function initialWall(): WallState {
   return {
-    show: validateWireShow({ format: 'formshow', version: 3, shapes: [], sources: [], groups: [] }),
+    show: validateWireShow({ format: 'formshow', version: 4, shapes: [], sources: [], groups: [], stageCorners: null }),
     projects: new Map(),
     options: { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: null, selectedIndex: null, outlinesOnly: false, invalidIds: [] },
     freeze: false,

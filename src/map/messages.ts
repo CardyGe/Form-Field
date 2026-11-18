@@ -51,6 +51,7 @@ export function toWire(show: ShowDocument): WireShow {
     }),
     sources: show.sources.map(({ id, kind, speed, revision }) => ({ id, kind, speed, revision })),
     groups: show.groups,
+    stageCorners: show.stageCorners && show.stageCorners.map(p => ({ x: roundForWire(p.x), y: roundForWire(p.y) })),
   };
 }
 

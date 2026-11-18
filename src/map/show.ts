@@ -3,6 +3,7 @@
  * damaged or outdated file field by field, so the Map always opens.
  */
 import { shapeValidity, MAX_HOLES } from './outline';
+import { isPinnable } from './homography';
 import { validateProject } from '../core/project';
 import type { Project } from '../shared/types';
 
@@ -24,7 +25,15 @@ export interface Border { width: number; colour: 'shape' | 'palette' | string; g
 export interface Shape {
   id: string; name: string; points: CurvePoint[]; colour: string; visible: boolean; locked: boolean; sourceId: string | null;
   holes: Ring[]; groupId: string | null; blocker: boolean; softEdge: number; border: Border; fill: 'colour' | 'grid';
+  /** Where the picture sits in the shape (stage 4). brightness: 0 to 2; tint: multiplies the picture, white for none. */
+  placement: Placement; brightness: number; tint: string;
 }
+/**
+ * Fit: the shape's box, with zoom, offset (stage fractions) and turn (degrees). Pin: four corners in perspective;
+ * pin null uses the shape's own four corners (or its box's). Across group / stage: the group's or stage's box.
+ */
+export type PlacementKind = 'fit' | 'pin' | 'across-group' | 'across-stage';
+export interface Placement { kind: PlacementKind; zoom: number; offset: Point; turn: number; pin: Point[] | null }
 /** A folder of shapes, one level deep. Hidden or locked, it hides or locks its members without changing their own settings. */
 export interface Group { id: string; name: string; visible: boolean; locked: boolean }
 /** A photograph to trace over, on the operator screen only: a JPEG or PNG as a data URL. */
@@ -32,11 +41,12 @@ export interface Photo { data: string; opacity: number }
 /** A Studio composition playing in one or more shapes. revision goes up with every change, so the wall knows what it has. */
 export interface InstrumentSource { id: string; kind: 'instrument'; project: Project; speed: number; revision: number }
 export type Source = InstrumentSource;
-export interface ShowDocument { format: 'formshow'; version: 3; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null }
+/** stageCorners: where the stage's four corners go on the projector (to fix a nudged projector), or null for none. */
+export interface ShowDocument { format: 'formshow'; version: 4; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null }
 /** A source as the wall first hears of it: everything but the composition, which travels in its own message. */
 export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number }
 /** The show as sent to the wall: no compositions, and never the photo. */
-export interface WireShow { format: 'formshow'; version: 3; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[] }
+export interface WireShow { format: 'formshow'; version: 4; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null }
 
 export const MAX_SHAPES = 64;
 export const MAX_POINTS = 32;
@@ -60,10 +70,14 @@ export const GLOW_MAX = 40;
 export const PHOTO_TEXT_LIMIT = 8 * 1024 * 1024;
 export const DEFAULT_BORDER: Border = { width: 0, colour: 'shape', glow: 0 };
 /** The stage 3 fields of a new shape, at their defaults. */
-export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'softEdge' | 'border' | 'fill'> => ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour' });
+export const DEFAULT_PLACEMENT: Placement = { kind: 'fit', zoom: 1, offset: { x: 0, y: 0 }, turn: 0, pin: null };
+export const ZOOM_RANGE = { min: 0.25, max: 4 };
+export const BRIGHTNESS_MAX = 2;
+export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'softEdge' | 'border' | 'fill' | 'placement' | 'brightness' | 'tint'> =>
+  ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour', placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, brightness: 1, tint: '#ffffff' });
 
 export function createShow(): ShowDocument {
-  return { format: 'formshow', version: 3, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null };
+  return { format: 'formshow', version: 4, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -144,6 +158,39 @@ function readPhoto(value: unknown): { photo: Photo | null; repaired: boolean } {
   return { photo: { data: value.data, opacity: opacity.value }, repaired: opacity.repaired };
 }
 
+/** Four points in stage fractions that can carry a picture (convex, not flat, in projector pixels), or null. */
+function readQuad(value: unknown): Point[] | null {
+  if (!Array.isArray(value) || value.length !== 4) return null;
+  const pts: Point[] = [];
+  for (const p of value) {
+    if (!isRecord(p) || typeof p.x !== 'number' || typeof p.y !== 'number' || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+    pts.push({ x: p.x, y: p.y });
+  }
+  return isPinnable(pts.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }))).ok ? pts : null;
+}
+function readCorners(value: unknown): { corners: Point[] | null; repaired: boolean } {
+  if (value === undefined || value === null) return { corners: null, repaired: false };
+  // Stage corners may reach a little past the stage, as a nudged projector needs.
+  const corners = readQuad(value);
+  const inReach = corners?.every(p => p.x >= -0.5 && p.x <= 1.5 && p.y >= -0.5 && p.y <= 1.5) ? corners : null;
+  return { corners: inReach, repaired: inReach === null };
+}
+const PLACEMENT_KINDS = ['fit', 'pin', 'across-group', 'across-stage'];
+function readPlacement(value: unknown): { placement: Placement; repaired: boolean } {
+  if (value === undefined) return { placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, repaired: false };
+  if (!isRecord(value)) return { placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, repaired: true };
+  const kind = (PLACEMENT_KINDS.includes(value.kind as string) ? value.kind : 'fit') as PlacementKind;
+  const finite = (v: unknown, fallback: number) => typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+  const zoom = Math.min(ZOOM_RANGE.max, Math.max(ZOOM_RANGE.min, finite(value.zoom, 1)));
+  const turn = Math.min(180, Math.max(-180, finite(value.turn, 0)));
+  const offsetIn = isRecord(value.offset) ? value.offset : {};
+  const offset = { x: Math.min(1, Math.max(-1, finite(offsetIn.x, 0))), y: Math.min(1, Math.max(-1, finite(offsetIn.y, 0))) };
+  const pin = value.pin === null || value.pin === undefined ? null : readQuad(value.pin);
+  const placement: Placement = { kind, zoom, offset, turn, pin };
+  const repaired = kind !== value.kind || zoom !== value.zoom || turn !== value.turn || !isRecord(value.offset) || offset.x !== offsetIn.x || offset.y !== offsetIn.y || (value.pin !== null && pin === null);
+  return { placement, repaired };
+}
+
 /** Whether a shape is drawn: its own setting and its group's. */
 export function isShapeShown(show: { groups: Group[] }, shape: Shape): boolean {
   if (!shape.visible) return false;
@@ -179,7 +226,7 @@ export function normaliseGroups<T extends { shapes: Shape[]; groups: Group[] }>(
 function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaired: boolean; ok: boolean } {
   if (!isRecord(value)) return { shapes: [], groups: [], repaired: true, ok: false };
   // Version 1 and 2 shows open with every later field at its default, which is not a repair.
-  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3);
+  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4);
   if (!isRecord(value.stage) || value.stage.width !== STAGE_SIZE.width || value.stage.height !== STAGE_SIZE.height) repaired = true;
   if (!Array.isArray(value.shapes)) return { shapes: [], groups: [], repaired: true, ok: false };
   if (value.shapes.length > MAX_SHAPES) repaired = true;
@@ -227,7 +274,11 @@ function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaire
     // Shapes from before the grid pattern keep their plain colour.
     const fill = raw.fill === 'grid' ? 'grid' : 'colour';
     if (raw.fill !== undefined && raw.fill !== 'grid' && raw.fill !== 'colour') repaired = true;
-    shapes.push({ id, name, points, colour: colourOk ? raw.colour as string : '#ffffff', visible, locked, sourceId, holes, groupId, blocker, softEdge: softEdge.value, border: border.border, fill });
+    const placement = readPlacement(raw.placement), brightness = clampNumber(raw.brightness, BRIGHTNESS_MAX, 1);
+    const tintOk = raw.tint === undefined || (typeof raw.tint === 'string' && HEX.test(raw.tint));
+    if (placement.repaired || brightness.repaired || !tintOk) repaired = true;
+    shapes.push({ id, name, points, colour: colourOk ? raw.colour as string : '#ffffff', visible, locked, sourceId, holes, groupId, blocker, softEdge: softEdge.value, border: border.border, fill,
+      placement: placement.placement, brightness: brightness.value, tint: typeof raw.tint === 'string' && HEX.test(raw.tint) ? raw.tint : '#ffffff' });
   }
   const normal = normaliseGroups({ shapes, groups: readG.groups });
   if (normal.shapes !== shapes) repaired = true;
@@ -244,6 +295,9 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
   const photo = readPhoto(value.photo);
   show.photo = photo.photo;
   if (photo.repaired) repaired = true;
+  const corners = readCorners(value.stageCorners);
+  show.stageCorners = corners.corners;
+  if (corners.repaired) repaired = true;
 
   // Sources: each composition is checked as Studio checks a file. A source that cannot be read is left out,
   // and its shapes play their colour; so do shapes that name a source the file does not have.
@@ -279,7 +333,7 @@ export function validateWireShow(value: unknown): WireShow {
   }
   const shapes = read.shapes;
   linkSources(shapes, sources);
-  return { format: 'formshow', version: 3, stage: { ...STAGE_SIZE }, shapes, sources: [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id)), groups: read.groups };
+  return { format: 'formshow', version: 4, stage: { ...STAGE_SIZE }, shapes, sources: [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id)), groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null };
 }
 
 /** Shapes that name a source the show does not have play their colour. True when any had to. */

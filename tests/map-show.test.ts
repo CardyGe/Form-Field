@@ -64,7 +64,7 @@ test('long names are shortened and long ids replaced, so a show always fits on t
 
 test('unknown version still loads valid shapes', () => {
   const r = validateShow(doc([shape()], { version: 9 }));
-  assert.equal(r.show.version, 3);
+  assert.equal(r.show.version, 4);
   assert.equal(r.show.shapes.length, 1);
 });
 
@@ -108,7 +108,7 @@ const doc2 = (shapes: unknown[], sources: unknown[], over: Record<string, unknow
 
 test('a version 1 file opens as an all-colour show without being called repaired', () => {
   const r = validateShow(doc([shape()]));
-  assert.equal(r.show.version, 3);
+  assert.equal(r.show.version, 4);
   assert.equal(r.show.shapes[0].sourceId, null);
   assert.deepEqual(r.show.sources, []);
   assert.equal(r.repaired, false);
@@ -248,4 +248,43 @@ test('the wall reads the same shape fields and groups, and never a photo', () =>
   assert.equal(wire.shapes[0].softEdge, 20);
   assert.equal(wire.groups[0].visible, false);
   assert.equal('photo' in wire, false);
+});
+
+// ---- Version 4: placement, look and stage corners ----
+import { DEFAULT_PLACEMENT } from '../src/map/show';
+const doc4 = (shapes: unknown[], over: Record<string, unknown> = {}) => ({ format: 'formshow', version: 4, stage: { width: 1920, height: 1080 }, shapes, sources: [], groups: [], photo: null, stageCorners: null, ...over });
+
+test('version 1 to 3 shapes open with Fit, full brightness, no tint and no stage corners, unrepaired', () => {
+  for (const input of [doc([shape()]), doc3([shape()])]) {
+    const r = validateShow(input);
+    assert.equal(r.repaired, false);
+    assert.equal(r.show.version, 4);
+    assert.deepEqual(r.show.shapes[0].placement, DEFAULT_PLACEMENT);
+    assert.equal(r.show.shapes[0].brightness, 1);
+    assert.equal(r.show.shapes[0].tint, '#ffffff');
+    assert.equal(r.show.stageCorners, null);
+  }
+});
+
+test('a version 4 show with placement, look and stage corners round-trips unrepaired', () => {
+  const corners = [{ x: .01, y: .02 }, { x: .99, y: 0 }, { x: 1, y: .98 }, { x: 0, y: 1 }];
+  const placement = { kind: 'pin', zoom: 1.5, offset: { x: .1, y: -.05 }, turn: 30, pin: [{ x: .2, y: .2 }, { x: .5, y: .25 }, { x: .5, y: .6 }, { x: .2, y: .55 }] };
+  const r = validateShow(doc4([shape({ placement, brightness: .5, tint: '#ffe0c0' })], { stageCorners: corners }));
+  assert.equal(r.repaired, false);
+  assert.deepEqual(r.show.shapes[0].placement, placement);
+  assert.equal(r.show.shapes[0].brightness, .5);
+  assert.deepEqual(r.show.stageCorners, corners);
+  assert.deepEqual(validateShow(JSON.parse(JSON.stringify(r.show))).show, r.show);
+});
+
+test('placement values are clamped; a folded pin or folded stage corners are dropped', () => {
+  const r = validateShow(doc4([shape({ placement: { kind: 'sideways', zoom: 99, offset: { x: 5, y: 0 }, turn: 400,
+    pin: [{ x: 0, y: 0 }, { x: .5, y: .5 }, { x: .5, y: 0 }, { x: 0, y: .5 }] }, brightness: 9, tint: 'red' })],
+    { stageCorners: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }] }));
+  const p = r.show.shapes[0].placement;
+  assert.deepEqual([p.kind, p.zoom, p.offset, p.turn, p.pin], ['fit', 4, { x: 1, y: 0 }, 180, null]);
+  assert.equal(r.show.shapes[0].brightness, 2);
+  assert.equal(r.show.shapes[0].tint, '#ffffff');
+  assert.equal(r.show.stageCorners, null);
+  assert.equal(r.repaired, true);
 });

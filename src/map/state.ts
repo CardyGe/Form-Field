@@ -22,6 +22,8 @@ export function mapReducer(state: MapState, action: MapAction): MapState {
     case 'edit': {
       const result = applyEdit(state.show, action.action);
       if (!result.ok) return { ...state, refusal: result.reason };
+      // An edit that changes nothing is not an undo step.
+      if (result.show === state.show) return { ...state, refusal: null };
       return { show: result.show, past: [...state.past, state.show].slice(-LIMIT), future: [], refusal: null };
     }
     case 'undo': {
