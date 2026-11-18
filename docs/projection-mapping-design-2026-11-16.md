@@ -707,6 +707,62 @@ Made 18 November 2026. The design had set sound and MIDI aside for a design of t
 - reacting to a sound file in Studio's export
 - per-link response curves beyond smoothing
 
+## Stage 5 results
+
+Built 18 November 2026 on `map-stage-5`.
+
+**Where it ended up on screen** (changed from the decisions above, after trying them):
+- **React to…** is a small ∿ button beside each slider, not a right-click: Brightness, Zoom, Move across, Move up and down, Turn and Speed in Details, and every slider of Live's looks plus Sensitivity. It offers Bass, Mids, Highs, Level, Beat and **MIDI: Learn**, and **Stop reacting** when lit. Closing the menu, by any means, stops a Learn.
+- **Sound & MIDI** is a tab beside Details in Map, not a header button, and a folding section at the bottom of Live's Setup column. The meters run only while it is open.
+- **Tap tempo is the B key.** T was already the triangle tool.
+- **Scenes:** the scene bar is under the stage. Click to switch, keys 1 to 9, + Scene keeps the stage as it is now. Right-click a scene to rename it, give it its own fade (Cut to 30 s) or delete it.
+- **Reacts** is a folding section in Details, with the ready-made reactions and the shape's own links.
+- **Loop with the tempo** (Off, or every 1 to 16 beats) is in the instrument card; Speed greys out while it is on.
+
+**Measured** with `scripts/measure-map.mjs` (eight shapes, four instruments, 1920 × 1080, 30 s, the Mac busy with other work):
+
+| Run | Median frame | 95th percentile | Frames over 16.7 ms (Medium · Heavy) | Governor |
+|---|---|---|---|---|
+| Every shape reacting to the test beat (`--react`) | 8.3 · 8.3 ms | 10.4 · 10.5 ms | 10 · 8 | never stepped down |
+| Same show, no reactions | 8.4 · 8.4 ms | 11.3 · 10.5 ms | 7 · 3 | never stepped down |
+
+Reactions cost nothing measurable: both runs held about 120 fps.
+
+**The long run** (`scripts/long-run-map.mjs`): the wall is sampled four times a second for a black frame (every sample black), and every wall frame is timed.
+
+| Run | Show | How long | Black frames | Frames slower than 16.7 ms | Wall memory |
+|---|---|---|---|---|---|
+| Standard | four shapes, three scenes, a reaction each, next scene every 16 beats | 15 min | 0 of 3,488 checks | not timed | flat, 25 MB |
+| `--heavy` | eight shapes all playing instruments, eight reactions (two on instrument settings), two instruments looping with the tempo, next scene every bar | 14.5 min | 0 of 3,280 checks | 34 of 102,500 (0.03 %), worst 22 ms | flat, 73 MB |
+
+- Both ran at about 120 fps, and the governor never stepped down.
+- The heavy run ended at 14.5 of its 20 minutes because a display was unplugged; the wall closed, as it should when its display goes.
+- Earlier runs were stopped by the test window being closed by hand. The script now notes what closes a window: a crash, a display coming or going, or a call to close it.
+- The two-hour run in the plan was not done. The show repeats the same work all the way through, and memory and frame times were flat, so it would mostly add confidence against a rare glitch. Worth running once before a real show, with the Mac left alone.
+
+**Checked in the app** (`npm run test:map`, 33 checks, 5 of them new):
+- Keys 1 and 2 switch between a full and a half-bright scene, and the wall fades with no dark frame.
+- With the test beat, Pulse on the beat brightens and dims a shape on the wall.
+- MIDI: Learn on Brightness takes control 7; at 0 the shape is dark on the wall, at full it is bright.
+- A MIDI note learned for a trigger moves to the next scene.
+- Live: Glow on the beat moves Paint's Spread with the test beat, while the slider stays as set.
+
+**Two reviews** found 21 problems. 19 are fixed; the other two are the first two known limits below. Among the fixes:
+- A 0 s fade drew garbage for a frame.
+- The wall kept the last signals forever after leaving Map; it now lets go after half a second.
+- Zoom on the bass resized instruments many times a second.
+- Freeze now holds links where they are.
+- Learn kept waiting after its menu closed.
+- Triggers firing on the beat pushed the operator's edits out of undo; they are now one undo step.
+
+**Known limits:**
+- **Play-once compositions loop when tempo-synced.** A composition that plays once and holds wraps every N beats.
+- **A scene's Pin that no longer fits is repaired differently** on opening a file (it becomes Fit) and on switching to the scene (it pins on the shape's box).
+- **A MIDI note released and pressed again within one frame (about 8 ms) fires its trigger once, not twice.** Triggers compare the signals frame to frame.
+- **Device names show as "Audio input 1, 2…"** until macOS has allowed the microphone once.
+- **Live has room for about 39 links** (its settings must stay under 16 KB). A link beyond that is refused with a note.
+- **Not shown on real hardware.** A MIDI controller, a sound interface and the projector together still need a session with Greg.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
