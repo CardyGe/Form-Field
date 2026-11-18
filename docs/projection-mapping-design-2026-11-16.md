@@ -460,15 +460,29 @@ Measured 17 November 2026 on this Mac with `scripts/measure-map.mjs` (eight shap
 
 Made 18 November 2026, before building stage 4. Greg handed over the how; each of these is my call and can be changed.
 
-**How Pin is drawn: a perspective helper beside the Canvas 2D compositor, not a whole new compositor.**
+**How Pin is drawn: the wall's drawing moves to the graphics card.** Measured first (18 November, `scripts/map-spike/warp/`). Eight moving 480 × 270 pictures went into eight shapes on a 1920 × 1080 stage, 540 frames each, timed including a wait for the graphics card:
 
-| Route | Trade-off |
-|---|---|
-| **Keep Canvas 2D; add one small WebGL "warp" helper** that draws a picture through a perspective transform. Pinned shapes and the stage corners use it; everything else is drawn as now. | Stage 3's soft edges, borders, Blockers and grid patterns stay as they are and keep their measured cost. Pinned shapes cost one extra copy each. **My pick.** |
-| Replace the compositor with WebGL throughout | Exact and fast for everything, but every stage 3 drawing feature must be rewritten and measured again, and the risk falls on the wall. |
-| Canvas 2D only, approximating perspective with many small triangles | No new graphics context, but seams between triangles and a cost that grows with how fine the triangles are. |
+| Route | Median frame | 95th percentile |
+|---|---|---|
+| Canvas 2D, as stage 3 draws (no Pin) | 6.9–7.8 ms | 8.8–9.8 ms |
+| Canvas 2D plus a perspective helper, one copy per pinned shape | 13.7 ms | 16.3 ms |
+| …plus the stage-corner pass | 16.9 ms | 19.7 ms |
+| Canvas 2D plus the helper, all pinned shapes in one batch | 6.2 ms | 7.2 ms |
+| **Everything on the graphics card, in one pass** | **4.9 ms** | **5.6 ms** |
 
-Task 1 measures the warp helper before anything is built on it. If its copies are too slow, the plan falls back to the full WebGL route.
+- The helper planned at first fails the plan's own rule (no more than 4 ms added).
+- Batching would pass, but pinned and unpinned shapes would need extra care to keep their stacking order.
+- **Greg chose the graphics-card compositor.** It was the fastest route measured, the stage corners come almost free, and it suits stage 6 (video and Live looks in shapes).
+- **How it works:**
+  - Each shape's outline, holes and soft edge become a coverage picture, made in 2D only when the shape changes. This is the original design's "Coverage" idea.
+  - Its border and its own fill (colour or grid pattern) become cached pictures too.
+  - Instruments are uploaded as textures when they render.
+  - Each shape is drawn as a single quad. Its picture goes through one 3 × 3 transform: plain for Fit and the Across placements, perspective for Pin. It is cut by the coverage picture, then given its brightness and tint.
+  - The test grid, names, identify flash and crosshair are drawn in 2D only when they change, and laid on top.
+  - The finished stage goes through the stage corners last.
+- **Two consequences:**
+  - The operator's small picture of the projector is read back without waiting for the graphics card, through a pixel buffer, as the audit required. It is taken before the stage corners.
+  - A lost graphics context blanks the projector until Chromium restores it. It cannot keep a last picture, because the picture lived on the card. That is accepted, and the operator is told.
 
 **Placement.**
 - Each shape gets a placement:
