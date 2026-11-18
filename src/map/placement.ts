@@ -65,3 +65,21 @@ export function sourceSizeFor(landings: Landing[], scale: number): { width: numb
   const side = (span: number, stage: number) => Math.min(stage, Math.max(MIN_SIDE, Math.ceil(span * scale / SIZE_STEP) * SIZE_STEP));
   return { width: side(w, STAGE_SIZE.width), height: side(h, STAGE_SIZE.height) };
 }
+
+/**
+ * Live in Map: Live draws at its own shape (16:9). On a place of another shape its picture covers it and the overflow
+ * is cropped, never stretched. Maps the landing's 0..1 square onto the centred part of the picture that covers it.
+ */
+export function coverCrop(landAspect: number, pictureAspect: number): H3 {
+  if (!(landAspect > 0) || !(pictureAspect > 0) || Math.abs(landAspect - pictureAspect) < 1e-9) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  if (landAspect < pictureAspect) { const w = landAspect / pictureAspect; return [w, 0, (1 - w) / 2, 0, 1, 0, 0, 0, 1]; }
+  const h = pictureAspect / landAspect;
+  return [1, 0, 0, 0, h, (1 - h) / 2, 0, 0, 1];
+}
+
+/** Width over height of the place a picture lands, in stage pixels (measured along its first two sides). */
+export function landingAspect(l: Landing): number {
+  const o = apply(l.h, { x: 0, y: 0 }), x = apply(l.h, { x: 1, y: 0 }), y = apply(l.h, { x: 0, y: 1 });
+  const w = Math.hypot(x.x - o.x, x.y - o.y), h = Math.hypot(y.x - o.x, y.y - o.y);
+  return w > 0 && h > 0 ? w / h : 1;
+}

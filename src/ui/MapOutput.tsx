@@ -28,6 +28,7 @@ export default function MapOutput() {
       compositor.setSignals(state.signals);
       compositor.setOptions(state.options);
       compositor.setFrozen(state.freeze);
+      compositor.setLive(state.live);
       compositor.setCorners(state.show.stageCorners);
     };
     apply();
@@ -37,6 +38,8 @@ export default function MapOutput() {
       // Signals come every frame: only they are passed on, not the whole show again.
       if (kind === 'signals') { heard = performance.now(); compositor.setSignals(state.signals); return; }
       if (kind === 'fade') return;
+      if (kind === 'liveClear') { compositor.liveClear(); return; }
+      if (kind === 'liveCaptureRoom') { compositor.liveCaptureRoom(); return; }
       // A show carrying a fade time is a scene switch, crossfading over the scene's time.
       const fadeMs = (message as { fadeMs?: unknown }).fadeMs;
       if (kind === 'show' && typeof fadeMs === 'number') { apply(fadeMs); return; }

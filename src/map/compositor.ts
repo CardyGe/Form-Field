@@ -12,10 +12,13 @@ import { drawCommands, shownOnWall, stageCommands, type DrawOptions } from './dr
 import { borderColour, fadeKey } from './edge';
 import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
-import { STAGE_SIZE, type Group, type Point, type Shape } from './show';
+import { LIVE_SOURCE_ID, STAGE_SIZE, usesLive, type Group, type Point, type Shape } from './show';
+import type { Scene } from './scenes';
+import { LiveSlot, LIVE_ASPECT } from './liveSlot';
+import type { LiveSettings } from '../live/settings';
 import { ringBounds } from './outline';
-import { IDENTITY, invert, quadToQuad, apply, type H3 } from './homography';
-import { landing, sourceSizeFor, type Landing } from './placement';
+import { IDENTITY, invert, multiply, quadToQuad, apply, type H3 } from './homography';
+import { coverCrop, landing, landingAspect, sourceSizeFor, type Landing } from './placement';
 import { Gpu, type ShapeDraw, type Texture } from './gpu';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
 import type { Link } from '../react/links';
@@ -23,7 +26,9 @@ import type { Signals } from '../react/signals';
 import { borderPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
-export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null }[]; groups: Group[]; links?: Link[] }
+export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null }[]; groups: Group[]; links?: Link[];
+  /** Live in Map: the wall is told whether the show uses Live; the operator screen has the scenes to work it out. */
+  usesLive?: boolean; scenes?: Scene[] }
 
 /**
  * Most instruments that play at once. Chromium caps live WebGL contexts per page; past the cap it silently kills the
@@ -76,6 +81,8 @@ export interface CompositorStats {
   edgeBuilds: number;
   /** The stage's own graphics context was lost and is waiting to come back: the wall is black meanwhile. */
   contextLost: boolean;
+  /** Live in Map: whether the show's Live runs (null: none, camera off). */
+  live?: { running: boolean; state: string } | null;
 }
 
 const kindsOf = (project: Project | null | undefined) => project ? project.layers.map(l => l.kind).join(',') : '';
@@ -133,7 +140,7 @@ export class MapCompositor {
     this.canvas = canvas;
     this.gpu = new Gpu(canvas);
     // A lost context blanks the wall until Chromium gives it back; then every picture is made again.
-    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; });
+    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; });
     canvas.addEventListener('webglcontextrestored', () => {
       this.gpu.setUp();
       this.pictures.clear(); this.overlay = null;
@@ -141,6 +148,7 @@ export class MapCompositor {
       // The old pictures were on the lost card: those fades end, and the shapes show what they play now.
       for (const [id, fade] of [...this.fades]) if (typeof fade.from !== 'string') this.fades.delete(id);
       this.lost = false; this.dirty = true;
+      this.updateLive();
     });
   }
 
@@ -161,13 +169,14 @@ export class MapCompositor {
     this.show = show;
     this.projects = new Map(projects);
     this.dirty = true;
+    this.updateLive();
     // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
     for (const shape of show.shapes) {
-      const next: Playing = { sourceId: shape.sourceId, kinds: kindsOf(shape.sourceId ? this.projects.get(shape.sourceId) : null) };
+      const next: Playing = { sourceId: shape.sourceId, kinds: shape.sourceId === LIVE_SOURCE_ID ? 'live' : kindsOf(shape.sourceId ? this.projects.get(shape.sourceId) : null) };
       const before = this.playing.get(shape.id);
       if (shouldFade(before, next) && !this.lost) {
-        const old = before!.sourceId ? this.slots.get(before!.sourceId)?.texture : null;
+        const old = before!.sourceId === LIVE_SOURCE_ID ? this.live?.current ?? null : before!.sourceId ? this.slots.get(before!.sourceId)?.texture : null;
         const held = this.fades.get(shape.id);
         // Changing again before the last change was ready keeps fading from what is on the wall, not from the colour.
         const from = old ? this.gpu.copy(old) : held ? held.from : shape.colour;
@@ -198,7 +207,23 @@ export class MapCompositor {
     if (this.frozen) return;
     if (this.show.links?.length || this.show.sources.some(s => s.tempoSync)) this.dirty = true;
   }
-  setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.frozenSignals = this.signals; this.dirty = true; } }
+  setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.frozenSignals = this.signals; this.live?.setFrozen(frozen); this.dirty = true; } }
+
+  // ---- Live in Map ----
+  private live: LiveSlot | null = null;
+  private liveTexture: Texture | null = null;
+  private liveSettings: LiveSettings | null = null;
+  /** The Live screen's settings while the show plays Live (null: it does not). */
+  setLive(settings: LiveSettings | null): void { if (settings === this.liveSettings) return; this.liveSettings = settings; this.updateLive(); }
+  liveClear(): void { this.live?.clear(); }
+  liveCaptureRoom(): void { this.live?.captureRoom(); }
+  /** Keeps one Live while the show uses Live anywhere, shapes or scenes, so a scene switching back never waits; lets it go (camera off) once nothing does. */
+  private updateLive(): void {
+    const wanted = !this.disposed && !this.lost && !!this.liveSettings && (this.show.usesLive ?? usesLive(this.show));
+    if (!wanted) { if (this.live) { this.live.dispose(); this.live = null; this.dirty = true; } return; }
+    if (!this.live) { this.live = new LiveSlot(this.gpu, this.liveSettings!); this.live.setFrozen(this.frozen); }
+    else this.live.setSettings(this.liveSettings!);
+  }
   private frozenSignals: Signals = {};
   /** Where the stage's corners go on the projector (stage fractions), or null for none. The wall uses this; the operator screen never does. */
   setCorners(corners: Point[] | null): void {
@@ -263,6 +288,12 @@ export class MapCompositor {
       } catch (error) { slot.failed = String((error as Error)?.message ?? error); }
     }
 
+    // Live's newest picture, once for every shape that plays it.
+    if (this.live) {
+      if (!this.frozen) this.live.setSignals(this.signals);
+      if (this.live.fresh) rendered = true;
+      this.liveTexture = this.live.frame();
+    } else this.liveTexture = null;
     const drawn = this.dirty || rendered || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
     this.frameIndex++;
@@ -286,12 +317,14 @@ export class MapCompositor {
       prepares: Object.fromEntries([...this.slots].map(([id, s]) => [id, s.prepares])),
       edgeBuilds: this.edgeBuilds,
       contextLost: this.lost,
+      live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status } : null,
     };
   }
 
   dispose(): void {
     this.disposed = true;
     for (const [id, slot] of this.slots) this.release(id, slot);
+    this.live?.dispose(); this.live = null;
     for (const id of [...this.pictures.keys()]) this.dropPictures(id);
     for (const id of [...this.fades.keys()]) this.endFade(id);
     this.gpu.free(this.overlay?.texture);
@@ -463,17 +496,20 @@ export class MapCompositor {
     const p = this.picturesFor(shape, palette);
     if (p.box.w < 0.5 || p.box.h < 0.5 || !p.coverage) return;
     const land = landing(shape, this.drawn.show), inv = inverseOf(land);
-    const slot = shape.sourceId ? this.slots.get(shape.sourceId) : undefined;
+    const isLive = shape.sourceId === LIVE_SOURCE_ID;
+    const slot = shape.sourceId && !isLive ? this.slots.get(shape.sourceId) : undefined;
     // A source that will not play (failing, over the limit, restarting, or with no composition) plays the shape's own fill.
-    const cannotPlay = shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === project) || !project);
+    const cannotPlay = !isLive && shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === project) || !project);
     const fill = (): ShapeDraw['content'] => this.own(shape, p, land);
     let content: ShapeDraw['content'];
     if (shape.blocker) content = { kind: 'colour', rgba: [0, 0, 0, 1] };
     else if (shape.sourceId === null || cannotPlay) content = fill();
+    // Live covers the place it lands and is cropped, never stretched; until it has a picture the shape plays its fill.
+    else if (isLive) content = this.liveTexture ? { kind: 'picture', texture: this.liveTexture, inv: multiply(coverCrop(landingAspect(land), LIVE_ASPECT), inv) } : fill();
     else if (slot?.project && slot.texture) content = { kind: 'picture', texture: slot.texture, inv };
     else content = fill(); // a source not ready yet plays the shape's own fill, never black
     // A fade waits for the composition the shape should now play, not one still drawing from before.
-    const ready = shape.blocker || shape.sourceId === null || cannotPlay || (slot?.project === project && !!slot?.texture);
+    const ready = shape.blocker || shape.sourceId === null || cannotPlay || (isLive ? !!this.liveTexture : slot?.project === project && !!slot?.texture);
     let from: ShapeDraw['from'] = null, mix = 1;
     const fade = this.fades.get(shape.id);
     if (fade && !shape.blocker) {

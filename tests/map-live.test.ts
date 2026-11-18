@@ -129,3 +129,26 @@ test('the wall hears Live’s link inputs only while the show uses Live', async 
   assert.deepEqual([...wallInputs(withLive, live)].sort(), ['audio.bass', 'audio.highs', 'tempo.beat', 'tempo.phase']);
   assert.deepEqual([...wallInputs(withLive, null)].sort(), ['audio.bass', 'tempo.beat', 'tempo.phase']);
 });
+
+test('a wide picture on a square shape is cropped at its sides, never stretched', async () => {
+  const { coverCrop } = await import('../src/map/placement');
+  const { apply } = await import('../src/map/homography');
+  const h = coverCrop(1, 16 / 9);
+  const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≠ ${b}`);
+  near(apply(h, { x: 0, y: 0 }).x, 0.21875); near(apply(h, { x: 1, y: 0 }).x, 0.78125);
+  near(apply(h, { x: 0, y: 0 }).y, 0); near(apply(h, { x: 0, y: 1 }).y, 1);
+});
+
+test('a tall shape crops the picture’s top and bottom', async () => {
+  const { coverCrop } = await import('../src/map/placement');
+  const { apply } = await import('../src/map/homography');
+  const h = coverCrop(4, 16 / 9); // a shape four times as wide as tall: the picture is too tall for it
+  const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≠ ${b}`);
+  near(apply(h, { x: 0, y: 0 }).x, 0); near(apply(h, { x: 1, y: 0 }).x, 1);
+  near(apply(h, { x: 0, y: 0 }).y, (1 - (16 / 9) / 4) / 2); near(apply(h, { x: 0, y: 1 }).y, 1 - (1 - (16 / 9) / 4) / 2);
+});
+
+test('a picture as wide as its shape is unchanged', async () => {
+  const { coverCrop } = await import('../src/map/placement');
+  assert.deepEqual(coverCrop(16 / 9, 16 / 9), [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+});

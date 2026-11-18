@@ -156,6 +156,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   pendingFadeRef.current = map.pendingFade;
   // Signals reach this screen's compositor directly.
   map.onSignals.current = signals => compositor.current?.setSignals(signals);
+  // Live's Clear and Capture empty room reach this screen's Live directly.
+  map.onLiveAction.current = action => { if (action === 'clear') compositor.current?.liveClear(); else compositor.current?.liveCaptureRoom(); };
   useEffect(() => {
     if (!canvas.current) return;
     // It draws on its own hidden canvas; this screen copies that picture and draws its marks over it.
@@ -163,7 +165,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     return () => { compositor.current?.dispose(); compositor.current = null; };
   }, []);
   const drawInputs = { cornersMode, cornerIndex, shown, refused, selectedId: map.selectedId, selectedIds: map.selectedIds, selectedIndex: map.selectedIndex, selectedRing: map.selectedRing, outputOpen: map.outputOpen, wallPicture: map.wallPicture,
-    freeze: map.freeze, soloed: map.soloed, pen, hover, marquee, snapMark, photo: map.photoShown && map.show.photo && photo?.complete ? { image: photo, opacity: map.show.photo.opacity } : null, tool: map.tool };
+    freeze: map.freeze, live: map.live, soloed: map.soloed, pen, hover, marquee, snapMark, photo: map.photoShown && map.show.photo && photo?.complete ? { image: photo, opacity: map.show.photo.opacity } : null, tool: map.tool };
   const inputs = useRef(drawInputs);
   inputs.current = drawInputs;
   const playedShow = useRef<ShowDocument | null>(null);
@@ -190,6 +192,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       }
       local.setOptions(options);
       local.setFrozen(d.freeze);
+      local.setLive(d.live);
       // This screen draws its marks over the stage, so the stage is drawn again under them every time.
       local.invalidate();
       local.frame(now);

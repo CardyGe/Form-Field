@@ -79,8 +79,12 @@ export class LiveRenderer {
   private counted = { frames: 0, since: 0, worst: 0 };
 
   /** `makeProvider` starts person finding when a look needs people. Without it, people are never found. */
-  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource, makeProvider?: () => MaskProvider) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+  /** How many frames have been drawn: Map waits for one before it shows Live. */
+  framesDrawn = 0;
+
+  /** preserveDrawingBuffer: keep the picture after it is shown, so Map's compositor can copy this canvas (Live in Map). */
+  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource, makeProvider?: () => MaskProvider, options: { preserveDrawingBuffer?: boolean } = {}) {
+    this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: options.preserveDrawingBuffer === true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(1);
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;
@@ -147,6 +151,7 @@ export class LiveRenderer {
     this.final.uniforms.uEncode.value = encode;
     this.final.uniforms.uBlackout.value = this.blackout ? 1 : 0;
     this.passes.draw(this.final, null);
+    this.framesDrawn++;
     this.counted.frames++;
   }
 

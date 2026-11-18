@@ -23,12 +23,12 @@ export class Stage {
   /** Gaps between display frames since the last mark, for the performance check. */
   private gaps: number[] = [];
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, options: { preserveDrawingBuffer?: boolean } = {}) {
     const stage = this;
     this.renderer = new LiveRenderer(canvas, { get element() { return stage.active?.element ?? null; }, get frameId() { return stage.active?.frameId ?? 0; } }, () => {
       const pattern = stage.pattern;
       return pattern?.audience ? new TestMaskProvider(() => pattern) : new WorkerMaskProvider();
-    });
+    }, options);
     this.camera.onState = state => { if (this.active === this.camera || state.status !== 'idle') this.onState(state); };
     const tick = (now: number) => {
       if (this.gaps.length < 100000) this.gaps.push(now - this.last);
