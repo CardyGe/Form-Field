@@ -33,6 +33,15 @@ delete env.ELECTRON_RUN_AS_NODE; delete env.STUDIO_DEV_URL;
 const app = await electron.launch({ args: [root, `--user-data-dir=${userData}`], env });
 const errors = [];
 let summary;
+// What happens in the main process, in case a window goes: a crashed page, a display coming and going.
+await app.evaluate(({ app, screen }) => {
+  globalThis.__longRun = [];
+  const note = text => globalThis.__longRun.push(`${new Date().toISOString().slice(11, 19)} ${text}`);
+  app.on('render-process-gone', (_e, contents, details) => note(`page gone: ${contents.getURL().split('#')[1] ?? 'studio'} ${details.reason} ${details.exitCode}`));
+  app.on('child-process-gone', (_e, details) => note(`process gone: ${details.type} ${details.reason} ${details.exitCode}`));
+  for (const e of ['display-added', 'display-removed']) screen.on(e, (_x, d) => note(`${e} ${d.id}`));
+});
+const mainNotes = () => app.evaluate(() => globalThis.__longRun ?? []).catch(() => ['(app gone)']);
 try {
   const studio = await app.firstWindow();
   studio.on('pageerror', e => errors.push(`studio: ${e}`));
@@ -45,6 +54,8 @@ try {
   await studio.getByRole('button', { name: 'Open output' }).click();
   const output = await opened;
   output.on('pageerror', e => errors.push(`wall: ${e}`));
+  output.on('crash', () => errors.push('wall: crashed'));
+  output.on('close', () => errors.push(`wall: closed at ${new Date().toISOString().slice(11, 19)}`));
   await output.waitForURL(/#map-output/);
 
   const rect = await stage.evaluate(c => { const r = c.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
@@ -86,7 +97,7 @@ try {
       x.drawImage(c, 0, 0, 96, 54);
       const d = x.getImageData(0, 0, 96, 54).data; let lit = 0;
       for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 30) lit++;
-      return { lit, fps: window.__mapStats?.fps ?? 0, level: window.__mapStats?.level ?? 0, failing: (window.__mapStats?.failing ?? []).length };
+      return { lit, fps: window.__mapStats?.fps ?? 0, level: window.__mapStats?.level ?? 0, failing: (window.__mapStats?.failing ?? []).length, heap: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : 0 };
     });
     samples++;
     if (s.lit === 0) { black++; blackAt.push(Math.round((Date.now() - started) / 1000)); }
@@ -96,15 +107,15 @@ try {
       const now = await studio.locator('.map-scene[aria-pressed="true"]').textContent().catch(() => '?');
       scenesSeen.add(now);
       const minute = Math.floor((Date.now() - started) / 60000);
-      const line = `${minute} min · ${samples} samples · ${black} black · scene ${now} · fps ${s.fps} · level ${s.level} · failing ${s.failing}`;
-      if (minute % 5 === 0 && line.split(' · ')[0] !== last) { console.log(line); last = line.split(' · ')[0]; }
+      const line = `${minute} min · ${samples} samples · ${black} black · scene ${now} · fps ${s.fps} · level ${s.level} · failing ${s.failing} · wall heap ${s.heap} MB`;
+      if (line.split(' · ')[0] !== last) { console.log(line); last = line.split(' · ')[0]; }
     }
     await sleep(250);
   }
   const memory = await output.evaluate(() => performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null);
-  summary = { minutes: MINUTES, samples, blackFrames: black, blackAt: blackAt.slice(0, 20), scenesSeen: [...scenesSeen], worstFpsReported: worstFps, governorLevels: [...levels], wallHeapMB: memory, errors };
+  summary = { main: await mainNotes(), minutes: MINUTES, samples, blackFrames: black, blackAt: blackAt.slice(0, 20), scenesSeen: [...scenesSeen], worstFpsReported: worstFps, governorLevels: [...levels], wallHeapMB: memory, errors };
 } catch (error) {
-  summary = { failed: String(error.stack || error), errors };
+  summary = { failed: String(error.stack || error), errors, main: await mainNotes() };
   process.exitCode = 1;
 } finally {
   await app.close().catch(() => {});
