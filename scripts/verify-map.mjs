@@ -697,6 +697,97 @@ try {
     await studio.getByRole('tab', { name: 'Details' }).click();
   });
 
+  // Live in Map: a shape plays the Live screen's look, from the test pattern here.
+  const liveStats = () => output.evaluate(() => window.__mapStats?.live ?? null);
+  const liveTestPattern = async () => {
+    await openSection(studio, 'live');
+    await studio.getByLabel('Live camera', { exact: true }).selectOption({ label: 'Test pattern' });
+    // A white ground, so Live's picture is never dark where nothing has been painted yet.
+    await studio.getByLabel('Ground', { exact: true }).selectOption('1');
+  };
+
+  await check('a shape playing Live shows Live on the wall, never black while it starts', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.5, .5]);
+    await tool('Select'); await asColour();
+    await wallUntil([[.35, .35]], c => near(c[0], RED, 30), 'its colour first');
+    await playLook(studio, 'live');
+    await liveTestPattern();
+    const seen = [];
+    for (let i = 0; i < 80; i++) {
+      const c = (await sample(output, [[.35, .35]])).colours[0];
+      seen.push(c);
+      if (!near(c, RED, 30) && (await liveStats())?.running) break;
+      await sleep(100);
+    }
+    assert.ok(seen.every(c => !near(c, BLACK, 20)), `a black frame while Live started: ${seen.map(c => `rgb(${c})`).join(' ')}`);
+    assert.ok(!near(seen.at(-1), RED, 30), `the shape still shows its colour: Live never came (${JSON.stringify(await liveStats())})`);
+    assert.equal(await studio.locator('.map-shape-list li .map-row-plays').first().textContent(), 'Live');
+  });
+
+  await check('two shapes Across stage playing Live show one continuous picture, with one Live drawn', async () => {
+    await placement('across-stage');
+    await tool('Rectangle'); await dragOn([.5 + 3 / 1920, .2], [.8, .5]);
+    await tool('Select');
+    const names = await studio.locator('.map-shape-list li .map-row-name').allTextContents();
+    await studio.getByLabel('Share with', { exact: true }).selectOption({ label: names[0] });
+    await placement('across-stage');
+    await sleep(1500);
+    // Live's brush texture is fine-grained: pairs only 7 px apart (just across the 3 px gap), and a wider tolerance.
+    // Two separate pictures would differ far more: the left shape would show the picture's right edge, the right its left.
+    const pairs = Array.from({ length: 24 }, (_, i) => [[.5 - 2 / 1920, .22 + i * .011], [.5 + 5 / 1920, .22 + i * .011]]).flat();
+    const s = await sample(output, pairs);
+    let close = 0;
+    for (let i = 0; i < s.colours.length; i += 2) if (near(s.colours[i], s.colours[i + 1], 60)) close++;
+    assert.ok(close >= 16, `only ${close} of 24 pairs match across the edge`);
+    assert.equal((await liveStats())?.running, true);
+  });
+
+  await check('a scene switches a shape from an instrument to Live and back, with a crossfade and no black frame', async () => {
+    const before = await sceneButtons().count();
+    const add = studio.getByRole('button', { name: '+ Scene' });
+    await add.click();                       // this scene: Live on both shapes
+    await add.click();                       // the next: the first shape plays an instrument
+    await focusStage(); await studio.keyboard.press('Escape');
+    await clickOn([.35, .35]);
+    await playLook(studio, 'preset:porcelain-shutters');
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length >= 1, null, { timeout: 15000 });
+    await sleep(1500);
+    await sceneButtons().nth(before).click();  // back to Live
+    const during = [];
+    for (let i = 0; i < 25; i++) { during.push((await sample(output, [[.35, .35]])).colours[0]); await sleep(100); }
+    assert.ok(during.every(c => !near(c, BLACK, 20)), `a black frame switching to Live: ${during.map(c => `rgb(${c})`).join(' ')}`);
+    assert.equal(await studio.locator('.map-shape-list li .map-row-plays').first().textContent(), 'Live');
+    await sceneButtons().nth(before + 1).click();
+    await studio.waitForFunction(() => document.querySelector('.map-shape-list li .map-row-plays')?.textContent !== 'Live', null, { timeout: 5000 });
+    await sceneButtons().nth(before).click();
+  });
+
+  await check('∿ on a slider in the Live card, with the test beat, moves the look on the wall; a slider moved there reaches the wall', async () => {
+    await focusStage(); await studio.keyboard.press('Escape');
+    await clickOn([.35, .35]);
+    await openSection(studio, 'live');
+    await studio.getByLabel('React to… Spread', { exact: true }).click();
+    await studio.getByRole('menuitem', { name: 'Beat', exact: true }).click();
+    await reactReady();
+    await react('testBeat', true);
+    await output.waitForFunction(() => !!window.__studioTest?.liveDrawn, null, { timeout: 5000 });
+    const values = [];
+    for (let i = 0; i < 30; i++) { values.push(await output.evaluate(() => window.__studioTest.liveDrawn().paint.spread)); await sleep(60); }
+    assert.ok(Math.max(...values) - Math.min(...values) > 0.02, `Spread on the wall did not move with the beat: ${values.map(v => v.toFixed(3)).join(', ')}`);
+    await react('testBeat', false);
+    const response = studio.getByLabel('Movement response', { exact: true });
+    await response.fill('2.5');
+    await output.waitForFunction(() => Math.abs(window.__studioTest.liveDrawn().paint.response - 2.5) < 0.01, null, { timeout: 5000 });
+  });
+
+  await check('with nothing using Live, the wall lets Live (and its camera) go', async () => {
+    // Deleting the shapes takes them out of every scene too.
+    await clearStage();
+    await output.waitForFunction(() => window.__mapStats?.live === null, null, { timeout: 5000 })
+      .catch(async () => { throw new Error(`Live still runs: ${JSON.stringify(await liveStats())}`); });
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
@@ -731,6 +822,9 @@ try {
     const liveRegion = studio.getByRole('region', { name: 'Live' });
     await liveRegion.waitFor();
     await studio.getByLabel('Source', { exact: true }).selectOption({ label: 'Test pattern' });
+    // Live in Map: a slider moved in Map's Live card is the Live screen's own setting.
+    await studio.waitForFunction(() => document.querySelector('input[aria-label="Movement response"]')?.value === '2.5', null, { timeout: 5000 })
+      .catch(async () => { throw new Error(`the Live screen shows ${await studio.getByLabel('Movement response', { exact: true }).inputValue()}, not the 2.5 set in Map`); });
     await studio.locator('details.live-react > summary').click();
     await studio.getByRole('button', { name: 'Glow on the beat' }).click();
     await reactReady();

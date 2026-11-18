@@ -763,6 +763,57 @@ Reactions cost nothing measurable: both runs held about 120 fps.
 - **Live has room for about 39 links** (its settings must stay under 16 KB). A link beyond that is refused with a note.
 - **Not shown on real hardware.** A MIDI controller, a sound interface and the projector together still need a session with Greg.
 
+## Live in Map results
+
+Built 18 November 2026 on `map-stage-5`, from [the Live in Map design](superpowers/specs/2026-11-18-live-in-map-design.md).
+
+**What it does:**
+- **Choosing Live:** any shape can play **Live** from the look browser. Every shape playing it shows the Live screen's one look, from one camera.
+- **Adjusting it in Map:** a Live shape has a **Live** section in Details with:
+  - the camera or test pattern, Mirror and Sensitivity
+  - the look's sliders with ∿
+  - Clear, Capture empty room, and Try the camera again
+  - Sound & MIDI for Live
+
+  These are the Live screen's own settings, so the Live screen shows the changes too.
+- **Placing it:** Across group and Across stage lay one camera picture over the shapes. On a shape that is not 16:9, the picture fills it and the overflow is cropped.
+- **Scenes:** a scene can switch a shape between an instrument and Live.
+- **Before it has a picture:** while the camera starts, or if it is refused or lost, Live shapes play their own fill.
+- **The camera** stays on while the show uses Live anywhere, including in a scene, and goes off when nothing does.
+- **In the show file:** Live is a reserved source id, `live`, in show version 6. Version 5 files open unchanged.
+
+**Measured** with `scripts/measure-map.mjs --live`: the eight-shape show plus a ninth shape playing Live on the test pattern, 30 s, 120 Hz.
+
+| Mix | Median frame | 95th percentile | Frames over 16.7 ms | Governor |
+|---|---|---|---|---|
+| Medium, with Live | 8.3 ms | 9.2 ms | 1 | never stepped down |
+| Heavy, with Live | 8.3 ms | 9.8 ms | 16 | never stepped down |
+| Medium · Heavy, no Live (same session, 10 s) | 8.3 · 8.3 ms | 8.7 · 9.2 ms | 0 · 0 | never stepped down |
+
+Live costs a few slow frames in the heaviest mix, but the show holds 110–121 fps.
+
+**Checked in the app** (`npm run test:map`, 37 checks, 5 of them new; two clean runs in a row):
+- **Starting:** a shape set to Live shows its colour, then Live, with no black frame in between.
+- **Across stage:** two shapes playing Live show one continuous picture.
+- **Scenes:** a scene switches a shape from an instrument to Live with no black frame.
+- **The Live section:**
+  - ∿ on Spread, with the test beat, moves the look on the wall
+  - a slider moved there reaches the wall, and the Live screen shows it afterwards
+- **The camera:** with nothing using Live, the wall lets Live and its camera go.
+
+**A review of the first three tasks** found ten problems, all fixed. Among them:
+- the projector window was not allowed the camera
+- a new look on several Live shapes crashed
+- a camera that could not play left the fade stuck
+- Live's graphics context was not given back
+
+**Known limits:**
+- A video file as Live's source plays on the Live screen only. On a Map shape it shows the shape's fill, with a note.
+- A fade away from Live uses Live's picture uncropped for that one crossfade.
+- With the output closed, the operator screen runs its own Live with the camera. Opening the output hands the camera to the projector.
+- Live is not counted in the 24-instrument limit. It is one context at most, given back at once.
+- Not yet seen with a real camera on the projector. That needs Greg and the room.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
