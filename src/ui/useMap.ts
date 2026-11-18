@@ -3,8 +3,10 @@ import type { EditAction } from '../map/editor';
 import { applyStudioEdit, initialMapState, mapReducer, type MapState } from '../map/state';
 import type { Project } from '../shared/types';
 import { autosaveSchedule, canEdit } from '../map/autosave';
-import { acceptMapMessage, sourcesToSend, toWire, type MapMessage } from '../map/messages';
-import { createShow, validateShow, type ShowDocument } from '../map/show';
+import { acceptMapMessage, sourcesToSend, toWire, wallInputs, type MapMessage } from '../map/messages';
+import { useLiveSettings } from './useLiveSettings';
+import type { LiveSettings } from '../live/settings';
+import { createShow, usesLive, validateShow, type ShowDocument } from '../map/show';
 import { reactivity, type ReactivityEngine } from '../react/engine';
 import { fire, type TriggerAction } from '../react/links';
 import type { Signals } from '../react/signals';
@@ -273,6 +275,16 @@ export function useMap(onError: (message: string) => void) {
   const showMessage = (s: ShowDocument): MapMessage => ({ type: 'show', show: toWire(s) });
   /** A scene switch's fade time, for the wall: it travels on the switch's own show message. */
   const wallFade = useRef<number | null>(null);
+  /** What the wall was last told of Live: its settings, null (not used), or undefined (nothing yet, since it opened). */
+  const sentLive = useRef<LiveSettings | null | undefined>(undefined);
+  const sendLive = () => {
+    const want = usesLive(stateRef.current.show) ? liveRef.current : null;
+    if (want === sentLive.current) return;
+    if (want === null && sentLive.current === undefined) { sentLive.current = null; return; }
+    const message: MapMessage = { type: 'liveSettings', settings: want };
+    if (acceptMapMessage(message as unknown)) { bridge?.send(message); sentLive.current = want; }
+  };
+
   /**
    * Compositions the output does not have yet go first, so the show never names one the wall cannot play.
    * The record of what the wall has is the session's (emptied whenever an output opens), shared with Studio edits.
@@ -299,6 +311,9 @@ export function useMap(onError: (message: string) => void) {
     // Solo before the show, so the wall never paints one frame of the shapes solo hides.
     sendNow({ type: 'solo', ids: soloIds(latest.current.shown, kept.solo) });
     sendSources(latest.current.shown);
+    // Live's settings before the show, so a Live shape can start at once.
+    sentLive.current = undefined;
+    sendLive();
     sendNow(showMessage(latest.current.shown));
   }, [outputOpen, outputEpoch]);
   // Then the whole show again after every edit, and the trial show while a drag is in progress.
@@ -384,8 +399,19 @@ export function useMap(onError: (message: string) => void) {
   const meter = useMemo(() => new MeterStore(), []);
   /** This screen's compositor hears the signals here. */
   const onSignals = useRef<((signals: Signals) => void) | null>(null);
-  const reacts = showReacts(show);
+  // Live in Map: the Live screen's settings, sent to the wall while the show plays Live anywhere.
+  const liveSettings = useLiveSettings();
+  const live = liveSettings.settings;
+  const liveRef = useRef<LiveSettings | null>(live);
+  liveRef.current = live;
+  const showUsesLive = usesLive(show);
+  const reacts = showReacts(show) || (showUsesLive && !!live?.links.some(l => l.on));
   const [panelOpen, setPanelOpen] = useState(false);
+  useEffect(() => { if (outputOpen) sendLive(); }, [live, showUsesLive, outputOpen]);
+  /** This screen's own compositor hears Live's Clear and Capture empty room here, as the wall does through messages. */
+  const onLiveAction = useRef<((action: 'clear' | 'captureRoom') => void) | null>(null);
+  const clearLive = () => { onLiveAction.current?.('clear'); if (outputOpen) bridge?.send({ type: 'liveClear' }); };
+  const captureLiveRoom = () => { onLiveAction.current?.('captureRoom'); if (outputOpen) bridge?.send({ type: 'liveCaptureRoom' }); };
   useEffect(() => { if ((reacts || panelOpen) && !engine) setEngine(reactivity()); }, [reacts, panelOpen, engine]);
   // Once a frame: signals to the wall and to this screen, and triggers fired as ordinary actions.
   const triggerAct = useRef<(action: TriggerAction) => void>(() => {});
@@ -414,7 +440,7 @@ export function useMap(onError: (message: string) => void) {
       const { panelOpen, outputOpen, reacts } = listening.current;
       // The wall gets only the signals the show uses, so a controller with many knobs never makes the message too large.
       if (outputOpen && reacts) {
-        const s = stateRef.current.show, used = new Set([...s.links.map(l => l.input), 'tempo.beat', 'tempo.phase']);
+        const used = wallInputs(stateRef.current.show, liveRef.current);
         bridge?.send({ type: 'signals', signals: Object.fromEntries(Object.entries(now).filter(([k]) => used.has(k))) });
       }
       onSignals.current?.(now);
@@ -493,7 +519,7 @@ export function useMap(onError: (message: string) => void) {
   const setSnap = (on: boolean) => { kept.snap = on; setSnapState(on); };
   const setPhotoShown = (on: boolean) => { kept.photoShown = on; setPhotoShownState(on); };
 
-  return { switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
+  return { live, updateLive: liveSettings.update, clearLive, captureLiveRoom, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
     show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
     solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };

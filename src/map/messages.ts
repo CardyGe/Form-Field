@@ -3,6 +3,7 @@ import { usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow
 import { shapeValidity } from './outline';
 import { acceptSignals, type Signals } from '../react/signals';
 import { ownCornersPinnable } from './placement';
+import type { LiveSettings } from '../live/settings';
 
 export type MapMessage =
   /** fadeMs: this show is a scene switch, crossfading over that long. */
@@ -19,7 +20,14 @@ export type MapMessage =
   /** What sound, the beat, tempo and MIDI are doing, once a frame while something reacts. */
   | { type: 'signals'; signals: Signals }
   /** The next show change is a scene switch: its crossfade takes this long. */
-  | { type: 'fade'; ms: number };
+  | { type: 'fade'; ms: number }
+  /** Live in Map: the Live screen's settings (null: the show no longer uses Live), and its Clear and Capture empty room. */
+  | { type: 'liveSettings'; settings: unknown }
+  | { type: 'liveClear' }
+  | { type: 'liveCaptureRoom' };
+
+/** Live's settings travel under the same limit as on Live's own output. */
+export const LIVE_SETTINGS_LIMIT = 16 * 1024;
 
 /**
  * Map's own limit, larger than Live's 16 KB settings cap: the largest valid show (64 shapes of 32 curve points with
@@ -102,6 +110,18 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'solo': return Array.isArray(value.ids) && value.ids.every(id => typeof id === 'string');
     case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
     case 'fade': return finite(value.ms) && (value.ms as number) >= 0 && (value.ms as number) <= 30000;
+    case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, LIVE_SETTINGS_LIMIT);
+    case 'liveClear': case 'liveCaptureRoom': return true;
     default: return false;
   }
+}
+
+/**
+ * The signals the wall needs each frame: what Map's links listen to, the tempo (for tempo sync), and, while the show
+ * plays Live, what Live's own links listen to.
+ */
+export function wallInputs(show: ShowDocument, live: LiveSettings | null): Set<string> {
+  const inputs = new Set<string>(['tempo.beat', 'tempo.phase', ...show.links.map(l => l.input)]);
+  if (live && usesLive(show)) for (const l of live.links) inputs.add(l.input);
+  return inputs;
 }

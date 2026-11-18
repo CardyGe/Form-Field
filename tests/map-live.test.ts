@@ -106,3 +106,26 @@ test('an instrument can never take the id "live"', () => {
   const r = applyEdit(base(), { type: 'setContent', shapeId: 'c', content: { kind: 'preset', presetId: 'porcelain-shutters', sourceId: 'live', seed: 1 } });
   assert.deepEqual(r, { ok: false, reason: 'duplicate-id' });
 });
+
+test('the wall keeps Live’s settings; damaged ones are repaired; null lets Live go', async () => {
+  const { initialWall, applyMapMessage } = await import('../src/map/wall');
+  const { defaultLiveSettings } = await import('../src/live/settings');
+  let wall = initialWall();
+  assert.equal(wall.live, null);
+  wall = applyMapMessage(wall, { type: 'liveSettings', settings: { ...defaultLiveSettings(), look: 'smoke', sensitivity: 99 } });
+  assert.equal(wall.live?.look, 'smoke');
+  assert.equal(wall.live?.sensitivity, 4, 'kept inside its range');
+  wall = applyMapMessage(wall, { type: 'liveSettings', settings: null });
+  assert.equal(wall.live, null);
+});
+
+test('the wall hears Live’s link inputs only while the show uses Live', async () => {
+  const { wallInputs } = await import('../src/map/messages');
+  const { defaultLiveSettings } = await import('../src/live/settings');
+  const live = { ...defaultLiveSettings(), links: [{ id: 'l', input: 'audio.highs', target: 'live.paint.spread', mode: 'modulate' as const, amount: .3, low: 0, high: 1, attackMs: 0, releaseMs: 100, on: true, name: '' }] };
+  const show = ok(base(), { type: 'addLink', link: { id: 'm', input: 'audio.bass', target: 'shape.a.brightness', mode: 'modulate', amount: .3, low: 0, high: 1, attackMs: 0, releaseMs: 100, on: true, name: '' } });
+  assert.deepEqual([...wallInputs(show, live)].sort(), ['audio.bass', 'tempo.beat', 'tempo.phase']);
+  const withLive = ok(show, { type: 'setContent', shapeId: 'c', content: { kind: 'live' } });
+  assert.deepEqual([...wallInputs(withLive, live)].sort(), ['audio.bass', 'audio.highs', 'tempo.beat', 'tempo.phase']);
+  assert.deepEqual([...wallInputs(withLive, null)].sort(), ['audio.bass', 'tempo.beat', 'tempo.phase']);
+});
