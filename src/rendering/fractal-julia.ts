@@ -5,28 +5,41 @@ vec2 juliaSquare(vec2 z) { return vec2(z.x*z.x-z.y*z.y,2.*z.x*z.y); }
 vec2 cMul(vec2 a,vec2 b){return vec2(a.x*b.x-a.y*b.y,a.x*b.y+a.y*b.x);}
 vec2 cDiv(vec2 a,vec2 b){return vec2(a.x*b.x+a.y*b.y,a.y*b.x-a.x*b.y)/max(dot(b,b),1e-30);}
 vec2 cSqrt(vec2 z){float r=length(z);return vec2(sqrt(max(.5*(r+z.x),0.)),(z.y<0.?-1.:1.)*sqrt(max(.5*(r-z.x),0.)));}
-vec2 juliaConstant() {
+vec2 juliaBaseConstant() {
   float seed=mod(uSeed,997.)*.0137;
   float reference=mod(1729.,997.)*.0137;
   vec2 c=vec2(uJuliaReal,uJuliaImag);
   c+=.0009*(vec2(sin(seed),cos(seed))-vec2(sin(reference),cos(reference)));
-  return c+uMorph*.014*vec2(cos(uPhase)-1.,sin(uPhase));
+  return c;
+}
+vec2 juliaConstant() {
+  vec2 c=juliaBaseConstant()+uMorph*.014*vec2(cos(uPhase)-1.,sin(uPhase));
+  if(uEvolution>0.){
+    float phase=uPhase+uVariant*.65;
+    vec2 path=vec2(.036*cos(phase)+.014*cos(2.*phase-.6),.055*sin(phase)+.013*sin(3.*phase));
+    c+=uEvolution*(.55+.45*uMorph)*path;
+  }
+  return c;
 }
 // Zoom flight dives toward a repelling period-2 point z1 of z²+c. Near it the
 // Julia set repeats exactly under the inverse map, scaled by the cycle's
 // multiplier 4(c+1). Each loop goes 2k inverse steps deep, so the last frame
 // is the first frame's own preimage: same image, no crossfade. Returns false
 // when that cycle is not repelling enough to zoom.
-float juliaDiveMultiplier() { return length(4.*(juliaConstant()+vec2(1.,0.))); }
-bool juliaCanDive() { return uZoomFlight>0.&&juliaDiveMultiplier()>1.03; }
+float juliaDiveMultiplier() {
+  vec2 c=uEvolution>0.?juliaBaseConstant():juliaConstant();
+  return length(4.*(c+vec2(1.,0.)));
+}
+bool juliaCanDive() { return uZoomFlight>0.&&juliaDiveMultiplier()>(uEvolution>0.?1.25:1.03); }
 
 vec2 juliaDomainPlane(vec2 pixelOffset) {
   vec2 p=fractalView(vUv+pixelOffset/uResolution);
   float denominator=1.+p.y*.18*tan(uCameraPitch);
   p/=(denominator<0.?-1.:1.)*max(abs(denominator),.08);
-  p=turn(uCameraYaw+uTravel*.12*sin(uPhase))*p;
+  float sway=uTravel*legacyCameraMotion();
+  p=turn(uCameraYaw+sway*.12*sin(uPhase))*p;
   p*=2.8*uScale/1.7/max(uZoom,.5)*.78*gZoom;
-  p+=uTravel*.18*vec2(sin(uPhase),cos(uPhase));
+  p+=sway*.18*vec2(sin(uPhase),cos(uPhase));
   return turn(uTwist*.6)*p;
 }
 vec2 juliaPlane(vec2 pixelOffset) {
@@ -74,7 +87,8 @@ vec3 juliaSample(vec2 pixelOffset) {
   if(juliaCanDive()) {
     vec2 d=cSqrt(vec2(-3.,0.)-4.*c),zp=.5*(vec2(-1.,0.)+d),zq=.5*(vec2(-1.,0.)-d);
     vec2 lambda2=4.*(c+vec2(1.,0.));
-    float k=clamp(ceil(log(1.+5.*uZoomFlight)/log(length(lambda2))),1.,8.),n=2.*k;
+    // Hold the number of inverse steps while the constant evolves.
+    float k=clamp(ceil(log(1.+5.*uZoomFlight)/log(juliaDiveMultiplier())),1.,8.),n=2.*k;
     float f=fract(uPhase/TAU);
     vec2 delta=domain,start=zp+delta,back=start;
     for(int j=0;j<16;j++) {
@@ -99,6 +113,8 @@ vec3 juliaSample(vec2 pixelOffset) {
   float trap=8.,orbitSum=0.,orbitWeight=0.,weight=pow(.87,-shift);
   vec3 filigree=vec3(0.);
   float trapRadius=.28+.58*uFold;
+  float crestPhase=uPhase-length(domain)*(2.1+2.8*uTravel);
+  trapRadius+=uEvolution*.19*cos(crestPhase+.85);
   float iterations=uQuality<.5?128.:(uQuality<1.5?192.:256.);
   for(int i=0;i<256;i++) {
     if(float(i)>=iterations||r2>256.)break;
@@ -175,6 +191,15 @@ vec3 juliaSample(vec2 pixelOffset) {
     vec3 tracer=pigment(exteriorCoordinate+.025*cos(uPhase),exteriorAA);
     color=color*mix(1.,.48+.52*emphasis,uReveal*.76)
       +tracer*ripple*band*uReveal*(.14+.62*emphasis);
+  }
+  if(uEvolution>0.){
+    // The orbit trap changes the filigree itself. Escape bands carry a
+    // separate outward wave so long contours remain legible during the morph.
+    float bandCoordinate=smoothCount*.26-uPhase/TAU+.09*cos(crestPhase);
+    float filament=juliaStroke(bandCoordinate,exteriorAA*1.7,.11+.04*uLineWidth);
+    float envelope=.25+.75*smoothstep(-.45,.82,cos(crestPhase));
+    vec3 pulse=pigment(exteriorCoordinate+.24+.14*cos(crestPhase-.6),exteriorAA);
+    color+=pulse*filament*envelope*exp(-distance*24.)*escaped*uEvolution*.43;
   }
 
   // This unfiltered height contains no derivative calls. Filtered colour and

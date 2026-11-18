@@ -449,6 +449,8 @@ Use **Focal point X/Y** to place the centre of the effect. With Portal selected,
 
 **Render quality** chooses Draft, Standard or High export sampling. High gives the cleanest fine edges and takes longer. Preview uses lighter sampling. **Randomize effect** preserves the quality choice. **Scale**, **Orbit**, **Elevation** and **Framing** change the view.
 
+**Evolution** animates the fractal’s geometry on all four families. New layers and re-applied presets start with it enabled. Existing projects can raise **Evolution** to adopt the new motion. In Portal and Mandelbox, **Bank** sets a fixed tilt while Evolution is active.
+
 **Morph** periodically changes structure. **Travel** adds a pan, orbit or dolly and returns to its starting position. Continuous controls can be animated through the shared Motion routes. Family, variant, quality, radial fold, symmetry and intrinsic cycle settings remain discrete. **Color drift** offsets the cyclic palette. **Color density**, **Relief**, **Glow**, **Contrast** and **Exposure** shape the finish.
 
 These are finite fractal renderers designed for controllable loops. They do not provide unlimited numerical zoom or an endless forward flight. Saved settings and the app version determine the image, with no accumulated simulation state unless a Feedback finish is applied.

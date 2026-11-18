@@ -7,7 +7,7 @@ import type { LayerKind, Modulation, Project } from '../src/shared/types';
 
 const TAU = Math.PI * 2;
 const FRACTAL_V5_FIELDS = ['variant', 'quality', 'density', 'juliaReal', 'juliaImag', 'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth'];
-const FRACTAL_PROJECTION_FIELDS = ['focalX', 'focalY', 'cutout', 'reveal', 'passage', 'depth', 'bank', 'position', 'autoTravel', 'afterglow'];
+const FRACTAL_PROJECTION_FIELDS = ['focalX', 'focalY', 'cutout', 'evolution', 'reveal', 'passage', 'depth', 'bank', 'position', 'autoTravel', 'afterglow'];
 const V6_FIELDS: Partial<Record<LayerKind, string[]>> = {
   surface: ['variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', 'saturation', 'hue', 'exposure'],
   sculpture: ['form', 'lobes', 'thickness', 'stretch', 'curl', 'foldFrequency', 'asymmetry', 'ridgeScale', 'metallic', 'clearcoat', 'sheen', 'filmScale', 'lightPower', 'shadowStrength', 'shadowSoftness', 'saturation', 'hue', 'exposure'],
@@ -387,6 +387,8 @@ test('fractal defaults and all family variants roundtrip alongside existing laye
   const presets = PRESETS.filter((preset) => preset.kind === 'fractal');
   assert.equal(presets.length, 11 + FRACTAL_PROJECTION_LOOK_IDS.length);
   assert.equal(new Set(presets.map((preset) => preset.id)).size, presets.length);
+  assert.ok(layer.params.evolution >= .72);
+  assert.ok(presets.every(preset => preset.params.evolution >= .72 && preset.params.bank === 0));
   for (const family of [0, 1, 2, 3]) assert.deepEqual([...new Set(presets.filter((preset) => preset.params.style === family).map((preset) => preset.params.variant))].sort(), [0, 1, 2]);
   const project = createProject();
   const before = clone(project.layers[0]);

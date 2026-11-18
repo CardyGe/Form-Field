@@ -16,7 +16,7 @@ uniform float uMorph,uTravel,uOffset,uRelief,uGlow,uContrast,uCameraYaw,uCameraP
 uniform float uVariant,uQuality,uDensity,uJuliaReal,uJuliaImag,uTrap,uLineWidth;
 uniform float uBoxScale,uBoxRadius,uRadial,uRoughness,uLightAngle,uExposure;
 uniform float uZoomFlight,uApproach,uOutside;
-uniform float uFocalX,uFocalY,uCutout,uReveal,uPassage,uDepth,uBank,uPosition,uAutoTravel,uAfterglow;
+uniform float uFocalX,uFocalY,uCutout,uReveal,uPassage,uDepth,uBank,uPosition,uAutoTravel,uAfterglow,uEvolution;
 // Extra magnification for Zoom flight; 1 leaves the plane unchanged.
 float gZoom=1.;
 const float TAU=6.28318530718;
@@ -38,13 +38,17 @@ vec2 wedge(vec2 p) {
 vec2 fractalView(vec2 uv) {
   return (sourceUV(uv)-.5-vec2(uFocalX,uFocalY))*vec2(uAspect,1.);
 }
+float legacyCameraMotion() {
+  return 1.-smoothstep(0.,.30,uEvolution);
+}
 vec2 planeAt(vec2 offset) {
   vec2 p=fractalView(vUv+offset/uResolution);
   float denominator=1.+p.y*.18*tan(uCameraPitch);
   p/=(denominator<0.?-1.:1.)*max(abs(denominator),.08);
-  p=turn(uCameraYaw+uTravel*.12*sin(uPhase))*p;
+  float sway=uTravel*legacyCameraMotion();
+  p=turn(uCameraYaw+sway*.12*sin(uPhase))*p;
   p*=2.8*uScale/1.7/max(uZoom,.5)*gZoom;
-  p+=uTravel*.22*vec2(sin(uPhase),cos(uPhase));
+  p+=sway*.22*vec2(sin(uPhase),cos(uPhase));
   return p;
 }
 vec2 plane() {return planeAt(vec2(0.));}
@@ -69,7 +73,9 @@ vec3 glaze(vec3 color,float height,float weight) {
 vec3 kaleidoscopeSample(vec2 offset) {
   vec2 p=planeAt(offset);
   float seed=mod(uSeed,997.)*.0137;
-  vec2 z=wedge(turn(uTwist*.7+uMorph*.18*sin(uPhase))*p);
+  float radius=length(p);
+  float wave=uPhase-radius*(2.5+uTravel*3.);
+  vec2 z=wedge(turn(uTwist*.7+uMorph*.18*sin(uPhase)*legacyCameraMotion())*p);
   float derivative=1.,height=0.;
   vec3 color=uPalette[5]*.025,halo=vec3(0.);
   float pixel=planePixel();
@@ -83,9 +89,16 @@ vec3 kaleidoscopeSample(vec2 offset) {
       opening=uReveal*(smoothstep(.12,.88,beat)-.5);
       stageMix=mix(1.,mix(.16,1.,smoothstep(.04,.72,beat)),uReveal*min(1.,levelIndex*.50+.18));
     }
-    z=wedge(turn(angle+.16*opening)*z);
-    z=abs(z)-vec2(.64+uFold*.2+.20*opening,.18+uMorph*.045*cos(uPhase)+.16*opening);
-    z*=growth;derivative*=growth;
+    // The inner levels change first. Alternating offsets turn the same folded
+    // scaffold through laced rings, pronounced chambers and narrow bridges.
+    float arrival=wave-levelIndex*.79;
+    float crest=cos(arrival),alternate=sin(arrival*2.+levelIndex*.37);
+    float change=uEvolution*(.77+.23*uMorph);
+    z=wedge(turn(angle+.16*opening+change*(.15*crest+.072*alternate))*z);
+    z=abs(z)-vec2(.64+uFold*.2+.20*opening+change*.22*crest,
+      .18+uMorph*.045*cos(uPhase)+.16*opening+change*.16*alternate);
+    float levelGrowth=growth+change*.19*cos(arrival+.8);
+    z*=levelGrowth;derivative*=levelGrowth;
     float shape=length(z)-(.34+.12*uFold);
     if(uVariant>.5&&uVariant<1.5) {
       // Elliptical petals with a wider inner body and a fine edge.
@@ -93,6 +106,11 @@ vec3 kaleidoscopeSample(vec2 offset) {
     } else if(uVariant>1.5) {
       // Orthogonal woven ribbons, recursively reflected into the radial field.
       shape=min(abs(z.x),abs(z.y))-(.12+.05*uFold);
+    }
+    if(uEvolution>0.){
+      float facet=.5+.5*cos(arrival-1.2);
+      float engraved=abs(z.x)*.64+abs(z.y)*.91-(.34+.11*uFold);
+      shape=mix(shape,engraved,change*facet*.70);
     }
     float signedDistance=shape/derivative;
     float distance=abs(signedDistance);
@@ -109,6 +127,11 @@ vec3 kaleidoscopeSample(vec2 offset) {
     coverage*=level;
     float coordinate=uOffset+uDensity*(float(i)*.115+.055*length(z))+uMorph*.035*sin(uPhase);
     vec3 ink=pigment(coordinate,max(.001,uDensity*.055*derivative*pixel));
+    if(uEvolution>0.){
+      float brilliance=.72+.37*smoothstep(-.55,.75,crest);
+      vec3 scroll=pigment(coordinate+.13*cos(arrival-.6)+.08*alternate,pixel*derivative*.25);
+      ink=mix(ink,scroll*brilliance,uEvolution*.74);
+    }
     color=mix(color,ink,coverage*.9);
     height+=coverage/(1.+float(i)*.35);
     float haloWidth=width*2.8;

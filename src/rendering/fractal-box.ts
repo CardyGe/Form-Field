@@ -3,16 +3,24 @@
 export const boxFunctions = /* glsl */`
 vec3 boxLimits() {
   float limit=.72+.38*uFold;
-  if(uVariant>.5&&uVariant<1.5)return vec3(limit*.82);
-  if(uVariant>1.5)return limit*vec3(1.18,.72,.94);
-  return vec3(limit);
+  vec3 proportions=vec3(1.);
+  if(uVariant>.5&&uVariant<1.5)proportions=vec3(.82);
+  if(uVariant>1.5)proportions=vec3(1.18,.72,.94);
+  if(uEvolution>0.){
+    // The chamber and its silhouette change proportions with the fold.
+    // The same animated limits are used by the camera's enclosure.
+    float phase=uPhase+uVariant*.8;
+    proportions*=1.+uEvolution*vec3(.13*sin(phase),.15*cos(phase-.95),.12*sin(2.*phase+.55));
+  }
+  return limit*proportions;
 }
 vec3 boxDomain(vec3 position) {
   vec3 p=position*(uScale/1.7);
   float seed=mod(uSeed,997.)*.0137;
-  float angle=uTwist*.9+.035*sin(seed)+uMorph*.12*sin(uPhase);
+  float sway=uMorph*legacyCameraMotion();
+  float angle=uTwist*.9+.035*sin(seed)+sway*.12*sin(uPhase);
   p.xy=turn(angle)*p.xy;
-  p.yz=turn(uTwist*.38+uMorph*.045*cos(uPhase))*p.yz;
+  p.yz=turn(uTwist*.38+sway*.045*cos(uPhase))*p.yz;
   // A full radial reflection preserves radius and is an isometry in each
   // sector. Blending folded and original coordinates could collapse opposite
   // rays, so radial folding is deliberately a discrete option.
@@ -23,9 +31,11 @@ vec2 boxField(vec3 position) {
   float size=uScale/1.7;
   vec3 p=boxDomain(position),z=p,limits=boxLimits();
   float derivative=1.,orbit=0.,weight=1.,totalWeight=0.;
-  float scale=-(uBoxScale+uMorph*.12*sin(uPhase));
+  float change=uEvolution*(.72+.28*uMorph);
+  float scale=-(uBoxScale+uMorph*.12*sin(uPhase)+change*.24*cos(uPhase+uVariant*.8));
   float outer=uVariant>.5&&uVariant<1.5?1.25:1.;
-  float minimum2=uBoxRadius*uBoxRadius,outer2=outer*outer;
+  float inner=clamp(uBoxRadius+change*.115*sin(uPhase*2.-.8+uVariant),.16,.90);
+  float minimum2=inner*inner,outer2=outer*outer;
   // Detail changes the geometric recursion, never the render resolution.
   // Keep the estimator converged even when artistic Detail is low. Fewer
   // than twelve passes can turn smooth surfaces into hit/normal stippling at 4K.
@@ -70,24 +80,29 @@ float boxShadow(vec3 p,vec3 light,float epsilon) {
 }
 vec4 traceBox(vec2 offset) {
   float size=uScale/1.7;
-  // Inside the box the camera also turns once per loop, so the space keeps changing.
-  float yaw=uCameraYaw+uTravel*.25*sin(uPhase)+(uApproach>0.?uPhase:0.);
-  float pitch=uCameraPitch+uTravel*.12*cos(uPhase);
+  float oldMotion=legacyCameraMotion();
+  float yaw=uCameraYaw+oldMotion*(uTravel*.25*sin(uPhase)+(uApproach>0.?uPhase:0.));
+  float pitch=uCameraPitch+oldMotion*uTravel*.12*cos(uPhase);
   float radius=2.*length(boxLimits())/size+.01/size;
-  float framing=radius+3.6/max(uZoom,.5)-uTravel*.35*cos(uPhase);
+  float framing=radius+3.6/max(uZoom,.5)-oldMotion*uTravel*.35*cos(uPhase);
   // Fly in: the camera moves inside the bounding sphere toward the folded core.
-  if(uApproach>0.)framing=mix(framing,radius*(.62-.12*uApproach)-uTravel*.35*radius*.3*cos(uPhase),uApproach);
-  float route=0.,bank=0.;
-  if(uPassage>0.||uBank!=0.){
-    // Hold the silhouette, approach the vault, pause, and pull back. The
-    // revised path stays outside the bounding sphere at closest approach.
-    float phase=fract(uPhase/TAU);
-    route=smoothstep(.13,.49,phase)*(1.-smoothstep(.62,.95,phase));
-    framing=mix(framing,radius+mix(3.7/max(uZoom,.5),.18/max(uZoom,.5),route),uPassage);
-    yaw+=uPassage*(.25+.22*uBank)*sin(uPhase-.32)*(.3+.7*route);
-    pitch+=uPassage*.15*sin(uPhase+.5);
-    bank=.39*uBank*sin(uPhase)*(.32+.68*route);
+  if(uApproach>0.)framing=mix(framing,radius*(.62-.12*uApproach)-uTravel*.35*radius*.3*cos(uPhase),uApproach*oldMotion);
+  float phase=fract(uPhase/TAU);
+  float route=smoothstep(.13,.49,phase)*(1.-smoothstep(.62,.95,phase));
+  float oldBank=.39*uBank*sin(uPhase)*(.32+.68*route);
+  if(oldMotion>0.&&(uPassage>0.||uBank!=0.)){
+    framing=mix(framing,radius+mix(3.7/max(uZoom,.5),.18/max(uZoom,.5),route),uPassage*oldMotion);
+    yaw+=oldMotion*uPassage*(.25+.22*uBank)*sin(uPhase-.32)*(.3+.7*route);
+    pitch+=oldMotion*uPassage*.15*sin(uPhase+.5);
   }
+  if(uEvolution>0.){
+    // Establish the full object and travel toward the same point on its
+    // surface. No phase-driven pan, yaw, pitch, or roll on the new path.
+    float journey=smoothstep(.08,.64-.23*uTravel,phase)*(1.-smoothstep(.73,1.,phase));
+    float strength=max(uPassage,uApproach*.79)*(1.-oldMotion);
+    framing=mix(framing,radius+mix(4.6,.09,pow(journey,1.17))/max(uZoom,.5),strength);
+  }
+  float bank=mix(uBank*.42,oldBank,oldMotion);
   vec3 origin=framing*vec3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch));
   vec3 forward=normalize(-origin),right=normalize(cross(forward,vec3(0,1,0))),up=cross(right,forward);
   vec2 uv=fractalView(vUv+offset/uResolution);
@@ -151,6 +166,18 @@ vec4 traceBox(vec2 offset) {
     color=color*mix(1.,.48+.52*separation,uDepth*.82)
       +edge*band*uDepth*(.14+.28*separation)*(.48+.52*sqrt(ao))
       +uPalette[0]*fill*uDepth*.33;
+  }
+  if(uEvolution>0.){
+    // Successive crests follow the material's surface, including its folds.
+    // Pulse spacing is band-limited at grazing angles and in the distance.
+    float surface=length(domain.xy)*2.95+domain.z*.74+field.y*1.2;
+    float wavelength=surface*2.6-uPhase/TAU*2.;
+    float aa=clamp(epsilon*size*14.,.016,.34);
+    float groove=abs(fract(wavelength+.5)-.5);
+    float crest=(1.-smoothstep(.056-aa,.056+aa,groove))*(1.-smoothstep(.14,.34,aa));
+    float xray=.5+.5*cos(surface*2.1-uPhase+3.1*domain.y);
+    vec3 signal=pigment(coordinate+surface*.12-uPhase/TAU,aa*.16);
+    color+=signal*crest*uEvolution*(.26+.51*xray)*(.36+.64*sqrt(ao));
   }
   return vec4(color,1.);
 }
