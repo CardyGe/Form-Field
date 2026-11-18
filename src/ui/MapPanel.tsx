@@ -17,7 +17,7 @@ import { ellipseRing, hitShape, isCurved, squareBox, triangleRing } from '../map
 import { joinedAnchors, snapMove, snapPoint, type SnapTarget } from '../map/snap';
 import { boxHandles, marqueeSelect, pick, selectionBox, transformFor, type Box, type BoxHandle } from '../map/gestures';
 import { ownCornersPinnable } from '../map/placement';
-import { LIVE_SOURCE_ID, MAX_NAME_LENGTH, STAGE_SIZE, isShapeLocked, isShapeShown, type CurvePoint, type Point, type ShowDocument } from '../map/show';
+import { LIVE_SOURCE_ID, usesLive, MAX_NAME_LENGTH, STAGE_SIZE, isShapeLocked, isShapeShown, type CurvePoint, type Point, type ShowDocument } from '../map/show';
 import { MapCompositor } from '../map/compositor';
 import { GOVERNOR_SCALES } from '../map/playout';
 
@@ -157,7 +157,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   // Signals reach this screen's compositor directly.
   map.onSignals.current = signals => compositor.current?.setSignals(signals);
   // Live's Clear and Capture empty room reach this screen's Live directly.
-  map.onLiveAction.current = action => { if (action === 'clear') compositor.current?.liveClear(); else compositor.current?.liveCaptureRoom(); };
+  map.onLiveAction.current = action => { if (action === 'clear') compositor.current?.liveClear(); else if (action === 'retry') compositor.current?.liveRetry(); else compositor.current?.liveCaptureRoom(); };
   useEffect(() => {
     if (!canvas.current) return;
     // It draws on its own hidden canvas; this screen copies that picture and draws its marks over it.
@@ -309,7 +309,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   }, []);
   useEffect(() => { drawStage(performance.now()); }, [cornersMode, cornerIndex, shown, refused, map.selectedIds, map.selectedIndex, map.selectedRing, map.outputOpen, map.wallPicture, redrawTick, pen, hover, marquee, snapMark, map.soloed.join(), map.photoShown, map.tool, drawStage]);
   // Instruments move, so while they play here the stage is drawn every frame.
-  const playsHere = !map.outputOpen && ((refused?.show ?? shown).sources.length > 0 || showReacts(shown));
+  const playsHere = !map.outputOpen && ((refused?.show ?? shown).sources.length > 0 || showReacts(shown) || usesLive(shown));
   useEffect(() => {
     if (!playsHere) return;
     let raf = requestAnimationFrame(function loop(now) { drawStage(now); raf = requestAnimationFrame(loop); });

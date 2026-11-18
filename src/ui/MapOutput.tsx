@@ -40,6 +40,7 @@ export default function MapOutput() {
       if (kind === 'fade') return;
       if (kind === 'liveClear') { compositor.liveClear(); return; }
       if (kind === 'liveCaptureRoom') { compositor.liveCaptureRoom(); return; }
+      if (kind === 'liveRetry') { compositor.liveRetry(); return; }
       // A show carrying a fade time is a scene switch, crossfading over the scene's time.
       const fadeMs = (message as { fadeMs?: unknown }).fadeMs;
       if (kind === 'show' && typeof fadeMs === 'number') { apply(fadeMs); return; }

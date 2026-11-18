@@ -162,3 +162,29 @@ test('the artwork window may report people finding alongside its camera, and onl
   assert.equal(live.acceptState({ status: 'running', label: 'x', width: 1, height: 1, people: 'running' }), false);
   assert.equal(live.acceptState({ status: 'running', label: 'x', width: 1, height: 1, roomCaptured: 'yes' }), false);
 });
+
+test('camera windows: the studio, Live’s output and Map’s output (Live in Map); nothing else', () => {
+  const studio = {}, liveOut = {}, mapOut = {}, other = {};
+  const windows = { studio: () => studio, isLiveOutput: c => c === liveOut, isMapOutput: c => c === mapOut };
+  assert.equal(live.isCameraWindow(studio, windows), true);
+  assert.equal(live.isCameraWindow(liveOut, windows), true);
+  assert.equal(live.isCameraWindow(mapOut, windows), true);
+  assert.equal(live.isCameraWindow(other, windows), false);
+  assert.equal(live.isCameraWindow(null, windows), false);
+  // Map's output gets the camera only: never sound or MIDI, which stay with the studio window.
+  assert.equal(live.allowPermission('media', { mediaTypes: ['audio'] }, live.isCameraWindow(mapOut, windows), false), false);
+  assert.equal(live.allowPermission('midi', {}, live.isCameraWindow(mapOut, windows), false), false);
+  assert.equal(live.allowPermission('media', { mediaTypes: ['video'] }, live.isCameraWindow(mapOut, windows), false), true);
+});
+
+test('loading Live’s settings waits for a save still being written (leaving one screen for the other)', async () => {
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'live-settings-'));
+  const h = harness({ settingsFile: path.join(dir, 'sub', 'live-settings.json') });
+  const save = h.handlers.get('studio:live:saveSettings'), load = h.handlers.get('studio:live:loadSettings');
+  const saving = save(h.fromStudio, { look: 'smoke' });
+  const loaded = await load(h.fromStudio);
+  await saving;
+  assert.deepEqual(loaded, { look: 'smoke' });
+  await fs.rm(dir, { recursive: true, force: true });
+});

@@ -53,6 +53,7 @@ export default function MapLiveCard({ map, locked, onError }: { map: Map; locked
     <LiveLookControls s={s} update={update} reactFor={target => ({ ...links.reactFor(target), disabled: locked })} onClear={map.clearLive} />
     <div className="map-toggles">
       <button className="text-button" disabled={locked} title="Empty the picture and start again" onClick={map.clearLive}>Clear</button>
+      {live && !live.running && s.source.kind === 'camera' && <button className="text-button" title="Open the camera again" onClick={map.retryLive}>Try the camera again</button>}
       {s.people.useEmptyRoom && <button className="text-button" disabled={locked} title="Take the room as it is now, with nobody in it" onClick={map.captureLiveRoom}>Capture empty room</button>}
     </div>
     <details className="live-react" onToggle={e => map.setReactivityPanel(e.currentTarget.open)}>

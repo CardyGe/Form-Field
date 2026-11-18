@@ -94,6 +94,7 @@ const PARITY: [string, unknown, boolean][] = [
   ['live settings over 16 KB', { type: 'liveSettings', settings: { padding: 'x'.repeat(16 * 1024) } }, false],
   ['live clear', { type: 'liveClear' }, true],
   ['live capture room', { type: 'liveCaptureRoom' }, true],
+  ['live retry', { type: 'liveRetry' }, true],
   ['unknown', { type: 'explode' }, false],
   ['null', null, false],
   ['array', [], false],

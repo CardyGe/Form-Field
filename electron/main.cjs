@@ -208,8 +208,8 @@ function createWindow() {
   const devURL = process.env.STUDIO_DEV_URL;
   if (devURL && (!/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(devURL))) throw new Error('STUDIO_DEV_URL must be a local development server.');
   const session = window.webContents.session;
-  // Everything is refused except camera video for this app's own windows (Live mode). Map's output window never uses the camera, so it is not one of them.
-  const ours = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents || !!liveControl?.isOutput(contents);
+  // Everything is refused except camera video for this app's own windows: the studio, Live's output, and Map's output (Live in Map).
+  const ours = contents => live.isCameraWindow(contents, { studio: () => window, isLiveOutput: c => !!liveControl?.isOutput(c), isMapOutput: c => !!mapControl?.isOutput(c) });
   // The studio window may also listen to sound and MIDI for reactivity; output windows never do.
   const studioWindow = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents;
   session.setPermissionRequestHandler((contents, permission, callback, details) => callback(live.allowPermission(permission, details, ours(contents), studioWindow(contents))));

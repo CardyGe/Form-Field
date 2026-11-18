@@ -490,7 +490,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
         dropUnplayed(next);
         return done();
       }
-      if (linked.length > 1) {
+      if (linked.length > 1 && shape.sourceId !== LIVE_SOURCE_ID) {
         if (shape.blocker) return { reason: 'blocker' };
         const project = presetComposition(content.presetId, content.seed);
         if (!project) return { reason: 'unknown-preset' };
@@ -504,10 +504,12 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const project = presetComposition(content.presetId, content.seed);
       if (!project) return { reason: 'unknown-preset' };
       const old = shape.sourceId;
-      const oldGoes = old !== null && !playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes }, old);
+      // Live is no source of the show's, so leaving it frees no room.
+      const oldGoes = old !== null && old !== LIVE_SOURCE_ID && !playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes }, old);
       if (next.sources.length - (oldGoes ? 1 : 0) >= MAX_SOURCES) return { reason: 'too-many-sources' };
       next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0, tempoSync: null });
-      shape.sourceId = content.sourceId;
+      // Several shapes on Live take the new look together, as one new instrument.
+      for (const s of linked) s.sourceId = content.sourceId;
       dropUnplayed(next);
       return done();
     }

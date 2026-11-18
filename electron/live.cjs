@@ -15,6 +15,16 @@ function allowPermission(permission, details, isOurWindow, isStudioWindow = fals
   return permission === 'midi';
 }
 
+/**
+ * The app's own windows that may use the camera: the studio, Live's output, and Map's output (which plays Live in
+ * Map's shapes). Only the studio window may also hear sound and MIDI.
+ */
+function isCameraWindow(contents, { studio, isLiveOutput, isMapOutput }) {
+  if (!contents) return false;
+  const s = studio();
+  return (!!s && !s.isDestroyed?.() && contents === (s.webContents ?? s)) || !!isLiveOutput?.(contents) || !!isMapOutput?.(contents);
+}
+
 /** A permission check (made before and while the camera is used): the same rule. */
 function allowPermissionCheck(permission, details, isOurWindow, isStudioWindow = false) {
   if (isOurWindow !== true) return false;
@@ -105,8 +115,11 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSav
   });
   const closeOutput = () => { if (alive(output)) output.close(); };
 
-  handle('loadSettings', () => loadSettings(settingsFile));
-  handle('saveSettings', settings => saveSettings(settingsFile, settings));
+  // Saves and loads run one after another: Map opening as the Live screen closes must read the Live screen's last save.
+  let settingsQueue = Promise.resolve();
+  const queued = work => { const next = settingsQueue.then(work, work); settingsQueue = next.catch(() => {}); return next; };
+  handle('loadSettings', () => queued(() => loadSettings(settingsFile)));
+  handle('saveSettings', settings => queued(() => saveSettings(settingsFile, settings)));
   handle('cameraAccess', () => ensureCameraAccess(systemPreferences));
   handle('microphoneAccess', () => ensureMicrophoneAccess(systemPreferences));
   handle('displays', () => {
@@ -146,4 +159,4 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSav
   return { closeOutput, isOutput: contents => alive(output) && contents === output.webContents };
 }
 
-module.exports = { allowPermission, allowPermissionCheck, ensureCameraAccess, ensureMicrophoneAccess, loadSettings, saveSettings, acceptMessage, acceptState, acceptPreview, pickDisplay, setupLive };
+module.exports = { isCameraWindow, allowPermission, allowPermissionCheck, ensureCameraAccess, ensureMicrophoneAccess, loadSettings, saveSettings, acceptMessage, acceptState, acceptPreview, pickDisplay, setupLive };

@@ -157,6 +157,8 @@ export class LiveRenderer {
 
   /** Wipes the artwork back to its ground. */
   clear(): void { this.look?.clear(); }
+  /** Gives the graphics context back at once, for a canvas that will not be used again (Map's Live). */
+  loseContext(): void { this.renderer.forceContextLoss(); }
 
   /** Frame rate and the longest gap between frames since the last call. */
   stats(): { fps: number; worstMs: number; frames: number } {

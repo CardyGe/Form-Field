@@ -169,7 +169,6 @@ export class MapCompositor {
     this.show = show;
     this.projects = new Map(projects);
     this.dirty = true;
-    this.updateLive();
     // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
     for (const shape of show.shapes) {
@@ -192,6 +191,8 @@ export class MapCompositor {
     const live = new Set(show.sources.map(s => s.id));
     for (const [id, slot] of this.slots) if (!live.has(id)) this.release(id, slot);
     for (const id of [...this.restartAt.keys()]) if (!live.has(id)) this.restartAt.delete(id);
+    // Live last, like the sources: a shape leaving Live has already copied its picture to fade from.
+    this.updateLive();
   }
 
   /** Called every frame by the operator screen, so only a real change counts. */
@@ -217,6 +218,7 @@ export class MapCompositor {
   setLive(settings: LiveSettings | null): void { if (settings === this.liveSettings) return; this.liveSettings = settings; this.updateLive(); }
   liveClear(): void { this.live?.clear(); }
   liveCaptureRoom(): void { this.live?.captureRoom(); }
+  liveRetry(): void { if (this.live && this.liveSettings) this.live.retry(this.liveSettings); }
   /** Keeps one Live while the show uses Live anywhere, shapes or scenes, so a scene switching back never waits; lets it go (camera off) once nothing does. */
   private updateLive(): void {
     const wanted = !this.disposed && !this.lost && !!this.liveSettings && (this.show.usesLive ?? usesLive(this.show));
@@ -289,10 +291,12 @@ export class MapCompositor {
     }
 
     // Live's newest picture, once for every shape that plays it.
+    // A Live whose own graphics context was lost is made again; meanwhile its shapes play their fill.
+    if (this.live?.broken) { this.live.dispose(); this.live = null; this.dirty = true; this.updateLive(); }
     if (this.live) {
       if (!this.frozen) this.live.setSignals(this.signals);
-      if (this.live.fresh) rendered = true;
       this.liveTexture = this.live.frame();
+      if (this.live.fresh) rendered = true;
     } else this.liveTexture = null;
     const drawn = this.dirty || rendered || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
@@ -509,7 +513,8 @@ export class MapCompositor {
     else if (slot?.project && slot.texture) content = { kind: 'picture', texture: slot.texture, inv };
     else content = fill(); // a source not ready yet plays the shape's own fill, never black
     // A fade waits for the composition the shape should now play, not one still drawing from before.
-    const ready = shape.blocker || shape.sourceId === null || cannotPlay || (isLive ? !!this.liveTexture : slot?.project === project && !!slot?.texture);
+    // A fade into Live waits only while Live is starting; a camera that cannot play lets it finish to the fill.
+    const ready = shape.blocker || shape.sourceId === null || cannotPlay || (isLive ? !this.live || this.live.readiness !== 'wait' : slot?.project === project && !!slot?.texture);
     let from: ShapeDraw['from'] = null, mix = 1;
     const fade = this.fades.get(shape.id);
     if (fade && !shape.blocker) {

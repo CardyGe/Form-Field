@@ -152,3 +152,28 @@ test('a picture as wide as its shape is unchanged', async () => {
   const { coverCrop } = await import('../src/map/placement');
   assert.deepEqual(coverCrop(16 / 9, 16 / 9), [1, 0, 0, 0, 1, 0, 0, 0, 1]);
 });
+
+test('review fix: a new look on one of several Live shapes gives them all one new instrument, never a crash', () => {
+  let show = ok(base(), { type: 'setContent', shapeId: 'a', content: { kind: 'live', linked: true } });
+  show = ok(show, { type: 'setContent', shapeId: 'a', content: { kind: 'preset', presetId: 'salt-mandala', sourceId: 'sx', seed: 2 } });
+  assert.equal(shapeOf(show, 'a').sourceId, 'sx');
+  assert.equal(shapeOf(show, 'b').sourceId, 'sx');
+  assert.deepEqual(show.sources.map(s => s.id), ['sx']);
+  const one = ok(ok(base(), { type: 'setContent', shapeId: 'a', content: { kind: 'live', linked: true } }), { type: 'setContent', shapeId: 'a', content: { kind: 'preset', presetId: 'salt-mandala', sourceId: 'sy', seed: 2, linked: false } });
+  assert.equal(shapeOf(one, 'a').sourceId, 'sy');
+  assert.equal(shapeOf(one, 'b').sourceId, 'live');
+});
+
+test('review fix: Live is waited for only while it is starting; a camera that cannot play lets the shapes show their fill', async () => {
+  const { liveReadiness } = await import('../src/map/liveReady');
+  assert.equal(liveReadiness({ status: 'starting' }, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0 }), 'wait');
+  assert.equal(liveReadiness({ status: 'idle' }, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0 }), 'wait');
+  for (const status of ['refused', 'none', 'lost', 'error'] as const)
+    assert.equal(liveReadiness({ status } as never, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0 }), 'cannot', status);
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: true, needsPeople: false, peopleLoading: false, drawnSinceRunning: 5 }), 'cannot', 'a video file plays on the Live screen only');
+  // Running, but nothing drawn since the camera came up: a frame from before could be no camera picture at all.
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: false, peopleLoading: false, drawnSinceRunning: 0 }), 'wait');
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: true, peopleLoading: true, drawnSinceRunning: 5 }), 'wait', 'people-finding still loading');
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: true, peopleLoading: false, drawnSinceRunning: 5 }), 'play');
+  assert.equal(liveReadiness({ status: 'running' } as never, { file: false, needsPeople: false, peopleLoading: true, drawnSinceRunning: 1 }), 'play');
+});
