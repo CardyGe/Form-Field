@@ -51,7 +51,8 @@ export function toWire(show: ShowDocument): WireShow {
     }),
     sources: show.sources.map(({ id, kind, speed, revision }) => ({ id, kind, speed, revision })),
     groups: show.groups,
-    stageCorners: show.stageCorners && show.stageCorners.map(p => ({ x: roundForWire(p.x), y: roundForWire(p.y) })),
+    // Not rounded: a pinnable quad at the edge of the rules could round to one that is not.
+    stageCorners: show.stageCorners,
   };
 }
 

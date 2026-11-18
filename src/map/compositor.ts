@@ -1,29 +1,26 @@
 /**
- * The Map compositor: plays every instrument source with its own StudioRenderer (the stage 0 route) and draws
- * each shape on a Canvas 2D stage, clipped to its outline. Used by the output window, and by the operator screen
- * while the output is closed.
+ * The Map compositor: plays every instrument source with its own StudioRenderer (the stage 0 route) and draws the
+ * stage on the graphics card (stage 4, see gpu.ts): each shape's picture through its placement (Fit, Pin in
+ * perspective, Across group or stage), cut by its coverage, with its look and border, then the overlays, then the
+ * stage corners. Used by the output window, and by the operator screen while the output is closed.
  *
- * The rules (sizing, clock, governor, fades) are in playout.ts and tested there. This class applies them.
+ * The rules (sizing, clock, governor, fades, placement) are in playout.ts and placement.ts and tested there.
  */
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
-import { drawCommands, ringPx, shownOnWall, stageCommands, traceRing, type DrawOptions } from './draw';
-import { drawPattern } from './pattern';
-import { borderColour, effectiveSoftEdge, fadeKey, fadeSize } from './edge';
-import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize, type Governor, type Playing } from './playout';
+import { drawCommands, shownOnWall, stageCommands, type DrawOptions } from './draw';
+import { borderColour, fadeKey } from './edge';
+import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
-import { STAGE_SIZE, type Group, type Shape } from './show';
+import { STAGE_SIZE, type Group, type Point, type Shape } from './show';
 import { ringBounds } from './outline';
+import { IDENTITY, invert, quadToQuad, apply, type H3 } from './homography';
+import { landing, sourceSizeFor, type Landing } from './placement';
+import { Gpu, type ShapeDraw, type Texture } from './gpu';
+import { borderPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
 export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number }[]; groups: Group[] }
-
-/** A shape's outline and holes as one path in stage pixels, with its box; kept until the shape's geometry changes. */
-interface Outline { shape: Shape; key: string; path: Path2D; box: { x: number; y: number; w: number; h: number } }
-/** A shape's soft edge: white where the content shows, fading to nothing at the outline. */
-interface Fader { shape: Shape; key: string; picture: OffscreenCanvas }
-
-type Frame = OffscreenCanvas;
 
 /**
  * Most instruments that play at once. Chromium caps live WebGL contexts per page; past the cap it silently kills the
@@ -41,8 +38,8 @@ interface Slot {
   project: Project | null;
   pending: Project | null;
   phase: number;
-  /** The last drawn picture, kept in 2D: a WebGL canvas is cleared after it is shown, and frames are sometimes skipped. */
-  frame: Frame | null;
+  /** The last drawn picture, on the stage's graphics card: it holds while frames are skipped or frozen. */
+  texture: Texture | null;
   failed: string | null;
   /** A composition that could not be prepared is not tried again every frame; a new composition is. */
   failedProject: Project | null;
@@ -50,7 +47,16 @@ interface Slot {
 }
 
 /** A shape's crossfade from what it played before to what it plays now. start is set once the new content is ready. */
-interface Fade { from: Frame | string; start: number | null }
+interface Fade { from: Texture | string; start: number | null }
+
+/** The pictures a shape reuses until it changes. */
+interface Pictures {
+  shape: Shape;
+  geometry: string; path: Path2D; box: Box;
+  coverageKey: string; coverage: Texture | null;
+  decorKey: string; decor: Texture | null;
+  ownKey: string; own: Texture | null;
+}
 
 export interface CompositorStats {
   fps: number;
@@ -60,35 +66,35 @@ export interface CompositorStats {
   failing: { id: string; reason: string }[];
   /** How many times each source has been prepared (for checks: editing one shape must not re-prepare another). */
   prepares: Record<string, number>;
-  /** How many soft-edge pictures have been made (for checks: they are made when a shape changes, not every frame). */
+  /** How many coverage pictures have been made (for checks: they are made when a shape changes, not every frame). */
   edgeBuilds: number;
+  /** The stage's own graphics context was lost and is waiting to come back: the wall is black meanwhile. */
+  contextLost: boolean;
 }
 
-const copyFrame = (source: CanvasImageSource, width: number, height: number, into: Frame | null): Frame => {
-  const frame = into && into.width === width && into.height === height ? into : new OffscreenCanvas(width, height);
-  const ctx = frame.getContext('2d')!;
-  ctx.clearRect(0, 0, width, height);
-  ctx.drawImage(source, 0, 0, width, height);
-  return frame;
-};
 const kindsOf = (project: Project | null | undefined) => project ? project.layers.map(l => l.kind).join(',') : '';
+const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255, parseInt(hex.slice(5, 7), 16) / 255];
+const opaque = (hex: string): [number, number, number, number] => [...rgb(hex), 1];
+const STAGE_RECT: Point[] = [{ x: 0, y: 0 }, { x: STAGE_SIZE.width, y: 0 }, { x: STAGE_SIZE.width, y: STAGE_SIZE.height }, { x: 0, y: STAGE_SIZE.height }];
+/** The landing's inverse: stage pixels to the picture's square. A landing too flat to invert lands nowhere. */
+const inverseOf = (l: Landing): H3 => invert(l.h) ?? [0, 0, -1, 0, 0, -1, 0, 0, 1];
+/** A box's own square: Fit's grid pattern is drawn over the box, whatever the zoom. */
+const boxInverse = (b: Box): H3 => invert([b.w || 1, 0, b.x, 0, b.h || 1, b.y, 0, 0, 1]) ?? IDENTITY;
 
 export class MapCompositor {
-  private readonly ctx: CanvasRenderingContext2D;
+  readonly canvas: HTMLCanvasElement;
+  private readonly gpu: Gpu;
   private show: PlayShow = { shapes: [], sources: [], groups: [] };
-  private readonly outlines = new Map<string, Outline>();
-  private readonly faders = new Map<string, Fader>();
-  /** Each grid-pattern shape's pattern, drawn once over its box and reused until the shape changes. */
-  private readonly patterns = new Map<string, { shape: Shape; picture: OffscreenCanvas }>();
-  private edgeBuilds = 0;
-  /** Where a soft-edged shape's content is put together before its fade is applied; stage-sized, reused. */
-  private scratch: OffscreenCanvas | null = null;
   private projects = new Map<string, Project>();
   private options: DrawOptions = { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: null, selectedIndex: null, outlinesOnly: false, invalidIds: [] };
+  private corners: H3 = IDENTITY;
   private frozen = false;
   private readonly slots = new Map<string, Slot>();
   private readonly playing = new Map<string, Playing>();
   private readonly fades = new Map<string, Fade>();
+  private readonly pictures = new Map<string, Pictures>();
+  /** The overlay (test grid, names, identify, crosshair, selection), drawn in 2D when it changes. */
+  private overlay: { key: string; canvas: OffscreenCanvas; texture: Texture | null; empty: boolean } | null = null;
   /** Sources whose graphics context was lost, and when they may start again. */
   private readonly restartAt = new Map<string, number>();
   /** Sources over MAX_LIVE_INSTRUMENTS this frame: they play their colour. */
@@ -99,7 +105,9 @@ export class MapCompositor {
   private framesThisSecond = 0;
   private secondStarted = 0;
   private fps = 0;
+  private edgeBuilds = 0;
   private disposed = false;
+  private lost = false;
   /** Something changed since the stage was last drawn: the show, the overlays, Freeze, or an instrument became ready. */
   private dirty = true;
   private optionsKey = '';
@@ -107,9 +115,17 @@ export class MapCompositor {
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
     canvas.height = STAGE_SIZE.height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('This screen cannot draw the stage.');
-    this.ctx = ctx;
+    this.canvas = canvas;
+    this.gpu = new Gpu(canvas);
+    // A lost context blanks the wall until Chromium gives it back; then every picture is made again.
+    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; });
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.gpu.setUp();
+      this.pictures.clear(); this.overlay = null;
+      for (const slot of this.slots.values()) slot.texture = null;
+      for (const [id, fade] of this.fades) if (typeof fade.from !== 'string') this.fades.set(id, { ...fade, from: '#000000' });
+      this.lost = false; this.dirty = true;
+    });
   }
 
   /** The shapes and sources to play, and the compositions the stage has for them (by source id). */
@@ -117,22 +133,24 @@ export class MapCompositor {
     this.show = show;
     this.projects = new Map(projects);
     this.dirty = true;
-    // Fades start when a shape changes source, or its source changes instrument. The old picture is taken before
+    // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
     const now = performance.now();
     for (const shape of show.shapes) {
       const next: Playing = { sourceId: shape.sourceId, kinds: kindsOf(shape.sourceId ? this.projects.get(shape.sourceId) : null) };
       const before = this.playing.get(shape.id);
-      if (shouldFade(before, next)) {
-        const old = before!.sourceId ? this.slots.get(before!.sourceId)?.frame : null;
+      if (shouldFade(before, next) && !this.lost) {
+        const old = before!.sourceId ? this.slots.get(before!.sourceId)?.texture : null;
+        const held = this.fades.get(shape.id);
         // Changing again before the last change was ready keeps fading from what is on the wall, not from the colour.
-        const from = old ? copyFrame(old, old.width, old.height, null) : this.fades.get(shape.id)?.from ?? shape.colour;
+        const from = old ? this.gpu.copy(old) : held ? held.from : shape.colour;
+        if (held && held.from !== from && typeof held.from !== 'string') this.gpu.free(held.from);
         this.fades.set(shape.id, { from, start: shape.sourceId === null ? now : null });
       }
       this.playing.set(shape.id, next);
     }
-    for (const id of [...this.playing.keys()]) if (!show.shapes.some(s => s.id === id)) { this.playing.delete(id); this.fades.delete(id); }
-    for (const id of [...this.outlines.keys()]) if (!show.shapes.some(s => s.id === id)) { this.outlines.delete(id); this.faders.delete(id); this.patterns.delete(id); }
+    for (const id of [...this.playing.keys()]) if (!show.shapes.some(s => s.id === id)) { this.playing.delete(id); this.endFade(id); }
+    for (const id of [...this.pictures.keys()]) if (!show.shapes.some(s => s.id === id)) this.dropPictures(id);
     const live = new Set(show.sources.map(s => s.id));
     for (const [id, slot] of this.slots) if (!live.has(id)) this.release(id, slot);
     for (const id of [...this.restartAt.keys()]) if (!live.has(id)) this.restartAt.delete(id);
@@ -145,15 +163,26 @@ export class MapCompositor {
     this.options = options; this.optionsKey = key; this.dirty = true;
   }
   setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.dirty = true; } }
-  /** Draw the stage again on the next frame even if nothing changed: the operator screen draws its own marks over it. */
+  /** Where the stage's corners go on the projector (stage fractions), or null for none. The wall uses this; the operator screen never does. */
+  setCorners(corners: Point[] | null): void {
+    const to = corners?.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }));
+    const h = to ? quadToQuad(STAGE_RECT, to) : null;
+    // The final pass needs output pixels to stage pixels.
+    const next = (h && invert(h)) ?? IDENTITY;
+    if (next.some((v, i) => v !== this.corners[i])) { this.corners = next; this.dirty = true; }
+  }
+  /** Draw the stage again on the next frame even if nothing changed. */
   invalidate(): void { this.dirty = true; }
+  /** The operator's picture of the wall: started after a drawn frame, collected on a later one, never waited for. */
+  requestPreview(): boolean { return !this.lost && this.gpu.requestPreview(); }
+  collectPreview(): ImageData | null { return this.lost ? null : this.gpu.collectPreview(); }
 
   /**
    * Advances the clock, draws every source that is due, and composites the stage. Returns whether the stage was drawn:
    * a still show (nothing playing, no fade, nothing changed) is not drawn again.
    */
   frame(now: number): boolean {
-    if (this.disposed) return false;
+    if (this.disposed || this.lost) return false;
     const started = performance.now();
     const seconds = this.last === null ? 0 : (now - this.last) / 1000;
     this.last = now;
@@ -174,11 +203,11 @@ export class MapCompositor {
       if (!slot.project || !slot.renderer) continue;
       if (!this.frozen) slot.phase = advancePhase(slot.phase, seconds, slot.project, source.speed);
       if (!draw) continue;
-      // Drawn at the size of the largest shape playing it on the stage.
-      const size = users.map(s => sourceSize(s.points, scale)).reduce((a, b) => ({ width: Math.max(a.width, b.width), height: Math.max(a.height, b.height) }));
+      // Drawn once, at the size of the largest place it lands on the stage.
+      const size = sourceSizeFor(users.map(s => landing(s, this.show)), scale);
       try {
         slot.renderer.render(slot.project, slot.phase, size.width, size.height);
-        slot.frame = copyFrame(slot.canvas, size.width, size.height, slot.frame);
+        slot.texture = this.gpu.upload(slot.canvas, slot.texture);
         rendered = true;
         if (slot.failedProject === null) slot.failed = null;
       } catch (error) { slot.failed = String((error as Error)?.message ?? error); }
@@ -202,25 +231,45 @@ export class MapCompositor {
         ...[...this.slots].filter(([, s]) => s.failed).map(([id, s]) => ({ id, reason: s.failed! })),
         ...[...this.overLimit].map(id => ({ id, reason: `more than ${MAX_LIVE_INSTRUMENTS} instruments are playing at once` })),
         ...[...this.restartAt.keys()].filter(id => !this.slots.has(id)).map(id => ({ id, reason: 'the graphics card stopped this instrument; it will start again' })),
+        ...(this.lost ? [{ id: 'stage', reason: 'the graphics card reset the projector picture; it will come back by itself' }] : []),
       ],
       prepares: Object.fromEntries([...this.slots].map(([id, s]) => [id, s.prepares])),
       edgeBuilds: this.edgeBuilds,
+      contextLost: this.lost,
     };
   }
 
   dispose(): void {
     this.disposed = true;
     for (const [id, slot] of this.slots) this.release(id, slot);
+    for (const id of [...this.pictures.keys()]) this.dropPictures(id);
+    for (const id of [...this.fades.keys()]) this.endFade(id);
+    this.gpu.free(this.overlay?.texture);
+    this.gpu.gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 
   /** Lets a source go, and gives its graphics context back now rather than whenever it is garbage collected. */
   private release(id: string, slot: Slot): void {
     slot.renderer?.dispose();
     slot.renderer = null;
-    this.dirty = true; // its shape now plays its colour
+    if (!this.lost) this.gpu.free(slot.texture);
+    slot.texture = null;
+    this.dirty = true; // its shape now plays its own fill
     const gl = slot.canvas.getContext('webgl2') ?? slot.canvas.getContext('webgl');
     gl?.getExtension('WEBGL_lose_context')?.loseContext();
     this.slots.delete(id);
+  }
+
+  private endFade(id: string): void {
+    const fade = this.fades.get(id);
+    if (fade && typeof fade.from !== 'string' && !this.lost) this.gpu.free(fade.from);
+    this.fades.delete(id);
+  }
+
+  private dropPictures(id: string): void {
+    const p = this.pictures.get(id);
+    if (p && !this.lost) { this.gpu.free(p.coverage); this.gpu.free(p.decor); this.gpu.free(p.own); }
+    this.pictures.delete(id);
   }
 
   /** The source's slot, started if need be. Null while over the limit or waiting to restart after a lost context. */
@@ -231,8 +280,8 @@ export class MapCompositor {
     if (this.slots.size >= MAX_LIVE_INSTRUMENTS) { this.overLimit.add(id); return null; }
     this.restartAt.delete(id);
     const canvas = document.createElement('canvas');
-    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, frame: null, failed: null, failedProject: null, prepares: 0 };
-    // A lost context (the graphics card reset, or too many contexts) drops the source: its shape plays its colour
+    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0 };
+    // A lost context (the graphics card reset, or too many contexts) drops the source: its shape plays its own fill
     // rather than freezing on its last picture, and the source starts again after a pause.
     canvas.addEventListener('webglcontextlost', event => {
       event.preventDefault();
@@ -267,172 +316,108 @@ export class MapCompositor {
   }
 
   private composite(now: number): void {
-    const ctx = this.ctx, { width: W, height: H } = STAGE_SIZE;
-    ctx.save();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, W, H);
-    if (this.options.blackout) { ctx.restore(); return; }
-    // The test grid shows outlines, names and numbers instead of content.
-    if (!this.options.testGrid && !this.options.outlinesOnly) {
-      for (const shape of this.show.shapes) if (shownOnWall(this.show, shape, this.options.solo)) this.drawShape(shape, now);
+    const gpu = this.gpu;
+    gpu.begin();
+    if (!this.options.blackout) {
+      // The test grid shows outlines, names and numbers instead of content.
+      if (!this.options.testGrid && !this.options.outlinesOnly) {
+        for (const shape of this.show.shapes) if (shownOnWall(this.show, shape, this.options.solo)) this.drawShape(shape, now);
+      }
+      const overlay = this.overlayPicture();
+      if (overlay) gpu.layer(overlay);
     }
-    ctx.restore();
-    drawCommands(ctx, stageCommands(this.show, this.options).filter(c => c.kind !== 'fill' && c.kind !== 'pattern'));
+    gpu.finish(this.corners);
   }
 
-  /** The shape's outline and holes as one path, made again only when its geometry changes. */
-  private outline(shape: Shape): Outline {
-    const held = this.outlines.get(shape.id);
-    // An unchanged show hands over the same shape objects, so most frames need no comparison at all.
-    if (held && held.shape === shape) return held;
-    const key = JSON.stringify([shape.points, shape.holes]);
-    if (held && held.key === key) { held.shape = shape; return held; }
-    const path = new Path2D();
-    for (const ring of [shape.points, ...shape.holes]) traceRing(path, ringPx(ring));
-    const b = ringBounds([shape.points]);
-    const box = { x: b.x0 * STAGE_SIZE.width, y: b.y0 * STAGE_SIZE.height, w: (b.x1 - b.x0) * STAGE_SIZE.width, h: (b.y1 - b.y0) * STAGE_SIZE.height };
-    const made = { shape, key, path, box };
-    this.outlines.set(shape.id, made);
-    return made;
+  /** The overlays drawn in 2D, and given to the graphics card only when they change. Null when there are none. */
+  private overlayPicture(): Texture | null {
+    const commands = stageCommands(this.show, this.options).filter(c => c.kind !== 'fill' && c.kind !== 'pattern');
+    const key = commands.length ? JSON.stringify(commands, (k, v) => (k === 'shape' ? undefined : v)) : '';
+    if (this.overlay && this.overlay.key === key) return this.overlay.empty ? null : this.overlay.texture;
+    const canvas = this.overlay?.canvas ?? new OffscreenCanvas(STAGE_SIZE.width, STAGE_SIZE.height);
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawCommands(ctx, commands);
+    const texture = commands.length ? this.gpu.upload(canvas, this.overlay?.texture ?? null) : this.overlay?.texture ?? null;
+    this.overlay = { key, canvas, texture, empty: commands.length === 0 };
+    return commands.length ? texture : null;
   }
 
-  /**
-   * The shape's fade picture, at half resolution over its box: the outline filled, worn back by half the soft edge,
-   * blurred, and cut by the outline again, so the content fades to nothing at the outline.
-   */
-  private fader(shape: Shape, outline: Outline): OffscreenCanvas {
-    const held = this.faders.get(shape.id);
-    if (held && held.shape === shape) return held.picture;
-    const key = fadeKey(shape);
-    if (held && held.key === key) { held.shape = shape; return held.picture; }
-    const { width, height, scale } = fadeSize(outline.box);
-    const draw = (canvas: OffscreenCanvas) => {
-      const c = canvas.getContext('2d')!;
-      c.setTransform(scale, 0, 0, scale, -outline.box.x * scale, -outline.box.y * scale);
-      return c;
-    };
-    // Worn back by 0.6 of the edge and blurred by a quarter of it, the outline sits 2.4 blur widths out: under 1 % is left there.
-    const soft = effectiveSoftEdge(shape.softEdge, outline.box);
-    const worn = new OffscreenCanvas(width, height), w = draw(worn);
-    w.fillStyle = '#ffffff'; w.fill(outline.path, 'evenodd');
-    w.globalCompositeOperation = 'destination-out'; w.lineWidth = soft * 1.2; w.lineJoin = 'round'; w.stroke(outline.path);
-    const picture = held?.picture.width === width && held.picture.height === height ? held.picture : new OffscreenCanvas(width, height);
-    const p = picture.getContext('2d')!;
-    p.setTransform(1, 0, 0, 1, 0, 0);
-    p.globalCompositeOperation = 'source-over';
-    p.clearRect(0, 0, width, height);
-    p.filter = `blur(${Math.max(0.5, soft / 4 * scale)}px)`;
-    p.drawImage(worn, 0, 0);
-    p.filter = 'none';
-    p.globalCompositeOperation = 'destination-in';
-    p.setTransform(scale, 0, 0, scale, -outline.box.x * scale, -outline.box.y * scale);
-    p.fillStyle = '#ffffff'; p.fill(outline.path, 'evenodd');
-    p.setTransform(1, 0, 0, 1, 0, 0);
-    p.globalCompositeOperation = 'source-over';
-    this.faders.set(shape.id, { shape, key, picture });
-    this.edgeBuilds++;
-    return picture;
+  /** The shape's cached pictures, made again only for what changed. */
+  private picturesFor(shape: Shape, palette: string[] | null): Pictures {
+    let p = this.pictures.get(shape.id);
+    if (p && p.shape === shape && p.decorKey === this.decorKey(shape, palette)) return p;
+    const geometry = JSON.stringify([shape.points, shape.holes]);
+    if (!p || p.geometry !== geometry) {
+      const b = ringBounds([shape.points]);
+      const box = { x: b.x0 * STAGE_SIZE.width, y: b.y0 * STAGE_SIZE.height, w: (b.x1 - b.x0) * STAGE_SIZE.width, h: (b.y1 - b.y0) * STAGE_SIZE.height };
+      p = { shape, geometry, path: outlinePath(shape), box, coverageKey: '', coverage: p?.coverage ?? null, decorKey: '', decor: p?.decor ?? null, ownKey: '', own: p?.own ?? null };
+    }
+    p.shape = shape;
+    const coverageKey = `${fadeKey(shape)}|${geometry}`;
+    if (p.coverageKey !== coverageKey) {
+      p.coverage = this.gpu.upload(coveragePicture(shape, p.path, p.box), p.coverage);
+      p.coverageKey = coverageKey;
+      this.edgeBuilds++;
+    }
+    const decorKey = this.decorKey(shape, palette);
+    if (p.decorKey !== decorKey) {
+      if (shape.border.width > 0 && !shape.blocker) p.decor = this.gpu.upload(borderPicture(shape, p.path, p.box, borderColour(shape, palette)), p.decor);
+      else { this.gpu.free(p.decor); p.decor = null; }
+      p.decorKey = decorKey;
+    }
+    this.pictures.set(shape.id, p);
+    return p;
+  }
+  private decorKey(shape: Shape, palette: string[] | null): string {
+    return shape.border.width > 0 && !shape.blocker ? JSON.stringify([shape.points, shape.holes, shape.border, borderColour(shape, palette)]) : '';
   }
 
-  /**
-   * One shape: its source's picture covering its bounding box (or its colour, or black for a Blocker), cut by its
-   * outline and holes. With a soft edge it is put together on the scratch canvas and faded there first. Then its border.
-   */
+  /** The shape's own fill when it plays nothing: its plain colour, or its grid pattern (flat through a pin's perspective). */
+  private own(shape: Shape, p: Pictures, land: Landing): ShapeDraw['content'] {
+    if (shape.fill !== 'grid') return { kind: 'colour', rgba: opaque(shape.colour) };
+    const pinned = shape.placement.kind === 'pin' && land.perspective;
+    const corner = (u: number, v: number) => apply(land.h, { x: u, y: v });
+    const landed = { w: Math.hypot(corner(1, 0).x - corner(0, 0).x, corner(1, 0).y - corner(0, 0).y), h: Math.hypot(corner(0, 1).x - corner(0, 0).x, corner(0, 1).y - corner(0, 0).y) };
+    const key = pinned ? JSON.stringify(['pin', shape.colour, Math.round(landed.w / 16), Math.round(landed.h / 16)]) : JSON.stringify(['box', p.geometry, shape.colour, shape.name]);
+    if (p.ownKey !== key) {
+      p.own = this.gpu.upload(pinned ? flatPatternPicture(shape, landed) : patternPicture(shape, p.path, p.box), p.own);
+      p.ownKey = key;
+    }
+    return { kind: 'picture', texture: p.own!, inv: pinned ? inverseOf(land) : boxInverse(p.box) };
+  }
+
+  /** One shape: what it plays through its placement, its crossfade, its look, its coverage and its border. */
   private drawShape(shape: Shape, now: number): void {
-    const ctx = this.ctx;
-    const outline = this.outline(shape), box = outline.box;
-    // The part of the box on the stage: a curve may bulge past the edge, and nothing there is seen.
-    const vx0 = Math.max(0, box.x), vy0 = Math.max(0, box.y);
-    const vw = Math.min(STAGE_SIZE.width, box.x + box.w) - vx0, vh = Math.min(STAGE_SIZE.height, box.y + box.h) - vy0;
-    const soft = shape.softEdge > 0 && vw >= 1 && vh >= 1;
-    // With a soft edge the content is put together on the scratch canvas, whose origin is the visible box's corner;
-    // otherwise it is drawn straight onto the stage, clipped.
-    let target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D = ctx;
-    let at = { x: box.x, y: box.y };
-    if (soft) {
-      if (!this.scratch) this.scratch = new OffscreenCanvas(STAGE_SIZE.width, STAGE_SIZE.height);
-      target = this.scratch.getContext('2d')!;
-      target.globalCompositeOperation = 'source-over';
-      target.globalAlpha = 1;
-      target.clearRect(0, 0, Math.ceil(vw) + 1, Math.ceil(vh) + 1);
-      at = { x: box.x - vx0, y: box.y - vy0 };
-    } else {
-      ctx.save();
-      ctx.clip(outline.path, 'evenodd');
-    }
-    const paintWith = (content: Frame | string, alpha: number) => {
-      target.globalAlpha = alpha;
-      if (typeof content === 'string') { target.fillStyle = content; target.fillRect(at.x, at.y, box.w, box.h); }
-      else target.drawImage(content, at.x, at.y, box.w, box.h);
-    };
-
-    if (shape.blocker) paintWith('#000000', 1);
-    else this.paintContent(shape, now, paintWith);
-
-    if (soft) {
-      const t = target as OffscreenCanvasRenderingContext2D;
-      const fader = this.fader(shape, outline), { scale } = fadeSize(box);
-      t.globalAlpha = 1;
-      t.globalCompositeOperation = 'destination-in';
-      t.drawImage(fader, at.x, at.y, fader.width / scale, fader.height / scale);
-      t.globalCompositeOperation = 'source-over';
-      ctx.save();
-      ctx.globalAlpha = 1;
-      ctx.drawImage(this.scratch!, 0, 0, vw, vh, vx0, vy0, vw, vh);
-      ctx.restore();
-    } else ctx.restore();
-
-    // The border sits inside the outline (the clip takes the outer half of a stroke twice as wide), so it never spills off the object.
-    if (shape.border.width > 0 && !shape.blocker) {
-      const colour = borderColour(shape, shape.sourceId ? this.projects.get(shape.sourceId)?.layers[0]?.palette ?? null : null);
-      ctx.save();
-      ctx.clip(outline.path, 'evenodd');
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = colour;
-      ctx.lineWidth = shape.border.width * 2;
-      ctx.lineJoin = 'round';
-      if (shape.border.glow > 0) { ctx.shadowColor = colour; ctx.shadowBlur = shape.border.glow; }
-      ctx.stroke(outline.path);
-      ctx.restore();
-    }
-  }
-
-  /** A shape's own fill when it plays nothing: its grid pattern, or its plain colour. */
-  private own(shape: Shape): Frame | string {
-    if (shape.fill !== 'grid') return shape.colour;
-    const held = this.patterns.get(shape.id);
-    if (held && held.shape === shape) return held.picture;
-    const { box, path } = this.outline(shape);
-    const w = Math.max(1, Math.ceil(box.w)), h = Math.max(1, Math.ceil(box.h));
-    const picture = held?.picture.width === w && held.picture.height === h ? held.picture : new OffscreenCanvas(w, h);
-    const p = picture.getContext('2d')!;
-    p.setTransform(1, 0, 0, 1, 0, 0); p.clearRect(0, 0, w, h);
-    p.setTransform(w / box.w || 1, 0, 0, h / box.h || 1, -box.x * (w / box.w || 1), -box.y * (h / box.h || 1));
-    p.save(); p.clip(path, 'evenodd'); drawPattern(p, shape, path); p.restore();
-    p.setTransform(1, 0, 0, 1, 0, 0);
-    this.patterns.set(shape.id, { shape, picture });
-    return picture;
-  }
-
-  /** What the shape plays: its source's picture, or its own fill, crossfading after a change. */
-  private paintContent(shape: Shape, now: number, paintWith: (content: Frame | string, alpha: number) => void): void {
+    const project = shape.sourceId ? this.projects.get(shape.sourceId) : undefined;
+    const palette = project?.layers[0]?.palette ?? null;
+    const p = this.picturesFor(shape, palette);
+    if (p.box.w < 0.5 || p.box.h < 0.5 || !p.coverage) return;
+    const land = landing(shape, this.show), inv = inverseOf(land);
     const slot = shape.sourceId ? this.slots.get(shape.sourceId) : undefined;
-    const wanted = shape.sourceId ? this.projects.get(shape.sourceId) : undefined;
-    // A source that will not play (failing, over the limit, restarting, or with no composition) plays the shape's colour.
-    const cannotPlay = shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === wanted) || !wanted);
-    const picture = shape.sourceId === null || cannotPlay ? this.own(shape) : slot?.project && slot.frame ? slot.frame : null;
+    // A source that will not play (failing, over the limit, restarting, or with no composition) plays the shape's own fill.
+    const cannotPlay = shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === project) || !project);
+    const fill = (): ShapeDraw['content'] => this.own(shape, p, land);
+    let content: ShapeDraw['content'];
+    if (shape.blocker) content = { kind: 'colour', rgba: [0, 0, 0, 1] };
+    else if (shape.sourceId === null || cannotPlay) content = fill();
+    else if (slot?.project && slot.texture) content = { kind: 'picture', texture: slot.texture, inv };
+    else content = fill(); // a source not ready yet plays the shape's own fill, never black
     // A fade waits for the composition the shape should now play, not one still drawing from before.
-    const ready = cannotPlay || shape.sourceId === null ? this.own(shape) : slot?.project === wanted && slot?.frame ? slot.frame : null;
+    const ready = shape.blocker || shape.sourceId === null || cannotPlay || (slot?.project === project && !!slot?.texture);
+    let from: ShapeDraw['from'] = null, mix = 1;
     const fade = this.fades.get(shape.id);
-    if (fade) {
-      // The old picture holds until the new one is ready, then they crossfade.
+    if (fade && !shape.blocker) {
       if (ready && fade.start === null) fade.start = now;
-      const a = fade.start === null ? 0 : fadeAlpha(fade.start, now);
-      paintWith(fade.from, 1);
-      if (ready && a > 0) paintWith(ready, a);
-      if (a >= 1) this.fades.delete(shape.id);
-    } else if (picture) paintWith(picture, 1);
-    else paintWith(shape.colour, 1); // a source not ready yet plays the shape's colour, never black
+      mix = fade.start === null ? 0 : fadeAlpha(fade.start, now);
+      from = typeof fade.from === 'string' ? { kind: 'colour', rgba: opaque(fade.from) } : { kind: 'picture', texture: fade.from, inv };
+      if (mix >= 1) { this.endFade(shape.id); from = null; }
+    }
+    const tint = rgb(shape.tint), b = shape.blocker ? 1 : shape.brightness;
+    this.gpu.shape({
+      rect: p.box, coverage: p.coverage, content, from, mix,
+      look: shape.blocker ? [1, 1, 1] : [tint[0] * b, tint[1] * b, tint[2] * b],
+      decor: p.decor,
+    });
   }
 }

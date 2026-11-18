@@ -83,3 +83,43 @@ test('stage corners: set, move, refuse crossing, and reset even when every shape
   show = ok(show, { type: 'setLocked', shapeId: 'a', locked: true });
   assert.equal(ok(show, { type: 'setStageCorners', corners: null }).stageCorners, null);
 });
+
+// Review fixes.
+test('copies carry their pin with them: duplicate, mirror; grid cells use their own corners', () => {
+  let tri = add(createShow(), 't', [{ x: .4, y: .2 }, { x: .6, y: .6 }, { x: .2, y: .6 }]);
+  tri = ok(tri, { type: 'setPlacement', shapeId: 't', placement: { kind: 'pin' } });
+  const dup = ok(tri, { type: 'duplicate', shapeId: 't', id: 'c' });
+  assert.ok(Math.abs(shapeOf(dup, 'c').placement.pin![0].x - (.2 + 20 / 1920)) < 1e-12);
+  const mir = ok(tri, { type: 'mirrorShapes', shapeIds: ['t'], axis: 'vertical', ids: ['m'], sourceIds: ['sm'] });
+  assert.ok(Math.abs(Math.max(...shapeOf(mir, 'm').placement.pin!.map(p => p.x)) - .8) < 1e-12);
+  let quad = add(createShow(), 'q', sq(.2, .2, .6, .6));
+  quad = ok(quad, { type: 'setPlacement', shapeId: 'q', placement: { kind: 'pin' } });
+  const grid = ok(quad, { type: 'makeGrid', shapeId: 'q', rows: 2, cols: 2, gapPx: 0, ids: ['a', 'b', 'c', 'd'], sourceIds: ['1', '2', '3', '4'], groupId: 'g' });
+  assert.ok(grid.shapes.every(s => s.placement.pin === null));
+});
+
+test('a four-point shape always pins by its own corners; gaining a point gives it pin handles at its box', () => {
+  let tri = add(createShow(), 't', [{ x: .4, y: .2 }, { x: .6, y: .6 }, { x: .2, y: .6 }]);
+  tri = ok(tri, { type: 'setPlacement', shapeId: 't', placement: { kind: 'pin' } });
+  // A new point on a straight side cannot carry a picture: the shape keeps handles at its box.
+  const four = ok(tri, { type: 'insertPoint', shapeId: 't', side: 2, t: .5 });
+  assert.deepEqual(shapeOf(four, 't').placement.pin, sq(.2, .2, .6, .6));
+  // Once its four corners can carry the picture, it pins by them.
+  const bent = ok(four, { type: 'movePoint', shapeId: 't', index: 3, to: { x: .25, y: .35 } });
+  assert.equal(shapeOf(bent, 't').placement.pin, null);
+  let quad = add(createShow(), 'q', sq(.2, .2, .4, .4));
+  quad = ok(quad, { type: 'setPlacement', shapeId: 'q', placement: { kind: 'pin' } });
+  const five = ok(quad, { type: 'insertPoint', shapeId: 'q', side: 0, t: .5 });
+  assert.deepEqual(shapeOf(five, 'q').placement.pin, sq(.2, .2, .4, .4));
+});
+
+test('pin handles: only while pinned, never NaN; stage corners stay within reach; sharing with itself changes nothing', () => {
+  let tri = add(createShow(), 't', [{ x: .4, y: .2 }, { x: .6, y: .6 }, { x: .2, y: .6 }]);
+  tri = ok(tri, { type: 'setPlacement', shapeId: 't', placement: { kind: 'pin' } });
+  refused(tri, { type: 'movePin', shapeId: 't', index: 0, to: { x: Number.NaN, y: .1 } }, 'not-found');
+  const fit = ok(tri, { type: 'setPlacement', shapeId: 't', placement: { kind: 'fit' } });
+  refused(fit, { type: 'movePin', shapeId: 't', index: 0, to: { x: .1, y: .1 } }, 'not-pinned');
+  refused(createShow(), { type: 'setStageCorners', corners: [{ x: -2, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }] }, 'corners-outside');
+  let show = play(add(createShow(), 'a', sq(.1, .1, .3, .3)), 'a', 'sa');
+  assert.equal(ok(show, { type: 'shareSource', shapeId: 'a', withShapeId: 'a' }), show);
+});

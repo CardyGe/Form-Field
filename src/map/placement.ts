@@ -5,7 +5,7 @@
  */
 import { STAGE_SIZE, type Group, type Point, type Shape } from './show';
 import { orderQuad, ringBounds } from './outline';
-import { apply, squareToQuad, type H3 } from './homography';
+import { apply, isPinnable, squareToQuad, type H3 } from './homography';
 
 export interface Landing { h: H3; perspective: boolean }
 
@@ -27,10 +27,12 @@ function boxLanding(box: { x: number; y: number; w: number; h: number }, shape: 
   return { h: [u.x, v.x, tl.x, u.y, v.y, tl.y, 0, 0, 1], perspective: false };
 }
 
-/** The four corners a Pin uses, in projector pixels: the stored pin, the shape's own four points, or its box. */
+/** A four-point shape whose own corners can carry a picture pins by them. */
+export const ownCornersPinnable = (shape: Shape): boolean => shape.points.length === 4 && isPinnable(orderQuad(shape.points).map(toPx)).ok;
+/** The four corners a Pin uses, in projector pixels: the shape's own four points when they can carry a picture, else its stored pin, else its box. */
 export function pinCorners(shape: Shape): Point[] {
+  if (ownCornersPinnable(shape)) return orderQuad(shape.points).map(toPx);
   if (shape.placement.pin) return shape.placement.pin.map(toPx);
-  if (shape.points.length === 4) return orderQuad(shape.points).map(toPx);
   const b = boxOf([shape]);
   return [{ x: b.x, y: b.y }, { x: b.x + b.w, y: b.y }, { x: b.x + b.w, y: b.y + b.h }, { x: b.x, y: b.y + b.h }];
 }

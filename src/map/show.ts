@@ -4,6 +4,8 @@
  */
 import { shapeValidity, MAX_HOLES } from './outline';
 import { isPinnable } from './homography';
+import { ownCornersPinnable, pinCorners } from './placement';
+import { ringBounds } from './outline';
 import { validateProject } from '../core/project';
 import type { Project } from '../shared/types';
 
@@ -164,6 +166,8 @@ function readQuad(value: unknown): Point[] | null {
   const pts: Point[] = [];
   for (const p of value) {
     if (!isRecord(p) || typeof p.x !== 'number' || typeof p.y !== 'number' || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+    // Pins and stage corners may reach a little past the stage, never further.
+    if (p.x < -0.5 || p.x > 1.5 || p.y < -0.5 || p.y > 1.5) return null;
     pts.push({ x: p.x, y: p.y });
   }
   return isPinnable(pts.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }))).ok ? pts : null;
@@ -187,7 +191,7 @@ function readPlacement(value: unknown): { placement: Placement; repaired: boolea
   const offset = { x: Math.min(1, Math.max(-1, finite(offsetIn.x, 0))), y: Math.min(1, Math.max(-1, finite(offsetIn.y, 0))) };
   const pin = value.pin === null || value.pin === undefined ? null : readQuad(value.pin);
   const placement: Placement = { kind, zoom, offset, turn, pin };
-  const repaired = kind !== value.kind || zoom !== value.zoom || turn !== value.turn || !isRecord(value.offset) || offset.x !== offsetIn.x || offset.y !== offsetIn.y || (value.pin !== null && pin === null);
+  const repaired = kind !== value.kind || zoom !== value.zoom || turn !== value.turn || !isRecord(value.offset) || offset.x !== offsetIn.x || offset.y !== offsetIn.y || (value.pin !== null && value.pin !== undefined && pin === null);
   return { placement, repaired };
 }
 
@@ -277,6 +281,14 @@ function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaire
     const placement = readPlacement(raw.placement), brightness = clampNumber(raw.brightness, BRIGHTNESS_MAX, 1);
     const tintOk = raw.tint === undefined || (typeof raw.tint === 'string' && HEX.test(raw.tint));
     if (placement.repaired || brightness.repaired || !tintOk) repaired = true;
+    // A Pin that cannot carry a picture would block every edit of the shape: it opens as Fit.
+    if (placement.placement.kind === 'pin' && !isPinnable(pinCorners({ points, placement: placement.placement } as Shape)).ok) { placement.placement.kind = 'fit'; repaired = true; }
+    // Four corners that cannot carry a picture, with no handles of their own: they get handles at the box, so the shape can still be edited.
+    else if (placement.placement.kind === 'pin' && points.length === 4 && !ownCornersPinnable({ points } as Shape) && !placement.placement.pin) {
+      const b = ringBounds([points]);
+      placement.placement.pin = [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }, { x: b.x0, y: b.y1 }];
+      repaired = true;
+    }
     shapes.push({ id, name, points, colour: colourOk ? raw.colour as string : '#ffffff', visible, locked, sourceId, holes, groupId, blocker, softEdge: softEdge.value, border: border.border, fill,
       placement: placement.placement, brightness: brightness.value, tint: typeof raw.tint === 'string' && HEX.test(raw.tint) ? raw.tint : '#ffffff' });
   }

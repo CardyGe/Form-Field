@@ -4,7 +4,6 @@ import { STAGE_SIZE } from '../map/show';
 import { applyMapMessage, initialWall } from '../map/wall';
 import PreviewWorker from '../map/preview-worker?worker&inline';
 
-const PREVIEW = [480, 270] as const;
 /** At most five previews a second, and only after the wall has changed. */
 const PREVIEW_EVERY_MS = 200;
 const REPORT_EVERY_MS = 1000;
@@ -25,18 +24,27 @@ export default function MapOutput() {
       compositor.setShow(state.show, new Map([...state.projects].map(([id, held]) => [id, held.project])));
       compositor.setOptions(state.options);
       compositor.setFrozen(state.freeze);
+      compositor.setCorners(state.show.stageCorners);
     };
     apply();
     const off = bridge.onMessage(message => { state = applyMapMessage(state, message); apply(); });
 
     // The operator screen gets a small picture of the wall, and once a second how the wall is keeping up.
     // The picture is taken without waiting for the graphics card and encoded in a worker, so the wall never stalls for it.
+    // It is the flat stage, read back from the graphics card on a later frame, before the stage corners bend it.
     const encoder = new PreviewWorker();
-    let raf = 0, busy = false, changed = true, sentPicture = 0, sentReport = 0;
+    let raf = 0, busy = false, reading = false, changed = true, sentPicture = 0, sentReport = 0;
     encoder.onmessage = (event: MessageEvent<ArrayBuffer | null>) => { busy = false; if (event.data) bridge.sendPreview(event.data); };
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
       if (compositor.frame(now)) changed = true;
+      if (reading) {
+        const picture = compositor.collectPreview();
+        if (picture) {
+          reading = false;
+          createImageBitmap(picture).then(bitmap => encoder.postMessage(bitmap, [bitmap])).catch(() => { busy = false; });
+        }
+      }
       if (now - sentReport >= REPORT_EVERY_MS) {
         sentReport = now;
         const stats = compositor.stats();
@@ -45,11 +53,8 @@ export default function MapOutput() {
         bridge.sendState(stats);
       }
       if (busy || !changed || now - sentPicture < PREVIEW_EVERY_MS) return;
-      // Taken straight after a drawn frame.
-      sentPicture = now; busy = true; changed = false;
-      createImageBitmap(element, { resizeWidth: PREVIEW[0], resizeHeight: PREVIEW[1], resizeQuality: 'medium' })
-        .then(picture => encoder.postMessage(picture, [picture]))
-        .catch(() => { busy = false; });
+      // Started straight after a drawn frame.
+      if (compositor.requestPreview()) { sentPicture = now; busy = true; reading = true; changed = false; }
     };
     raf = requestAnimationFrame(tick);
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };

@@ -7,7 +7,9 @@ import { clampToStage, nudge, rectangleFromDrag } from './geometry';
 import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
 import { joinedAnchors } from './snap';
 import { isPinnable } from './homography';
-import { pinCorners } from './placement';
+import { ownCornersPinnable, pinCorners } from './placement';
+/** Pin handles at the corners of the shape's box, in stage fractions. */
+const boxPin = (shape: Shape): Point[] => pinCorners({ ...shape, points: shape.points.length === 4 ? [...shape.points, shape.points[0]] : shape.points, placement: { ...shape.placement, pin: null } }).map(q => ({ x: q.x / STAGE_SIZE.width, y: q.y / STAGE_SIZE.height }));
 import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer } from '../core/project';
 import type { Project } from '../shared/types';
 
@@ -186,7 +188,7 @@ type Staged = { show: ShowDocument; touched: Shape[] } | { reason: string };
  * Copies of shapes, each placed right after its original (so a copy stays in its original's group), with its own
  * source when the original plays one. `place` gives each copy's points.
  */
-function addCopies(next: ShowDocument, originals: Shape[], ids: string[], sourceIds: (string | undefined)[], place: (shape: Shape) => Pick<Shape, 'points' | 'holes'>, name: (shape: Shape) => string): Staged {
+function addCopies(next: ShowDocument, originals: Shape[], ids: string[], sourceIds: (string | undefined)[], place: (shape: Shape) => Pick<Shape, 'points' | 'holes' | 'placement'>, name: (shape: Shape) => string): Staged {
   if (ids.length !== originals.length) return { reason: 'not-found' };
   if (next.shapes.length + originals.length > MAX_SHAPES) return { reason: 'too-many-shapes' };
   const taken = new Set([...next.shapes.map(s => s.id), ...next.sources.map(s => s.id)]);
@@ -217,6 +219,9 @@ function addCopies(next: ShowDocument, originals: Shape[], ids: string[], source
   }
   return { show: next, touched: copies };
 }
+
+/** The shape's placement with its stored pin (if any) moved by `move`. */
+const movedPin = (shape: Shape, move: (p: Point) => Point): Placement => ({ ...shape.placement, pin: shape.placement.pin && shape.placement.pin.map(move) });
 
 /** The list as items: an ungrouped shape, or a whole group's block of members. */
 function blocks(shapes: Shape[]): Shape[][] {
@@ -277,6 +282,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     }
     case 'setStageCorners': {
       if (action.corners === null) { next.stageCorners = null; return done(); }
+      if (action.corners.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < -0.5 || p.x > 1.5 || p.y < -0.5 || p.y > 1.5)) return { reason: 'corners-outside' };
       const px = action.corners.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }));
       if (action.corners.length !== 4 || !isPinnable(px).ok) return { reason: 'corners-folded' };
       next.stageCorners = action.corners.map(p => ({ x: p.x, y: p.y }));
@@ -324,7 +330,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const shape = find(action.shapeId);
       if (!shape) return { reason: 'not-found' };
       const { dx, dy } = copyStep([shape]);
-      return addCopies(next, [shape], [action.id], [action.sourceId], s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)) }), s => copyName(s.name));
+      return addCopies(next, [shape], [action.id], [action.sourceId], s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)), placement: movedPin(s, p => ({ x: p.x + dx, y: p.y + dy })) }), s => copyName(s.name));
     }
     case 'duplicateShapes': {
       // A copy leaves the original untouched, so locked shapes can be copied; the copies start unlocked.
@@ -332,7 +338,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if ('reason' in shapes) return shapes;
       const order = shapes.map(s => action.shapeIds.indexOf(s.id));
       const { dx, dy } = action.offset ? limitMove(shapes, action.offset.dx, action.offset.dy) : copyStep(shapes);
-      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)) }), s => copyName(s.name));
+      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)), placement: movedPin(s, p => ({ x: p.x + dx, y: p.y + dy })) }), s => copyName(s.name));
     }
     case 'mirrorShapes': {
       const shapes = many(action.shapeIds, true);
@@ -340,7 +346,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const order = shapes.map(s => action.shapeIds.indexOf(s.id));
       const { width: W, height: H } = STAGE_SIZE;
       const m: Matrix = action.axis === 'vertical' ? [-1, 0, 0, 1, W, 0] : [1, 0, 0, -1, 0, H];
-      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: transformRing(s.points, m), holes: s.holes.map(h => transformRing(h, m)) }), s => copyName(s.name));
+      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: transformRing(s.points, m), holes: s.holes.map(h => transformRing(h, m)), placement: movedPin(s, p => { const [q] = transformRing([p], m); return { x: q.x, y: q.y }; }) }), s => copyName(s.name));
     }
     case 'makeGrid': return stageGrid(next, action);
     case 'group': {
@@ -418,13 +424,15 @@ function stage(show: ShowDocument, action: EditAction): Staged {
         pin: p.pin ? p.pin.map(q => ({ x: q.x, y: q.y })) : null,
       };
       // Choosing Pin on a shape without four points starts its handles at its box's corners; four points use their own.
-      if (placement.kind === 'pin' && !placement.pin && shape.points.length !== 4) placement.pin = pinCorners(shape).map(q => ({ x: q.x / STAGE_SIZE.width, y: q.y / STAGE_SIZE.height }));
+      if (ownCornersPinnable(shape)) placement.pin = null;
+      else if (placement.kind === 'pin' && (!placement.pin || !isPinnable(placement.pin.map(q => ({ x: q.x * STAGE_SIZE.width, y: q.y * STAGE_SIZE.height }))).ok)) placement.pin = boxPin(shape);
       shape.placement = placement;
       return done([shape]);
     }
     case 'movePin': {
-      if (!shape.placement.pin) return { reason: 'pin-own-corners' };
-      if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3) return { reason: 'not-found' };
+      if (shape.placement.kind !== 'pin') return { reason: 'not-pinned' };
+      if (!shape.placement.pin || ownCornersPinnable(shape)) return { reason: 'pin-own-corners' };
+      if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3 || !Number.isFinite(action.to.x) || !Number.isFinite(action.to.y)) return { reason: 'not-found' };
       const pin = shape.placement.pin.map(q => ({ ...q }));
       pin[action.index] = { x: clamp(action.to.x, -0.5, 1.5), y: clamp(action.to.y, -0.5, 1.5) };
       shape.placement = { ...shape.placement, pin };
@@ -435,6 +443,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const other = next.shapes.find(s => s.id === action.withShapeId);
       if (!other) return { reason: 'not-found' };
       if (other.sourceId === null) return { reason: 'nothing-to-share' };
+      if (other.sourceId === shape.sourceId) return { show, touched: [] };
       shape.sourceId = other.sourceId;
       dropUnplayed(next);
       return done();
@@ -443,7 +452,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const source = shape.sourceId ? next.sources.find(src => src.id === shape.sourceId) : undefined;
       // The only player of its instrument is already separate: nothing changes.
       if (!source || !next.shapes.some(s => s !== shape && s.sourceId === source.id)) return { show, touched: [] };
-      if (next.sources.some(src => src.id === action.sourceId)) return { reason: 'duplicate-id' };
+      if (next.sources.some(src => src.id === action.sourceId) || next.shapes.some(s => s.id === action.sourceId)) return { reason: 'duplicate-id' };
       if (next.sources.length >= MAX_SOURCES) return { reason: 'too-many-sources' };
       next.sources.push({ ...source, id: action.sourceId, revision: 0 });
       shape.sourceId = action.sourceId;
@@ -551,6 +560,7 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const base = shape.name.slice(0, MAX_NAME_LENGTH - String(count).length - 1);
   const made: Shape[] = cells.map((points, k) => ({
     ...structuredClone(shape), id: action.ids[k], name: `${base} ${k + 1}`, points, holes: [], groupId, locked: false, visible: true,
+    placement: { ...shape.placement, pin: null },
     sourceId: source ? action.sourceIds[k] : null,
   }));
   if (source) next.sources.push(...action.sourceIds.map(id => ({ ...source, id, revision: 0 })));
@@ -570,6 +580,14 @@ export function applyEdit(show: ShowDocument, action: EditAction): EditResult {
   const staged = stage(show, action);
   if ('reason' in staged) return refuse(staged.reason);
   for (const shape of staged.touched) {
+    // A pinned shape uses its own corners while it has four points; gaining or losing one gives it pin handles at its box, or takes them away.
+    if (shape.placement.kind === 'pin') {
+      const before = show.shapes.find(s => s.id === shape.id);
+      if (ownCornersPinnable(shape)) shape.placement = { ...shape.placement, pin: null };
+      // Folding the four corners a shape was pinned by is refused, in red; any other change of points gives it handles at its box.
+      else if (shape.points.length === 4 && before && before.points.length === 4 && before.placement.kind === 'pin' && ownCornersPinnable(before)) return refuse('pin-folded');
+      else if (!shape.placement.pin) shape.placement = { ...shape.placement, pin: boxPin(shape) };
+    }
     const valid = shapeValidity(shape.points, shape.holes);
     if (!valid.ok) return refuse(valid.reason);
     const pin = pinValidity(shape);

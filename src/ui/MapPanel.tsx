@@ -121,7 +121,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const compositor = useRef<MapCompositor | null>(null);
   useEffect(() => {
     if (!canvas.current) return;
-    try { compositor.current = new MapCompositor(canvas.current); } catch { compositor.current = null; }
+    // It draws on its own hidden canvas; this screen copies that picture and draws its marks over it.
+    try { compositor.current = new MapCompositor(document.createElement('canvas')); } catch { compositor.current = null; }
     return () => { compositor.current?.dispose(); compositor.current = null; };
   }, []);
   const drawInputs = { shown, refused, selectedId: map.selectedId, selectedIds: map.selectedIds, selectedIndex: map.selectedIndex, selectedRing: map.selectedRing, outputOpen: map.outputOpen, wallPicture: map.wallPicture,
@@ -149,6 +150,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       // This screen draws its marks over the stage, so the stage is drawn again under them every time.
       local.invalidate();
       local.frame(now);
+      ctx.drawImage(local.canvas, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
     } else {
       // Not playing here (the wall plays them, or nothing does): the instruments here give their graphics contexts back.
       if (playedShow.current && compositor.current) { compositor.current.setShow({ shapes: [], sources: [], groups: [] }, new Map()); playedShow.current = null; }

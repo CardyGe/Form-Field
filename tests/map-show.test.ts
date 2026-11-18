@@ -288,3 +288,14 @@ test('placement values are clamped; a folded pin or folded stage corners are dro
   assert.equal(r.show.stageCorners, null);
   assert.equal(r.repaired, true);
 });
+
+test('a saved Pin on four corners that cannot carry a picture gets handles at its box; pins far off the stage are dropped', () => {
+  const concave = [{ x: .1, y: .1 }, { x: .5, y: .1 }, { x: .2, y: .2 }, { x: .1, y: .5 }];
+  const r = validateShow(doc4([shape({ points: concave, placement: { kind: 'pin', zoom: 1, offset: { x: 0, y: 0 }, turn: 0, pin: null } })]));
+  // It keeps its Pin, with handles at its box, so it can still be edited.
+  assert.equal(r.show.shapes[0].placement.kind, 'pin');
+  assert.deepEqual(r.show.shapes[0].placement.pin, [{ x: .1, y: .1 }, { x: .5, y: .1 }, { x: .5, y: .5 }, { x: .1, y: .5 }]);
+  assert.equal(r.repaired, true);
+  const far = validateShow(doc4([shape({ placement: { kind: 'pin', zoom: 1, offset: { x: 0, y: 0 }, turn: 0, pin: [{ x: 1e9, y: 0 }, { x: 2e9, y: 0 }, { x: 2e9, y: 1e9 }, { x: 1e9, y: 1e9 }] } })]));
+  assert.equal(far.show.shapes[0].placement.pin, null);
+});
