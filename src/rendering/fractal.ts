@@ -1,6 +1,7 @@
 import { sourceViewGLSL } from './source-view';
 import { juliaFunctions } from './fractal-julia';
 import { boxFunctions } from './fractal-box';
+import { portalFunctions } from './fractal-portal';
 
 // Original instrument shaders. Mandelbox folding follows Tom Lowe's mathematical
 // definition; no artistic shader or third-party implementation is copied.
@@ -15,6 +16,7 @@ uniform float uMorph,uTravel,uOffset,uRelief,uGlow,uContrast,uCameraYaw,uCameraP
 uniform float uVariant,uQuality,uDensity,uJuliaReal,uJuliaImag,uTrap,uLineWidth;
 uniform float uBoxScale,uBoxRadius,uRadial,uRoughness,uLightAngle,uExposure;
 uniform float uZoomFlight,uApproach,uOutside;
+uniform float uFocalX,uFocalY,uCutout,uReveal,uPassage,uDepth,uBank,uPosition,uAutoTravel,uAfterglow;
 // Extra magnification for Zoom flight; 1 leaves the plane unchanged.
 float gZoom=1.;
 const float TAU=6.28318530718;
@@ -33,8 +35,11 @@ vec2 wedge(vec2 p) {
   float angle=abs(mod(atan(p.y,p.x)+sector*.5,sector)-sector*.5);
   return r*vec2(cos(angle),sin(angle));
 }
+vec2 fractalView(vec2 uv) {
+  return (sourceUV(uv)-.5-vec2(uFocalX,uFocalY))*vec2(uAspect,1.);
+}
 vec2 planeAt(vec2 offset) {
-  vec2 p=(sourceUV(vUv+offset/uResolution)-.5)*vec2(uAspect,1.);
+  vec2 p=fractalView(vUv+offset/uResolution);
   float denominator=1.+p.y*.18*tan(uCameraPitch);
   p/=(denominator<0.?-1.:1.)*max(abs(denominator),.08);
   p=turn(uCameraYaw+uTravel*.12*sin(uPhase))*p;
@@ -71,8 +76,15 @@ vec3 kaleidoscopeSample(vec2 offset) {
   float growth=1.65+uFold*.52;
   float angle=.24+uTwist*.5+.12*sin(seed)+uMorph*.065*sin(uPhase+seed);
   for(int i=0;i<7;i++) {
-    z=wedge(turn(angle)*z);
-    z=abs(z)-vec2(.64+uFold*.2,.18+uMorph*.045*cos(uPhase));
+    float levelIndex=float(i);
+    float stageMix=1.,opening=0.;
+    if(uReveal>0.){
+      float beat=.5-.5*cos(uPhase-.40*levelIndex);
+      opening=uReveal*(smoothstep(.12,.88,beat)-.5);
+      stageMix=mix(1.,mix(.16,1.,smoothstep(.04,.72,beat)),uReveal*min(1.,levelIndex*.50+.18));
+    }
+    z=wedge(turn(angle+.16*opening)*z);
+    z=abs(z)-vec2(.64+uFold*.2+.20*opening,.18+uMorph*.045*cos(uPhase)+.16*opening);
     z*=growth;derivative*=growth;
     float shape=length(z)-(.34+.12*uFold);
     if(uVariant>.5&&uVariant<1.5) {
@@ -85,7 +97,7 @@ vec3 kaleidoscopeSample(vec2 offset) {
     float signedDistance=shape/derivative;
     float distance=abs(signedDistance);
     float width=.055*uLineWidth/derivative;
-    float level=smoothstep(-.05,.18,uDetail-float(i)*.16+.18);
+    float level=smoothstep(-.05,.18,uDetail-levelIndex*.16+.18)*stageMix;
     // Integrate both stroke edges. Thin lines preserve their coverage instead
     // of turning into half-opaque pixels or changing thickness with recursion.
     float coverage=clamp((width-signedDistance+pixel*.5)/pixel,0.,1.)
@@ -102,7 +114,13 @@ vec3 kaleidoscopeSample(vec2 offset) {
     float haloWidth=width*2.8;
     halo+=ink*exp(-distance/max(haloWidth,pixel*.6))*min(1.,haloWidth/(pixel*.6))*level*.11;
   }
-  return glaze(color,height,1.)+halo*uGlow;
+  vec3 result=glaze(color,height,1.)+halo*uGlow;
+  if(uReveal>0.){
+    float outward=smoothstep(.30,1.48,length(p));
+    float bloom=smoothstep(.04,.77,.5-.5*cos(uPhase-1.2*outward));
+    result*=1.-uReveal*outward*.88*(1.-bloom);
+  }
+  return result;
 }
 vec3 kaleidoscope() {
   if(uQuality<.5)return kaleidoscopeSample(vec2(0.));
@@ -112,9 +130,11 @@ vec3 kaleidoscope() {
 }
 ${juliaFunctions}
 ${boxFunctions}
+${portalFunctions}
 void main() {
   vec4 pixel;
-  if(uStyle>.5&&uStyle<1.5&&juliaCanDive())pixel=vec4(juliaBloom(),1.);
+  if(uStyle>2.5)pixel=fractalPortal();
+  else if(uStyle>.5&&uStyle<1.5&&juliaCanDive())pixel=vec4(juliaBloom(),1.);
   else if(uStyle<1.5&&uZoomFlight>0.) {
     // Zoom flight: two copies one zoom step apart. The nearer one magnifies
     // across the cycle and the farther one replaces it in a short fade at the
@@ -131,6 +151,11 @@ void main() {
   else {
     // Fixed, deterministic subpixel samples also produce associated edge alpha.
     pixel=mandelbox();
+  }
+  if(uStyle<1.5&&uCutout>0.){
+    float peak=max(max(pixel.r,pixel.g),pixel.b);
+    pixel.a=mix(1.,smoothstep(.012,.22,peak),uCutout);
+    pixel.rgb*=pixel.a;
   }
   if(pixel.a>0.) {
     vec3 color=pixel.rgb/pixel.a;

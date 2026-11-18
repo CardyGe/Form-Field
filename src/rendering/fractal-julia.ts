@@ -21,7 +21,7 @@ float juliaDiveMultiplier() { return length(4.*(juliaConstant()+vec2(1.,0.))); }
 bool juliaCanDive() { return uZoomFlight>0.&&juliaDiveMultiplier()>1.03; }
 
 vec2 juliaDomainPlane(vec2 pixelOffset) {
-  vec2 p=(sourceUV(vUv+pixelOffset/uResolution)-.5)*vec2(uAspect,1.);
+  vec2 p=fractalView(vUv+pixelOffset/uResolution);
   float denominator=1.+p.y*.18*tan(uCameraPitch);
   p/=(denominator<0.?-1.:1.)*max(abs(denominator),.08);
   p=turn(uCameraYaw+uTravel*.12*sin(uPhase))*p;
@@ -164,6 +164,18 @@ vec3 juliaSample(vec2 pixelOffset) {
   color+=filigree*uTrap*ornamentMask*.3;
   float detailGlow=exp(-distance*45.)*escaped;
   color+=pigment(exteriorCoordinate+.12,exteriorAA)*detailGlow*uGlow*.065;
+  if(uReveal>0.){
+    // The bright crest advances along the same escape levels as the filigree.
+    // A second, wider envelope keeps one part of the field readable at a time.
+    float crest=exteriorCoordinate*1.65-uPhase/TAU;
+    float ripple=juliaStroke(crest,exteriorAA*1.65,.13+.055*uLineWidth);
+    float sweep=.5+.5*cos(uPhase-length(domain)*6.5-domain.y*2.);
+    float emphasis=smoothstep(.20,.88,sweep);
+    float band=exp(-distance*mix(28.,15.,emphasis))*escaped;
+    vec3 tracer=pigment(exteriorCoordinate+.025*cos(uPhase),exteriorAA);
+    color=color*mix(1.,.48+.52*emphasis,uReveal*.76)
+      +tracer*ripple*band*uReveal*(.14+.62*emphasis);
+  }
 
   // This unfiltered height contains no derivative calls. Filtered colour and
   // footprint values never feed the material derivative inside glaze().

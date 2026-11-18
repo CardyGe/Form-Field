@@ -77,9 +77,21 @@ vec4 traceBox(vec2 offset) {
   float framing=radius+3.6/max(uZoom,.5)-uTravel*.35*cos(uPhase);
   // Fly in: the camera moves inside the bounding sphere toward the folded core.
   if(uApproach>0.)framing=mix(framing,radius*(.62-.12*uApproach)-uTravel*.35*radius*.3*cos(uPhase),uApproach);
+  float route=0.,bank=0.;
+  if(uPassage>0.||uBank!=0.){
+    // Hold the silhouette, approach the vault, pause, and pull back. The
+    // revised path stays outside the bounding sphere at closest approach.
+    float phase=fract(uPhase/TAU);
+    route=smoothstep(.13,.49,phase)*(1.-smoothstep(.62,.95,phase));
+    framing=mix(framing,radius+mix(3.7/max(uZoom,.5),.18/max(uZoom,.5),route),uPassage);
+    yaw+=uPassage*(.25+.22*uBank)*sin(uPhase-.32)*(.3+.7*route);
+    pitch+=uPassage*.15*sin(uPhase+.5);
+    bank=.39*uBank*sin(uPhase)*(.32+.68*route);
+  }
   vec3 origin=framing*vec3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch));
   vec3 forward=normalize(-origin),right=normalize(cross(forward,vec3(0,1,0))),up=cross(right,forward);
-  vec2 uv=(sourceUV(vUv+offset/uResolution)-.5)*vec2(uAspect,1.);
+  vec2 uv=fractalView(vUv+offset/uResolution);
+  if(bank!=0.)uv=turn(bank)*uv;
   vec3 ray=normalize(forward*1.65+right*uv.x+up*uv.y);
   // A negative-scale Mandelbox lies within [-2L,2L] on each fold axis.
   // Global rotations and the optional radial reflection preserve this radius.
@@ -127,6 +139,19 @@ vec4 traceBox(vec2 offset) {
   vec3 rimLight=normalize(vec3(.8,.3,-.7));
   color+=pigment(coordinate+.18,.002)*max(dot(n,rimLight),0.)*ao*materialWeight*.15;
   color+=pigment(coordinate+.2,.002)*rim*uGlow*.32;
+  if(uDepth>0.){
+    float separation=exp(-max(0.,t-framing+radius*.56)*.86*size);
+    float stripe=length(domain.xy)*7.+domain.z*.62+field.y*1.6;
+    float line=abs(fract(stripe+.5)-.5);
+    float aa=clamp(epsilon*size*12.,.006,.42);
+    float band=(1.-smoothstep(.09-aa,.09+aa,line))*(1.-smoothstep(.16,.42,aa));
+    vec3 edge=pigment(coordinate+.27+.10*separation,aa*.13);
+    vec3 fillDirection=normalize(vec3(-.8,.28,.52));
+    float fill=pow(max(0.,dot(n,fillDirection)),1.6)*(.33+.67*sqrt(ao));
+    color=color*mix(1.,.48+.52*separation,uDepth*.82)
+      +edge*band*uDepth*(.14+.28*separation)*(.48+.52*sqrt(ao))
+      +uPalette[0]*fill*uDepth*.33;
+  }
   return vec4(color,1.);
 }
 vec4 mandelbox() {
