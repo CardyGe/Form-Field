@@ -32,6 +32,7 @@ export class Stage {
     this.camera.onState = state => { if (this.active === this.camera || state.status !== 'idle') this.onState(state); };
     const tick = (now: number) => {
       if (this.gaps.length < 100000) this.gaps.push(now - this.last);
+      if (this.pattern) this.pattern.moving = !this.pattern.signalDemo || this.pattern.seconds % 7 >= 3;
       this.pattern?.advance(Math.min(.1, (now - this.last) / 1000)); this.last = now;
       this.raf = requestAnimationFrame(tick);
     };
@@ -68,6 +69,8 @@ export class Stage {
     const relief = settings.look === 'relief';
     pattern.volley = relief && settings.relief.motion === 'ricochet' && !settings.reliefPresence;
     pattern.audience = relief && !pattern.volley;
+    pattern.figure = settings.look === 'signal' || settings.look === 'smoke';
+    pattern.signalDemo = settings.look === 'signal';
   }
 
   /** Opens the current source again, for example after a camera was reconnected. */

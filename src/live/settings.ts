@@ -3,14 +3,14 @@
  * never in a project. validateLiveSettings repairs a damaged or outdated file
  * field by field, so Live always starts.
  */
-import { HOT_SIGNAL } from '../core/palettes';
+import { HOT_SIGNAL, NEON_STRATA } from '../core/palettes';
 import { validateReliefPalette, type ReliefPaletteName } from './relief-palettes';
 
 /** The part of the camera view that paints. 0..1, origin bottom-left. */
 export interface Box { left: number; right: number; bottom: number; top: number }
 export type PaintKey = 'response' | 'strokeLength' | 'bristle' | 'spread' | 'fadeSeconds' | 'colourChange' | 'ground';
 export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number }
-export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief' } as const;
+export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief', signal: 'Signal Melt' } as const;
 export type LookKind = keyof typeof LOOK_LABELS;
 export type ReliefKey = 'depth' | 'reach' | 'settle' | 'lightAngle' | 'edgeLight';
 export const RELIEF_CONTROLS: LiveControl<ReliefKey>[] = [
@@ -41,6 +41,7 @@ export const RELIEF_PRESETS: { name: string; settings: ReliefSettings }[] = [
   { name: 'Aurora silk', settings: { surface: 'weave', size: 'fine', motion: 'ripple', finish: 'foil', depth: 1, reach: .67, settle: 1.85, lightAngle: -42, edgeLight: .66 } },
 ];
 
+export type SignalKey = 'poseCount' | 'poseFill' | 'poseEcho' | 'poseSpacing' | 'chargeSeconds' | 'release' | 'halo' | 'vividness' | 'contours' | 'echoSpread' | 'colourChange' | 'maskThreshold' | 'maskSoftness' | 'shift' | 'relief' | 'focus' | 'chroma' | 'memorySeconds' | 'blockSize' | 'tear' | 'response' | 'mix';
 export type SmokeKey = 'density' | 'emit' | 'smoulder' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange' | 'vividness';
 /** Where people are found. ignoreStillSeconds null means Off. */
 export interface PeopleSettings { ignoreStillSeconds: number | null; useEmptyRoom: boolean }
@@ -63,6 +64,7 @@ export interface LiveSettings {
   reliefPalette: ReliefPaletteName;
   /** forever: smoke never fades, and stays in the picture. */
   smoke: Record<SmokeKey, number> & { palette: string[]; forever: boolean };
+  signal: Record<SignalKey, number> & { hold: boolean; removeBackground: boolean; keepStill: boolean; palette: string[] };
   people: PeopleSettings;
 }
 
@@ -93,6 +95,44 @@ export const SMOKE_STARTS: { id: 'wispy' | 'smouldering' | 'solid'; label: strin
   { id: 'smouldering', label: 'Smouldering', values: { density: .6, smoulder: .5, rise: .4, swirl: .35, lifeSeconds: 6, response: 1 } },
   { id: 'solid', label: 'Solid', values: { density: 1, smoulder: .1, rise: .15, swirl: .2, lifeSeconds: 10, response: .7 } },
 ];
+export const SIGNAL_MAX_POSES = 16;
+
+/** Signal Melt: luma relief is an artistic depth proxy, never measured distance. */
+export const SIGNAL_CONTROLS: LiveControl<SignalKey>[] = [
+  { key: 'poseEcho', label: 'Pose echoes', min: 0, max: 1, step: .01, default: .65 },
+  { key: 'poseCount', label: 'Number of poses', min: 1, max: SIGNAL_MAX_POSES, step: 1, default: 8 },
+  { key: 'poseFill', label: 'Pose fill', min: 0, max: 1, step: .01, default: .07 },
+  { key: 'poseSpacing', label: 'Time between poses', min: .1, max: .6, step: .05, default: .25 },
+  { key: 'chargeSeconds', label: 'Pose charge time', min: .5, max: 8, step: .1, default: 2.5 },
+  { key: 'release', label: 'Gesture release', min: 0, max: 1, step: .01, default: .65 },
+  { key: 'halo', label: 'Prismatic flare', min: 0, max: 1, step: .01, default: .55 },
+  { key: 'vividness', label: 'Colour intensity', min: 0, max: 1, step: .01, default: 1 },
+  { key: 'contours', label: 'Luminous contours', min: 0, max: 1, step: .01, default: .65 },
+  { key: 'echoSpread', label: 'Echo spread', min: 0, max: 1, step: .01, default: .55 },
+  { key: 'colourChange', label: 'Colour flow', min: 0, max: 1, step: .01, default: .4 },
+  { key: 'maskThreshold', label: 'Cutout strength', min: .1, max: .85, step: .01, default: .45 },
+  { key: 'maskSoftness', label: 'Edge softness', min: .01, max: .2, step: .01, default: .06 },
+  { key: 'shift', label: 'Pixel shift', min: 0, max: 1, step: .01, default: .45 },
+  { key: 'relief', label: 'Depth relief', min: 0, max: 1, step: .01, default: .55 },
+  { key: 'focus', label: 'Depth focus', min: 0, max: 1, step: .01, default: .45 },
+  { key: 'chroma', label: 'Chroma slip', min: 0, max: 1, step: .01, default: .5 },
+  { key: 'memorySeconds', label: 'Frame memory', min: .1, max: 20, step: .1, default: 3 },
+  { key: 'blockSize', label: 'Block size', min: 2, max: 96, step: 1, default: 24 },
+  { key: 'tear', label: 'Block fracture', min: 0, max: 1, step: .01, default: .45 },
+  { key: 'response', label: 'Movement response', min: 0, max: 3, step: .01, default: 1.2 },
+  { key: 'mix', label: 'Effect mix', min: 0, max: 1, step: .01, default: 1 },
+];
+export const SIGNAL_STARTS: { label: string; values: Record<SignalKey, number> }[] = [
+  { label: 'Prism body', values: { poseEcho: .1, poseCount: 4, poseFill: .05, poseSpacing: .15, chargeSeconds: 2, release: .25, halo: .25, vividness: 1, contours: .9, echoSpread: .15, colourChange: .2, maskThreshold: .45, maskSoftness: .06, shift: .7, relief: .85, focus: .5, chroma: .15, memorySeconds: .25, blockSize: 4, tear: .05, response: 1, mix: 1 } },
+  { label: 'Chroma wake', values: { poseEcho: .8, poseCount: 8, poseFill: .1, poseSpacing: .25, chargeSeconds: 2.5, release: .65, halo: .55, vividness: 1, contours: .45, echoSpread: .8, colourChange: .6, maskThreshold: .45, maskSoftness: .06, shift: .25, relief: .35, focus: .3, chroma: .95, memorySeconds: 4, blockSize: 12, tear: .15, response: 1.3, mix: 1 } },
+  { label: 'Signal sculpture', values: { poseEcho: 1, poseCount: 10, poseFill: .12, poseSpacing: .4, chargeSeconds: 1.5, release: 1, halo: .85, vividness: 1, contours: .7, echoSpread: .5, colourChange: .35, maskThreshold: .45, maskSoftness: .06, shift: .65, relief: .5, focus: .45, chroma: .6, memorySeconds: 12, blockSize: 48, tear: .9, response: 2, mix: 1 } },
+  { label: 'Long exposure', values: {
+    poseEcho: 1, poseCount: 16, poseFill: .18, poseSpacing: .35, chargeSeconds: 2,
+    release: .25, halo: .3, vividness: 1, contours: .55, echoSpread: .2, colourChange: .3,
+    maskThreshold: .45, maskSoftness: .06, shift: .2, relief: .35, focus: .45, chroma: .35,
+    memorySeconds: .4, blockSize: 12, tear: .08, response: 1.2, mix: 1,
+  } },
+];
 export const IGNORE_STILL = { min: 10, max: 120, default: 30 };
 export const SENSITIVITY = { min: .2, max: 4, default: 1 };
 export const NOISE_FLOOR = { min: 0, max: .1, default: .02 };
@@ -108,6 +148,7 @@ export function defaultLiveSettings(): LiveSettings {
     relief: { ...RELIEF_PRESETS[0].settings },
     reliefPresence: false,
     reliefPalette: 'material',
+    signal: { ...Object.fromEntries(SIGNAL_CONTROLS.map(c => [c.key, c.default])) as Record<SignalKey, number>, hold: false, removeBackground: true, keepStill: true, palette: [...NEON_STRATA] },
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
   };
@@ -126,7 +167,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
   const b: Box = { left: ranged(box.left, 0, 1, 0), right: ranged(box.right, 0, 1, 1), bottom: ranged(box.bottom, 0, 1, 0), top: ranged(box.top, 0, 1, 1) };
   const isPalette = (p: unknown): p is string[] => Array.isArray(p) && p.length === 6 && p.every(c => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c));
   const palette = isPalette(v.palette) ? v.palette : d.palette;
-  const relief = record(v.relief), smoke = record(v.smoke), people = record(v.people);
+  const relief = record(v.relief), signal = record(v.signal), smoke = record(v.smoke), people = record(v.people);
   const still = people.ignoreStillSeconds === null ? null : ranged(people.ignoreStillSeconds, IGNORE_STILL.min, IGNORE_STILL.max, IGNORE_STILL.default);
   return {
     version: 1,
@@ -139,7 +180,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     quality: v.quality === 720 ? 720 : 1080,
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, ranged(paint[c.key], c.min, c.max, c.default)])) as Record<PaintKey, number>,
     palette: [...palette],
-    look: v.look === 'smoke' || v.look === 'relief' ? v.look : 'paint',
+    look: v.look === 'smoke' || v.look === 'relief' || v.look === 'signal' ? v.look : 'paint',
     reliefPresence: v.reliefPresence === true,
     reliefPalette: validateReliefPalette(v.reliefPalette),
     relief: {
@@ -149,6 +190,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
       motion: choice(relief.motion, RELIEF_MOTIONS, d.relief.motion),
       finish: choice(relief.finish, RELIEF_FINISHES, d.relief.finish),
     },
+    signal: { ...Object.fromEntries(SIGNAL_CONTROLS.map(c => [c.key, c.key === 'poseCount' ? Math.round(ranged(signal[c.key], c.min, c.max, c.default)) : ranged(signal[c.key], c.min, c.max, c.default)])) as Record<SignalKey, number>, hold: signal.hold === true, removeBackground: signal.removeBackground !== false, keepStill: signal.keepStill !== false, palette: [...(isPalette(signal.palette) ? signal.palette : d.signal.palette)] },
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, ranged(smoke[c.key], c.min, c.max, c.default)])) as Record<SmokeKey, number>,
       palette: [...(isPalette(smoke.palette) ? smoke.palette : d.smoke.palette)], forever: smoke.forever === true },
     people: { ignoreStillSeconds: still, useEmptyRoom: typeof people.useEmptyRoom === 'boolean' ? people.useEmptyRoom : false },
@@ -161,7 +203,12 @@ export function chooseDisplay(displays: { id: number; primary: boolean }[], curr
   return (displays.find(d => !d.primary) ?? displays[0])?.id ?? null;
 }
 
-/** Paint and motion-only Relief run with optical flow alone. */
+/** Paint and motion-only Relief run with optical flow alone; Signal finds people when it removes the background. */
 export function usesPeople(settings: LiveSettings): boolean {
-  return settings.look === 'smoke' || (settings.look === 'relief' && settings.reliefPresence);
+  return settings.look === 'smoke' || (settings.look === 'relief' && settings.reliefPresence) || (settings.look === 'signal' && settings.signal.removeBackground);
+}
+
+/** Signal treats stillness as participation unless the operator explicitly opts out. */
+export function personStillTimeout(settings: LiveSettings): number | null {
+  return settings.look === 'signal' && settings.signal.keepStill ? null : settings.people.ignoreStillSeconds;
 }

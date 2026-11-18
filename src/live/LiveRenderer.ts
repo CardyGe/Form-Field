@@ -13,12 +13,13 @@ import type { FrameSource } from './look';
 import type { MaskProvider } from './MaskProvider';
 import { Tracking, FLOW_SIZE } from './Tracking';
 import { Paint } from './Paint';
+import { Signal } from './Signal';
 import { Smoke } from './Smoke';
 import { Relief } from './Relief';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
 
-const looks = { paint: Paint, smoke: Smoke, relief: Relief };
+const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal };
 
 /** Operator setup view: the camera dimmed, people in blue with a pink outline. Never shown in the artwork window. */
 const peopleViewFragment = /* glsl */`
@@ -57,6 +58,7 @@ export class LiveRenderer {
   private peopleView: THREE.ShaderMaterial | null = null;
   private readonly tracking: Tracking;
   private look: Look | null = null;
+  private signalSource: FrameSource['element'] = null;
   private lookKind: LiveSettings['look'] | null = null;
   private readonly black: THREE.DataTexture;
   private scratch: THREE.WebGLRenderTarget;
@@ -114,6 +116,8 @@ export class LiveRenderer {
       this.lookKind = this.settings.look;
     }
     if (!this.look) return;
+    if (this.settings.look === 'signal' && this.signalSource !== this.source.element) this.look.clear();
+    this.signalSource = this.source.element;
     this.look.step(step, this.time, this.tracking, this.settings);
     let image: THREE.Texture = this.look.output, encode = 1;
     if (this.view === 'tracking') {
@@ -165,6 +169,8 @@ export class LiveRenderer {
     const t = this.tracking.peopleTargets;
     return { status: this.tracking.peopleStatus, ready: this.tracking.peopleReady, masks: t.masks, delegate: (t.provider as { delegate?: string } | null)?.delegate ?? '', roomCaptured: this.tracking.roomCaptured };
   }
+
+  signalInteraction(): {energy:number;charge:number;burst:number} | null { return this.look instanceof Signal ? this.look.readGesture() : null; }
 
   captureRoom(): void { this.tracking.captureRoom(); }
   get roomCaptured(): boolean { return this.tracking.roomCaptured; }

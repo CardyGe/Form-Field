@@ -174,3 +174,38 @@ test('Relief colour schemes persist and old settings use the finish colours', ()
   assert.equal(validateLiveSettings({ reliefPalette: 'constructor' }).reliefPalette, 'material');
   assert.equal(validateLiveSettings({ reliefPalette: 'cyber' }).reliefPalette, 'cyber');
 });
+
+import { SIGNAL_CONTROLS, SIGNAL_STARTS } from '../src/live/settings';
+test('Signal settings survive saving, repair bad values, and migrate older files', () => {
+  const settings = defaultLiveSettings(); settings.look = 'signal'; settings.signal.hold = true;
+  Object.assign(settings.signal, SIGNAL_STARTS[2].values);
+  assert.deepEqual(validateLiveSettings(JSON.parse(JSON.stringify(settings))), settings);
+  const bad = validateLiveSettings({ look: 'signal', signal: { memorySeconds: Infinity, blockSize: 9000, shift: -1, hold: 'yes' } });
+  assert.equal(bad.signal.memorySeconds, 3); assert.equal(bad.signal.blockSize, 96); assert.equal(bad.signal.shift, 0); assert.equal(bad.signal.hold, false);
+  const old = { ...settings } as Record<string, unknown>; delete old.signal;
+  assert.deepEqual(validateLiveSettings(old).signal, defaultLiveSettings().signal);
+  for (const start of SIGNAL_STARTS) for (const c of SIGNAL_CONTROLS) assert.ok(start.values[c.key] >= c.min && start.values[c.key] <= c.max);
+});
+
+test('Signal defaults to people only, vivid colour, and its own independent palette', () => {
+  const d = defaultLiveSettings();
+  assert.equal(d.signal.removeBackground, true); assert.equal(d.signal.vividness, 1);
+  const restored = validateLiveSettings({ look: 'signal', signal: { removeBackground: false, palette: CANDY, maskThreshold: 9, maskSoftness: 0 } });
+  assert.equal(restored.signal.removeBackground, false); assert.deepEqual(restored.signal.palette, CANDY);
+  assert.equal(restored.signal.maskThreshold, .85); assert.equal(restored.signal.maskSoftness, .01);
+  assert.deepEqual(restored.smoke.palette, HOT_SIGNAL);
+  assert.equal(validateLiveSettings({signal:{removeBackground:'no'}}).signal.removeBackground,true);
+  assert.deepEqual(validateLiveSettings({signal:{palette:['bad']}}).signal.palette,d.signal.palette);
+});
+
+import { personStillTimeout } from '../src/live/settings';
+test('Still poses participate in Signal without changing Smoke still-object settings', () => {
+  const s=defaultLiveSettings();s.look='signal';s.people.ignoreStillSeconds=10;
+  assert.equal(personStillTimeout(s),null);
+  s.signal.keepStill=false;assert.equal(personStillTimeout(s),10);
+  s.look='smoke';s.signal.keepStill=true;assert.equal(personStillTimeout(s),10);
+  assert.equal(validateLiveSettings({signal:{keepStill:false}}).signal.keepStill,false);
+  assert.equal(validateLiveSettings({signal:{keepStill:'yes',chargeSeconds:99,halo:-1}}).signal.keepStill,true);
+  assert.equal(validateLiveSettings({signal:{chargeSeconds:99}}).signal.chargeSeconds,8);
+  assert.equal(validateLiveSettings({signal:{halo:-1}}).signal.halo,0);
+});

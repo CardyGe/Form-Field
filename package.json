@@ -45,11 +45,8 @@
     },
     "files": [
       "dist/**/*",
-      "electron/main.cjs",
-      "electron/preload.cjs",
-      "electron/export-manager.cjs",
-      "electron/seam-check.cjs",
-      "electron/live.cjs",
+      "electron/**/*.cjs",
+      "!electron/**/*.test.cjs",
       "package.json"
     ],
     "mac": {

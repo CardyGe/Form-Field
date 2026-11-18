@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import type { Passes, Pair } from './passes';
 import type { Mask, MaskProvider, PeopleStatus } from './MaskProvider';
-import type { LiveSettings } from './settings';
+import { personStillTimeout, type LiveSettings } from './settings';
 import { alignFragment, copyFragment, fillFragment, globalFragment, memoryFragment, peopleFragment, stillFragment } from './people-shaders';
 
 export const PEOPLE_SIZE = [640, 360] as const;
@@ -141,7 +141,7 @@ export class People {
     const f = this.filter.uniforms, box = settings.box;
     f.uSmoothed.value = this.smoothed.read.texture; f.uStill.value = this.timers.read.texture; f.uCamera.value = inputs.camera;
     (f.uBox.value as THREE.Vector4).set(box.left, box.right, box.bottom, box.top);
-    f.uIgnore.value = relief ? -1 : settings.people.ignoreStillSeconds ?? -1;
+    f.uIgnore.value = relief ? -1 : personStillTimeout(settings) ?? -1;
     f.uUseRoom.value = settings.people.useEmptyRoom ? 1 : 0; f.uCaptured.value = this.captured ? 1 : 0; f.uReady.value = this.presence;
     this.passes.draw(this.filter, this.output);
   }

@@ -39,6 +39,7 @@ export class Tracking implements TrackingFeed {
   private moving = false;
   private lastFrameAt = 0;
   private readonly peopleStage: People;
+  private providerElement: FrameSource['element'] = null;
   private provider: MaskProvider | null = null;
   private providerKind = '';
   private epoch = 0;
@@ -79,7 +80,8 @@ export class Tracking implements TrackingFeed {
   /** One display frame: movement from new camera frames, and people when the look wants them. `step` is the capped time step. */
   update(source: FrameSource, settings: LiveSettings, step = 0): void {
     const kind = usesPeople(settings) ? settings.look + ':' + settings.source.kind : '';
-    if (kind !== this.providerKind) {
+    // A new look, a new kind of source, or a different source element starts person finding afresh.
+    if (kind !== this.providerKind || (this.provider && this.providerElement !== source.element)) {
       this.provider?.dispose();
       this.provider = null;
       this.peopleStage.reset();
@@ -89,6 +91,7 @@ export class Tracking implements TrackingFeed {
         catch (error) { this.provider = new FailedProvider(error); }
       }
     }
+    this.providerElement = source.element;
     const before = this.frameId, restartsBefore = this.restarts;
     this.analyse(source, settings);
     if (!this.provider) return;
