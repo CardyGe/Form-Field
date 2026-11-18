@@ -12,6 +12,7 @@ import { _electron as electron } from 'playwright';
 
 // The look browser and the Details panel's folding sections (Map UI pass).
 const playLook = async (page, value) => {
+  await openSection(page, 'effect');
   await page.getByRole('button', { name: 'Change look' }).click();
   await page.locator(`[data-look="${value}"]`).click();
   // A person presses Escape well after the click; pressed within milliseconds it can arrive before the page settles.
@@ -23,7 +24,13 @@ const playLook = async (page, value) => {
     await page.locator('.look-browser').waitFor({ state: 'detached' });
   });
 };
-const openSection = (page, id) => page.evaluate(id => { const d = document.querySelector(`details[data-section="${id}"]`); if (d && !d.open) d.open = true; }, id);
+// Details has Shape, Effect and Sound tabs: a section opens its tab first ('effect' and 'reacts' are tabs of their own).
+const openSection = async (page, id) => {
+  const tab = { reacts: /^Sound/, effect: /^Effect$/, live: /^Effect$/ }[id] ?? /^Shape$/;
+  const button = page.getByRole('tablist', { name: 'Shape panels' }).getByRole('tab', { name: tab });
+  if (await button.count()) await button.click();
+  await page.evaluate(id => { const d = document.querySelector(`details[data-section="${id}"]`); if (d && !d.open) d.open = true; }, id);
+};
 
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -270,7 +277,10 @@ try {
     await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 2, null, { timeout: 10000 });
     const before = (await wallStats()).prepares;
     await studio.getByRole('button', { name: 'Vary', exact: true }).click();
-    await output.waitForFunction(n => Object.values(window.__mapStats.prepares).reduce((a, b) => a + b, 0) > n, Object.values(before).reduce((a, b) => a + b, 0), { timeout: 10000 });
+    // The change reaches the wall: prepared again, or (settings that can follow sound) taken in place.
+    const adjustedBefore = (await wallStats()).adjusted ?? 0;
+    await output.waitForFunction(([n, a]) => Object.values(window.__mapStats.prepares).reduce((x, y) => x + y, 0) > n || (window.__mapStats.adjusted ?? 0) > a, [Object.values(before).reduce((a, b) => a + b, 0), adjustedBefore], { timeout: 10000 })
+      .catch(async () => { throw new Error(`the wall never took the change: before ${JSON.stringify(before)} adjusted ${adjustedBefore}; now ${JSON.stringify(await wallStats())}`); });
     const after = (await wallStats()).prepares;
     const firstId = Object.keys(before).find(id => before[id] === after[id]);
     assert.ok(firstId, `every source was prepared again: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
@@ -300,7 +310,10 @@ try {
     assert.ok(app.windows().some(w => /#map-output/.test(w.url())), 'the output closed when Studio opened');
     const before = (await wallStats()).prepares;
     await studio.getByRole('button', { name: 'Randomize effect' }).click();
-    await output.waitForFunction(n => Object.values(window.__mapStats.prepares).reduce((a, b) => a + b, 0) > n, Object.values(before).reduce((a, b) => a + b, 0), { timeout: 10000 });
+    // The change reaches the wall: prepared again, or (settings that can follow sound) taken in place.
+    const adjustedAt = (await wallStats()).adjusted ?? 0;
+    await output.waitForFunction(([n, a]) => Object.values(window.__mapStats.prepares).reduce((x, y) => x + y, 0) > n || (window.__mapStats.adjusted ?? 0) > a, [Object.values(before).reduce((a, b) => a + b, 0), adjustedAt], { timeout: 10000 })
+      .catch(async () => { throw new Error(`the Studio edit never reached the wall: before ${JSON.stringify(before)} adjusted ${adjustedAt}; now ${JSON.stringify(await wallStats())}`); });
     // Studio's autosave still holds Studio's own project.
     await sleep(1200);
     const autosave = JSON.parse(await fs.readFile(path.join(userData, 'autosave.formfield'), 'utf8'));
@@ -383,6 +396,7 @@ try {
     await tool('Rectangle'); await dragOn([.1, .1], [.5, .5]); await asColour();
     await tool('Rectangle'); await dragOn([.3, .3], [.6, .6]);
     await tool('Select');
+    await openSection(studio, 'effect');
     await studio.getByLabel('Blocker', { exact: true }).check();
     await wallUntil([[.2, .2], [.4, .4], [.55, .55]], c => coloured(c[0]) && near(c[1], BLACK) && near(c[2], BLACK), 'blocker');
   });
@@ -506,6 +520,7 @@ try {
     await tool('Rectangle'); await dragOn([.3 + 3 / 1920, .3], [.5, .6]);
     await tool('Select');
     const names = await studio.locator('.map-shape-list li .map-row-name').allTextContents();
+    await openSection(studio, 'effect');
     await studio.getByLabel('Share with', { exact: true }).selectOption({ label: names[0] });
     await placement('across-stage');
     await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
@@ -604,12 +619,14 @@ try {
     // The whole grid is selected after Make grid: that is the group view; one cell is picked on its own here.
     await focusStage(); await studio.keyboard.press('Escape');
     await clickOn([.3, .3]);
+    await openSection(studio, 'effect');
     assert.equal(await studio.getByLabel('Change all linked shapes', { exact: true }).isChecked(), true);
     await playLook(studio, 'preset:salt-mandala');
     await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1 && Object.values(window.__mapStats.prepares)[0] >= 2, null, { timeout: 15000 });
     const names = await studio.locator('.map-shape-list li.member .map-row-plays').allTextContents();
     assert.deepEqual(names, ['Hot Mandala', 'Hot Mandala', 'Hot Mandala', 'Hot Mandala']);
     // With "Change all" off, a cell gets a look of its own.
+    await openSection(studio, 'effect');
     await studio.getByLabel('Change all linked shapes', { exact: true }).uncheck();
     await playLook(studio, 'preset:porcelain-shutters');
     const after = await studio.locator('.map-shape-list li.member .map-row-plays').allTextContents();
@@ -618,6 +635,7 @@ try {
     // Back on, from a cell still linked to the others.
     await focusStage(); await studio.keyboard.press('Escape');
     await clickOn([.5, .5]);
+    await openSection(studio, 'effect');
     await studio.getByLabel('Change all linked shapes', { exact: true }).check();
   });
 
@@ -678,7 +696,7 @@ try {
   });
 
   await check('a MIDI note learned for a trigger switches to the next scene', async () => {
-    await studio.getByRole('tab', { name: /Sound & MIDI/ }).click();
+    await studio.getByRole('button', { name: 'Show-wide sound and triggers' }).click();
     await studio.getByRole('button', { name: '+ Trigger' }).click();
     const row = studio.locator('.react-trigger').last();
     await row.getByLabel('When', { exact: true }).selectOption('on');
@@ -694,7 +712,7 @@ try {
       .catch(async () => { throw new Error(`still on ${before}; triggers: ${JSON.stringify(await studio.evaluate(() => [...document.querySelectorAll('.react-trigger select')].map(s => s.value)))}`); });
     assert.notEqual(await currentScene(), before);
     await react('midi', [0x80, 60, 0]);
-    await studio.getByRole('tab', { name: 'Details' }).click();
+    await studio.getByRole('button', { name: 'Show-wide sound and triggers' }).click();
   });
 
   // Live in Map: a shape plays the Live screen's look, from the test pattern here.
@@ -730,6 +748,7 @@ try {
     await tool('Rectangle'); await dragOn([.5 + 3 / 1920, .2], [.8, .5]);
     await tool('Select');
     const names = await studio.locator('.map-shape-list li .map-row-name').allTextContents();
+    await openSection(studio, 'effect');
     await studio.getByLabel('Share with', { exact: true }).selectOption({ label: names[0] });
     await placement('across-stage');
     await sleep(1500);
@@ -800,6 +819,68 @@ try {
     await clearStage();
     await output.waitForFunction(() => window.__mapStats?.live === null, null, { timeout: 5000 })
       .catch(async () => { throw new Error(`Live still runs: ${JSON.stringify(await liveStats())}`); });
+  });
+
+  // Map sound pass: the Effect tab's own settings, its ∿, the Show popover and the strip.
+  const effectSlider = () => studio.locator('.map-effect-settings .parameter:has(details.react-to) input[type="range"]').first();
+  await check('an Effect-tab slider moved with the output open changes the effect without preparing it again, as one undo step', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.5, .5]);
+    await tool('Select');
+    await playLook(studio, 'preset:porcelain-shutters');
+    await output.waitForFunction(() => Object.values(window.__mapStats?.prepares ?? {}).some(n => n >= 1), null, { timeout: 15000 });
+    await sleep(1500);
+    const prepares = await output.evaluate(() => JSON.stringify(window.__mapStats.prepares));
+    await openSection(studio, 'effect');
+    const slider = effectSlider();
+    const label = await slider.getAttribute('aria-label'), start = await slider.inputValue();
+    const min = Number(await slider.getAttribute('min')), max = Number(await slider.getAttribute('max'));
+    for (let i = 1; i <= 5; i++) { await slider.fill(String(min + (max - min) * i / 6)); await sleep(80); }
+    assert.notEqual(await slider.inputValue(), start, `${label} did not move`);
+    await sleep(2500);
+    assert.equal(await output.evaluate(() => JSON.stringify(window.__mapStats.prepares)), prepares, 'the effect was prepared again');
+    await studio.getByRole('button', { name: 'Undo', exact: true }).click();
+    await studio.waitForFunction(([l, v]) => document.querySelector(`.map-effect-settings input[type="range"][aria-label="${l}"]`)?.value === v, [label, start], { timeout: 3000 })
+      .catch(async () => { throw new Error(`one Undo left ${label} at ${await effectSlider().inputValue()}, not ${start}`); });
+  });
+
+  await check('∿ on an Effect setting, with the test beat, moves that setting on the wall', async () => {
+    await openSection(studio, 'effect');
+    const row = studio.locator('.map-effect-settings .parameter:has(details.react-to)').first();
+    await row.locator('details.react-to > summary').click();
+    await studio.getByRole('menuitem', { name: 'Bass', exact: true }).click();
+    await reactReady();
+    await react('testBeat', true);
+    const seen = new Set();
+    for (let i = 0; i < 8; i++) { const l = await output.evaluate(() => window.__mapStats?.linked ?? {}); Object.values(l).forEach(v => seen.add(v.toFixed(3))); await sleep(700); }
+    await react('testBeat', false);
+    assert.ok(seen.size >= 2, `the linked setting did not move on the wall: ${[...seen].join(', ')}`);
+    assert.ok(await studio.locator('.map-shape-list .map-row-reacts').count() >= 1, 'the shape list does not mark the shape as reacting');
+  });
+
+  await check('a setting that only changes by restarting has its ∿ greyed, with the reason', async () => {
+    await openSection(studio, 'effect');
+    const greyed = studio.locator('.map-effect-settings .react-to.disabled[aria-label*="restarts the effect"]');
+    assert.ok(await greyed.count() >= 1, 'no greyed ∿ with the restarts note');
+  });
+
+  await check('Show lists the triggers', async () => {
+    await studio.getByRole('button', { name: 'Show-wide sound and triggers' }).click();
+    await studio.getByRole('dialog', { name: 'Show-wide sound and triggers' }).waitFor();
+    assert.ok(await studio.locator('.map-show-pop .react-trigger').count() >= 1, 'the trigger made earlier is not listed');
+    await studio.keyboard.press('Escape');
+    await studio.getByRole('dialog', { name: 'Show-wide sound and triggers' }).waitFor({ state: 'detached', timeout: 2000 });
+  });
+
+  await check('the sound strip keeps the input, meters and scenes on screen at 1280 wide', async () => {
+    await studio.setViewportSize({ width: 1280, height: 800 });
+    await sleep(400);
+    for (const name of ['Sound input', 'Sound levels', 'Scenes']) {
+      const box = await studio.getByLabel(name, { exact: true }).first().boundingBox();
+      assert.ok(box && box.x >= 0 && box.x + box.width <= 1280 && box.y + box.height <= 800, `${name} is off screen: ${JSON.stringify(box)}`);
+    }
+    await studio.setViewportSize({ width: 1500, height: 900 });
+    await sleep(300);
   });
 
   await check('Escape in the output window closes it', async () => {
