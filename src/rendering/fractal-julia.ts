@@ -15,9 +15,12 @@ vec2 juliaBaseConstant() {
 vec2 juliaConstant() {
   vec2 c=juliaBaseConstant()+uMorph*.014*vec2(cos(uPhase)-1.,sin(uPhase));
   if(uEvolution>0.){
-    float phase=uPhase+uVariant*.65;
-    vec2 path=vec2(.036*cos(phase)+.014*cos(2.*phase-.6),.055*sin(phase)+.013*sin(3.*phase));
-    c+=uEvolution*(.55+.45*uMorph)*path;
+    float progress=fract(uPhase/TAU);
+    float open=fractalCue(progress,vec4(.06,.36,.51,.75));
+    float divide=fractalCue(progress,vec4(.40,.65,.78,.98));
+    vec2 emergence=mix(vec2(-.066,.048),vec2(.066,-.054),uVariant*.50);
+    vec2 branching=mix(vec2(.044,.085),vec2(-.060,-.053),uVariant*.50);
+    c+=uEvolution*(.69+.31*uMorph)*(emergence*open+branching*divide);
   }
   return c;
 }
@@ -40,6 +43,9 @@ vec2 juliaDomainPlane(vec2 pixelOffset) {
   p=turn(uCameraYaw+sway*.12*sin(uPhase))*p;
   p*=2.8*uScale/1.7/max(uZoom,.5)*.78*gZoom;
   p+=sway*.18*vec2(sin(uPhase),cos(uPhase));
+  // Frame the unfolding arms slightly closer during their transition.
+  float open=fractalCue(fract(uPhase/TAU),vec4(.12,.43,.66,.99));
+  p*=1.-uEvolution*(.18+.19*uTravel)*open;
   return turn(uTwist*.6)*p;
 }
 vec2 juliaPlane(vec2 pixelOffset) {
@@ -105,7 +111,7 @@ vec3 juliaSample(vec2 pixelOffset) {
     vec2 residual=cMul(lambda,back-zp)-delta;
     z=zp+cMul(inward,delta+f*residual);
     shift=n*f;
-    ratio=length(fwidth(z))/max(length(fwidth(domain)),1e-12);
+    ratio=max(1.e-6,length(fwidth(z))/max(length(fwidth(domain)),1e-12));
     pixel*=ratio;
   }
 
@@ -193,13 +199,23 @@ vec3 juliaSample(vec2 pixelOffset) {
       +tracer*ripple*band*uReveal*(.14+.62*emphasis);
   }
   if(uEvolution>0.){
-    // The orbit trap changes the filigree itself. Escape bands carry a
-    // separate outward wave so long contours remain legible during the morph.
-    float bandCoordinate=smoothCount*.26-uPhase/TAU+.09*cos(crestPhase);
-    float filament=juliaStroke(bandCoordinate,exteriorAA*1.7,.11+.04*uLineWidth);
-    float envelope=.25+.75*smoothstep(-.45,.82,cos(crestPhase));
-    vec3 pulse=pigment(exteriorCoordinate+.24+.14*cos(crestPhase-.6),exteriorAA);
-    color+=pulse*filament*envelope*exp(-distance*24.)*escaped*uEvolution*.43;
+    // A metallic edge, a darker basin and a spreading light front make
+    // the branching forms readable at different scales.
+    float progress=fract(uPhase/TAU);
+    float opening=fractalCue(progress,vec4(.14,.42,.64,.94));
+    float bandCoordinate=smoothCount*.29-progress+.09*cos(crestPhase);
+    float bandFootprint=max(.00001,fwidth(bandCoordinate));
+    float filament=juliaStroke(bandCoordinate,bandFootprint,.10+.056*uLineWidth);
+    float bevel=juliaStroke(bandCoordinate-.19,bandFootprint,.056+.028*uLineWidth);
+    float basin=juliaStroke(interiorCoordinate*4.-progress,interiorAA*4.,.14);
+    float reach=mix(40.,15.,opening);
+    float field=exp(-distance*reach);
+    vec3 plated=pigment(exteriorCoordinate+.07+.19*opening,exteriorAA);
+    vec3 lip=mix(plated,vec3(1.,.96,.86),.32+.25*uRelief);
+    vec3 inlay=pigment(interiorCoordinate-.17+.18*opening,interiorAA);
+    vec3 inside=(inlay*(.034+.25*basin)+filigree*.42*uTrap);
+    vec3 outside=plated*(.025+uOutside*.12)+field*(plated*(.095+.63*filament)+lip*bevel*.43);
+    color=mix(color,mix(inside,outside,escaped),uEvolution*.83);
   }
 
   // This unfiltered height contains no derivative calls. Filtered colour and

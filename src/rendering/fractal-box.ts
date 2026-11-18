@@ -9,8 +9,11 @@ vec3 boxLimits() {
   if(uEvolution>0.){
     // The chamber and its silhouette change proportions with the fold.
     // The same animated limits are used by the camera's enclosure.
-    float phase=uPhase+uVariant*.8;
-    proportions*=1.+uEvolution*vec3(.13*sin(phase),.15*cos(phase-.95),.12*sin(2.*phase+.55));
+    float progress=fract(uPhase/TAU);
+    float opening=fractalCue(progress,vec4(.10,.39,.63,.99));
+    float unfold=fractalCue(progress,vec4(.41,.61,.74,.97));
+    vec3 reach=mix(vec3(.13,-.10,.25),vec3(-.08,.18,.27),uVariant*.5);
+    proportions*=1.+uEvolution*(opening*reach+unfold*vec3(-.07,.12,-.14));
   }
   return limit*proportions;
 }
@@ -32,9 +35,11 @@ vec2 boxField(vec3 position) {
   vec3 p=boxDomain(position),z=p,limits=boxLimits();
   float derivative=1.,orbit=0.,weight=1.,totalWeight=0.;
   float change=uEvolution*(.72+.28*uMorph);
-  float scale=-(uBoxScale+uMorph*.12*sin(uPhase)+change*.24*cos(uPhase+uVariant*.8));
+  float opening=fractalCue(fract(uPhase/TAU),vec4(.17,.46,.56,.96));
+  float chamber=fractalCue(fract(uPhase/TAU),vec4(.47,.64,.76,.98));
+  float scale=-(uBoxScale+uMorph*.12*sin(uPhase)+change*(.27*opening-.22*chamber));
   float outer=uVariant>.5&&uVariant<1.5?1.25:1.;
-  float inner=clamp(uBoxRadius+change*.115*sin(uPhase*2.-.8+uVariant),.16,.90);
+  float inner=clamp(uBoxRadius+change*(.11*opening-.14*chamber),.16,.90);
   float minimum2=inner*inner,outer2=outer*outer;
   // Detail changes the geometric recursion, never the render resolution.
   // Keep the estimator converged even when artistic Detail is low. Fewer
@@ -98,9 +103,9 @@ vec4 traceBox(vec2 offset) {
   if(uEvolution>0.){
     // Establish the full object and travel toward the same point on its
     // surface. No phase-driven pan, yaw, pitch, or roll on the new path.
-    float journey=smoothstep(.08,.64-.23*uTravel,phase)*(1.-smoothstep(.73,1.,phase));
+    float journey=fractalCue(phase,vec4(.04,.65-.25*uTravel,.76,1.));
     float strength=max(uPassage,uApproach*.79)*(1.-oldMotion);
-    framing=mix(framing,radius+mix(4.6,.09,pow(journey,1.17))/max(uZoom,.5),strength);
+    framing=mix(framing,radius+mix(5.2,-.26,pow(journey,1.17))/max(uZoom,.5),strength);
   }
   float bank=mix(uBank*.42,oldBank,oldMotion);
   vec3 origin=framing*vec3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch));
@@ -168,16 +173,23 @@ vec4 traceBox(vec2 offset) {
       +uPalette[0]*fill*uDepth*.33;
   }
   if(uEvolution>0.){
-    // Successive crests follow the material's surface, including its folds.
-    // Pulse spacing is band-limited at grazing angles and in the distance.
-    float surface=length(domain.xy)*2.95+domain.z*.74+field.y*1.2;
-    float wavelength=surface*2.6-uPhase/TAU*2.;
+    // Dark metal around the recess gives the moving edge light an
+    // independent geometry. Successive bands expose deeper folds.
+    float shutter=fractalCue(phase,vec4(.22,.49,.80,.97));
+    float radial=length(domain.xy),surface=radial*2.45+domain.z*.83+field.y*1.22;
+    float wavelength=surface*3.25-phase*2.;
     float aa=clamp(epsilon*size*14.,.016,.34);
     float groove=abs(fract(wavelength+.5)-.5);
-    float crest=(1.-smoothstep(.056-aa,.056+aa,groove))*(1.-smoothstep(.14,.34,aa));
-    float xray=.5+.5*cos(surface*2.1-uPhase+3.1*domain.y);
-    vec3 signal=pigment(coordinate+surface*.12-uPhase/TAU,aa*.16);
-    color+=signal*crest*uEvolution*(.26+.51*xray)*(.36+.64*sqrt(ao));
+    float definition=1.-smoothstep(.14,.34,aa);
+    float crest=(1.-smoothstep(.065-aa,.065+aa,groove))*definition;
+    float ledge=(1.-smoothstep(.23-aa,.23+aa,groove))*definition;
+    float exposure=.31+.69*max(facing,.44*rim);
+    vec3 signal=pigment(coordinate+surface*.105-phase,aa*.16);
+    vec3 edge=mix(signal,vec3(1.,.97,.92),.25+.27*shine);
+    vec3 polished=base*(.035+.38*diffuse*shadow)*ao
+      +(ledge*.43*signal+crest*.68*edge)*exposure*(.55+.45*shutter)
+      +edge*(.11*rim+.66*shine*shadow);
+    color=mix(color,polished,uEvolution*.87);
   }
   return vec4(color,1.);
 }

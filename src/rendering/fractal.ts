@@ -41,6 +41,10 @@ vec2 fractalView(vec2 uv) {
 float legacyCameraMotion() {
   return 1.-smoothstep(0.,.30,uEvolution);
 }
+// An arrival, a hold and a release. Both ends are flat at the loop seam.
+float fractalCue(float progress,vec4 timing) {
+  return smoothstep(timing.x,timing.y,progress)*(1.-smoothstep(timing.z,timing.w,progress));
+}
 vec2 planeAt(vec2 offset) {
   vec2 p=fractalView(vUv+offset/uResolution);
   float denominator=1.+p.y*.18*tan(uCameraPitch);
@@ -75,6 +79,13 @@ vec3 kaleidoscopeSample(vec2 offset) {
   float seed=mod(uSeed,997.)*.0137;
   float radius=length(p);
   float wave=uPhase-radius*(2.5+uTravel*3.);
+  float progress=fract(uPhase/TAU);
+  float unfurl=fractalCue(progress,vec4(.08,.34,.53,.89));
+  float interlace=fractalCue(progress,vec4(.48,.65,.78,.99));
+  float shellRadius=1.24+.64*unfurl+.26*interlace;
+  // The smaller centre becomes a readable rosette before the outer folds open.
+  float reach=smoothstep(.32,1.5,radius);
+  p*=1.+uEvolution*(.27*(1.-reach)-.23*reach)*unfurl;
   vec2 z=wedge(turn(uTwist*.7+uMorph*.18*sin(uPhase)*legacyCameraMotion())*p);
   float derivative=1.,height=0.;
   vec3 color=uPalette[5]*.025,halo=vec3(0.);
@@ -94,10 +105,13 @@ vec3 kaleidoscopeSample(vec2 offset) {
     float arrival=wave-levelIndex*.79;
     float crest=cos(arrival),alternate=sin(arrival*2.+levelIndex*.37);
     float change=uEvolution*(.77+.23*uMorph);
-    z=wedge(turn(angle+.16*opening+change*(.15*crest+.072*alternate))*z);
-    z=abs(z)-vec2(.64+uFold*.2+.20*opening+change*.22*crest,
-      .18+uMorph*.045*cos(uPhase)+.16*opening+change*.16*alternate);
-    float levelGrowth=growth+change*.19*cos(arrival+.8);
+    float onset=.10+.036*levelIndex+.075*reach;
+    float outward=fractalCue(progress,vec4(onset,onset+.23,.68,.98));
+    vec2 hinge=vec2(.64+uFold*.2+.20*opening,.18+uMorph*.045*cos(uPhase)+.16*opening);
+    hinge+=change*vec2(.31*outward-.19*interlace+.075*crest,.24*interlace-.14*outward+.065*alternate);
+    z=wedge(turn(angle+.16*opening+change*(.20*interlace-.14*outward+.065*crest))*z);
+    z=abs(z)-hinge;
+    float levelGrowth=growth+change*(.20*outward-.13*interlace+.06*cos(arrival+.8));
     z*=levelGrowth;derivative*=levelGrowth;
     float shape=length(z)-(.34+.12*uFold);
     if(uVariant>.5&&uVariant<1.5) {
@@ -108,9 +122,10 @@ vec3 kaleidoscopeSample(vec2 offset) {
       shape=min(abs(z.x),abs(z.y))-(.12+.05*uFold);
     }
     if(uEvolution>0.){
-      float facet=.5+.5*cos(arrival-1.2);
-      float engraved=abs(z.x)*.64+abs(z.y)*.91-(.34+.11*uFold);
-      shape=mix(shape,engraved,change*facet*.70);
+      float bevel=abs(z.x)*.58+abs(z.y)*1.04-(.39+.11*uFold);
+      float lens=(length(z*vec2(.58,1.48))-(.35+.13*uFold))*.78;
+      shape=mix(shape,lens,change*outward*.72);
+      shape=mix(shape,bevel,change*interlace*.64);
     }
     float signedDistance=shape/derivative;
     float distance=abs(signedDistance);
@@ -128,16 +143,25 @@ vec3 kaleidoscopeSample(vec2 offset) {
     float coordinate=uOffset+uDensity*(float(i)*.115+.055*length(z))+uMorph*.035*sin(uPhase);
     vec3 ink=pigment(coordinate,max(.001,uDensity*.055*derivative*pixel));
     if(uEvolution>0.){
-      float brilliance=.72+.37*smoothstep(-.55,.75,crest);
-      vec3 scroll=pigment(coordinate+.13*cos(arrival-.6)+.08*alternate,pixel*derivative*.25);
-      ink=mix(ink,scroll*brilliance,uEvolution*.74);
+      float brilliance=.70+.48*smoothstep(.12,.83,outward);
+      float zones=smoothstep(.24,1.75,radius);
+      vec3 enamel=pigment(uOffset+.22*zones+.139*levelIndex+.15*interlace-.14*outward,
+        pixel*derivative*.25);
+      ink=mix(ink,enamel*brilliance,uEvolution*.88);
     }
     color=mix(color,ink,coverage*.9);
-    height+=coverage/(1.+float(i)*.35);
+    float ridge=exp(-pow(distance/max(width*1.85,pixel),2.));
+    height+=mix(coverage,ridge*level,uEvolution*.88)/(1.+levelIndex*mix(.35,.45,uEvolution));
     float haloWidth=width*2.8;
     halo+=ink*exp(-distance/max(haloWidth,pixel*.6))*min(1.,haloWidth/(pixel*.6))*level*.11;
   }
   vec3 result=glaze(color,height,1.)+halo*uGlow;
+  if(uEvolution>0.){
+    // A subdued second scale extends into the corners while the main rosette unfolds.
+    float broadcast=1.-smoothstep(shellRadius-.1,shellRadius+.52,radius);
+    float ambient=.38+.17*unfurl+.36*broadcast;
+    result*=mix(1.,ambient,uEvolution);
+  }
   if(uReveal>0.){
     float outward=smoothstep(.30,1.48,length(p));
     float bloom=smoothstep(.04,.77,.5-.5*cos(uPhase-1.2*outward));

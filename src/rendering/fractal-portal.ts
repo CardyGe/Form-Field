@@ -32,10 +32,13 @@ vec4 beadedTunnel(vec2 p,float phase) {
   float pixel=portalPixel();
   float pulse=.5-.5*cos(phase);
   float evolution=smoothstep(0.,.72,uEvolution);
+  float progress=phase/TAU;
+  float junction=fractalCue(progress,vec4(.22,.50,.73,.98));
+  float surge=fractalCue(progress,vec4(.08,.27,.52,.86));
   if(evolution>0.){
     // A complex square turns two fixed-axis throats into a single one when
     // their roots meet. The screen centre and horizon stay fixed.
-    float separation=.36*(1.-smoothstep(.25,.91,pulse));
+    float separation=.38*(1.-junction);
     vec2 pair=vec2(p.x*p.x-p.y*p.y-separation*separation,2.*p.x*p.y);
     p=mix(p,pair/max(.28,length(p)+separation*.47),evolution);
   }
@@ -44,19 +47,22 @@ vec4 beadedTunnel(vec2 p,float phase) {
   // The repeated ribs live in inverse depth. Their spacing in the image
   // expands as they approach the viewer, while the silhouette can breathe.
   float bend=uTwist*(.65*sin(r*2.8-phase)+.33*log(1.+r));
+  bend+=evolution*surge*(.36*log(1.+r*2.8)-.12*cos(5.*a));
   float angle=a+bend+.018*mod(uSeed,997.)/997.;
   float lobes=cos(angle*3.+.2*sin(phase));
-  float wall=radius*(1.+uFold*(.28*lobes+.10*cos(angle*6.-phase)));
+  float wall=radius*(1.+uFold*(.28*lobes+.10*cos(angle*6.-phase))
+    +evolution*junction*.22*cos(angle*4.+r*1.9));
   float z=wall/max(r,.012);
   float speed=phase/TAU-uReveal*mix(.108,mix(.077,.137,uTravel),evolution)*sin(phase);
-  float row=z*mix(2.9,5.6,uDepth)+6.*speed;
-  float count=uSymmetry*mix(4.,2.,evolution);
+  float rowCycle=6.+floor(6.*evolution+.5);
+  float row=z*mix(2.9,5.6,uDepth)+rowCycle*speed;
+  float count=uSymmetry*mix(4.,2.75,evolution);
   count=floor(count+.5);
   float lane=angle*count/TAU+uFold*.42*sin(z*.9+angle*3.);
   float laneAA=max(.006,pixel*count/(TAU*r));
   float rowAA=max(.006,fwidth(row)*.64);
   float aa=max(laneAA,rowAA);
-  vec2 cell=vec2(portalDistance(lane),portalDistance(row)*1.02);
+  vec2 cell=vec2(portalDistance(lane),portalDistance(row)*mix(1.02,.92,evolution));
   float shape=length(cell);
   float beadWidth=.26+.035*uFold;
   float line=.045*uLineWidth;
@@ -67,10 +73,10 @@ vec4 beadedTunnel(vec2 p,float phase) {
   float legibility=(1.-smoothstep(.16,.54,aa))*smoothstep(.062,.15+.045*uReveal*pulse,r);
   float light=1./(1.+uDepth*.19*z*z);
   float track=.5+.5*cos(angle*2.+.55*cos(phase));
-  float colorIndex=uOffset+.42*track+uDensity*(.12*sin(row*TAU/6.)+.14/(.7+z));
+  float colorIndex=uOffset+.42*track+uDensity*(.12*sin(row*TAU/rowCycle)+.14/(.7+z));
   vec3 ink=pigment(colorIndex,aa*.12);
   if(evolution>0.){
-    float heat=uOffset-phase/TAU+.17*sin(angle)+.09*sin(row*TAU/6.);
+    float heat=uOffset-progress+.16*sin(angle)+.055*sin(row*TAU/rowCycle)+.17*surge;
     vec3 current=pigment(heat,aa*.12);
     ink=mix(ink,current,evolution*.81);
   }
@@ -80,28 +86,22 @@ vec4 beadedTunnel(vec2 p,float phase) {
   vec3 rim=pigment(uOffset+.10+.22*cos(angle*3.),.001);
   float hotSpot=shell*(.60+.40*cos(a+z*.6))*evolution;
   vec3 beads=ink*(shell*1.19+core*.55+soft+lines)+mix(ink,vec3(1.),.6)*(highlight*.29+hotSpot*.19);
-  return portalOutput(beads*intensity+rim*contour*.61,
-    (shell+core+highlight*.28+soft+lines)*legibility+contour*.66);
+  float innerRim=portalFill(abs(r-(.103+.083*junction)*(.82+.18*lobes)),.0035,pixel)*junction*evolution;
+  float filament=portalFill(cell.x,.022,laneAA)*portalFill(cell.y,.23,rowAA)
+    *legibility*surge*evolution*.20;
+  return portalOutput(beads*intensity+rim*(contour*.61+innerRim*.81)+ink*filament,
+    (shell+core+highlight*.28+soft+lines)*legibility+contour*.66+innerRim+filament);
 }
 
-vec4 mosaicFans(vec2 p,float phase) {
-  float pixel=portalPixel();
+vec4 mosaicFanSheet(vec2 p,float pixel) {
   float radius=max(length(p),.0001),angle=portalAngle(p);
-  float progress=phase/TAU;
-  float pulse=.5-.5*cos(phase);
-  float front=.13+.37*smoothstep(.12,.80,pulse);
-  float aperture=1.-smoothstep(front*.78,front*1.17,radius);
-  // Six complete bands move forward each cycle. The pattern and colour of
-  // the entering ring match the outgoing one, including the half-tile stagger.
-  float run=progress-mix(.073,.139,uTravel)*uReveal*sin(phase);
-  float pitch=mix(3.1,4.6,uDepth)*sqrt(uDensity);
-  float readable=sqrt(radius*radius+.0029*aperture);
-  float logRadius=log2(readable)*pitch;
-  float petals=.34+.27*uFold;
-  float rowCoord=logRadius-6.*run+petals*cos(uSymmetry*angle+logRadius*1.37-phase);
+  float pitch=mix(2.7,4.2,uDepth)*sqrt(uDensity);
+  float logRadius=log2(sqrt(radius*radius+.00064))*pitch;
+  float petals=.32+.32*uFold;
+  float rowCoord=logRadius+petals*cos(uSymmetry*angle+logRadius*1.37);
   float row=floor(rowCoord),height=fract(rowCoord);
-  float arms=uSymmetry*2.;
-  float spiral=angle*arms/TAU+(uTwist+.24)*logRadius+row*.5;
+  float arms=uSymmetry;
+  float spiral=angle*arms/TAU+(uTwist+.41)*logRadius+row*.5;
   float toward=fract(spiral)-.5;
   vec2 fan=vec2(toward*1.7,height*1.12);
   float arc=length(fan);
@@ -115,12 +115,40 @@ vec4 mosaicFans(vec2 p,float phase) {
   float mortar=max(portalFill(.5-abs(toward),.027,colAA),portalFill(portalDistance(rowCoord),.031,arcAA*.58));
   float legible=1.-smoothstep(.16,.68,max(arcAA,colAA));
   float coverage=glass*(1.-mortar)*legible;
-  float sector=.5+.5*cos(angle*2.+.6*sin(phase));
-  vec3 ink=pigment(uOffset+(row+.43)/6.+sector*.59+.015*floor(arc*arcPitch),.001);
-  float tile=.65+.35*portalFill(portalDistance(arc*arcPitch+.5),.29,arcAA);
-  float lighting=mix(.36+smoothstep(.1,.9,pulse)*.61,1.16,aperture*uReveal);
+  float sector=abs(cos(angle+logRadius*.11));
+  vec3 ink=pigment(uOffset+(row+.31)/6.+sector*.37+.012*floor(arc*arcPitch),.001);
+  float tile=.68+.41*portalFill(portalDistance(arc*arcPitch+.5),.29,arcAA);
   float core=portalFill(radius,.028,pixel);
-  return portalOutput(ink*coverage*tile*lighting+pigment(uOffset+.16,.001)*core*.9,coverage+core);
+  return vec4(ink*coverage*mix(.93,tile,uRelief)+pigment(uOffset+.16,.001)*core*.95,coverage+core);
+}
+vec4 mosaicFans(vec2 p,float phase) {
+  float pixel=portalPixel(),radius=length(p);
+  float progress=phase/TAU;
+  // The foreground disc replaces its parent as it grows. On wrap, each layer
+  // takes the next layer's exact scale and position. Only invisible extremes
+  // are removed, so there is no reverse zoom or crossfade at the seam.
+  float advance=progress-mix(.04,.14,uReveal)*sin(phase);
+  float ratio=mix(3.65,5.1,uDepth);
+  float initial=mix(.24,.31,uTravel);
+  float coverage=0.;
+  vec3 color=vec3(0.);
+  for(int i=2;i>=-3;i--){
+    float scale=initial*pow(ratio,float(i)+advance);
+    float visible=smoothstep(max(.014,pixel*2.5),max(.027,pixel*6.),scale)
+      *(1.-smoothstep(2.8,initial*ratio*ratio,scale));
+    if(visible<=0.)continue;
+    // Keep derivatives defined across a fragment quad before testing its coverage.
+    vec4 sheet=mosaicFanSheet(p/scale,pixel/scale);
+    float disc=1.-smoothstep(scale-pixel*2.,scale+pixel*2.,radius);
+    float edge=portalFill(abs(radius-scale),pixel*1.8,pixel)*(.18+.29*uGlow);
+    float normalLight=.84+.26*clamp(p.y/max(scale,.01),-1.,1.);
+    float focus=.37+.80*(1.-smoothstep(.57,1.85,scale));
+    float layerAlpha=disc*visible;
+    color=mix(color,sheet.rgb*normalLight*focus,layerAlpha)
+      +pigment(uOffset+.075,.001)*edge*visible;
+    coverage=mix(coverage,clamp(sheet.a,0.,1.),layerAlpha)+edge*visible;
+  }
+  return portalOutput(color,coverage);
 }
 
 vec4 mosaicSpiral(vec2 p,float phase) {
@@ -179,40 +207,58 @@ vec4 mosaicSpiral(vec2 p,float phase) {
 
 vec4 stackedHalo(vec2 p,float phase) {
   float pixel=portalPixel(),progress=phase/TAU;
-  float opening=smoothstep(.19,.54,progress)*(1.-smoothstep(.74,.99,progress));
-  vec2 crown=p-vec2(0.,.17*opening);
-  vec2 lower=p+vec2(0.,.27);
+  float opening=fractalCue(progress,vec4(.16,.42,.82,.98));
+  float crownChange=fractalCue(progress,vec4(.37,.62,.83,.99));
+  vec2 crown=p-vec2(0.,.055+.23*opening);
+  vec2 lower=p+vec2(0.,.21+.085*crownChange);
   float angle=portalAngle(crown),minorAngle=portalAngle(lower);
   float points=max(4.,uSymmetry);
   float flutes=cos(points*angle+uTwist*1.7);
-  float upperShape=length(crown)/(1.+(.19-.14*opening)*cos(2.*angle)+.09*uFold*flutes);
-  float lowerShape=length(lower)/(1.+.24*cos(2.*minorAngle)+.11*uFold*cos(4.*minorAngle));
+  // A pinched two-lobed opening rises and becomes a wheel. A smaller,
+  // differently shaped bloom forms on the beam beneath it.
+  float upperForm=1.+(1.-crownChange)*(.17*cos(2.*angle)-.22*sin(angle)-.10*sin(3.*angle))
+    +uFold*(.031+.075*crownChange)*flutes;
+  float lowerForm=1.+.16*cos(2.*minorAngle)-.18*sin(minorAngle)-.10*sin(3.*minorAngle);
+  float upperShape=length(crown)/upperForm;
+  float lowerShape=length(lower)/lowerForm;
   float width=.0035+.0044*uLineWidth;
-  float beamMask=portalFill(abs(p.x),width*.58,pixel)*(1.-smoothstep(.39,.61,abs(p.y+.08)));
+  float beamEdge=(1.-smoothstep(.46,.77,abs(p.y+.09)));
+  float beamMask=portalFill(abs(p.x),width*.58,pixel)*beamEdge;
+  float beamGlow=exp(-abs(p.x)*50.)*beamEdge*(.12+.19*opening)*uGlow;
   float spark=portalFill(abs(fract(p.y*6.2-progress*2.)-.5),.084,pixel*6.2);
-  vec3 color=pigment(uOffset+.03,.001)*beamMask*(.29+.91*spark);
-  float alpha=beamMask*(.35+.49*spark);
-  for(int i=0;i<8;i++){
+  vec3 color=pigment(uOffset+.03,.001)*(beamMask*(.29+.91*spark)+beamGlow);
+  float alpha=beamMask*(.35+.49*spark)+beamGlow;
+  for(int i=0;i<9;i++){
     float order=float(i);
     float age=fract(progress-mix(.067,.113,uTravel)*order);
-    float envelope=smoothstep(.015,.11,age)*(1.-smoothstep(.58,1.,age));
-    float radius=.045+(.40+.18*uDepth+.04*uDensity)*age;
+    float envelope=fractalCue(age,vec4(.01,.11,.55,1.));
+    float radius=.045+(.41+.18*uDepth+.04*uDensity)*age+.04*opening;
     float rib=abs(upperShape-radius);
-    float spokes=portalFill(portalDistance(angle*points*4./TAU),.10,pixel*points/max(length(crown),.06)*.7);
+    float spokeCoord=angle*points/TAU;
+    float spokeAA=pixel*points/(TAU*max(length(crown),.04));
+    float spokes=mix(portalFill(portalDistance(spokeCoord*4.),.086,spokeAA*4.),
+      portalFill(portalDistance(spokeCoord*7.),.086,spokeAA*7.),crownChange);
     float ghost=portalFill(rib,width*3.5,pixel)*uGlow*.28;
     float light=(portalFill(rib,width,pixel)+spokes*portalFill(rib,width*2.85,pixel)*(.30+.54*uDetail)+ghost)*envelope;
     light*=i==0?1.:uAfterglow*(.68+.32*uReveal);
     vec3 ink=pigment(uOffset+order*.143+.12*opening+.035*flutes,.003);
     color+=mix(ink,vec3(1.),.06+.20*uRelief)*light;
     alpha=max(alpha,light);
-    float lowerRing=portalFill(abs(lowerShape-(.037+.26*age)),width*.78,pixel)*envelope*opening;
+    float lowerRim=abs(lowerShape-(.035+.26*age));
+    float lowerRing=(portalFill(lowerRim,width*.78,pixel)+.24*uGlow*portalFill(lowerRim,width*3.1,pixel))
+      *envelope*opening;
     color+=pigment(uOffset+order*.129,.002)*lowerRing*.82;
     alpha=max(alpha,lowerRing);
   }
   float core=portalFill(length(crown),width*1.5,pixel)*(.46+.54*opening);
-  float foot=portalFill(abs(length(vec2(p.x,(p.y+.48)*3.2))-(.065+.058*opening)),width,pixel);
-  color+=pigment(uOffset-.025,.002)*(core+foot*.40);
-  return portalOutput(color,max(alpha,max(core,foot*.45)));
+  float footing=length(vec2(p.x,(p.y+.57)*3.4));
+  float foot=portalFill(abs(footing-(.071+.06*opening)),width,pixel);
+  foot+=.49*portalFill(abs(footing-(.108+.076*opening)),width*.63,pixel);
+  float wheel=portalFill(abs(length(crown)-.27),width*.56,pixel)*crownChange;
+  float sparks=portalFill(portalDistance(angle*points/TAU),.07,pixel*points/(TAU*max(length(crown),.04)));
+  sparks*=portalFill(abs(length(crown)-.27),width*2.7,pixel)*crownChange;
+  color+=pigment(uOffset-.025,.002)*(core+foot*.40)+pigment(uOffset+.48,.001)*wheel*.65+vec3(1.,.79,.49)*sparks;
+  return portalOutput(color,max(alpha,max(core,max(foot*.45,wheel*.65+sparks))));
 }
 
 vec4 lightHalo(vec2 p,float phase) {
