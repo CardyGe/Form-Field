@@ -10,7 +10,7 @@ import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
 import { drawCommands, shownOnWall, stageCommands, type DrawOptions } from './draw';
 import { borderColour, fadeKey } from './edge';
-import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, type Governor, type Playing } from './playout';
+import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, STAGE_SIZE, usesLive, type Group, type Point, type Shape } from './show';
 import type { Scene } from './scenes';
@@ -271,7 +271,9 @@ export class MapCompositor {
       if (!users.length) { const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
       const slot = this.slot(source.id, now);
       if (!slot) continue;
-      if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) this.prepare(slot, project);
+      // A setting that can follow sound changed (Map's Effect tab): the playing effect is adjusted in place, never restarted.
+      if (project !== slot.project && slot.project && !slot.pending && slot.failedProject === null && !needsPrepare(slot.project, project)) slot.project = project;
+      else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) this.prepare(slot, project);
       if (!slot.project || !slot.renderer) continue;
       if (!this.frozen) {
         // In tempo sync the loop follows the clock's beats; without a clock it runs at its own speed.

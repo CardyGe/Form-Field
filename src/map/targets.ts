@@ -5,8 +5,9 @@
  *   source.<id>.param.<layer>.<setting>
  * A target's range comes from the shape's own rules, or from the instrument's parameter definitions.
  */
-import { readParameterDefinitions } from '../core/project';
-import { BRIGHTNESS_MAX, SPEED_RANGE, ZOOM_RANGE, type ShowDocument } from './show';
+import { readParameterDefinitions, visibleParameterDefinitions } from '../core/project';
+import type { ParameterDefinition } from '../shared/types';
+import { BRIGHTNESS_MAX, LIVE_SOURCE_ID, SPEED_RANGE, ZOOM_RANGE, type ShowDocument } from './show';
 import type { Link } from '../react/links';
 
 export const SHAPE_PROPS = { brightness: 'Brightness', opacity: 'Opacity', zoom: 'Zoom', turn: 'Turn', movex: 'Move across', movey: 'Move up and down' } as const;
@@ -99,4 +100,37 @@ export function targetOptions(show: Pick<ShowDocument, 'shapes' | 'sources'>): {
     });
   }
   return out;
+}
+
+/** Whether a setting can follow sound: preparation settings, the seed and whole-number choices only change by restarting. */
+export function reactable(d: Pick<ParameterDefinition, 'key' | 'step' | 'preparation'>): { ok: true } | { ok: false; why: 'restarts' } {
+  return d.preparation || d.key === 'seed' || d.step >= 1 ? { ok: false, why: 'restarts' } : { ok: true };
+}
+
+/** The links a shape's Sound tab lists: on the shape itself, and on the effect it plays (Live's live in Live's settings). */
+export function shapeLinks(show: Pick<ShowDocument, 'shapes' | 'links'>, shapeId: string): ShowDocument['links'] {
+  const shape = show.shapes.find(s => s.id === shapeId);
+  if (!shape) return [];
+  const source = shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID ? `source.${shape.sourceId}.` : null;
+  return show.links.filter(l => l.target.startsWith(`shape.${shapeId}.`) || (source !== null && l.target.startsWith(source)));
+}
+
+/** ∿ and a count, for the shape list: '' when the shape reacts to nothing. */
+export function reactsLabel(show: Pick<ShowDocument, 'shapes' | 'links'>, shapeId: string): string {
+  const n = shapeLinks(show, shapeId).length;
+  return n ? `∿${n}` : '';
+}
+
+/** Links on effects no shape on screen plays (only a scene that is not live does): listed under Show. */
+export function offScreenLinks(show: Pick<ShowDocument, 'shapes' | 'links'>): ShowDocument['links'] {
+  const playing = new Set(show.shapes.map(s => s.sourceId).filter(Boolean));
+  return show.links.filter(l => { const t = parseTarget(l.target); return !!t && t.kind !== 'shape' && !playing.has(t.sourceId); });
+}
+
+/** False when a link drives a setting its effect no longer shows (its pattern or style changed). It is kept. */
+export function linkInUse(show: Pick<ShowDocument, 'sources'>, link: ShowDocument['links'][number]): boolean {
+  const t = parseTarget(link.target);
+  if (!t || t.kind !== 'param') return true;
+  const layer = show.sources.find(s => s.id === t.sourceId)?.project.layers[t.layer];
+  return !!layer && visibleParameterDefinitions(layer).some(d => d.key === t.key);
 }
