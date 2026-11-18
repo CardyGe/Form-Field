@@ -5,7 +5,7 @@
 import type { Signals } from './signals';
 
 export type MidiStatus = { state: 'off' } | { state: 'on'; devices: string[] } | { state: 'unavailable'; reason: string };
-export interface MidiClockSink { midiTick(t: number): void; midiStart(t: number): void; midiStop(): void }
+export interface MidiClockSink { midiTick(t: number): void; midiStart(t: number): void; midiContinue(t: number): void; midiStop(): void }
 
 export class MidiInput {
   status: MidiStatus = { state: 'off' };
@@ -19,10 +19,19 @@ export class MidiInput {
 
   constructor(private readonly clock: MidiClockSink) {}
 
-  async start(): Promise<void> {
-    if (this.access) return;
+  private starting: Promise<void> | null = null;
+  private generation = 0;
+  start(): Promise<void> {
+    if (this.access) return Promise.resolve();
+    // One request at a time: two would hear every message twice (and double the clock).
+    this.starting ??= this.open().finally(() => { this.starting = null; });
+    return this.starting;
+  }
+  private async open(): Promise<void> {
+    const generation = this.generation;
     try {
       const access = await navigator.requestMIDIAccess({ sysex: false });
+      if (generation !== this.generation) return; // stopped meanwhile
       this.access = access;
       const wire = () => {
         for (const input of access.inputs.values()) input.onmidimessage = e => { if (e.data) this.receive(e.data, performance.now() / 1000); };
@@ -38,7 +47,8 @@ export class MidiInput {
   }
 
   stop(): void {
-    if (this.access) for (const input of this.access.inputs.values()) input.onmidimessage = null;
+    this.generation++;
+    if (this.access) { this.access.onstatechange = null; for (const input of this.access.inputs.values()) input.onmidimessage = null; }
     this.access = null;
     this.status = { state: 'off' };
     this.onStatus(this.status);
@@ -54,7 +64,8 @@ export class MidiInput {
     const [status, a = 0, b = 0] = data;
     this.lastMessage = performance.now();
     if (status === 0xf8) { this.clock.midiTick(t); return; }
-    if (status === 0xfa || status === 0xfb) { this.clock.midiStart(t); return; }
+    if (status === 0xfa) { this.clock.midiStart(t); return; }
+    if (status === 0xfb) { this.clock.midiContinue(t); return; }
     if (status === 0xfc) { this.clock.midiStop(); return; }
     const kind = status & 0xf0, channel = (status & 0x0f) + 1;
     let name: string | null = null, value = 0;

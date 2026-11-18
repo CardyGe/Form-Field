@@ -15,7 +15,15 @@ export class TempoClock {
   private taps: number[] = [];
   private midi = { running: false, ticks: 0, last: 0, gaps: [] as number[] };
 
-  setSource(source: TempoSource): void { this.source = source; }
+  /** A new source carries the beat count on from where it was, so beat triggers and synced loops do not jump. */
+  setSource(source: TempoSource): void {
+    if (source === this.source) return;
+    const beats = this.currentBeats(this.lastT);
+    this.source = source;
+    this.anchor = { t: this.lastT, beats };
+    if (source === 'midi') this.midi.ticks = Math.round(beats * 24);
+  }
+  private currentBeats(t: number): number { return this.source === 'midi' ? this.midi.ticks / 24 : this.beatsAt(t); }
   /** A new tempo from the last moment the clock was read, so the beat count carries on without a jump. */
   setBpm(bpm: number): void {
     if (!Number.isFinite(bpm)) return;
@@ -49,9 +57,12 @@ export class TempoClock {
   }
 
   midiStart(t: number): void { this.midi = { running: true, ticks: 0, last: t, gaps: [] }; this.anchor = { t, beats: 0 }; }
+  /** Continue: carries on from where Stop left it. */
+  midiContinue(t: number): void { this.midi.running = true; this.midi.last = t; }
   midiStop(): void { this.midi.running = false; }
   midiTick(t: number): void {
-    if (!this.midi.running) { this.midi.running = true; this.midi.last = t; }
+    // Many devices send clock all the time: while stopped it does not move the beat.
+    if (!this.midi.running) return;
     const gap = t - this.midi.last;
     if (gap > 0 && gap < 0.25) { this.midi.gaps.push(gap); if (this.midi.gaps.length > 48) this.midi.gaps.shift(); }
     this.midi.last = t;

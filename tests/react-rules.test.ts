@@ -121,3 +121,27 @@ test('signals messages: numbers only, bounded', () => {
   assert.equal(acceptSignals(Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`midi.cc.1.${i}`, 0]))), false);
   assert.equal(acceptSignals(null), false);
 });
+
+test('review fixes: a new tempo source carries the beat on; clock while stopped does not move it; Continue keeps the place', () => {
+  const c = new TempoClock();
+  c.setSource('fixed'); c.setBpm(120); c.advance(0);
+  const before = c.advance(4.25);
+  c.setSource('tap');
+  const after = c.advance(4.25);
+  assert.equal(after.beat, before.beat);
+  const m = new TempoClock(); m.setSource('midi'); m.midiStart(0);
+  for (let i = 1; i <= 24; i++) m.midiTick(i * 0.02);
+  m.midiStop();
+  for (let i = 25; i <= 72; i++) m.midiTick(i * 0.02);
+  assert.equal(m.advance(1.5).beat, 1, 'stopped: no movement');
+  m.midiContinue(1.5);
+  for (let i = 73; i <= 96; i++) m.midiTick(i * 0.02);
+  assert.equal(m.advance(2).beat, 2, 'continue carries on from 1');
+});
+
+test('review fixes: room noise after silence is not a beat', () => {
+  const d = new BeatDetector();
+  let onsets = 0;
+  for (let f = 0; f < 600; f++) if (d.update(f < 300 ? 0 : 0.0005 * Math.random(), f / 60).onset) onsets++;
+  assert.equal(onsets, 0);
+});

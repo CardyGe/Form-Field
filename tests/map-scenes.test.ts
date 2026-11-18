@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { applyEdit, type EditAction } from '../src/map/editor';
 import { createShow, validateShow, type CurvePoint, type ShowDocument } from '../src/map/show';
 import { toWire } from '../src/map/messages';
+import { isPinnable } from '../src/map/homography';
+import { pinCorners } from '../src/map/placement';
 
 const sq = (x0: number, y0: number, x1: number, y1: number): CurvePoint[] => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
 const ok = (show: ShowDocument, action: EditAction): ShowDocument => { const r = applyEdit(show, action); assert.ok(r.ok, `refused: ${!r.ok && r.reason}`); return r.show; };
@@ -101,4 +103,19 @@ test('the wall gets links and tempo sync, never scenes or triggers', () => {
   assert.equal((wire.links as unknown[]).length, 1);
   assert.equal('scenes' in wire, false);
   assert.equal('triggers' in wire, false);
+});
+
+test('review fix: a scene bringing back a Pin whose own corners no longer carry a picture pins on its box', () => {
+  let show = ok(createShow(), { type: 'addShape', id: 'q', points: sq(.2, .2, .4, .4), colour: '#ff0000' });
+  show = ok(show, { type: 'setPlacement', shapeId: 'q', placement: { kind: 'pin' } });
+  show = ok(ok(show, { type: 'addScene', sceneId: 'a', name: 'A' }), { type: 'addScene', sceneId: 'b', name: 'B' });
+  show = ok(show, { type: 'setPlacement', shapeId: 'q', placement: { kind: 'fit' } });
+  // Folded in scene B, where it is not pinned.
+  show = ok(show, { type: 'movePoint', shapeId: 'q', index: 0, to: { x: .35, y: .35 } });
+  const back = ok(show, { type: 'switchScene', sceneId: 'a' });
+  const q = shapeOf(back, 'q');
+  assert.equal(q.placement.kind, 'pin');
+  assert.equal(isPinnable(pinCorners(q)).ok, true, 'it pins on corners that carry the picture (its box)');
+  // Switching to the live scene, or renaming to the same name, is no step at all.
+  assert.equal(applyEdit(back, { type: 'switchScene', sceneId: 'a' }).ok && (applyEdit(back, { type: 'switchScene', sceneId: 'a' }) as { show: ShowDocument }).show, back);
 });

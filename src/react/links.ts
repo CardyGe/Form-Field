@@ -29,7 +29,8 @@ export function evaluate(base: number, range: Range, links: Link[], signals: Sig
     if (!l.on) continue;
     const raw = signals[l.input];
     if (raw === undefined) { if (l.mode === 'modulate') state.delete(l.id); continue; }
-    const s = smooth(state.get(l.id) ?? raw, Math.min(1, Math.max(0, raw)), dt, l.attackMs, l.releaseMs);
+    const clamped = Math.min(1, Math.max(0, raw));
+    const s = smooth(state.get(l.id) ?? clamped, clamped, dt, l.attackMs, l.releaseMs);
     state.set(l.id, s);
     if (l.mode === 'control') control = range.min + span * (l.low + (l.high - l.low) * s);
     else sum += l.amount * s * span;

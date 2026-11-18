@@ -5,7 +5,7 @@
 import { bandEnergies, rms, type Bands } from './features';
 
 export const TEST_TONE = 'test-tone';
-export type AudioStatus = { state: 'off' } | { state: 'starting' } | { state: 'on'; label: string } | { state: 'refused' } | { state: 'lost' } | { state: 'failed'; reason: string };
+export type AudioStatus = { state: 'off' } | { state: 'starting' } | { state: 'on'; label: string } | { state: 'refused' } | { state: 'lost' } | { state: 'missing' } | { state: 'failed'; reason: string };
 
 export async function listAudioInputs(): Promise<{ id: string; label: string }[]> {
   try {
@@ -45,30 +45,35 @@ export class AudioInput {
     this.stop();
     const generation = ++this.generation;
     this.set({ state: 'starting' });
+    let ctx: AudioContext | null = null;
     try {
-      const ctx = new AudioContext();
+      ctx = new AudioContext();
       const analyser = ctx.createAnalyser();
+      const live = ctx;
       analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0.35;
       if (deviceId === TEST_TONE) {
-        this.tone = testBeat(ctx); this.tone.connect(analyser); this.tone.start();
-        this.ctx = ctx; this.analyser = analyser;
+        this.tone = testBeat(live); this.tone.connect(analyser); this.tone.start();
+        this.ctx = live; this.analyser = analyser;
         this.set({ state: 'on', label: 'Test beat' });
         return;
       }
-      if (await allow() !== 'granted') { void ctx.close(); if (generation === this.generation) this.set({ state: 'refused' }); return; }
+      if (await allow() !== 'granted') { void live.close(); if (generation === this.generation) this.set({ state: 'refused' }); return; }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
-      if (generation !== this.generation) { stream.getTracks().forEach(t => t.stop()); void ctx.close(); return; }
-      ctx.createMediaStreamSource(stream).connect(analyser);
+      if (generation !== this.generation) { stream.getTracks().forEach(t => t.stop()); void live.close(); return; }
+      live.createMediaStreamSource(stream).connect(analyser);
       const track = stream.getAudioTracks()[0];
       // An unplugged device ends its track: the operator is told, and every link falls back to its set value.
       track?.addEventListener('ended', () => { if (this.stream === stream) { this.stop(); this.set({ state: 'lost' }); } });
-      this.ctx = ctx; this.analyser = analyser; this.stream = stream;
-      void ctx.resume();
+      this.ctx = live; this.analyser = analyser; this.stream = stream;
+      void live.resume();
       this.set({ state: 'on', label: track?.label || 'Audio input' });
     } catch (error) {
+      // Each try's context is given back: Chromium allows only a few at once.
+      if (ctx && ctx !== this.ctx) void ctx.close().catch(() => {});
       if (generation !== this.generation) return;
       const name = (error as Error)?.name;
-      this.set(name === 'NotAllowedError' || name === 'SecurityError' ? { state: 'refused' } : { state: 'failed', reason: String((error as Error)?.message ?? error) });
+      this.set(name === 'NotAllowedError' || name === 'SecurityError' ? { state: 'refused' }
+        : name === 'NotFoundError' || name === 'OverconstrainedError' ? { state: 'missing' } : { state: 'failed', reason: String((error as Error)?.message ?? error) });
     }
   }
 

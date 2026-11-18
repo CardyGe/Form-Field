@@ -304,7 +304,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       next.photo = action.photo && { data: action.photo.data, opacity: clamp(Number.isFinite(action.photo.opacity) ? action.photo.opacity : .5, 0, 1) };
       return done();
     }
-    case 'addScene': case 'renameScene': case 'deleteScene': case 'setSceneFade': case 'switchScene': return stageScene(next, action);
+    case 'addScene': case 'renameScene': case 'deleteScene': case 'setSceneFade': case 'switchScene': return stageScene(next, action, show);
     case 'addLink': case 'updateLink': {
       const old = action.type === 'updateLink' ? next.links.find(l => l.id === action.linkId) : undefined;
       if (action.type === 'updateLink' && !old) return { reason: 'not-found' };
@@ -485,7 +485,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const project = presetComposition(content.presetId, content.seed);
       if (!project) return { reason: 'unknown-preset' };
       const old = shape.sourceId;
-      const oldGoes = old !== null && !next.shapes.some(s => s !== shape && s.sourceId === old);
+      const oldGoes = old !== null && !playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes }, old);
       if (next.sources.length - (oldGoes ? 1 : 0) >= MAX_SOURCES) return { reason: 'too-many-sources' };
       next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0, tempoSync: null });
       shape.sourceId = content.sourceId;
@@ -628,7 +628,7 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const source = shape.sourceId ? next.sources.find(s => s.id === shape.sourceId) : undefined;
   if (source && !action.spread) {
     if (action.sourceIds.length !== count || new Set(action.sourceIds).size !== count || action.sourceIds.some(id => taken.has(id) || action.ids.includes(id))) return { reason: 'duplicate-id' };
-    const sharedElsewhere = next.shapes.some(s => s !== shape && s.sourceId === source.id);
+    const sharedElsewhere = playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes }, source.id);
     if (next.sources.length - (sharedElsewhere ? 0 : 1) + count > MAX_SOURCES) return { reason: 'too-many-sources' };
   }
   let groupId = shape.groupId;
@@ -653,12 +653,24 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   return { show: normaliseGroups(next), touched: made };
 }
 
+/**
+ * A shape brought back by a scene keeps its Pin only if its corners can carry the picture now (its outline may have been
+ * edited since): four corners that cannot get handles at the box, and failing that it plays Fit.
+ */
+function pinnable(shape: Shape): Shape {
+  if (shape.placement.kind !== 'pin' || isPinnable(pinCorners(shape)).ok) return shape;
+  const boxed: Shape = { ...shape, placement: { ...shape.placement, pin: boxPin(shape) } };
+  return isPinnable(pinCorners(boxed)).ok ? boxed : { ...shape, placement: { ...shape.placement, kind: 'fit' } };
+}
+
 /** Scene edits. The shapes on screen are the live scene, so it is written back before another is brought in. */
-function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'addScene' | 'renameScene' | 'deleteScene' | 'setSceneFade' | 'switchScene' }>): Staged {
+function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'addScene' | 'renameScene' | 'deleteScene' | 'setSceneFade' | 'switchScene' }>, original: ShowDocument): Staged {
   const keepLive = () => { if (next.sceneId) next.scenes = next.scenes.map(sc => sc.id === next.sceneId ? { ...sc, shapes: capture(next.shapes) } : sc); };
   if (action.type === 'setSceneFade' && action.sceneId === null) {
     if (action.seconds === null || !Number.isFinite(action.seconds)) return { reason: 'bad-fade' };
-    next.sceneFade = clamp(action.seconds, FADE_RANGE.min, FADE_RANGE.max);
+    const fade = clamp(action.seconds, FADE_RANGE.min, FADE_RANGE.max);
+    if (fade === original.sceneFade) return { show: original, touched: [] };
+    next.sceneFade = fade;
     return { show: next, touched: [] };
   }
   if (action.type === 'addScene') {
@@ -676,11 +688,13 @@ function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'add
     case 'renameScene': {
       const name = cleanName(action.name).trim();
       if (!name || name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
+      if (name === scene.name) return { show: original, touched: [] };
       next.scenes = next.scenes.map(s => s === scene ? { ...s, name } : s);
       return { show: next, touched: [] };
     }
     case 'setSceneFade': {
       const fadeSeconds = action.seconds === null || !Number.isFinite(action.seconds) ? null : clamp(action.seconds, FADE_RANGE.min, FADE_RANGE.max);
+      if (fadeSeconds === scene.fadeSeconds) return { show: original, touched: [] };
       next.scenes = next.scenes.map(s => s === scene ? { ...s, fadeSeconds } : s);
       return { show: next, touched: [] };
     }
@@ -691,11 +705,11 @@ function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'add
       dropUnplayed(next);
       return { show: next, touched: [] };
     case 'switchScene': {
-      if (next.sceneId === scene.id) return { show: next, touched: [] };
+      if (next.sceneId === scene.id) return { show: original, touched: [] };
       keepLive();
       const target = next.scenes.find(s => s.id === scene.id)!;
       // A locked shape keeps its state; a shape the scene has never seen keeps its own.
-      next.shapes = next.shapes.map(sh => isShapeLocked(next, sh) ? sh : withState(sh, target.shapes[sh.id]));
+      next.shapes = next.shapes.map(sh => isShapeLocked(next, sh) ? sh : pinnable(withState(sh, target.shapes[sh.id])));
       for (const sh of next.shapes) if (sh.sourceId !== null && !next.sources.some(src => src.id === sh.sourceId)) sh.sourceId = null;
       next.sceneId = scene.id;
       return { show: next, touched: [] };

@@ -392,9 +392,14 @@ export function useMap(onError: (message: string) => void) {
   };
   useEffect(() => {
     if (!engine || !(reacts || panelOpen)) return;
-    let prev: Signals = {}, shown = 0;
+    // Triggers compare with the signals as they were, so a control already past halfway does not fire at once.
+    let prev: Signals = { ...engine.signals }, shown = 0;
     return engine.subscribe(now => {
-      if (outputOpen && reacts) bridge?.send({ type: 'signals', signals: now });
+      // The wall gets only the signals the show uses, so a controller with many knobs never makes the message too large.
+      if (outputOpen && reacts) {
+        const s = stateRef.current.show, used = new Set([...s.links.map(l => l.input), 'tempo.beat', 'tempo.phase']);
+        bridge?.send({ type: 'signals', signals: Object.fromEntries(Object.entries(now).filter(([k]) => used.has(k))) });
+      }
       onSignals.current?.(now);
       for (const action of fire(stateRef.current.show.triggers, prev, now)) triggerAct.current(action);
       prev = now;

@@ -405,15 +405,19 @@ function readTempoSync(value: unknown): { value: number | null; repaired: boolea
   return TEMPO_SYNC_BEATS.includes(value as number) ? { value: value as number, repaired: false } : { value: null, repaired: true };
 }
 
-function readSceneState(raw: unknown, sources: Map<string, unknown>): SceneState | null {
+function readSceneState(raw: unknown, sources: Map<string, unknown>, points: CurvePoint[]): { state: SceneState; repaired: boolean } | null {
   if (!isRecord(raw)) return null;
   const sourceId = typeof raw.sourceId === 'string' && sources.has(raw.sourceId) ? raw.sourceId : null;
-  return {
-    sourceId, fill: raw.fill === 'grid' ? 'grid' : 'colour', placement: readPlacement(raw.placement).placement,
+  const lostSource = raw.sourceId !== null && raw.sourceId !== undefined && sourceId === null;
+  const placement = readPlacement(raw.placement).placement;
+  // A scene's Pin must fit the shape's outline as it is now, as on the stage.
+  if (placement.kind === 'pin' && !isPinnable(pinCorners({ points, placement } as Shape)).ok) placement.kind = 'fit';
+  return { repaired: lostSource, state: {
+    sourceId, fill: raw.fill === 'grid' ? 'grid' : 'colour', placement,
     brightness: clampNumber(raw.brightness, BRIGHTNESS_MAX, 1).value, tint: typeof raw.tint === 'string' && HEX.test(raw.tint) ? raw.tint : '#ffffff',
     softEdge: clampNumber(raw.softEdge, SOFT_EDGE_MAX).value, border: readBorder(raw.border).border,
     visible: raw.visible !== false, blocker: raw.blocker === true,
-  };
+  } };
 }
 
 /** Scenes field by field: shapes no longer in the show are left out of each scene; a scene with a bad id or name is dropped. */
@@ -424,13 +428,13 @@ function readScenes(value: Record<string, unknown>, show: ShowDocument, sources:
   if (show.sceneFade !== fade) repaired = true;
   if (value.scenes === undefined) return { repaired };
   if (!Array.isArray(value.scenes)) return { repaired: true };
-  const ids = new Set(show.shapes.map(s => s.id));
+  const byId = new Map(show.shapes.map(s => [s.id, s]));
   for (const raw of value.scenes.slice(0, MAX_SCENES)) {
     if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH || show.scenes.some(s => s.id === raw.id) || !isRecord(raw.shapes)) { repaired = true; continue; }
     const shapes: Record<string, SceneState> = {};
     for (const [id, st] of Object.entries(raw.shapes)) {
-      const state = ids.has(id) ? readSceneState(st, sources) : null;
-      if (state) shapes[id] = state; else repaired = true;
+      const shape = byId.get(id), read = shape ? readSceneState(st, sources, shape.points) : null;
+      if (read) { shapes[id] = read.state; if (read.repaired) repaired = true; } else repaired = true;
     }
     const name = typeof raw.name === 'string' ? cleanName(raw.name).slice(0, MAX_NAME_LENGTH) : `Scene ${show.scenes.length + 1}`;
     const f = raw.fadeSeconds;
@@ -487,7 +491,10 @@ export function readTrigger(raw: unknown, show: Pick<ShowDocument, 'scenes' | 's
   if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH) return null;
   if (typeof raw.input !== 'string' || !SIGNAL.test(raw.input) || raw.input.length > 32 || !actionValid(raw.action, show)) return null;
   const when = raw.when === 'beats' ? 'beats' : 'on';
-  return { id: raw.id, input: raw.input, when, every: Math.round(num(raw.every, 1, 64, 1)), action: raw.action, on: raw.on !== false };
+  // The action is rebuilt with only its own fields.
+  const a = raw.action;
+  const action: TriggerAction = a.kind === 'scene' ? { kind: 'scene', sceneId: a.sceneId } : a.kind === 'vary' ? { kind: 'vary', sourceId: a.sourceId } : { kind: a.kind };
+  return { id: raw.id, input: raw.input, when, every: Math.round(num(raw.every, 1, 64, 1)), action, on: raw.on !== false };
 }
 function readTriggers(value: unknown, show: Pick<ShowDocument, 'scenes' | 'sources'>): { triggers: Trigger[]; repaired: boolean } {
   if (value === undefined) return { triggers: [], repaired: false };

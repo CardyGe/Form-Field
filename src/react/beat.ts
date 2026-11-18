@@ -23,7 +23,8 @@ export class BeatDetector {
     const sd = Math.sqrt(this.flux.reduce((a, x) => a + (x.v - mean) ** 2, 0) / (this.flux.length || 1));
     const loudest = Math.max(v, ...this.recent.map(x => x.v));
     // Above its own recent spread, and a real share of the recent bass, so a steady hum never counts.
-    const onset = f > mean + 1.5 * sd && f > 0.1 * loudest && t - this.last >= MIN_GAP;
+    // With about a sixth of a second heard, above an absolute floor, so room noise after silence is not a beat.
+    const onset = this.flux.length >= 10 && f > 0.002 && f > mean + 1.5 * sd && f > 0.1 * loudest && t - this.last >= MIN_GAP;
     this.flux.push({ t, v: f });
     this.recent.push({ t, v });
     if (onset) { this.last = t; this.count++; this.onsets.push(t); if (this.onsets.length > 16) this.onsets.shift(); }

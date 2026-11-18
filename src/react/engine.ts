@@ -50,8 +50,9 @@ export class ReactivityEngine {
   /** Called with fresh signals every frame while subscribed. Returns the unsubscribe. */
   subscribe(listener: (signals: Signals) => void): () => void {
     this.listeners.add(listener);
-    if (this.listeners.size === 1) this.run();
-    return () => { this.listeners.delete(listener); if (!this.listeners.size) cancelAnimationFrame(this.raf); };
+    if (this.listeners.size === 1) { this.run(); if (this.audio.status.state === 'off') void this.applyAudio(); }
+    // With nothing listening the device is let go, so the Mac's microphone light goes out.
+    return () => { this.listeners.delete(listener); if (!this.listeners.size) { cancelAnimationFrame(this.raf); this.audio.stop(); } };
   }
   /** Told when devices, status or preferences change (for the panel). */
   onChange(listener: () => void): () => void { this.changes.add(listener); return () => this.changes.delete(listener); }
