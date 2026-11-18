@@ -13,7 +13,7 @@ import { isPinnable } from './homography';
 import { ownCornersPinnable, pinCorners } from './placement';
 /** Pin handles at the corners of the shape's box, in stage fractions. */
 const boxPin = (shape: Shape): Point[] => pinCorners({ ...shape, points: shape.points.length === 4 ? [...shape.points, shape.points[0]] : shape.points, placement: { ...shape.placement, pin: null } }).map(q => ({ x: q.x / STAGE_SIZE.width, y: q.y / STAGE_SIZE.height }));
-import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer } from '../core/project';
+import { PRESETS, applyPreset, createLayer, createProject, readParameterDefinitions, validateProject, varyLayer } from '../core/project';
 import type { Project } from '../shared/types';
 
 /** ring: which outline of a shape a point belongs to. Missing or -1 is the shape's own outline; 0 and up are its holes. */
@@ -76,6 +76,8 @@ export type EditAction =
   | { type: 'movePin'; shapeId: string; index: number; to: Point }
   | { type: 'shareSource'; shapeId: string; withShapeId: string }
   | { type: 'makeSeparate'; shapeId: string; sourceId: string }
+  /** Map's Effect tab: some of one layer's settings, each kept inside its own range. */
+  | { type: 'setSourceLayer'; sourceId: string; layer: number; params: Record<string, number> }
   | { type: 'setLook'; shapeId: string; brightness?: number; tint?: string }
   | { type: 'setStageCorners'; corners: Point[] | null }
   /** Stage 5: scenes. Adding one takes in the live state; switching keeps the live scene, then brings the other back. */
@@ -176,10 +178,24 @@ export function presetComposition(presetId: string, seed: number): Project | nul
 }
 
 /** Changes to a source itself. Refused while any shape playing it is locked. */
-function stageSource(next: ShowDocument, action: Extract<EditAction, { sourceId: string; type: 'varySource' | 'setSourcePalette' | 'setSourceSpeed' | 'setSourceProject' }>): Staged {
+function stageSource(next: ShowDocument, action: Extract<EditAction, { sourceId: string; type: 'varySource' | 'setSourcePalette' | 'setSourceSpeed' | 'setSourceProject' | 'setSourceLayer' }>): Staged {
   const i = next.sources.findIndex(s => s.id === action.sourceId);
   if (i < 0) return { reason: 'not-found' };
   if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+  if (action.type === 'setSourceLayer') {
+    const layer = next.sources[i].project.layers[action.layer];
+    if (!layer || !Number.isInteger(action.layer)) return { reason: 'not-found' };
+    const defs = readParameterDefinitions(layer.kind), params = { ...layer.params };
+    for (const [key, raw] of Object.entries(action.params)) {
+      const d = defs.find(x => x.key === key);
+      if (!d || !Number.isFinite(raw)) return { reason: 'bad-setting' };
+      const v = clamp(raw, d.min, d.max);
+      params[key] = d.step >= 1 ? Math.round(v) : v;
+    }
+    const project = { ...next.sources[i].project, layers: next.sources[i].project.layers.map((l, n) => n === action.layer ? { ...l, params } : l) };
+    next.sources[i] = { ...next.sources[i], project, revision: next.sources[i].revision + 1 };
+    return { show: next, touched: [] };
+  }
   const source = next.sources[i];
   // Sources are never changed in place: undo snapshots share them.
   const replace = (changes: Partial<Source>): Staged => { next.sources[i] = { ...source, ...changes }; return { show: next, touched: [] }; };
@@ -296,7 +312,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
   const done = (touched: Shape[] = []): Staged => ({ show: next, touched });
 
   switch (action.type) {
-    case 'varySource': case 'setSourcePalette': case 'setSourceSpeed': case 'setSourceProject': return stageSource(next, action);
+    case 'varySource': case 'setSourcePalette': case 'setSourceSpeed': case 'setSourceProject': case 'setSourceLayer': return stageSource(next, action);
     case 'addRectangle': return stage(show, { type: 'addShape', id: action.id, points: rectangleFromDrag(clampToStage(action.a), clampToStage(action.b)), colour: action.colour });
     case 'addShape': {
       if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
@@ -564,6 +580,11 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (next.sources.length >= MAX_SOURCES) return { reason: 'too-many-sources' };
       next.sources.push({ ...source, id: action.sourceId, revision: 0 });
       shape.sourceId = action.sourceId;
+      // The effect's reactions come with the copy, as far as the link limit allows.
+      const from = `source.${source.id}.`, room = MAX_LINKS - next.links.length;
+      const copies = next.links.filter(l => l.target.startsWith(from)).slice(0, Math.max(0, room))
+        .map(l => ({ ...l, id: `${l.id}~${action.sourceId}`.slice(0, 64), target: `source.${action.sourceId}.${l.target.slice(from.length)}` }));
+      next.links = [...next.links, ...copies.filter(c => !next.links.some(l => l.id === c.id))];
       return done();
     }
     case 'setLook': {

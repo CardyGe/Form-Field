@@ -9,9 +9,11 @@ import { shouldCommit } from '../map/keys';
 import type { Shape } from '../map/show';
 import { BORDER_MAX, BRIGHTNESS_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, ZOOM_RANGE, isShapeLocked, type Placement, type PlacementKind } from '../map/show';
 import { ownCornersPinnable } from '../map/placement';
-import { REACTIONS, reactionLinks, targetRange, type Reaction } from '../map/targets';
+import { REACTIONS, reactionLinks, reactsLabel, targetRange, type Reaction } from '../map/targets';
 import { LIVE_SOURCE_ID, TEMPO_SYNC_BEATS } from '../map/show';
 import MapLiveCard from './MapLiveCard';
+import MapEffectTab from './MapEffectTab';
+import MapSoundTab from './MapSoundTab';
 import { LOOK_LABELS } from '../live/settings';
 import { ReactTo, linkFor } from './ReactControls';
 import { newItemId } from './mapActions';
@@ -68,31 +70,14 @@ function ReactButton({ map, target, label, disabled }: { map: Map; target: strin
     onStop={() => map.dispatch({ type: 'removeLinks', target })} />;
 }
 
-/** What makes this shape (and its instrument) move with sound and MIDI: the ready-made reactions, and its links. */
-function ReactsSection({ map, shape, setNote }: { map: Map; shape: Shape; setNote: (text: string | null) => void }) {
-  const mine = map.show.links.filter(l => l.target.startsWith(`shape.${shape.id}.`) || (shape.sourceId !== null && l.target.startsWith(`source.${shape.sourceId}.`)));
-  const add = (reaction: Reaction) => {
-    const links = reactionLinks(map.show, reaction, shape.id, [newItemId('link')]);
-    if (typeof links === 'string') { setNote(links === 'needs-instrument' ? 'This reaction needs the shape to play an instrument with a motion setting' : 'That shape is gone'); return; }
-    setNote(null);
-    map.startEngine();
-    map.dispatch({ type: 'addReaction', reaction, shapeId: shape.id, ids: links.map(l => l.id) });
-  };
-  return <Section id="reacts" title="Reacts" summary={mine.length ? `${mine.length} ${mine.length === 1 ? 'link' : 'links'}` : 'no'}>
-    <label className="map-field">Add a reaction<select aria-label="Add a reaction" value="" onChange={e => { if (e.target.value) add(e.target.value as Reaction); }}>
-      <option value="">Choose…</option>
-      {(Object.keys(REACTIONS) as Reaction[]).map(r => <option key={r} value={r} disabled={r === 'instrument-bass' && !shape.sourceId}>{REACTIONS[r].label}</option>)}
-    </select></label>
-    {mine.map(l => <div key={l.id} className="map-react-line">
-      <span>{l.name || signalLabel(l.input)} → {targetRange(map.show, l.target)?.label.split(' · ').slice(1).join(' · ') ?? '?'}</span>
-      <button className="map-icon" aria-label="Remove reaction" title="Remove" onClick={() => map.dispatch({ type: 'removeLink', linkId: l.id })}>×</button></div>)}
-    {mine.length > 0 && <p className="muted-text">Fine-tune these in Sound &amp; MIDI.</p>}
-  </Section>;
-}
+/** The Details tab last chosen, kept while the app is open. */
+let lastTab: 'shape' | 'effect' | 'sound' = 'shape';
 
 /** The Details panel: the selected shape's name, colour, what it plays, its edge, shape tools and its chosen point. */
 export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, linked, setLinked, liveStatus = null }: { liveStatus?: { running: boolean; state: string } | null; map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void; onOpenLooks: () => void; linked: boolean; setLinked: (on: boolean) => void }) {
   const act = mapActions(map);
+  const [tab, setTab] = useState<'shape' | 'effect' | 'sound'>(lastTab);
+  const chooseTab = (t: 'shape' | 'effect' | 'sound') => { lastTab = t; setTab(t); };
   const [grid, setGrid] = useState({ rows: '2', cols: '2', gap: '0', spread: true });
   const many = map.selectedIds.length > 1;
   const shape = map.show.shapes.find(s => s.id === map.selectedId) ?? null;
@@ -125,6 +110,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
   }
   if (!shape) return <p className="muted-text">Pick a shape to see its details. Shift-click or drag a box on the stage to pick several.</p>;
 
+  const reacts = reactsLabel(map.show, shape.id);
   const commitName = (text: string) => { const name = text.trim(); if (name && name !== shape.name) map.dispatch({ type: 'rename', shapeId: shape.id, name }); };
   const commitColour = (text: string) => {
     const colour = text.trim();
@@ -169,9 +155,12 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
       <CommitField label="Group name" value={group.name} maxLength={MAX_NAME_LENGTH} disabled={group.locked} onCommit={text => { const name = text.trim(); if (name && name !== group.name) map.dispatch({ type: 'renameGroup', groupId: group.id, name }); }} />
       <button className="text-button" disabled={group.locked} title="Dissolve this group; its shapes stay · ⇧⌘G" onClick={() => act.ungroup(group.id)}>Ungroup</button></div>}
 
-    <ContentCard map={map} shape={shape} locked={locked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked={linked} setLinked={setLinked} />
-    {shape.sourceId === LIVE_SOURCE_ID && !shape.blocker && <Section id="live" title="Live" summary={map.live ? LOOK_LABELS[map.live.look] : ''}><MapLiveCard map={map} locked={locked} onError={text => setNote(text)} localStatus={liveStatus} /></Section>}
 
+    <div className="map-inspector-tabs" role="tablist" aria-label="Shape panels">
+      {(['shape', 'effect', 'sound'] as const).map(t => <button key={t} role="tab" aria-selected={tab === t} onClick={() => chooseTab(t)}>
+        {t === 'shape' ? 'Shape' : t === 'effect' ? 'Effect' : <>Sound{reacts ? <small> {reacts}</small> : null}</>}</button>)}
+    </div>
+    {tab === 'shape' && <>
     {point && map.selectedIndex !== null && <div className="map-point">
       <h3>{map.selectedRing >= 0 ? `Hole ${map.selectedRing + 1}, ${isCurved(point) ? 'curve point' : 'corner'}` : isCurved(point) ? 'Curve point' : 'Corner'} {map.selectedIndex + 1}</h3>
       <div className="map-xy">
@@ -212,8 +201,6 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
           onClick={() => map.dispatch({ type: 'setLook', shapeId: shape.id, tint: colour })} />)}
         <label className="map-tint custom" title="Any tint"><input type="color" aria-label="Tint colour" value={shape.tint} disabled={locked} onChange={e => map.dispatch({ type: 'setLook', shapeId: shape.id, tint: e.target.value.toLowerCase() })} /></label></div></div>
     </Section>}
-
-    {!shape.blocker && <ReactsSection map={map} shape={shape} setNote={setNote} />}
 
     <Section id="edge" title="Edge" summary={edgeSummary}>
       <SliderField key={`soft-${shape.id}`} label="Soft edge" value={shape.softEdge} min={0} max={SOFT_EDGE_MAX} step={1} unit=" px" disabled={locked} onCommit={px => map.dispatch({ type: 'setSoftEdge', shapeId: shape.id, px })} />
@@ -256,6 +243,14 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
       <button className="text-button danger-button" disabled={locked} title={locked ? 'Unlock the shape to delete it' : 'Delete this shape · ⌫'} onClick={() => act.remove([shape.id])}>Delete shape</button>
     </Section>
     {!point && <p className="muted-text map-hint">Click a point on the stage to set its exact position. Double-click a side to add a point.</p>}
+    </>}
+    {tab === 'effect' && <>
+      <ContentCard map={map} shape={shape} locked={locked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked={linked} setLinked={setLinked} />
+      {!shape.blocker && !shape.sourceId && <p className="muted-text">Choose an effect first: Change… above. Its settings, and what can react to sound, show here.</p>}
+      {!shape.blocker && shape.sourceId === LIVE_SOURCE_ID && <MapLiveCard map={map} locked={locked} onError={text => setNote(text)} localStatus={liveStatus} />}
+      {!shape.blocker && shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID && <MapEffectTab map={map} shape={shape} locked={locked} linked={linked} setNote={setNote} />}
+    </>}
+    {tab === 'sound' && <MapSoundTab map={map} shape={shape} locked={locked} setNote={setNote} />}
   </>;
 }
 

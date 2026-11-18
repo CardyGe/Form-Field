@@ -2,6 +2,7 @@ import { useState, type MouseEvent } from 'react';
 import type { useMap } from './useMap';
 import MapIcon from './mapIcons';
 import { LIVE_SOURCE_ID, type Shape } from '../map/show';
+import { reactsLabel } from '../map/targets';
 
 type Map = ReturnType<typeof useMap>;
 
@@ -48,7 +49,7 @@ export default function MapShapeList({ map, onMenu }: { map: Map; onMenu: (e: Mo
     onContextMenu={e => { e.preventDefault(); if (map.loaded) onMenu(e, shape.id); }}>
     <button className="map-shape-name" aria-pressed={map.selectedIds.includes(shape.id)} aria-label={shape.name} title={shape.blocker ? 'Blocker: blacks out everything beneath it' : undefined} onClick={e => select(e, [shape.id])}>
       <span className={`map-swatch ${shape.blocker ? 'blocker' : ''}`} style={{ background: shape.blocker ? undefined : shape.colour }} /><span className="map-row-name">{shape.name}</span>
-      <span className="map-row-plays">{plays(shape)}</span></button>
+      <span className="map-row-plays">{plays(shape)}</span>{reactsLabel(map.show, shape.id) && <span className="map-row-reacts" title="Reacts to sound or MIDI">{reactsLabel(map.show, shape.id)}</span>}</button>
     {toggles(shape.name, shape.visible, shape.locked, map.solo.shapes.includes(shape.id), {
       show: () => map.dispatch({ type: 'setVisible', shapeId: shape.id, visible: !shape.visible }),
       lock: () => map.dispatch({ type: 'setLocked', shapeId: shape.id, locked: !shape.locked }),

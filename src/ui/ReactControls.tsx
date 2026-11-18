@@ -37,7 +37,9 @@ function Meter({ label, value }: { label: string; value: number }) {
 }
 
 /** The sound input, MIDI and tempo, with meters. With no engine yet, a single button starts it. */
-export function ReactDevices({ engine, meter, onStart, audioOnly = false }: { engine: ReactivityEngine | null; meter: MeterStore; onStart: () => void; audioOnly?: boolean }) {
+export function ReactDevices({ engine, meter, onStart, layout = 'column', audioOnly = false }: {
+  engine: ReactivityEngine | null; meter: MeterStore; onStart: () => void; layout?: 'column' | 'strip'; audioOnly?: boolean;
+}) {
   useEngine(engine);
   // Only this part re-renders with the meters.
   const signals: Signals = useSyncExternalStore(meter.subscribe, meter.get);
@@ -50,14 +52,14 @@ export function ReactDevices({ engine, meter, onStart, audioOnly = false }: { en
     const off = engine.onChange(refresh);
     return () => { navigator.mediaDevices?.removeEventListener?.('devicechange', refresh); off(); };
   }, [engine]);
-  if (!engine) return <div className="react-devices">
+  if (!engine) return <div className={`react-devices ${layout}`}>
     {!audioOnly && <p className="muted-text">Sound and MIDI are off until something uses them.</p>}
     <button className="text-button" onClick={onStart}>{audioOnly ? 'Choose a sound input' : 'Turn on sound and MIDI'}</button></div>;
   const p = engine.prefs, midi = engine.midi.status;
   const audioOk = engine.audio.status.state === 'on' || engine.audio.status.state === 'off' || engine.audio.status.state === 'starting';
   const beat = Math.floor(signals['tempo.beat'] ?? 0) % 4, bpm = signals['tempo.bpm'] ?? p.bpm;
   const midiActive = performance.now() - engine.midi.lastMessage < 250;
-  return <div className="react-devices">
+  return <div className={`react-devices ${layout}`}>
     <label className="map-field">Sound input<select aria-label="Sound input" value={p.audioDevice ?? ''} onChange={e => engine.setPrefs({ audioDevice: e.target.value || null })}>
       <option value="">Off</option>
       {inputs.map(i => <option key={i.id} value={i.id}>{i.label}</option>)}
@@ -112,14 +114,15 @@ function Range({ label, value, min, max, step, shown, onCommit }: { label: strin
 }
 
 /** One link: what it listens to, what it moves, how much and how smoothly. */
-export function LinkRow({ link, targetLabel, targets, engine, onChange, onRemove }: { link: Link; targetLabel: string; targets?: { target: string; label: string }[]; engine: ReactivityEngine | null; onChange: (change: Partial<Omit<Link, 'id'>>) => void; onRemove: () => void }) {
+export function LinkRow({ link, targetLabel, targets, engine, onChange, onRemove, note }: { link: Link; targetLabel: string; targets?: { target: string; label: string }[]; engine: ReactivityEngine | null; onChange: (change: Partial<Omit<Link, 'id'>>) => void; onRemove: () => void; note?: string }) {
   const pct = (v: number) => `${Math.round(v * 100)} %`, ms = (v: number) => `${Math.round(v)} ms`;
   return <details className="react-link" data-link={link.id}>
     <summary>
       <input type="checkbox" aria-label={`${link.name || 'Link'} on`} checked={link.on} onClick={e => e.stopPropagation()} onChange={e => onChange({ on: e.target.checked })} />
-      <span className="react-link-name"><strong>{signalLabel(link.input)}</strong> → {targetLabel}</span>
+      <span className="react-link-name"><strong>{signalLabel(link.input)}</strong> → {targetLabel} <small className="muted-text">· {link.mode === 'control' ? `${pct(link.low)}–${pct(link.high)}` : pct(link.amount)}</small></span>
       <button className="map-icon" aria-label="Remove link" title="Remove" onClick={e => { e.preventDefault(); onRemove(); }}>×</button>
     </summary>
+    {note && <p className="react-status warn">{note}</p>}
     <div className="react-link-body">
       <InputSelect value={link.input} engine={engine} learnKey={`link:${link.id}`} onChange={input => onChange({ input })} />
       {targets && <label className="map-field">Moves<select aria-label="Moves" value={link.target} onChange={e => onChange({ target: e.target.value })}>

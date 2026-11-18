@@ -206,3 +206,30 @@
 .look-art.live, .map-content-thumb.live { position: relative; }
 .map-live-card { display: grid; gap: 6px; }
 .map-live-card .stacked-label { display: grid; gap: 2px; font-size: 11px; color: var(--muted); }
+
+/* Map sound pass: the Effect tab's settings (Studio's own controls), layer chips, reacting shapes */
+.map-effect-settings { display: grid; gap: 6px; margin-top: 8px; }
+.map-effect-settings .control-section { border-top: 1px solid var(--line); }
+.map-layer-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.map-animated { font-size: 10px; color: var(--accent); padding: 0 4px; }
+.map-row-reacts { margin-left: 4px; font-size: 10px; color: var(--accent); }
+.map-sound-tab { display: grid; gap: 6px; }
+.parameter .react-to { display: inline-flex; }
+
+/* The sound strip under the stage */
+.map-sound-strip { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 6px 12px; background: var(--panel); border-top: 1px solid var(--line); font-size: 11px; }
+.map-sound-strip .map-scenes { border-top: 0; padding: 0; flex: 1 1 280px; }
+.react-devices.strip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 0; border-bottom: 0; }
+.react-devices.strip .map-field { display: flex; align-items: center; gap: 6px; }
+.react-devices.strip .map-field select { width: auto; max-width: 180px; }
+.react-devices.strip .react-status { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.react-devices.strip .react-status.warn { white-space: normal; }
+.react-devices.strip .react-meters { display: flex; gap: 6px; }
+.react-devices.strip .react-meter { grid-template-columns: auto 40px; gap: 3px; }
+.react-devices.strip .react-tempo { flex-wrap: nowrap; align-items: center; }
+.react-devices.strip .react-beats, .react-devices.strip .react-bpm { padding-bottom: 0; }
+.map-show-pop { position: absolute; right: 8px; bottom: calc(100% + 6px); z-index: 40; width: 360px; max-height: 60vh; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 10px 32px rgba(0,0,0,.5); }
+/* A meter's track is visible when it is silent. */
+.react-meter i { box-shadow: none; }
+.react-meter { background-image: linear-gradient(var(--line), var(--line)); background-repeat: no-repeat; background-size: calc(100% - 44px) 6px; background-position: right center; }
+.react-devices.strip .react-meter { background-size: 40px 6px; }

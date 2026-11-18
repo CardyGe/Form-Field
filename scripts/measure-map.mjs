@@ -14,6 +14,7 @@ import { _electron as electron } from 'playwright';
 
 // The look browser and the Details panel's folding sections (Map UI pass).
 const playLook = async (page, value) => {
+  await openSection(page, 'effect');
   await page.getByRole('button', { name: 'Change look' }).click();
   await page.locator(`[data-look="${value}"]`).click();
   // A person presses Escape well after the click; pressed within milliseconds it can arrive before the page settles.
@@ -25,7 +26,13 @@ const playLook = async (page, value) => {
     await page.locator('.look-browser').waitFor({ state: 'detached' });
   });
 };
-const openSection = (page, id) => page.evaluate(id => { const d = document.querySelector(`details[data-section="${id}"]`); if (d && !d.open) d.open = true; }, id);
+// Details has Shape, Effect and Sound tabs: a section opens its tab first ('effect' and 'reacts' are tabs of their own).
+const openSection = async (page, id) => {
+  const tab = { reacts: /^Sound/, effect: /^Effect$/, live: /^Effect$/ }[id] ?? /^Shape$/;
+  const button = page.getByRole('tablist', { name: 'Shape panels' }).getByRole('tab', { name: tab });
+  if (await button.count()) await button.click();
+  await page.evaluate(id => { const d = document.querySelector(`details[data-section="${id}"]`); if (d && !d.open) d.open = true; }, id);
+};
 
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

@@ -17,6 +17,7 @@ const MINUTES = arg('--minutes', 120);
 const HEAVY = process.argv.includes('--heavy');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const playLook = async (page, value) => {
+  await openSection(page, 'effect');
   await page.getByRole('button', { name: 'Change look' }).click();
   await page.locator(`[data-look="${value}"]`).click();
   await sleep(150);
@@ -26,7 +27,13 @@ const playLook = async (page, value) => {
     await page.locator('.look-browser').waitFor({ state: 'detached' });
   });
 };
-const openSection = (page, id) => page.evaluate(id => { const d = document.querySelector(`details[data-section="${id}"]`); if (d && !d.open) d.open = true; }, id);
+// Details has Shape, Effect and Sound tabs: a section opens its tab first ('effect' and 'reacts' are tabs of their own).
+const openSection = async (page, id) => {
+  const tab = { reacts: /^Sound/, effect: /^Effect$/, live: /^Effect$/ }[id] ?? /^Shape$/;
+  const button = page.getByRole('tablist', { name: 'Shape panels' }).getByRole('tab', { name: tab });
+  if (await button.count()) await button.click();
+  await page.evaluate(id => { const d = document.querySelector(`details[data-section="${id}"]`); if (d && !d.open) d.open = true; }, id);
+};
 
 const userData = path.join(out, 'user-data');
 await fs.rm(userData, { recursive: true, force: true });
@@ -101,9 +108,8 @@ try {
   }
   const reactions = HEAVY ? ['pulse', 'bass-zoom', 'highs-flicker', 'instrument-bass', 'breathe', 'instrument-bass', 'pulse', 'bass-zoom'] : ['pulse', 'bass-zoom', 'highs-flicker', 'breathe'];
   for (let i = 0; i < reactions.length; i++) { await pick(i); await openSection(studio, 'reacts'); await studio.getByLabel('Add a reaction', { exact: true }).selectOption(reactions[i]); }
-  await studio.getByRole('tab', { name: /Sound & MIDI/ }).click();
-  if (HEAVY) for (const i of [0, 5]) { await pick(i); await studio.getByRole('tab', { name: 'Details' }).click(); await studio.getByLabel('Loop with the tempo', { exact: true }).selectOption('4'); }
-  await studio.getByRole('tab', { name: /Sound & MIDI/ }).click();
+  if (HEAVY) for (const i of [0, 5]) { await pick(i); await openSection(studio, 'effect'); await studio.getByLabel('Loop with the tempo', { exact: true }).selectOption('4'); }
+  await studio.getByRole('button', { name: 'Show-wide sound and triggers' }).click();
   await studio.getByRole('button', { name: '+ Trigger' }).click(); // every 16 beats: next scene
   if (HEAVY) await studio.locator('.react-trigger').last().getByLabel('Every', { exact: true }).selectOption('4');
   await studio.waitForFunction(() => !!window.__studioTest?.react, null, { timeout: 5000 });

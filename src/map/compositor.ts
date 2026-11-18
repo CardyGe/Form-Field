@@ -10,7 +10,7 @@ import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
 import { drawCommands, shownOnWall, stageCommands, type DrawOptions } from './draw';
 import { borderColour, fadeKey } from './edge';
-import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, type Governor, type Playing } from './playout';
+import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, STAGE_SIZE, usesLive, type Group, type Point, type Shape } from './show';
 import type { Scene } from './scenes';
@@ -83,6 +83,9 @@ export interface CompositorStats {
   contextLost: boolean;
   /** Live in Map: whether the show's Live runs (null: none, camera off). */
   live?: { running: boolean; state: string } | null;
+  linked?: Record<string, number>;
+  /** How many times a playing effect took new settings without being prepared again (for checks). */
+  adjusted?: number;
 }
 
 const kindsOf = (project: Project | null | undefined) => project ? project.layers.map(l => l.kind).join(',') : '';
@@ -211,6 +214,7 @@ export class MapCompositor {
   setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.frozenSignals = this.signals; this.live?.setFrozen(frozen); this.dirty = true; } }
 
   // ---- Live in Map ----
+  private adjusted = 0;
   private live: LiveSlot | null = null;
   private liveTexture: Texture | null = null;
   private liveSettings: LiveSettings | null = null;
@@ -271,7 +275,9 @@ export class MapCompositor {
       if (!users.length) { const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
       const slot = this.slot(source.id, now);
       if (!slot) continue;
-      if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) this.prepare(slot, project);
+      // A setting that can follow sound changed (Map's Effect tab): the playing effect is adjusted in place, never restarted.
+      if (project !== slot.project && slot.project && !slot.pending && slot.failedProject === null && !needsPrepare(slot.project, project)) { slot.project = project; this.adjusted++; }
+      else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) this.prepare(slot, project);
       if (!slot.project || !slot.renderer) continue;
       if (!this.frozen) {
         // In tempo sync the loop follows the clock's beats; without a clock it runs at its own speed.
@@ -322,6 +328,9 @@ export class MapCompositor {
       edgeBuilds: this.edgeBuilds,
       contextLost: this.lost,
       live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status } : null,
+      // For the scripted checks: the effect settings links are moving now, as drawn (source:layer:key → value).
+      adjusted: this.adjusted,
+      linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
     };
   }
 
