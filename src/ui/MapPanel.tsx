@@ -64,6 +64,8 @@ const stagePx = (p: Point) => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.
 const CORNER_PX = 16;        // stage-corner handle radius (pixels on screen)
 /** Where the stage's corners go on the projector: the show's stage corners, or the stage's own. */
 const stageCornerPoints = (show: { stageCorners: Point[] | null }): Point[] => show.stageCorners ?? [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+/** A corner past the stage's edge is shown, and grabbed, at the edge. */
+const onScreen = (p: Point): Point => ({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) });
 const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
 /** The photo, decoded once per picture, and the rectangle it fills: as large as fits on the stage, centred. */
@@ -154,7 +156,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     const picture = d.refused?.show ?? d.shown;
     const options = { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: d.selectedId, selectedIndex: null,
       outlinesOnly: !!background, invalidIds: d.refused ? d.refused.ids : [], solo: d.soloed, operator: true };
-    const local = compositor.current && !d.outputOpen && picture.sources.length > 0 && !compositor.current.stats().contextLost ? compositor.current : null;
+    // With the output closed this screen draws the stage as the wall would (placement, pins, look), instruments or not.
+    const local = compositor.current && !d.outputOpen && !compositor.current.stats().contextLost ? compositor.current : null;
     if (local) {
       if (playedShow.current !== picture) { local.setShow(picture, new Map(picture.sources.map(s => [s.id, s.project]))); playedShow.current = picture; }
       local.setOptions(options);
@@ -241,7 +244,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     }
     // Stage corners: where the stage's corners go on the projector, numbered, joined by a dashed line.
     if (d.cornersMode) {
-      const corners = stageCornerPoints(picture).map(stagePx);
+      const corners = stageCornerPoints(picture).map(onScreen).map(stagePx);
       ctx.save(); ctx.setLineDash([10 * k, 6 * k]); ctx.strokeStyle = '#00e0ff'; ctx.lineWidth = 2 * k;
       ctx.beginPath(); corners.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.closePath(); ctx.stroke(); ctx.restore();
       corners.forEach((q, i) => {
@@ -348,7 +351,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     // Stage corners: only the four corner handles answer, and the corner keeps pointing at the projector's picture.
     if (cornersMode) {
       const here = stagePx(raw), r = CORNER_PX * 1.5 * screenScale();
-      const i = stageCornerPoints(map.show).findIndex(q => { const c = stagePx(q); return Math.hypot(c.x - here.x, c.y - here.y) <= r; });
+      const i = stageCornerPoints(map.show).findIndex(q => { const c = stagePx(onScreen(q)); return Math.hypot(c.x - here.x, c.y - here.y) <= r; });
       if (i >= 0) { setCornerIndex(i); drag.current = { kind: 'corner', index: i, start: raw }; e.currentTarget.setPointerCapture(e.pointerId); }
       return;
     }
@@ -459,7 +462,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
 
   /** Double-click: on a point removes it, on a side adds one there. */
   const onDoubleClick = (e: MouseEvent<HTMLCanvasElement>) => {
-    if (map.tool !== 'select' || !map.loaded) return;
+    if (map.tool !== 'select' || !map.loaded || cornersMode) return;
     const picked = pick(pointerAt(e), map.show, selection(), reach());
     if (picked.kind === 'point') {
       if (map.dispatch({ type: 'removePoint', shapeId: picked.shapeId, ring: picked.ring, index: picked.index })) map.setSelection(picked.shapeId);
@@ -487,18 +490,22 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     const action = shortcutFor({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, onStage, target });
     if (!action) return;
     const shape = map.show.shapes.find(s => s.id === map.selectedId) ?? null;
+    // In Stage corners only the corner keys, Escape, undo and redo act: the shapes cannot be grabbed in this mode.
+    if (cornersMode && !['arrow', 'next-corner', 'previous-corner', 'deselect', 'undo', 'redo'].includes(action)) return;
     switch (action) {
       case 'undo': e.preventDefault(); map.undo(); break;
       case 'redo': e.preventDefault(); map.redo(); break;
       case 'select': case 'rectangle': case 'triangle': case 'ellipse': case 'pen': chooseTool(action); break;
       case 'close': if (penRef.current) { e.preventDefault(); closePen(); } break;
-      case 'deselect': if (cornersMode) setCornersMode(false); else if (penRef.current) { setPen(null); setHover(null); } else map.setSelection(null); break;
+      case 'deselect': if (cornersMode) { setCornersMode(false); clearDrag(); } else if (penRef.current) { setPen(null); setHover(null); } else map.setSelection(null); break;
       case 'select-all': e.preventDefault(); map.selectMany(map.show.shapes.filter(s => isShapeShown(map.show, s)).map(s => s.id)); break;
       case 'group': e.preventDefault(); act.group(); break;
       case 'ungroup': e.preventDefault(); act.ungroup(shape?.groupId ?? null); break;
       case 'duplicate': if (map.selectedIds.length) { e.preventDefault(); act.duplicate(); } break;
       case 'delete': if (map.selectedIds.length) { e.preventDefault(); act.remove(); } break;
       case 'next-corner': case 'previous-corner': {
+        // In Stage corners, Tab steps between the four corners for the arrow keys.
+        if (cornersMode) { e.preventDefault(); setCornerIndex(i => (i + (action === 'next-corner' ? 1 : 3)) % 4); break; }
         if (!shape) return;
         e.preventDefault();
         // Every point of the shape in one sequence: its outline, then each hole.
@@ -552,7 +559,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   };
   const onStageMenu = (e: MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    if (!map.loaded) return;
+    if (!map.loaded || cornersMode) return;
     const at = stageFromPointer(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
     // The topmost visible shape under the pointer, as a left click would pick.
     const hit = [...map.show.shapes].reverse().find(s => isShapeShown(map.show, s) && hitShape(at, s.points, s.holes));
@@ -592,7 +599,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         { kind: 'separator' } as const,
         ...([['fit', 'Fit'], ['pin', 'Pin in perspective'], ['across-group', 'Across group'], ['across-stage', 'Across stage']] as const).map(([kind, label]) =>
           ({ kind: 'item', label, checked: shape.placement.kind === kind, disabled: locked, onSelect: () => map.dispatch({ type: 'setPlacement', shapeId: shape.id, placement: { kind } }) }) as const),
-        { kind: 'item', label: 'Share with…', disabled: locked || shape.blocker, onSelect: () => requestAnimationFrame(() => document.querySelector<HTMLSelectElement>('.map-inspector select[aria-label="Share with"]')?.focus()) } as const,
+        { kind: 'item', label: 'Share with…', disabled: locked || shape.blocker || !map.show.shapes.some(s => s !== shape && s.sourceId !== null && s.sourceId !== shape.sourceId), onSelect: () => requestAnimationFrame(() => document.querySelector<HTMLSelectElement>('.map-inspector select[aria-label="Share with"]')?.focus()) } as const,
         ...(shape.sourceId && map.show.shapes.some(s => s !== shape && s.sourceId === shape.sourceId) ? [{ kind: 'item', label: 'Make separate', disabled: locked, onSelect: () => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() }) } as const] : []),
       ] : []),
       { kind: 'separator' },
@@ -632,7 +639,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const wallText = wall ? `Showing on the projector · ${wall.fps} fps${wall.level ? ` · instruments drawn at ${Math.round(GOVERNOR_SCALES[wall.level] * 100)} %${wall.level === 3 ? ', every other frame' : ''}` : ''}` : 'Showing on the projector';
   const failing = wall?.failing[0] ? `An instrument could not start, so its shape plays its colour: ${wall.failing[0].reason}` : null;
   const penHint = pen ? `Pen: ${pen.points.length} point${pen.points.length === 1 ? '' : 's'}${pen.hole ? ' (a hole)' : ''} · click the first point or press Enter to close · Backspace takes back a point · Esc abandons` : null;
-  const cornersHint = cornersMode ? `Stage corners: drag a numbered corner, or use the arrow keys on corner ${cornerIndex + 1} (Shift for 10 pixels). This screen stays flat; the projector bends.` : null;
+  const cornersHint = cornersMode ? `Stage corners: drag a numbered corner, or use the arrow keys on corner ${cornerIndex + 1} (Shift for 10 pixels, Tab for the next corner). This screen stays flat; the projector bends.` : null;
   const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? cornersHint ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
 

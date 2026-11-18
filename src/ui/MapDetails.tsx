@@ -149,6 +149,7 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
       </select></label>}
     </>}
 
+    {!shape.blocker && <>
     <h3>Placement</h3>
     <label className="map-field">Picture<select aria-label="Placement" value={place.kind} disabled={locked} onChange={e => setPlacement({ kind: e.target.value as PlacementKind })}>
       <option value="fit">Fit: fills the shape</option>
@@ -168,6 +169,7 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
       {place.kind !== 'pin' && <button className="text-button" disabled={locked || (place.zoom === 1 && place.turn === 0 && place.offset.x === 0 && place.offset.y === 0)} onClick={() => setPlacement({ zoom: 1, turn: 0, offset: { x: 0, y: 0 } })}>Reset picture</button>}
       {place.kind === 'pin' && shape.placement.pin && !ownCornersPinnable(shape) && <button className="text-button" disabled={locked} title="Put the four handles back at the shape's box" onClick={() => setPlacement({ pin: null })}>Reset pin</button>}
     </div>
+    </>}
 
     {!shape.blocker && <>
       <h3>Look</h3>

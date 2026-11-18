@@ -58,6 +58,12 @@ export function pick(at: Point, show: Shapes, selection: Selection, reach: Reach
       if (h && dist(p, toPx({ x: point.x + h.x, y: point.y + h.y })) <= reach.reachPx) return { kind: 'handle', shapeId: single.id, ring: selection.ring, index: selection.index, which };
     }
   }
+  // A pinned shape that does not pin by its own corners has four handles of its own; they come before its points,
+  // since they start on its box's corners, where points often are.
+  if (single && single.placement.kind === 'pin' && single.placement.pin && !ownCornersPinnable(single)) {
+    const i = single.placement.pin.findIndex(q => dist(p, toPx(q)) <= reach.reachPx);
+    if (i >= 0) return { kind: 'pin', shapeId: single.id, index: i };
+  }
   if (single) {
     let best: { ring: number; index: number; d: number } | null = null;
     rings(single).forEach((ring, r) => ring.forEach((point, index) => {
@@ -65,11 +71,6 @@ export function pick(at: Point, show: Shapes, selection: Selection, reach: Reach
       if (d <= reach.reachPx && (!best || d < best.d)) best = { ring: r - 1, index, d };
     }));
     if (best) { const b = best as { ring: number; index: number }; return { kind: 'point', shapeId: single.id, ring: b.ring, index: b.index }; }
-  }
-  // A pinned shape that does not pin by its own corners has four handles of its own.
-  if (single && single.placement.kind === 'pin' && single.placement.pin && !ownCornersPinnable(single)) {
-    const i = single.placement.pin.findIndex(q => dist(p, toPx(q)) <= reach.reachPx);
-    if (i >= 0) return { kind: 'pin', shapeId: single.id, index: i };
   }
   if (editable) {
     const box = selectionBox(show, selected.map(s => s.id))!;

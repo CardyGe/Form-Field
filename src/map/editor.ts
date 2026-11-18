@@ -590,6 +590,8 @@ export function applyEdit(show: ShowDocument, action: EditAction): EditResult {
     }
     const valid = shapeValidity(shape.points, shape.holes);
     if (!valid.ok) return refuse(valid.reason);
+    // A stored pin may reach half a stage past the edge, as the show file keeps it, never further.
+    if (shape.placement.pin?.some(q => q.x < -0.5 || q.x > 1.5 || q.y < -0.5 || q.y > 1.5)) return refuse('pin-outside');
     const pin = pinValidity(shape);
     if (!pin.ok) return refuse(pin.reason);
   }

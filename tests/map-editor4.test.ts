@@ -123,3 +123,16 @@ test('pin handles: only while pinned, never NaN; stage corners stay within reach
   let show = play(add(createShow(), 'a', sq(.1, .1, .3, .3)), 'a', 'sa');
   assert.equal(ok(show, { type: 'shareSource', shapeId: 'a', withShapeId: 'a' }), show);
 });
+
+test('a stored pin cannot be carried past half a stage off the edge; nudging one stage corner is one undo step', async () => {
+  let tri = add(createShow(), 't', [{ x: .4, y: .2 }, { x: .6, y: .6 }, { x: .2, y: .6 }]);
+  tri = ok(tri, { type: 'setPlacement', shapeId: 't', placement: { kind: 'pin' } });
+  tri = ok(tri, { type: 'movePin', shapeId: 't', index: 1, to: { x: 1.45, y: .2 } });
+  refused(tri, { type: 'moveShapes', shapeIds: ['t'], dx: .3, dy: 0 }, 'pin-outside');
+  const { mapReducer, initialMapState } = await import('../src/map/state');
+  let state = initialMapState(add(createShow(), 'a', sq(.1, .1, .3, .3)));
+  for (let i = 0; i < 5; i++) state = mapReducer(state, { type: 'edit', action: { type: 'moveStageCorner', index: 0, to: { x: .01 * (i + 1), y: 0 } } });
+  assert.equal(state.past.length, 1);
+  state = mapReducer(state, { type: 'edit', action: { type: 'moveStageCorner', index: 1, to: { x: .95, y: 0 } } });
+  assert.equal(state.past.length, 2);
+});

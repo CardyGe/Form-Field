@@ -1,6 +1,6 @@
 # Map: projection mapping design
 
-16 November 2026 · Form & Field 0.16.0 · Approved 17 November. Stage 0 is measured (see Stage 0 results). Stages 1, 2 and 3 are built and reviewed; stage 1's projector session, and stage 3's tracing session, are still to happen (see Known limits and Stage 3 results).
+16 November 2026 · Form & Field 0.16.0 · Approved 17 November. Stage 0 is measured (see Stage 0 results). Stages 1 to 4 are built and reviewed. The projector sessions for stages 1, 3 and 4 are still to happen (see Known limits and the results sections).
 
 ## Intent
 
@@ -497,7 +497,7 @@ Made 18 November 2026, before building stage 4. Greg handed over the how; each o
 - **The grid pattern follows the placement.** A pinned shape's grid is drawn in true perspective, so the lines meet at a vanishing point instead of being evenly spaced. That is what makes "a pinned grid looks square on an angled box face" something you can see.
 
 **Sharing.**
-- **Share with…** lists the other shapes; choosing one makes this shape play that shape's instrument.
+- **Share with…** lists the other shapes that play an instrument; choosing one makes this shape play that instrument.
 - **Make separate** gives a shape its own copy again.
 - Stage 2's rule stays: shapes are separate by default, and duplicates and grid cells get their own copy.
 - A shared instrument is drawn once, at the size of the largest place it lands. That is the bounding box of a group or the stage for the Across placements.
@@ -528,6 +528,67 @@ Made 18 November 2026, before building stage 4. Greg handed over the how; each o
 **Not in stage 4:**
 - Double-click to adjust the picture inside a shape on the stage. Stage 4 adjusts it with sliders in the Details panel.
 - A pin or stage-corner grid finer than four corners. That is the "curved objects" design.
+
+**Known limits, stage 4**
+
+- **Pin.**
+  - A shape with four points pins by its own corners when they can carry a picture.
+  - Any other shape, including four points with one on a straight line, gets four pin handles of its own, starting at its box.
+  - Folding a shape's own pinned corners is refused, in red.
+  - A pin is one flat surface. Bending a picture over a curved object is the "curved objects" design.
+- **Pin and the grid pattern.** On a pinned shape the grid pattern is a flat grid seen through the perspective, without the shape's name, which would be stretched.
+- **Zoom, Move and Turn** are for Fit and the Across placements. A pinned picture fills its four corners exactly.
+- **The picture inside a shape is adjusted with sliders** in the Details panel. Double-clicking a shape to adjust it on the stage is not built.
+- **Across group** covers the box of every member of the group, hidden ones and Blockers included.
+- **Stage corners.**
+  - They bend the projector's picture only. The operator screen stays flat, and its picture of the projector is taken before the bend.
+  - The corners may go at most half a stage past the edge. A corner past the edge is shown, and can be grabbed, at the edge. Tab steps between the four corners for the arrow keys.
+  - Each drag is one undo step, and so is each arrow nudge.
+- **Sharing.** A shared instrument is drawn once, at the largest place it lands. Vary, palette and speed change every shape that shares it, and Make separate gives a shape its own copy.
+- **Brightness and tint** apply to everything a shape shows, its own grid pattern included, but not to Blockers.
+- **The projector's drawing is on the graphics card.**
+  - If the graphics card resets, the projector shows black until it comes back by itself, usually within a second. The operator is told.
+  - The picture is kept after each frame (preserveDrawingBuffer), so a frame with nothing new, the operator screen and the scripted checks all see the last picture. This costs a little graphics-card time.
+
+## Stage 4 results
+
+Measured 18 November 2026 with `scripts/measure-map.mjs` (eight shapes, four instruments, 1920 × 1080, at the display's 120 Hz).
+
+**Earlier in the day, with the Mac quiet** (the new graphics-card drawing, before the pinned runs existed):
+
+| Run | Mix | Median frame | 95th percentile | Worst | Frames over 16.7 ms in 30 s |
+|---|---|---|---|---|---|
+| Standard | Medium · Heavy | 8.3 · 8.3 ms | 8.4 · 8.5 ms | 9.4 · 9.3 ms | 0 · 0 |
+| Every shape with a 40 px soft edge and a 6 px border with glow | Medium · Heavy | 8.3 · 8.3 ms | 9.3 · 9.2 ms | 9.4 · 9.4 ms | 0 · 0 |
+
+That is better than stage 3, whose worst frames were 12.8 and 9.4 ms on a quiet Mac. The wall's drawing now costs less than it did in 2D.
+
+**Later, with other work on the Mac** (another copy of the app was running), standard and pinned runs alternated, 15 s each:
+
+| Run | Frames over 16.7 ms (Medium · Heavy) | Reported fps |
+|---|---|---|
+| Standard, round 1 | 77 · 174 | 99–108 · 75–98 |
+| Every shape pinned, stage corners set, round 1 | 57 · 138 | 106–114 · 83–98 |
+| Standard, round 2 | 56 · 162 | 104–118 · 77–100 |
+| Every shape pinned, stage corners set, round 2 | 77 · 135 | 102–108 · 82–104 |
+
+- Pin and the stage corners cost nothing measurable; the pinned runs were no slower than the standard ones next to them.
+- The long frames in these runs came from the Mac being busy, since the standard show had as many.
+- A pinned run on a quiet Mac, to confirm 120 fps with no frame over 16.7 ms, is still to do.
+
+**Checked in the app** (`npm run test:map`, 25 checks, 4 of them new):
+- A pinned trapezoid's grid lines bunch up towards its narrow side, where Fit spaces them evenly.
+- Two shapes sharing one instrument Across stage show one continuous picture across their shared edge, with one instrument prepared.
+- Brightness 50 % halves a colour on the wall.
+- Stage corners move the projector's picture. Blackout stays black with them set, the operator screen stays flat, and Reset brings the picture back.
+
+The 21 stage 3 checks pass on the new graphics-card drawing.
+
+**Not shown.**
+- That a grid pinned to an angled box face looks square to the eye.
+- That a nudged projector is fixed with the four corners.
+
+Both need Greg, a projector and a box.
 
 ## Stage 0 results
 

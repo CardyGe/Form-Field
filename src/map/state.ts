@@ -5,7 +5,8 @@ import type { Project } from '../shared/types';
 const LIMIT = 100;
 
 /** The show, what undo can return to, what redo can return to, and why the last edit was refused. */
-export interface MapState { show: ShowDocument; past: ShowDocument[]; future: ShowDocument[]; refusal: string | null }
+/** merge: the last edit, when the next one of the same kind should join its undo step (nudging one stage corner). */
+export interface MapState { show: ShowDocument; past: ShowDocument[]; future: ShowDocument[]; refusal: string | null; merge?: string | null }
 
 export type MapAction =
   | { type: 'edit'; action: EditAction }
@@ -24,7 +25,10 @@ export function mapReducer(state: MapState, action: MapAction): MapState {
       if (!result.ok) return { ...state, refusal: result.reason };
       // An edit that changes nothing is not an undo step.
       if (result.show === state.show) return { ...state, refusal: null };
-      return { show: result.show, past: [...state.past, state.show].slice(-LIMIT), future: [], refusal: null };
+      // Moving one stage corner again and again (arrow nudges) is one undo step, so it cannot push older edits out.
+      const merge = action.action.type === 'moveStageCorner' ? `corner-${action.action.index}` : null;
+      if (merge && state.merge === merge && state.past.length) return { ...state, show: result.show, future: [], refusal: null, merge };
+      return { show: result.show, past: [...state.past, state.show].slice(-LIMIT), future: [], refusal: null, merge };
     }
     case 'undo': {
       if (!state.past.length) return state;
