@@ -1,11 +1,14 @@
 import {
   BORDER_MAX, GLOW_MAX, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, PHOTO_TEXT_LIMIT, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE,
-  BRIGHTNESS_MAX, ZOOM_RANGE, cleanName, isShapeLocked, normaliseGroups, shapeExtras,
+  BRIGHTNESS_MAX, ZOOM_RANGE, MAX_LINKS, MAX_TRIGGERS, TEMPO_SYNC_BEATS, playedBy, readLink, readTrigger, cleanName, isShapeLocked, normaliseGroups, shapeExtras,
   type Border, type Placement, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source,
 } from './show';
 import { clampToStage, nudge, rectangleFromDrag } from './geometry';
 import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
 import { joinedAnchors } from './snap';
+import { capture, withState, MAX_SCENES, FADE_RANGE } from './scenes';
+import { reactionLinks, type Reaction } from './targets';
+import type { Link, Trigger } from '../react/links';
 import { isPinnable } from './homography';
 import { ownCornersPinnable, pinCorners } from './placement';
 /** Pin handles at the corners of the shape's box, in stage fractions. */
@@ -75,6 +78,22 @@ export type EditAction =
   | { type: 'makeSeparate'; shapeId: string; sourceId: string }
   | { type: 'setLook'; shapeId: string; brightness?: number; tint?: string }
   | { type: 'setStageCorners'; corners: Point[] | null }
+  /** Stage 5: scenes. Adding one takes in the live state; switching keeps the live scene, then brings the other back. */
+  | { type: 'addScene'; sceneId: string; name: string }
+  | { type: 'renameScene'; sceneId: string; name: string }
+  | { type: 'deleteScene'; sceneId: string }
+  /** sceneId null: the show's own fade time. seconds null (for a scene): use the show's. */
+  | { type: 'setSceneFade'; sceneId: string | null; seconds: number | null }
+  | { type: 'switchScene'; sceneId: string }
+  /** Stage 5: what sound, the beat, tempo and MIDI drive. */
+  | { type: 'addLink'; link: Link }
+  | { type: 'updateLink'; linkId: string; change: Partial<Omit<Link, 'id'>> }
+  | { type: 'removeLink'; linkId: string }
+  | { type: 'addTrigger'; trigger: Trigger }
+  | { type: 'updateTrigger'; triggerId: string; change: Partial<Omit<Trigger, 'id'>> }
+  | { type: 'removeTrigger'; triggerId: string }
+  | { type: 'addReaction'; reaction: Reaction; shapeId: string; ids: string[] }
+  | { type: 'setTempoSync'; sourceId: string; beats: number | null }
   | { type: 'moveStageCorner'; index: number; to: Point };
 
 export type EditResult = { ok: true; show: ShowDocument } | { ok: false; reason: string };
@@ -137,7 +156,7 @@ const PHOTO = /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/;
 const MAX_GRID_SIDE = 16;
 
 /** Sources no shape plays any more are dropped. */
-const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => show.shapes.some(s => s.sourceId === src.id)); };
+const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => playedBy(show, src.id)); };
 
 /** A one-layer composition of a Library preset, in the canonical form a file would load as. */
 export function presetComposition(presetId: string, seed: number): Project | null {
@@ -285,6 +304,53 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       next.photo = action.photo && { data: action.photo.data, opacity: clamp(Number.isFinite(action.photo.opacity) ? action.photo.opacity : .5, 0, 1) };
       return done();
     }
+    case 'addScene': case 'renameScene': case 'deleteScene': case 'setSceneFade': case 'switchScene': return stageScene(next, action);
+    case 'addLink': case 'updateLink': {
+      const old = action.type === 'updateLink' ? next.links.find(l => l.id === action.linkId) : undefined;
+      if (action.type === 'updateLink' && !old) return { reason: 'not-found' };
+      if (action.type === 'addLink' && (next.links.length >= MAX_LINKS)) return { reason: 'too-many-links' };
+      if (action.type === 'addLink' && next.links.some(l => l.id === action.link.id)) return { reason: 'duplicate-id' };
+      const link = readLink(action.type === 'addLink' ? action.link : { ...old, ...action.change, id: old!.id }, next);
+      if (!link) return { reason: 'bad-target' };
+      next.links = action.type === 'addLink' ? [...next.links, link] : next.links.map(l => l.id === link.id ? link : l);
+      return done();
+    }
+    case 'removeLink': {
+      if (!next.links.some(l => l.id === action.linkId)) return { reason: 'not-found' };
+      next.links = next.links.filter(l => l.id !== action.linkId);
+      return done();
+    }
+    case 'addTrigger': case 'updateTrigger': {
+      const old = action.type === 'updateTrigger' ? next.triggers.find(t => t.id === action.triggerId) : undefined;
+      if (action.type === 'updateTrigger' && !old) return { reason: 'not-found' };
+      if (action.type === 'addTrigger' && next.triggers.length >= MAX_TRIGGERS) return { reason: 'too-many-triggers' };
+      if (action.type === 'addTrigger' && next.triggers.some(t => t.id === action.trigger.id)) return { reason: 'duplicate-id' };
+      const trigger = readTrigger(action.type === 'addTrigger' ? action.trigger : { ...old, ...action.change, id: old!.id }, next);
+      if (!trigger) return { reason: 'bad-target' };
+      next.triggers = action.type === 'addTrigger' ? [...next.triggers, trigger] : next.triggers.map(t => t.id === trigger.id ? trigger : t);
+      return done();
+    }
+    case 'removeTrigger': {
+      if (!next.triggers.some(t => t.id === action.triggerId)) return { reason: 'not-found' };
+      next.triggers = next.triggers.filter(t => t.id !== action.triggerId);
+      return done();
+    }
+    case 'addReaction': {
+      const links = reactionLinks(next, action.reaction, action.shapeId, action.ids);
+      if (typeof links === 'string') return { reason: links };
+      if (next.links.length + links.length > MAX_LINKS) return { reason: 'too-many-links' };
+      if (links.some(l => next.links.some(x => x.id === l.id))) return { reason: 'duplicate-id' };
+      next.links = [...next.links, ...links];
+      return done();
+    }
+    case 'setTempoSync': {
+      const i = next.sources.findIndex(s => s.id === action.sourceId);
+      if (i < 0) return { reason: 'not-found' };
+      if (action.beats !== null && !TEMPO_SYNC_BEATS.includes(action.beats)) return { reason: 'bad-tempo' };
+      if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+      next.sources[i] = { ...next.sources[i], tempoSync: action.beats };
+      return done();
+    }
     case 'setStageCorners': {
       if (action.corners === null) { next.stageCorners = null; return done(); }
       if (action.corners.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < -0.5 || p.x > 1.5 || p.y < -0.5 || p.y > 1.5)) return { reason: 'corners-outside' };
@@ -421,7 +487,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const old = shape.sourceId;
       const oldGoes = old !== null && !next.shapes.some(s => s !== shape && s.sourceId === old);
       if (next.sources.length - (oldGoes ? 1 : 0) >= MAX_SOURCES) return { reason: 'too-many-sources' };
-      next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0 });
+      next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0, tempoSync: null });
       shape.sourceId = content.sourceId;
       dropUnplayed(next);
       return done();
@@ -587,6 +653,73 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   return { show: normaliseGroups(next), touched: made };
 }
 
+/** Scene edits. The shapes on screen are the live scene, so it is written back before another is brought in. */
+function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'addScene' | 'renameScene' | 'deleteScene' | 'setSceneFade' | 'switchScene' }>): Staged {
+  const keepLive = () => { if (next.sceneId) next.scenes = next.scenes.map(sc => sc.id === next.sceneId ? { ...sc, shapes: capture(next.shapes) } : sc); };
+  if (action.type === 'setSceneFade' && action.sceneId === null) {
+    if (action.seconds === null || !Number.isFinite(action.seconds)) return { reason: 'bad-fade' };
+    next.sceneFade = clamp(action.seconds, FADE_RANGE.min, FADE_RANGE.max);
+    return { show: next, touched: [] };
+  }
+  if (action.type === 'addScene') {
+    if (next.scenes.length >= MAX_SCENES) return { reason: 'too-many-scenes' };
+    if (next.scenes.some(s => s.id === action.sceneId)) return { reason: 'duplicate-id' };
+    keepLive();
+    const name = cleanName(action.name).trim().slice(0, MAX_NAME_LENGTH) || `Scene ${next.scenes.length + 1}`;
+    next.scenes = [...next.scenes, { id: action.sceneId, name, fadeSeconds: null, shapes: capture(next.shapes) }];
+    next.sceneId = action.sceneId;
+    return { show: next, touched: [] };
+  }
+  const scene = next.scenes.find(s => s.id === action.sceneId);
+  if (!scene) return { reason: 'not-found' };
+  switch (action.type) {
+    case 'renameScene': {
+      const name = cleanName(action.name).trim();
+      if (!name || name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
+      next.scenes = next.scenes.map(s => s === scene ? { ...s, name } : s);
+      return { show: next, touched: [] };
+    }
+    case 'setSceneFade': {
+      const fadeSeconds = action.seconds === null || !Number.isFinite(action.seconds) ? null : clamp(action.seconds, FADE_RANGE.min, FADE_RANGE.max);
+      next.scenes = next.scenes.map(s => s === scene ? { ...s, fadeSeconds } : s);
+      return { show: next, touched: [] };
+    }
+    case 'deleteScene':
+      // The live scene going leaves the shapes as they are, with no scene live.
+      next.scenes = next.scenes.filter(s => s !== scene);
+      if (next.sceneId === scene.id) next.sceneId = null;
+      dropUnplayed(next);
+      return { show: next, touched: [] };
+    case 'switchScene': {
+      if (next.sceneId === scene.id) return { show: next, touched: [] };
+      keepLive();
+      const target = next.scenes.find(s => s.id === scene.id)!;
+      // A locked shape keeps its state; a shape the scene has never seen keeps its own.
+      next.shapes = next.shapes.map(sh => isShapeLocked(next, sh) ? sh : withState(sh, target.shapes[sh.id]));
+      for (const sh of next.shapes) if (sh.sourceId !== null && !next.sources.some(src => src.id === sh.sourceId)) sh.sourceId = null;
+      next.sceneId = scene.id;
+      return { show: next, touched: [] };
+    }
+  }
+}
+
+/**
+ * After every edit: scenes forget shapes that have gone, and links and triggers that name something gone are dropped.
+ * The same show comes back when nothing needed tidying.
+ */
+function tidy(show: ShowDocument): ShowDocument {
+  const ids = new Set(show.shapes.map(s => s.id));
+  const scenesOk = show.scenes.every(sc => Object.keys(sc.shapes).every(id => ids.has(id)));
+  const scenes = scenesOk ? show.scenes : show.scenes.map(sc => ({ ...sc, shapes: Object.fromEntries(Object.entries(sc.shapes).filter(([id]) => ids.has(id))) }));
+  const base = scenesOk ? show : { ...show, scenes };
+  const sources = base.sources.filter(src => playedBy(base, src.id));
+  const withSources = sources.length === base.sources.length ? base : { ...base, sources };
+  const links = withSources.links.filter(l => readLink(l, withSources));
+  const triggers = withSources.triggers.filter(t => readTrigger(t, withSources));
+  if (links.length === withSources.links.length && triggers.length === withSources.triggers.length) return withSources;
+  return { ...withSources, links, triggers };
+}
+
 /** A pinned shape's four corners must be able to carry its picture: convex and not flat. */
 function pinValidity(shape: Shape): { ok: true } | { ok: false; reason: string } {
   if (shape.placement.kind !== 'pin') return { ok: true };
@@ -613,7 +746,7 @@ export function applyEdit(show: ShowDocument, action: EditAction): EditResult {
     const pin = pinValidity(shape);
     if (!pin.ok) return refuse(pin.reason);
   }
-  return { ok: true, show: staged.show };
+  return { ok: true, show: staged.show === show ? show : tidy(staged.show) };
 }
 
 /**

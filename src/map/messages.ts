@@ -50,7 +50,8 @@ export function toWire(show: ShowDocument): WireShow {
       // Rounding moves points by up to 0.1 projector pixels; a shape that would then touch itself goes as it is.
       return shapeValidity(rounded.points, rounded.holes).ok && ownCornersPinnable(rounded) === ownCornersPinnable(shape) ? rounded : shape;
     }),
-    sources: show.sources.map(({ id, kind, speed, revision }) => ({ id, kind, speed, revision })),
+    sources: show.sources.map(({ id, kind, speed, revision, tempoSync }) => ({ id, kind, speed, revision, tempoSync })),
+    links: show.links,
     groups: show.groups,
     // Not rounded: a pinnable quad at the edge of the rules could round to one that is not.
     stageCorners: show.stageCorners,

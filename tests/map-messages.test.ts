@@ -23,7 +23,7 @@ function showWithInstruments(count = 2): ShowDocument {
 test('toWire leaves the compositions out and keeps speed and revision', () => {
   const show = showWithInstruments();
   const wire = toWire(show);
-  assert.deepEqual(wire.sources, show.sources.map(s => ({ id: s.id, kind: 'instrument', speed: s.speed, revision: s.revision })));
+  assert.deepEqual(wire.sources, show.sources.map(s => ({ id: s.id, kind: 'instrument', speed: s.speed, revision: s.revision, tempoSync: s.tempoSync })));
   assert.ok(!('project' in wire.sources[0]));
   assert.equal(wire.shapes[0].sourceId, 'src0');
   // What the wall reads back is the same show without the compositions.

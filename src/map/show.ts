@@ -3,6 +3,9 @@
  * damaged or outdated file field by field, so the Map always opens.
  */
 import { shapeValidity, MAX_HOLES } from './outline';
+import { capture, MAX_SCENES, FADE_RANGE, type Scene, type SceneState } from './scenes';
+import { targetRange, targetNamesKnown } from './targets';
+import type { Link, Trigger, TriggerAction } from '../react/links';
 import { isPinnable } from './homography';
 import { ownCornersPinnable, pinCorners } from './placement';
 import { ringBounds } from './outline';
@@ -41,14 +44,17 @@ export interface Group { id: string; name: string; visible: boolean; locked: boo
 /** A photograph to trace over, on the operator screen only: a JPEG or PNG as a data URL. */
 export interface Photo { data: string; opacity: number }
 /** A Studio composition playing in one or more shapes. revision goes up with every change, so the wall knows what it has. */
-export interface InstrumentSource { id: string; kind: 'instrument'; project: Project; speed: number; revision: number }
+/** tempoSync: null plays at its own speed; a number of beats runs one loop in that many beats of the tempo clock. */
+export interface InstrumentSource { id: string; kind: 'instrument'; project: Project; speed: number; revision: number; tempoSync: number | null }
 export type Source = InstrumentSource;
 /** stageCorners: where the stage's four corners go on the projector (to fix a nudged projector), or null for none. */
-export interface ShowDocument { format: 'formshow'; version: 4; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null }
+/** Stage 5: scenes (with the live one and the default fade in seconds), and the links and triggers sound and MIDI drive. */
+export interface ShowDocument { format: 'formshow'; version: 5; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null;
+  scenes: Scene[]; sceneId: string | null; sceneFade: number; links: Link[]; triggers: Trigger[] }
 /** A source as the wall first hears of it: everything but the composition, which travels in its own message. */
-export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number }
+export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number; tempoSync: number | null }
 /** The show as sent to the wall: no compositions, and never the photo. */
-export interface WireShow { format: 'formshow'; version: 4; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null }
+export interface WireShow { format: 'formshow'; version: 5; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[] }
 
 export const MAX_SHAPES = 64;
 export const MAX_POINTS = 32;
@@ -65,6 +71,11 @@ export const SPEED_RANGE = { min: 0.1, max: 4 };
 export const MIN_OUTLINE_AREA = 1 / (1920 * 1080);
 export { MAX_HOLES } from './outline';
 export const MAX_GROUPS = 32;
+export const MAX_LINKS = 64;
+export const MAX_TRIGGERS = 32;
+export const DEFAULT_SCENE_FADE = 2;
+/** Loops an instrument can run in, in beats of the tempo clock. */
+export const TEMPO_SYNC_BEATS = [1, 2, 4, 8, 16];
 export const SOFT_EDGE_MAX = 200;
 export const BORDER_MAX = 40;
 export const GLOW_MAX = 40;
@@ -79,7 +90,7 @@ export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'so
   ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour', placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, brightness: 1, tint: '#ffffff' });
 
 export function createShow(): ShowDocument {
-  return { format: 'formshow', version: 4, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null };
+  return { format: 'formshow', version: 5, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null, scenes: [], sceneId: null, sceneFade: DEFAULT_SCENE_FADE, links: [], triggers: [] };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -230,7 +241,7 @@ export function normaliseGroups<T extends { shapes: Shape[]; groups: Group[] }>(
 function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaired: boolean; ok: boolean } {
   if (!isRecord(value)) return { shapes: [], groups: [], repaired: true, ok: false };
   // Version 1 and 2 shows open with every later field at its default, which is not a repair.
-  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4);
+  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5);
   if (!isRecord(value.stage) || value.stage.width !== STAGE_SIZE.width || value.stage.height !== STAGE_SIZE.height) repaired = true;
   if (!Array.isArray(value.shapes)) return { shapes: [], groups: [], repaired: true, ok: false };
   if (value.shapes.length > MAX_SHAPES) repaired = true;
@@ -324,8 +335,14 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
     }
   } else if (value.sources !== undefined) repaired = true;
   if (linkSources(show.shapes, sources)) repaired = true;
-  show.sources = [...sources.values()].filter(source => show.shapes.some(s => s.sourceId === source.id));
+  // Scenes, then the instruments any shape or scene plays, then the links and triggers that name what is left.
+  const scenes = readScenes(value, show, sources);
+  if (scenes.repaired) repaired = true;
+  show.sources = [...sources.values()].filter(source => playedBy(show, source.id));
   if (show.sources.length !== sources.size) repaired = true;
+  const links = readLinks(value.links, show), triggers = readTriggers(value.triggers, show);
+  show.links = links.links; show.triggers = triggers.triggers;
+  if (links.repaired || triggers.repaired) repaired = true;
   return { show, repaired };
 }
 
@@ -340,12 +357,14 @@ export function validateWireShow(value: unknown): WireShow {
     for (const raw of value.sources) {
       if (sources.size >= MAX_SOURCES) break;
       if (!isRecord(raw) || raw.kind !== 'instrument' || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH || sources.has(raw.id)) continue;
-      sources.set(raw.id, { id: raw.id, kind: 'instrument', speed: readSpeed(raw.speed).speed, revision: readRevision(raw.revision) });
+      sources.set(raw.id, { id: raw.id, kind: 'instrument', speed: readSpeed(raw.speed).speed, revision: readRevision(raw.revision), tempoSync: readTempoSync(raw.tempoSync).value });
     }
   }
   const shapes = read.shapes;
   linkSources(shapes, sources);
-  return { format: 'formshow', version: 4, stage: { ...STAGE_SIZE }, shapes, sources: [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id)), groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null };
+  const kept = [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id));
+  return { format: 'formshow', version: 5, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
+    links: isRecord(value) ? readLinks(value.links, { shapes, sources: kept }, true).links : [] };
 }
 
 /** Shapes that name a source the show does not have play their colour. True when any had to. */
@@ -369,5 +388,118 @@ function validateSource(value: unknown): { source: Source; repaired: boolean } |
   if (project.layers.length > MAX_SOURCE_LAYERS) return null;
   const { speed, repaired: speedRepaired } = readSpeed(value.speed);
   const revision = readRevision(value.revision);
-  return { source: { id: value.id, kind: 'instrument', project, speed, revision }, repaired: speedRepaired || revision !== value.revision };
+  const sync = readTempoSync(value.tempoSync);
+  return { source: { id: value.id, kind: 'instrument', project, speed, revision, tempoSync: sync.value }, repaired: speedRepaired || revision !== value.revision || sync.repaired };
 }
+
+
+// ---- Stage 5: scenes, links, triggers, tempo sync ----
+
+/** Whether any shape, or any scene, plays a source: such a source stays in the show. */
+export function playedBy(show: { shapes: Shape[]; scenes?: Scene[] }, sourceId: string): boolean {
+  return show.shapes.some(s => s.sourceId === sourceId) || (show.scenes ?? []).some(sc => Object.values(sc.shapes).some(st => st.sourceId === sourceId));
+}
+
+function readTempoSync(value: unknown): { value: number | null; repaired: boolean } {
+  if (value === undefined || value === null) return { value: null, repaired: false };
+  return TEMPO_SYNC_BEATS.includes(value as number) ? { value: value as number, repaired: false } : { value: null, repaired: true };
+}
+
+function readSceneState(raw: unknown, sources: Map<string, unknown>): SceneState | null {
+  if (!isRecord(raw)) return null;
+  const sourceId = typeof raw.sourceId === 'string' && sources.has(raw.sourceId) ? raw.sourceId : null;
+  return {
+    sourceId, fill: raw.fill === 'grid' ? 'grid' : 'colour', placement: readPlacement(raw.placement).placement,
+    brightness: clampNumber(raw.brightness, BRIGHTNESS_MAX, 1).value, tint: typeof raw.tint === 'string' && HEX.test(raw.tint) ? raw.tint : '#ffffff',
+    softEdge: clampNumber(raw.softEdge, SOFT_EDGE_MAX).value, border: readBorder(raw.border).border,
+    visible: raw.visible !== false, blocker: raw.blocker === true,
+  };
+}
+
+/** Scenes field by field: shapes no longer in the show are left out of each scene; a scene with a bad id or name is dropped. */
+function readScenes(value: Record<string, unknown>, show: ShowDocument, sources: Map<string, unknown>): { repaired: boolean } {
+  let repaired = false;
+  const fade = value.sceneFade === undefined ? DEFAULT_SCENE_FADE : value.sceneFade;
+  show.sceneFade = typeof fade === 'number' && Number.isFinite(fade) ? Math.min(FADE_RANGE.max, Math.max(FADE_RANGE.min, fade)) : DEFAULT_SCENE_FADE;
+  if (show.sceneFade !== fade) repaired = true;
+  if (value.scenes === undefined) return { repaired };
+  if (!Array.isArray(value.scenes)) return { repaired: true };
+  const ids = new Set(show.shapes.map(s => s.id));
+  for (const raw of value.scenes.slice(0, MAX_SCENES)) {
+    if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH || show.scenes.some(s => s.id === raw.id) || !isRecord(raw.shapes)) { repaired = true; continue; }
+    const shapes: Record<string, SceneState> = {};
+    for (const [id, st] of Object.entries(raw.shapes)) {
+      const state = ids.has(id) ? readSceneState(st, sources) : null;
+      if (state) shapes[id] = state; else repaired = true;
+    }
+    const name = typeof raw.name === 'string' ? cleanName(raw.name).slice(0, MAX_NAME_LENGTH) : `Scene ${show.scenes.length + 1}`;
+    const f = raw.fadeSeconds;
+    const fadeSeconds = typeof f === 'number' && Number.isFinite(f) ? Math.min(FADE_RANGE.max, Math.max(FADE_RANGE.min, f)) : null;
+    if (name !== raw.name || (f !== null && f !== fadeSeconds)) repaired = true;
+    show.scenes.push({ id: raw.id, name, fadeSeconds, shapes });
+  }
+  if (value.scenes.length > MAX_SCENES) repaired = true;
+  show.sceneId = typeof value.sceneId === 'string' && show.scenes.some(s => s.id === value.sceneId) ? value.sceneId : null;
+  if (value.sceneId !== undefined && value.sceneId !== null && show.sceneId === null) repaired = true;
+  return { repaired };
+}
+
+const SIGNAL = /^[a-z]+(\.[a-z0-9]+){1,3}$/;
+const num = (v: unknown, lo: number, hi: number, fallback: number) => typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback;
+
+/** One link, checked; null when it cannot be read or names nothing in the show. */
+export function readLink(raw: unknown, show: { shapes: Shape[]; sources: { id: string }[] }, wire = false): Link | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH) return null;
+  if (typeof raw.input !== 'string' || !SIGNAL.test(raw.input) || raw.input.length > 32 || typeof raw.target !== 'string') return null;
+  if (wire ? !targetNamesKnown(show, raw.target) : !targetRange(show as Pick<ShowDocument, 'shapes' | 'sources'>, raw.target)) return null;
+  return {
+    id: raw.id, input: raw.input, target: raw.target, mode: raw.mode === 'control' ? 'control' : 'modulate',
+    amount: num(raw.amount, -1, 1, 0.5), low: num(raw.low, 0, 1, 0), high: num(raw.high, 0, 1, 1),
+    attackMs: num(raw.attackMs, 0, 5000, 20), releaseMs: num(raw.releaseMs, 0, 5000, 200), on: raw.on !== false,
+    name: typeof raw.name === 'string' ? cleanName(raw.name).slice(0, MAX_NAME_LENGTH) : '',
+  };
+}
+function readLinks(value: unknown, show: { shapes: Shape[]; sources: { id: string }[] }, wire = false): { links: Link[]; repaired: boolean } {
+  if (value === undefined) return { links: [], repaired: false };
+  if (!Array.isArray(value)) return { links: [], repaired: true };
+  const links: Link[] = [];
+  let repaired = value.length > MAX_LINKS;
+  for (const raw of value.slice(0, MAX_LINKS)) {
+    const l = readLink(raw, show, wire);
+    if (!l || links.some(x => x.id === l.id)) { repaired = true; continue; }
+    if (JSON.stringify(l) !== JSON.stringify(raw)) repaired = true;
+    links.push(l);
+  }
+  return { links, repaired };
+}
+
+/** A trigger's action is valid when what it names is still in the show. */
+export function actionValid(action: unknown, show: Pick<ShowDocument, 'scenes' | 'sources'>): action is TriggerAction {
+  if (!isRecord(action)) return false;
+  switch (action.kind) {
+    case 'scene': return typeof action.sceneId === 'string' && show.scenes.some(s => s.id === action.sceneId);
+    case 'vary': return typeof action.sourceId === 'string' && show.sources.some(s => s.id === action.sourceId);
+    case 'next-scene': case 'previous-scene': case 'blackout': case 'freeze': case 'tap': return Object.keys(action).length === 1;
+    default: return false;
+  }
+}
+export function readTrigger(raw: unknown, show: Pick<ShowDocument, 'scenes' | 'sources'>): Trigger | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH) return null;
+  if (typeof raw.input !== 'string' || !SIGNAL.test(raw.input) || raw.input.length > 32 || !actionValid(raw.action, show)) return null;
+  const when = raw.when === 'beats' ? 'beats' : 'on';
+  return { id: raw.id, input: raw.input, when, every: Math.round(num(raw.every, 1, 64, 1)), action: raw.action, on: raw.on !== false };
+}
+function readTriggers(value: unknown, show: Pick<ShowDocument, 'scenes' | 'sources'>): { triggers: Trigger[]; repaired: boolean } {
+  if (value === undefined) return { triggers: [], repaired: false };
+  if (!Array.isArray(value)) return { triggers: [], repaired: true };
+  const triggers: Trigger[] = [];
+  let repaired = value.length > MAX_TRIGGERS;
+  for (const raw of value.slice(0, MAX_TRIGGERS)) {
+    const t = readTrigger(raw, show);
+    if (!t || triggers.some(x => x.id === t.id)) { repaired = true; continue; }
+    if (JSON.stringify(t) !== JSON.stringify(raw)) repaired = true;
+    triggers.push(t);
+  }
+  return { triggers, repaired };
+}
+export { capture as captureScene };
