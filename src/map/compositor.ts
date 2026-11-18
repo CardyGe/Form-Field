@@ -17,10 +17,13 @@ import { ringBounds } from './outline';
 import { IDENTITY, invert, quadToQuad, apply, type H3 } from './homography';
 import { landing, sourceSizeFor, type Landing } from './placement';
 import { Gpu, type ShapeDraw, type Texture } from './gpu';
+import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
+import type { Link } from '../react/links';
+import type { Signals } from '../react/signals';
 import { borderPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
-export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number }[]; groups: Group[] }
+export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null }[]; groups: Group[]; links?: Link[] }
 
 /**
  * Most instruments that play at once. Chromium caps live WebGL contexts per page; past the cap it silently kills the
@@ -47,7 +50,10 @@ interface Slot {
 }
 
 /** A shape's crossfade from what it played before to what it plays now. start is set once the new content is ready. */
-interface Fade { from: Texture | string; start: number | null }
+interface Fade { from: Texture | string; start: number | null; duration: number }
+/** A scene switch's glide of a shape's brightness and visibility, from where they were. */
+interface Glide { brightness: number; alpha: number; start: number; duration: number }
+const CHANGE_FADE_MS = 400;
 
 /** The pictures a shape reuses until it changes. */
 interface Pictures {
@@ -93,6 +99,11 @@ export class MapCompositor {
   private readonly playing = new Map<string, Playing>();
   private readonly fades = new Map<string, Fade>();
   private readonly pictures = new Map<string, Pictures>();
+  private readonly glides = new Map<string, Glide>();
+  private readonly modulator = new Modulator();
+  private signals: Signals = {};
+  /** What is drawn this frame: the show with its links applied. */
+  private drawn: Modulated<PlayShow> = { show: this.show, opacity: new Map(), speed: new Map(), params: new Map() };
   /** The overlay (test grid, names, identify, crosshair, selection), drawn in 2D when it changes. */
   private overlay: { key: string; canvas: OffscreenCanvas; texture: Texture | null; empty: boolean } | null = null;
   /** Sources whose graphics context was lost, and when they may start again. */
@@ -134,7 +145,19 @@ export class MapCompositor {
   }
 
   /** The shapes and sources to play, and the compositions the stage has for them (by source id). */
-  setShow(show: PlayShow, projects: ReadonlyMap<string, Project>): void {
+  /** fadeMs: a scene switch's fade time; otherwise a change of content crossfades in 0.4 s. */
+  setShow(show: PlayShow, projects: ReadonlyMap<string, Project>, fadeMs?: number): void {
+    const before = this.show;
+    const duration = fadeMs ?? CHANGE_FADE_MS;
+    // A scene switch glides brightness and visibility from where they were.
+    if (fadeMs !== undefined && fadeMs > 0) {
+      for (const shape of show.shapes) {
+        const old = before.shapes.find(s => s.id === shape.id);
+        if (!old) continue;
+        const wasShown = shownOnWall(before, old, this.options.solo), isShown = shownOnWall(show, shape, this.options.solo);
+        if (old.brightness !== shape.brightness || wasShown !== isShown) this.glides.set(shape.id, { brightness: old.brightness, alpha: wasShown ? 1 : 0, start: this.fadeClock, duration: fadeMs });
+      }
+    }
     this.show = show;
     this.projects = new Map(projects);
     this.dirty = true;
@@ -149,7 +172,7 @@ export class MapCompositor {
         // Changing again before the last change was ready keeps fading from what is on the wall, not from the colour.
         const from = old ? this.gpu.copy(old) : held ? held.from : shape.colour;
         if (held && held.from !== from && typeof held.from !== 'string') this.gpu.free(held.from);
-        this.fades.set(shape.id, { from, start: shape.sourceId === null ? this.fadeClock : null });
+        this.fades.set(shape.id, { from, start: shape.sourceId === null ? this.fadeClock : null, duration });
       }
       this.playing.set(shape.id, next);
     }
@@ -165,6 +188,11 @@ export class MapCompositor {
     const key = JSON.stringify(options);
     if (key === this.optionsKey) return;
     this.options = options; this.optionsKey = key; this.dirty = true;
+  }
+  /** The latest signals. A show that reacts is drawn again with them. */
+  setSignals(signals: Signals): void {
+    this.signals = signals;
+    if (this.show.links?.length || this.show.sources.some(s => s.tempoSync)) this.dirty = true;
   }
   setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.dirty = true; } }
   /** Where the stage's corners go on the projector (stage fractions), or null for none. The wall uses this; the operator screen never does. */
@@ -198,29 +226,37 @@ export class MapCompositor {
 
     this.overLimit.clear();
     let rendered = false;
+    // The links applied for this frame (for drawing only); with none, the show itself.
+    this.drawn = this.modulator.apply(this.show, this.projects, this.signals, seconds);
+    const show = this.drawn.show;
     for (const source of this.show.sources) {
       const project = this.projects.get(source.id);
       if (!project) continue;
       // Only sources some visible shape plays are started; one whose shapes are all hidden gives its context back.
-      const users = this.show.shapes.filter(s => s.sourceId === source.id && shownOnWall(this.show, s, this.options.solo));
+      // A shape gliding out of view after a scene switch still needs its picture.
+      const users = show.shapes.filter(s => s.sourceId === source.id && (shownOnWall(show, s, this.options.solo) || this.glides.has(s.id)));
       if (!users.length) { const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
       const slot = this.slot(source.id, now);
       if (!slot) continue;
       if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) this.prepare(slot, project);
       if (!slot.project || !slot.renderer) continue;
-      if (!this.frozen) slot.phase = advancePhase(slot.phase, seconds, slot.project, source.speed);
+      if (!this.frozen) {
+        // In tempo sync the loop follows the clock's beats; without a clock it runs at its own speed.
+        const synced = source.tempoSync ? tempoPhase(this.signals, source.tempoSync) : null;
+        slot.phase = synced ?? advancePhase(slot.phase, seconds, slot.project, this.drawn.speed.get(source.id) ?? source.speed);
+      }
       if (!draw) continue;
       // Drawn once, at the size of the largest place it lands on the stage.
-      const size = sourceSizeFor(users.map(s => landing(s, this.show)), scale);
+      const size = sourceSizeFor(users.map(s => landing(s, show)), scale);
       try {
-        slot.renderer.render(slot.project, slot.phase, size.width, size.height);
+        slot.renderer.render(withParams(slot.project, this.drawn.params.get(source.id)), slot.phase, size.width, size.height);
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);
         rendered = true;
         if (slot.failedProject === null) slot.failed = null;
       } catch (error) { slot.failed = String((error as Error)?.message ?? error); }
     }
 
-    const drawn = this.dirty || rendered || this.fades.size > 0;
+    const drawn = this.dirty || rendered || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
     this.frameIndex++;
     const work = performance.now() - started;
@@ -329,8 +365,17 @@ export class MapCompositor {
     if (!this.options.blackout) {
       // The test grid shows outlines, names and numbers instead of content.
       if (!this.options.testGrid && !this.options.outlinesOnly) {
-        for (const shape of this.show.shapes) if (shownOnWall(this.show, shape, this.options.solo)) this.drawShape(shape, now);
-      }
+        const show = this.drawn.show;
+        for (const shape of show.shapes) {
+          const glide = this.glides.get(shape.id), shown = shownOnWall(show, shape, this.options.solo);
+          const t = glide ? fadeAlpha(glide.start, now, glide.duration) : 1;
+          if (glide && t >= 1) this.glides.delete(shape.id);
+          const alpha = (glide && t < 1 ? glide.alpha + ((shown ? 1 : 0) - glide.alpha) * t : shown ? 1 : 0) * (this.drawn.opacity.get(shape.id) ?? 1);
+          if (alpha <= 0) continue;
+          const brightness = glide && t < 1 ? glide.brightness + (shape.brightness - glide.brightness) * t : shape.brightness;
+          this.drawShape(brightness === shape.brightness ? shape : { ...shape, brightness }, now, alpha);
+        }
+      } else this.glides.clear();
       const overlay = this.overlayPicture();
       if (overlay) gpu.layer(overlay);
     }
@@ -405,12 +450,12 @@ export class MapCompositor {
   }
 
   /** One shape: what it plays through its placement, its crossfade, its look, its coverage and its border. */
-  private drawShape(shape: Shape, now: number): void {
+  private drawShape(shape: Shape, now: number, alpha = 1): void {
     const project = shape.sourceId ? this.projects.get(shape.sourceId) : undefined;
     const palette = project?.layers[0]?.palette ?? null;
     const p = this.picturesFor(shape, palette);
     if (p.box.w < 0.5 || p.box.h < 0.5 || !p.coverage) return;
-    const land = landing(shape, this.show), inv = inverseOf(land);
+    const land = landing(shape, this.drawn.show), inv = inverseOf(land);
     const slot = shape.sourceId ? this.slots.get(shape.sourceId) : undefined;
     // A source that will not play (failing, over the limit, restarting, or with no composition) plays the shape's own fill.
     const cannotPlay = shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === project) || !project);
@@ -426,7 +471,7 @@ export class MapCompositor {
     const fade = this.fades.get(shape.id);
     if (fade && !shape.blocker) {
       if (ready && fade.start === null) fade.start = now;
-      mix = fade.start === null ? 0 : fadeAlpha(fade.start, now);
+      mix = fade.start === null ? 0 : fadeAlpha(fade.start, now, fade.duration);
       from = typeof fade.from === 'string' ? { kind: 'colour', rgba: opaque(fade.from) } : { kind: 'picture', texture: fade.from, inv };
       if (mix >= 1) { this.endFade(shape.id); from = null; }
     }
@@ -436,6 +481,7 @@ export class MapCompositor {
       rect: p.box, coverage: p.coverage, content, from, mix,
       look: shape.blocker ? [1, 1, 1] : [tint[0] * b, tint[1] * b, tint[2] * b],
       decor: p.decor,
+      alpha,
     });
   }
 }

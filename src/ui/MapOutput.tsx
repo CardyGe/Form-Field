@@ -20,14 +20,24 @@ export default function MapOutput() {
     try { compositor = new MapCompositor(element); }
     catch (error) { setFailure((error as Error).message); return; }
     let state = initialWall();
-    const apply = () => {
-      compositor.setShow(state.show, new Map([...state.projects].map(([id, held]) => [id, held.project])));
+    const apply = (fadeMs?: number) => {
+      compositor.setShow(state.show, new Map([...state.projects].map(([id, held]) => [id, held.project])), fadeMs);
+      compositor.setSignals(state.signals);
       compositor.setOptions(state.options);
       compositor.setFrozen(state.freeze);
       compositor.setCorners(state.show.stageCorners);
     };
     apply();
-    const off = bridge.onMessage(message => { state = applyMapMessage(state, message); apply(); });
+    const off = bridge.onMessage(message => {
+      const kind = (message as { type?: string })?.type;
+      state = applyMapMessage(state, message);
+      // Signals come every frame: only they are passed on, not the whole show again.
+      if (kind === 'signals') { compositor.setSignals(state.signals); return; }
+      if (kind === 'fade') return;
+      // A show after a fade message is a scene switch, crossfading over the scene's time.
+      if (kind === 'show' && state.fadeMs !== null) { const ms = state.fadeMs; state = { ...state, fadeMs: null }; apply(ms); return; }
+      apply();
+    });
 
     // The operator screen gets a small picture of the wall, and once a second how the wall is keeping up.
     // The picture is taken without waiting for the graphics card and encoded in a worker, so the wall never stalls for it.

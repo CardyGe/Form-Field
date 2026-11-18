@@ -39,6 +39,11 @@ const { acceptPreview } = require('./live.cjs');
 // tests/map-messages.test.ts runs one table of messages against both copies, so they stay in step.
 const MESSAGE_LIMIT = 512 * 1024; // MAP_MESSAGE_LIMIT
 const SOURCE_MESSAGE_LIMIT = 256 * 1024 * 1024; // up to four layers, each with images of up to 20 MB, as text
+const SIGNALS_LIMIT = 16 * 1024; // SIGNALS_LIMIT
+// A copy of acceptSignals in src/react/signals.ts.
+const SIGNAL_NAME = /^[a-z]+(\.[a-z0-9]+){1,3}$/;
+const acceptSignals = value => !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length <= 600
+  && Object.entries(value).every(([k, v]) => k.length <= 32 && SIGNAL_NAME.test(k) && typeof v === 'number' && Number.isFinite(v));
 const SHOW_TEXT_LIMIT = 1024 * 1024 * 1024; // a show's compositions can hold many images
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const within = (value, limit) => { try { const text = JSON.stringify(value); return typeof text === 'string' && text.length < limit; } catch { return false; } };
@@ -63,6 +68,8 @@ function acceptMapMessage(value) {
     case 'identify': return idOrNull(value.shapeId);
     case 'crosshair': return idOrNull(value.shapeId) && (value.point === null || (plain(value.point) && finite(value.point.x) && finite(value.point.y)));
     case 'solo': return Array.isArray(value.ids) && value.ids.every(id => typeof id === 'string');
+    case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
+    case 'fade': return finite(value.ms) && value.ms >= 0 && value.ms <= 30000;
     default: return false;
   }
 }

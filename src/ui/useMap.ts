@@ -5,6 +5,12 @@ import type { Project } from '../shared/types';
 import { autosaveSchedule, canEdit } from '../map/autosave';
 import { acceptMapMessage, sourcesToSend, toWire, type MapMessage } from '../map/messages';
 import { createShow, validateShow, type ShowDocument } from '../map/show';
+import { reactivity, type ReactivityEngine } from '../react/engine';
+import { fire, type TriggerAction } from '../react/links';
+import type { Signals } from '../react/signals';
+
+/** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
+export const showReacts = (show: ShowDocument) => show.links.length > 0 || show.triggers.length > 0 || show.sources.some(s => s.tempoSync !== null);
 
 export type MapTool = 'select' | 'rectangle' | 'triangle' | 'ellipse' | 'pen';
 /** The shapes soloed, directly or through their group, that are still in the show. */
@@ -344,6 +350,59 @@ export function useMap(onError: (message: string) => void) {
   const setTestGrid = (on: boolean) => { kept.testGrid = on; setTestGridState(on); if (outputOpen) bridge?.send({ type: 'testGrid', on }); };
   /** Freeze holds the wall's picture: the instruments stop where they are. */
   const setFreeze = (on: boolean) => { kept.freeze = on; setFreezeState(on); if (outputOpen) bridge?.send({ type: 'freeze', on }); };
+
+  // ---- Scenes and reactivity (stage 5) ----
+  /** This screen's own compositor is told of a scene switch's fade through this, as the wall is through a message. */
+  const pendingFade = useRef<number | null>(null);
+  /** Switches scene: the wall and this screen crossfade over the scene's own fade time, or the show's. */
+  const switchScene = (sceneId: string) => {
+    const s = stateRef.current.show, scene = s.scenes.find(sc => sc.id === sceneId);
+    if (!scene || s.sceneId === sceneId) return false;
+    const ms = Math.round((scene.fadeSeconds ?? s.sceneFade) * 1000);
+    if (outputOpen) bridge?.send({ type: 'fade', ms });
+    pendingFade.current = ms;
+    return dispatch({ type: 'switchScene', sceneId });
+  };
+  const stepScene = (by: 1 | -1) => {
+    const s = stateRef.current.show;
+    if (!s.scenes.length) return;
+    const at = s.scenes.findIndex(sc => sc.id === s.sceneId);
+    const next = s.scenes[((at < 0 ? (by > 0 ? -1 : 0) : at) + by + s.scenes.length) % s.scenes.length];
+    switchScene(next.id);
+  };
+  const [engine, setEngine] = useState<ReactivityEngine | null>(null);
+  const [signals, setSignals] = useState<Signals>({});
+  /** This screen's compositor hears the signals here. */
+  const onSignals = useRef<((signals: Signals) => void) | null>(null);
+  const reacts = showReacts(show);
+  const [panelOpen, setPanelOpen] = useState(false);
+  useEffect(() => { if ((reacts || panelOpen) && !engine) setEngine(reactivity()); }, [reacts, panelOpen, engine]);
+  // Once a frame: signals to the wall and to this screen, and triggers fired as ordinary actions.
+  const triggerAct = useRef<(action: TriggerAction) => void>(() => {});
+  triggerAct.current = action => {
+    switch (action.kind) {
+      case 'scene': switchScene(action.sceneId); break;
+      case 'next-scene': stepScene(1); break;
+      case 'previous-scene': stepScene(-1); break;
+      case 'vary': dispatch({ type: 'varySource', sourceId: action.sourceId, entropy: Math.floor(Math.random() * 1e6) }); break;
+      case 'blackout': setBlackout(!latest.current.blackout); break;
+      case 'freeze': setFreeze(!latest.current.freeze); break;
+      case 'tap': engine?.tap(); break;
+    }
+  };
+  useEffect(() => {
+    if (!engine || !(reacts || panelOpen)) return;
+    let prev: Signals = {}, shown = 0;
+    return engine.subscribe(now => {
+      if (outputOpen && reacts) bridge?.send({ type: 'signals', signals: now });
+      onSignals.current?.(now);
+      for (const action of fire(stateRef.current.show.triggers, prev, now)) triggerAct.current(action);
+      prev = now;
+      // The panel's meters update a few times a second, not every frame.
+      const t = performance.now();
+      if (panelOpen && t - shown > 100) { shown = t; setSignals(now); }
+    });
+  }, [engine, reacts, panelOpen, outputOpen]);
   const openOutput = async () => {
     if (display === null) return;
     try { await bridge?.openOutput(display); }
@@ -410,7 +469,8 @@ export function useMap(onError: (message: string) => void) {
   const setSnap = (on: boolean) => { kept.snap = on; setSnapState(on); };
   const setPhotoShown = (on: boolean) => { kept.photoShown = on; setPhotoShownState(on); };
 
-  return { show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
+  return { switchScene, stepScene, pendingFade, engine: engine, startEngine: () => setEngine(e => e ?? reactivity()), signals, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
+    show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
     solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

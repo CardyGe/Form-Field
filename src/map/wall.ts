@@ -1,6 +1,7 @@
 import type { Project } from '../shared/types';
 import { validateProject } from '../core/project';
 import { acceptMapMessage, type MapMessage } from './messages';
+import type { Signals } from '../react/signals';
 import { MAX_SOURCE_LAYERS, validateWireShow, type WireShow } from './show';
 import type { DrawOptions } from './draw';
 
@@ -10,6 +11,9 @@ export interface WallState {
   projects: Map<string, { revision: number; project: Project }>;
   options: DrawOptions;
   freeze: boolean;
+  /** The latest signals, and the fade time the next show change should use (a scene switch), if any. */
+  signals: Signals;
+  fadeMs: number | null;
 }
 
 export function initialWall(): WallState {
@@ -18,6 +22,8 @@ export function initialWall(): WallState {
     projects: new Map(),
     options: { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: null, selectedIndex: null, outlinesOnly: false, invalidIds: [] },
     freeze: false,
+    signals: {},
+    fadeMs: null,
   };
 }
 
@@ -51,5 +57,7 @@ export function applyMapMessage(state: WallState, value: unknown): WallState {
     case 'identify': return { ...state, options: { ...state.options, identifyId: message.shapeId } };
     case 'crosshair': return { ...state, options: { ...state.options, crosshair: message.point, selectedId: message.shapeId } };
     case 'solo': return { ...state, options: { ...state.options, solo: message.ids } };
+    case 'signals': return { ...state, signals: message.signals };
+    case 'fade': return { ...state, fadeMs: message.ms };
   }
 }

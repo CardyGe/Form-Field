@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
-import { useMap, type MapTool } from './useMap';
+import { useMap, showReacts, type MapTool } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
 import MapShapeList from './MapShapeList';
 import MapIcon from './mapIcons';
@@ -150,6 +150,10 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
 
   // With the output closed, this screen plays the instruments itself, with the same compositor as the wall.
   const compositor = useRef<MapCompositor | null>(null);
+  const pendingFadeRef = useRef<{ current: number | null } | null>(null);
+  pendingFadeRef.current = map.pendingFade;
+  // Signals reach this screen's compositor directly.
+  map.onSignals.current = signals => compositor.current?.setSignals(signals);
   useEffect(() => {
     if (!canvas.current) return;
     // It draws on its own hidden canvas; this screen copies that picture and draws its marks over it.
@@ -176,7 +180,12 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     // With the output closed this screen draws the stage as the wall would (placement, pins, look), instruments or not.
     const local = compositor.current && !d.outputOpen && !compositor.current.stats().contextLost ? compositor.current : null;
     if (local) {
-      if (playedShow.current !== picture) { local.setShow(picture, new Map(picture.sources.map(s => [s.id, s.project]))); playedShow.current = picture; }
+      if (playedShow.current !== picture) {
+        // A scene switch crossfades over its fade time here as on the wall.
+        local.setShow(picture, new Map(picture.sources.map(s => [s.id, s.project])), pendingFadeRef.current?.current ?? undefined);
+        if (pendingFadeRef.current) pendingFadeRef.current.current = null;
+        playedShow.current = picture;
+      }
       local.setOptions(options);
       local.setFrozen(d.freeze);
       // This screen draws its marks over the stage, so the stage is drawn again under them every time.
@@ -295,7 +304,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   }, []);
   useEffect(() => { drawStage(performance.now()); }, [cornersMode, cornerIndex, shown, refused, map.selectedIds, map.selectedIndex, map.selectedRing, map.outputOpen, map.wallPicture, redrawTick, pen, hover, marquee, snapMark, map.soloed.join(), map.photoShown, map.tool, drawStage]);
   // Instruments move, so while they play here the stage is drawn every frame.
-  const playsHere = !map.outputOpen && (refused?.show ?? shown).sources.length > 0;
+  const playsHere = !map.outputOpen && ((refused?.show ?? shown).sources.length > 0 || showReacts(shown));
   useEffect(() => {
     if (!playsHere) return;
     let raf = requestAnimationFrame(function loop(now) { drawStage(now); raf = requestAnimationFrame(loop); });

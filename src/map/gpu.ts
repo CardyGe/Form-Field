@@ -37,6 +37,7 @@ uniform sampler2D uFrom;
 uniform mat3 uFromInv;      // the old picture keeps its own placement
 uniform float uMix;
 uniform vec3 uLook;         // brightness times tint
+uniform float uAlpha;       // opacity, for drawing only (links, scene glides)
 uniform int uDecor;
 uniform sampler2D uDecorTex;
 vec4 picture(sampler2D t, mat3 inv) {
@@ -56,7 +57,7 @@ void main() {
   if (uFromKind >= 0) c = mix(uFromKind == 1 ? picture(uFrom, uFromInv) : uFromColour, c, uMix);
   c.rgb *= uLook;
   c *= cover;
-  o = d + c * (1. - d.a);
+  o = (d + c * (1. - d.a)) * uAlpha;
 }`;
 
 const LAYER = `#version 300 es
@@ -94,6 +95,8 @@ export interface ShapeDraw {
   mix: number;
   look: [number, number, number];
   decor: Texture | null;
+  /** 0..1; 1 when missing. */
+  alpha?: number;
 }
 
 type Program = { program: WebGLProgram; u: Record<string, WebGLUniformLocation | null> };
@@ -149,7 +152,7 @@ export class Gpu {
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'program');
       return { program, u: Object.fromEntries(uniforms.map(n => [n, gl.getUniformLocation(program, n)])) };
     };
-    this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uLook', 'uDecor', 'uDecorTex']);
+    this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uLook', 'uAlpha', 'uDecor', 'uDecorTex']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
     this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex']);
     this.quad = gl.createVertexArray()!;
@@ -242,6 +245,7 @@ export class Gpu {
     } else { gl.uniform1i(u.uFromKind, 0); gl.uniform4fv(u.uFromColour, d.from.rgba); bind(2, 'uFrom', null); }
     gl.uniform1f(u.uMix, d.mix);
     gl.uniform3f(u.uLook, ...d.look);
+    gl.uniform1f(u.uAlpha, d.alpha ?? 1);
     gl.uniform1i(u.uDecor, d.decor ? 1 : 0); bind(3, 'uDecorTex', d.decor);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }

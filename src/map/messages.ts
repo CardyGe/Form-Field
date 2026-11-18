@@ -1,6 +1,7 @@
 import type { Project } from '../shared/types';
 import type { CurvePoint, Point, ShowDocument, WireShow } from './show';
 import { shapeValidity } from './outline';
+import { acceptSignals, type Signals } from '../react/signals';
 import { ownCornersPinnable } from './placement';
 
 export type MapMessage =
@@ -13,7 +14,11 @@ export type MapMessage =
   | { type: 'identify'; shapeId: string | null }
   | { type: 'crosshair'; point: Point | null; shapeId: string | null }
   /** Only these shapes reach the wall; none means no solo. Not saved. */
-  | { type: 'solo'; ids: string[] };
+  | { type: 'solo'; ids: string[] }
+  /** What sound, the beat, tempo and MIDI are doing, once a frame while something reacts. */
+  | { type: 'signals'; signals: Signals }
+  /** The next show change is a scene switch: its crossfade takes this long. */
+  | { type: 'fade'; ms: number };
 
 /**
  * Map's own limit, larger than Live's 16 KB settings cap: the largest valid show (64 shapes of 32 curve points with
@@ -21,6 +26,8 @@ export type MapMessage =
  * refused. Tested.
  */
 export const MAP_MESSAGE_LIMIT = 512 * 1024;
+/** A frame of signals is small; anything larger is refused. */
+export const SIGNALS_LIMIT = 16 * 1024;
 /**
  * A composition can hold up to four layers, each with an image and a mask of up to 20 MB (Studio's MAX_ASSET_BYTES),
  * stored as text about a third larger: so its message has its own, much larger limit.
@@ -91,6 +98,8 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'identify': return idOrNull(value.shapeId);
     case 'crosshair': return idOrNull(value.shapeId) && (value.point === null || (plain(value.point) && finite(value.point.x) && finite(value.point.y)));
     case 'solo': return Array.isArray(value.ids) && value.ids.every(id => typeof id === 'string');
+    case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
+    case 'fade': return finite(value.ms) && (value.ms as number) >= 0 && (value.ms as number) <= 30000;
     default: return false;
   }
 }
