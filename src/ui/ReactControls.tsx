@@ -111,14 +111,15 @@ function Range({ label, value, min, max, step, shown, onCommit }: { label: strin
 }
 
 /** One link: what it listens to, what it moves, how much and how smoothly. */
-export function LinkRow({ link, targetLabel, targets, engine, onChange, onRemove }: { link: Link; targetLabel: string; targets?: { target: string; label: string }[]; engine: ReactivityEngine | null; onChange: (change: Partial<Omit<Link, 'id'>>) => void; onRemove: () => void }) {
+export function LinkRow({ link, targetLabel, targets, engine, onChange, onRemove, note }: { link: Link; targetLabel: string; targets?: { target: string; label: string }[]; engine: ReactivityEngine | null; onChange: (change: Partial<Omit<Link, 'id'>>) => void; onRemove: () => void; note?: string }) {
   const pct = (v: number) => `${Math.round(v * 100)} %`, ms = (v: number) => `${Math.round(v)} ms`;
   return <details className="react-link" data-link={link.id}>
     <summary>
       <input type="checkbox" aria-label={`${link.name || 'Link'} on`} checked={link.on} onClick={e => e.stopPropagation()} onChange={e => onChange({ on: e.target.checked })} />
-      <span className="react-link-name"><strong>{signalLabel(link.input)}</strong> → {targetLabel}</span>
+      <span className="react-link-name"><strong>{signalLabel(link.input)}</strong> → {targetLabel} <small className="muted-text">· {link.mode === 'control' ? `${pct(link.low)}–${pct(link.high)}` : pct(link.amount)}</small></span>
       <button className="map-icon" aria-label="Remove link" title="Remove" onClick={e => { e.preventDefault(); onRemove(); }}>×</button>
     </summary>
+    {note && <p className="react-status warn">{note}</p>}
     <div className="react-link-body">
       <InputSelect value={link.input} engine={engine} learnKey={`link:${link.id}`} onChange={input => onChange({ input })} />
       {targets && <label className="map-field">Moves<select aria-label="Moves" value={link.target} onChange={e => onChange({ target: e.target.value })}>
