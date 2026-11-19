@@ -83,7 +83,7 @@ const FILTERS = [{ name: 'Form & Field Map show', extensions: ['formshow'] }];
  * `open(window)` loads the app page into the output window with the hash #map-output;
  * `closeLiveOutput()` closes Live's output window. Map never holds Live's window.
  */
-function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath, preload, studio, open, closeLiveOutput }) {
+function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath, preload, studio, open, closeLiveOutput, videoFiles }) {
   let output = null;
   let showPath = null;
   // Every write, and the autosave read, goes through one queue, so two saves never overlap
@@ -111,7 +111,9 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
   };
   const checkText = text => { if (typeof text !== 'string' || text.length > SHOW_TEXT_LIMIT) throw new Error('This show cannot be saved.'); };
 
-  handle('loadAutosave', () => queued(() => loadShowFile(autosavePath)));
+  // Stage 6: the videos a show names may play once the show is opened through the app (Open, or its own autosave).
+  const grantVideos = show => { if (show && videoFiles) videoFiles.allowFromShow(show); return show; };
+  handle('loadAutosave', async () => grantVideos(await queued(() => loadShowFile(autosavePath))));
   handle('saveAutosave', text => { checkText(text); return queuedSave(autosavePath, text); });
   // The parsed show; null when the person cancelled; { damaged: true } when the chosen file cannot be read.
   handle('openShow', async () => {
@@ -122,7 +124,7 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     try { show = await queued(() => loadShowFile(file)); } catch { show = null; }
     if (!show) return { damaged: true };
     showPath = file;
-    return show;
+    return grantVideos(show);
   });
   // Returns the file written, or null when the person cancelled the dialog.
   handle('saveShow', async (text, saveAs) => {
@@ -159,6 +161,17 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     open(window);
   });
   handle('closeOutput', () => closeOutput());
+  // Video… and Find…: a video file Greg picks may be played from now on.
+  const VIDEO_FILTERS = [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'webm'] }];
+  const pickVideo = async title => {
+    const result = await dialog.showOpenDialog(studio(), { title, properties: ['openFile'], filters: VIDEO_FILTERS });
+    if (result.canceled || !result.filePaths?.length) return null;
+    const file = result.filePaths[0];
+    if (!videoFiles || !videoFiles.allow(file)) return null;
+    return { path: file, name: path.basename(file) };
+  };
+  handle('chooseVideo', () => pickVideo('Choose a video'));
+  handle('findVideo', name => pickVideo(typeof name === 'string' && name ? `Find ${name.slice(0, 120)}` : 'Find the video'));
 
   // The output page says when it is ready; only then is the studio told the output is open (and sends the show).
   ipcMain.on('studio:map:ready', event => { if (fromOutput(event)) tellStudio('studio:map:output', true); });

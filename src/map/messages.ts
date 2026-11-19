@@ -75,6 +75,7 @@ export function toWire(show: ShowDocument): WireShow {
     // Not rounded: a pinnable quad at the edge of the rules could round to one that is not.
     stageCorners: show.stageCorners,
     usesLive: usesLive(show),
+    videos: show.videos,
   };
 }
 

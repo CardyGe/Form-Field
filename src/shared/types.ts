@@ -191,6 +191,9 @@ export interface MapBridge {
   saveAutosave(text: string): Promise<void>;
   /** The chosen show file as parsed JSON; null when cancelled; { damaged: true } when the file cannot be read. */
   openShow(): Promise<unknown>;
+  /** Stage 6: a video file picked by Greg (Video… or Find…), which the projector may then play. */
+  chooseVideo(): Promise<{ path: string; name: string } | null>;
+  findVideo(name: string): Promise<{ path: string; name: string } | null>;
   /** The file written, or null when the person cancelled. */
   saveShow(text: string, saveAs: boolean): Promise<string | null>;
   displays(): Promise<{ id: number; label: string; primary: boolean }[]>;

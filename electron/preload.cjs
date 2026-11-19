@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
     loadAutosave: () => invoke('map:loadAutosave'),
     saveAutosave: text => invoke('map:saveAutosave', text),
     openShow: () => invoke('map:openShow'),
+    chooseVideo: () => invoke('map:chooseVideo'),
+    findVideo: (name) => invoke('map:findVideo', name),
     saveShow: (text, saveAs) => invoke('map:saveShow', text, saveAs),
     displays: () => invoke('map:displays'),
     openOutput: displayId => invoke('map:openOutput', displayId),

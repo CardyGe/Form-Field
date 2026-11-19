@@ -1,0 +1,68 @@
+// Map stage 6: the main process serves the video files Greg chose, and nothing else.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { createVideoFiles, videoPathFromUrl } = require('./video-files.cjs');
+
+const url = p => `formfield-video://file/${encodeURIComponent(p)}`;
+const setup = async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'video-files-'));
+  const clip = path.join(dir, 'loop.mp4');
+  await fs.writeFile(clip, Buffer.from('0123456789abcdef'));
+  const secret = path.join(dir, 'notes.txt');
+  await fs.writeFile(secret, 'private');
+  return { dir, clip, secret, files: createVideoFiles({ fs }) };
+};
+
+test('only video extensions can be allowed', async () => {
+  const { files, clip, secret } = await setup();
+  assert.equal(files.allow(clip), true);
+  assert.equal(files.allow(secret), false);
+  assert.equal(files.allow('/clips/loop.MOV'), true);
+  assert.equal(files.allow(''), false);
+});
+
+test('a path not on the list is refused (403), even if it exists', async () => {
+  const { files, clip } = await setup();
+  const res = await files.handle(new Request(url(clip)));
+  assert.equal(res.status, 403);
+});
+
+test('an allowed file is served with its type and supports byte ranges', async () => {
+  const { files, clip } = await setup();
+  files.allow(clip);
+  const whole = await files.handle(new Request(url(clip)));
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get('content-type'), 'video/mp4');
+  assert.equal(await whole.text(), '0123456789abcdef');
+  const part = await files.handle(new Request(url(clip), { headers: { range: 'bytes=4-7' } }));
+  assert.equal(part.status, 206);
+  assert.equal(part.headers.get('content-range'), 'bytes 4-7/16');
+  assert.equal(await part.text(), '4567');
+  const open = await files.handle(new Request(url(clip), { headers: { range: 'bytes=10-' } }));
+  assert.equal(await open.text(), 'abcdef');
+});
+
+test('a missing allowed file answers 404', async () => {
+  const { files, dir } = await setup();
+  const gone = path.join(dir, 'gone.mp4');
+  files.allow(gone);
+  assert.equal((await files.handle(new Request(url(gone)))).status, 404);
+});
+
+test('allowFromShow grants the video paths a show names, and nothing else', async () => {
+  const { files, clip } = await setup();
+  const show = JSON.stringify({ format: 'formshow', version: 7, videos: [{ id: 'video-1', path: clip, name: 'loop.mp4' }, { id: 'video-2', path: '/etc/passwd', name: 'x' }], sources: [{ id: 's', path: '/Users/me/other.mp4' }] });
+  assert.equal(files.allowFromShow(show), 1);
+  assert.equal((await files.handle(new Request(url(clip)))).status, 200);
+  assert.equal((await files.handle(new Request(url('/etc/passwd')))).status, 403);
+  assert.equal((await files.handle(new Request(url('/Users/me/other.mp4')))).status, 403, 'only the videos list counts');
+  assert.equal(files.allowFromShow('not json'), 0);
+});
+
+test('the page’s url for a path reads back to the same path', () => {
+  assert.equal(videoPathFromUrl(url('/Users/greg/My Clips/loop #1.mp4')), '/Users/greg/My Clips/loop #1.mp4');
+  assert.equal(videoPathFromUrl('formfield-video://other/x'), null);
+});

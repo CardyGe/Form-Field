@@ -58,7 +58,9 @@ export interface WireSource { id: string; kind: 'instrument'; speed: number; rev
 /** The show as sent to the wall: no compositions, and never the photo. */
 export interface WireShow { format: 'formshow'; version: 7; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[];
   /** The show plays Live somewhere (a shape, or a scene): the wall keeps Live's camera running. */
-  usesLive: boolean }
+  usesLive: boolean;
+  /** Stage 6: the videos shapes play, with their paths (the wall fetches them through the app). */
+  videos: VideoSource[] }
 
 /**
  * Live in Map: a shape that plays the Live screen's look names this as its sourceId. There is one Live, shared, and it
@@ -403,11 +405,14 @@ export function validateWireShow(value: unknown): WireShow {
   const shapes = read.shapes;
   const known = new Map<string, unknown>(sources);
   known.set(LIVE_SOURCE_ID, true);
+  const videos = isRecord(value) ? readVideos(value.videos).videos : [];
+  for (const v of videos) known.set(v.id, true);
   linkSources(shapes, known);
   const kept = [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id));
   return { format: 'formshow', version: 7, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
     links: isRecord(value) ? readLinks(value.links, { shapes, sources: kept }, true).links : [],
-    usesLive: (isRecord(value) && value.usesLive === true) || shapes.some(s => s.sourceId === LIVE_SOURCE_ID) };
+    usesLive: (isRecord(value) && value.usesLive === true) || shapes.some(s => s.sourceId === LIVE_SOURCE_ID),
+    videos };
 }
 
 /** Shapes that name a source the show does not have play their colour. True when any had to. */

@@ -118,3 +118,14 @@ test('a reaction on a video’s speed has a range of 0.1 to 4 and a label naming
   const show = video(base(), 'a', 'video-1', '/clips/waves.mp4');
   assert.deepEqual(targetRange(show, 'source.video-1.speed'), { min: 0.1, max: 4, label: 'waves.mp4 · Speed' });
 });
+
+test('the wall is sent the videos with their paths, and keeps the shapes that play them', async () => {
+  const { toWire } = await import('../src/map/messages');
+  const { validateWireShow } = await import('../src/map/show');
+  const { videoUrl } = await import('../src/map/videoUrl');
+  const show = video(base(), 'a', 'video-1', '/clips/loop.mp4');
+  const wire = validateWireShow(JSON.parse(JSON.stringify(toWire(show))));
+  assert.deepEqual(wire.videos.map(v => v.path), ['/clips/loop.mp4']);
+  assert.equal(wire.shapes.find(s => s.id === 'a')!.sourceId, 'video-1');
+  assert.equal(videoUrl('/My Clips/a #1.mp4'), 'formfield-video://file/%2FMy%20Clips%2Fa%20%231.mp4');
+});
