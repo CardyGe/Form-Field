@@ -2,6 +2,7 @@ import {
   BORDER_MAX, GLOW_MAX, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, PHOTO_TEXT_LIMIT, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE,
   BRIGHTNESS_MAX, ZOOM_RANGE, MAX_LINKS, MAX_TRIGGERS, TEMPO_SYNC_BEATS, playedBy, readLink, readTrigger, cleanName, isShapeLocked, normaliseGroups, shapeExtras,
   type Border, type Placement, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source, LIVE_SOURCE_ID,
+  IMAGE_FILE_LIMIT, IMAGE_SHOW_LIMIT, MAX_VIDEOS, dataUrlBytes, imageBytes, isVideoId, isVideoPath,
 } from './show';
 import { clampToStage, nudge, rectangleFromDrag } from './geometry';
 import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
@@ -66,7 +67,9 @@ export type EditAction =
    * linked (the default): when the shape shares its instrument with others, they are one instrument and all change;
    * false changes this shape only (a new look gets an instrument of its own).
    */
-  | { type: 'setContent'; shapeId: string; content: ({ kind: 'colour' } | { kind: 'grid' } | { kind: 'live' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number }) & { linked?: boolean } }
+  | { type: 'setContent'; shapeId: string; content: ({ kind: 'colour' } | { kind: 'grid' } | { kind: 'live' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number }
+    | { kind: 'image'; sourceId: string; image: { name: string; dataUrl: string; width: number; height: number } }
+    | { kind: 'video'; videoId: string; path: string; name: string }) & { linked?: boolean } }
   | { type: 'varySource'; sourceId: string; entropy: number }
   | { type: 'setSourcePalette'; sourceId: string; palette: string[] }
   | { type: 'setSourceSpeed'; sourceId: string; speed: number }
@@ -76,6 +79,8 @@ export type EditAction =
   | { type: 'movePin'; shapeId: string; index: number; to: Point }
   | { type: 'shareSource'; shapeId: string; withShapeId: string }
   | { type: 'makeSeparate'; shapeId: string; sourceId: string }
+  /** Find…: every video that played `path` plays `to` from now on. */
+  | { type: 'relinkVideo'; path: string; to: string; name: string }
   /** Map's Effect tab: some of one layer's settings, each kept inside its own range. */
   | { type: 'setSourceLayer'; sourceId: string; layer: number; params: Record<string, number> }
   | { type: 'setLook'; shapeId: string; brightness?: number; tint?: string }
@@ -160,7 +165,14 @@ const PHOTO = /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/;
 const MAX_GRID_SIDE = 16;
 
 /** Sources no shape plays any more are dropped. */
-const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => playedBy(show, src.id)); };
+const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => playedBy(show, src.id)); show.videos = show.videos.filter(v => playedBy(show, v.id)); };
+
+/** A one-layer composition of a picture (Studio's image layer, cover fit), as a file would load it; null if it is not valid. */
+export function imageComposition(image: { name: string; dataUrl: string; width: number; height: number }): Project | null {
+  const project = createProject();
+  const layer = { ...createLayer('image'), name: cleanName(image.name).slice(0, 60) || 'Image', image: { name: cleanName(image.name).slice(0, 120) || 'image', dataUrl: image.dataUrl, width: image.width, height: image.height, fit: 'cover' as const } };
+  try { return validateProject({ ...project, name: layer.name, background: '#000000', layers: [layer] }); } catch { return null; }
+}
 
 /** A one-layer composition of a Library preset, in the canonical form a file would load as. */
 export function presetComposition(presetId: string, seed: number): Project | null {
@@ -179,6 +191,15 @@ export function presetComposition(presetId: string, seed: number): Project | nul
 
 /** Changes to a source itself. Refused while any shape playing it is locked. */
 function stageSource(next: ShowDocument, action: Extract<EditAction, { sourceId: string; type: 'varySource' | 'setSourcePalette' | 'setSourceSpeed' | 'setSourceProject' | 'setSourceLayer' }>): Staged {
+  // A video has a speed and nothing else a composition has.
+  if (isVideoId(action.sourceId)) {
+    const v = next.videos.findIndex(x => x.id === action.sourceId);
+    if (v < 0 || action.type !== 'setSourceSpeed') return { reason: 'not-found' };
+    if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+    const speed = Number.isFinite(action.speed) ? clamp(action.speed, SPEED_RANGE.min, SPEED_RANGE.max) : 1;
+    next.videos = next.videos.map((x, n) => n === v ? { ...x, speed } : x);
+    return { show: next, touched: [] };
+  }
   const i = next.sources.findIndex(s => s.id === action.sourceId);
   if (i < 0) return { reason: 'not-found' };
   if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
@@ -376,7 +397,21 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       next.links = [...next.links, ...links];
       return done();
     }
+    case 'relinkVideo': {
+      if (!isVideoPath(action.to)) return { reason: 'not-a-video' };
+      if (!next.videos.some(v => v.path === action.path)) return { reason: 'not-found' };
+      next.videos = next.videos.map(v => v.path === action.path ? { ...v, path: action.to, name: cleanName(action.name).slice(0, 120) || v.name } : v);
+      return { show: next, touched: [] };
+    }
     case 'setTempoSync': {
+      if (isVideoId(action.sourceId)) {
+        const v = next.videos.findIndex(x => x.id === action.sourceId);
+        if (v < 0) return { reason: 'not-found' };
+        if (action.beats !== null && !TEMPO_SYNC_BEATS.includes(action.beats)) return { reason: 'bad-tempo' };
+        if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+        next.videos = next.videos.map((x, n) => n === v ? { ...x, tempoSync: action.beats } : x);
+        return { show: next, touched: [] };
+      }
       const i = next.sources.findIndex(s => s.id === action.sourceId);
       if (i < 0) return { reason: 'not-found' };
       if (action.beats !== null && !TEMPO_SYNC_BEATS.includes(action.beats)) return { reason: 'bad-tempo' };
@@ -504,6 +539,39 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const linked = content.linked !== false && shape.sourceId !== null ? next.shapes.filter(s => s.sourceId === shape.sourceId) : [shape];
       if (linked.some(s => isShapeLocked(next, s))) return { reason: 'locked' };
       if (content.kind === 'colour' || content.kind === 'grid') { for (const s of linked) { s.sourceId = null; s.fill = content.kind; } dropUnplayed(next); return done(); }
+      // A picture of Greg's own: a one-layer image composition, stored in the show. The same picture is stored once.
+      if (content.kind === 'image') {
+        if (shape.blocker) return { reason: 'blocker' };
+        const bytes = dataUrlBytes(content.image.dataUrl);
+        if (!/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(content.image.dataUrl)) return { reason: 'bad-image' };
+        if (bytes > IMAGE_FILE_LIMIT) return { reason: 'image-too-large' };
+        const same = next.sources.find(s => s.project.layers.length === 1 && s.project.layers[0].image?.dataUrl === content.image.dataUrl);
+        let id = same?.id;
+        if (!id) {
+          if (imageBytes(next) + bytes > IMAGE_SHOW_LIMIT) return { reason: 'images-over-budget' };
+          if (content.sourceId === LIVE_SOURCE_ID || isVideoId(content.sourceId) || next.sources.some(s => s.id === content.sourceId)) return { reason: 'duplicate-id' };
+          const project = imageComposition(content.image);
+          if (!project) return { reason: 'bad-image' };
+          next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0, tempoSync: null });
+          id = content.sourceId;
+        }
+        for (const s of linked) s.sourceId = id;
+        dropUnplayed(next);
+        if (next.sources.length > MAX_SOURCES) return { reason: 'too-many-sources' };
+        return done();
+      }
+      // A video of Greg's own, left on disk: shapes name it by its id.
+      if (content.kind === 'video') {
+        if (shape.blocker) return { reason: 'blocker' };
+        if (!isVideoPath(content.path)) return { reason: 'not-a-video' };
+        if (!isVideoId(content.videoId) || next.videos.some(v => v.id === content.videoId)) return { reason: 'duplicate-id' };
+        const stays = next.videos.filter(v => !linked.every(s => s.sourceId === v.id) || playedBy({ shapes: next.shapes.filter(s => !linked.includes(s)), scenes: next.scenes }, v.id));
+        if (stays.length >= MAX_VIDEOS) return { reason: 'too-many-videos' };
+        next.videos = [...next.videos, { id: content.videoId, path: content.path, name: cleanName(content.name).slice(0, 120), speed: 1, tempoSync: null }];
+        for (const s of linked) s.sourceId = content.videoId;
+        dropUnplayed(next);
+        return done();
+      }
       // Live: the Live screen's one look. Every linked shape plays it; it is no source of the show's.
       if (content.kind === 'live') {
         if (shape.blocker) return { reason: 'blocker' };
@@ -575,6 +643,19 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       return done();
     }
     case 'makeSeparate': {
+      // A video: this shape gets its own copy, its own player, speed and tempo loop.
+      if (isVideoId(shape.sourceId)) {
+        const v = next.videos.find(x => x.id === shape.sourceId)!;
+        if (!next.shapes.some(s => s !== shape && s.sourceId === v.id)) return { show, touched: [] };
+        const id = isVideoId(action.sourceId) ? action.sourceId : `video-${action.sourceId}`;
+        if (next.videos.some(x => x.id === id)) return { reason: 'duplicate-id' };
+        if (next.videos.length >= MAX_VIDEOS) return { reason: 'too-many-videos' };
+        next.videos = [...next.videos, { ...v, id }];
+        shape.sourceId = id;
+        const from = `source.${v.id}.`, room = MAX_LINKS - next.links.length;
+        next.links = [...next.links, ...next.links.filter(l => l.target.startsWith(from)).slice(0, Math.max(0, room)).map(l => ({ ...l, id: `${l.id}~${id}`.slice(0, 64), target: `source.${id}.${l.target.slice(from.length)}` }))];
+        return done();
+      }
       const source = shape.sourceId ? next.sources.find(src => src.id === shape.sourceId) : undefined;
       // The only player of its instrument is already separate: nothing changes.
       if (!source || !next.shapes.some(s => s !== shape && s.sourceId === source.id)) return { show, touched: [] };
@@ -758,7 +839,7 @@ function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'add
       const target = next.scenes.find(s => s.id === scene.id)!;
       // A locked shape keeps its state; a shape the scene has never seen keeps its own.
       next.shapes = next.shapes.map(sh => isShapeLocked(next, sh) ? sh : pinnable(withState(sh, target.shapes[sh.id])));
-      for (const sh of next.shapes) if (sh.sourceId !== null && sh.sourceId !== LIVE_SOURCE_ID && !next.sources.some(src => src.id === sh.sourceId)) sh.sourceId = null;
+      for (const sh of next.shapes) if (sh.sourceId !== null && sh.sourceId !== LIVE_SOURCE_ID && !next.sources.some(src => src.id === sh.sourceId) && !next.videos.some(v => v.id === sh.sourceId)) sh.sourceId = null;
       next.sceneId = scene.id;
       return { show: next, touched: [] };
     }
@@ -781,8 +862,8 @@ function tidy(show: ShowDocument): ShowDocument {
   const scenesOk = show.scenes.every(sc => Object.keys(sc.shapes).every(id => ids.has(id)));
   const scenes = scenesOk ? show.scenes : show.scenes.map(sc => ({ ...sc, shapes: Object.fromEntries(Object.entries(sc.shapes).filter(([id]) => ids.has(id))) }));
   const base = scenesOk ? show : { ...show, scenes };
-  const sources = base.sources.filter(src => playedBy(base, src.id));
-  const withSources = sources.length === base.sources.length ? base : { ...base, sources };
+  const sources = base.sources.filter(src => playedBy(base, src.id)), videos = base.videos.filter(v => playedBy(base, v.id));
+  const withSources = sources.length === base.sources.length && videos.length === base.videos.length ? base : { ...base, sources, videos };
   const links = withSources.links.filter(l => readLink(l, withSources));
   // A trigger whose scene or instrument has gone is kept, switched off and set to Next scene, for the operator to see.
   let changedTriggers = false;

@@ -7,7 +7,7 @@
  */
 import { readParameterDefinitions, scopeParameterVisible, visibleParameterDefinitions } from '../core/project';
 import type { Layer, ParameterDefinition } from '../shared/types';
-import { BRIGHTNESS_MAX, LIVE_SOURCE_ID, SPEED_RANGE, ZOOM_RANGE, type ShowDocument } from './show';
+import { BRIGHTNESS_MAX, LIVE_SOURCE_ID, SPEED_RANGE, ZOOM_RANGE, isVideoId, type ShowDocument } from './show';
 import type { Link } from '../react/links';
 
 export const SHAPE_PROPS = { brightness: 'Brightness', opacity: 'Opacity', zoom: 'Zoom', turn: 'Turn', movex: 'Move across', movey: 'Move up and down' } as const;
@@ -42,9 +42,14 @@ export function activeParameterLink(layer: Layer, key: string): boolean {
 }
 
 /** The target's range, or null when what it names is not in the show. */
-export function targetRange(show: Pick<ShowDocument, 'shapes' | 'sources'>, target: string): { min: number; max: number; label: string } | null {
+export function targetRange(show: Pick<ShowDocument, 'shapes' | 'sources'> & { videos?: ShowDocument['videos'] }, target: string): { min: number; max: number; label: string } | null {
   const t = parseTarget(target);
   if (!t) return null;
+  // A video's speed (stage 6): it has no other settings.
+  if (t.kind !== 'shape' && isVideoId(t.sourceId)) {
+    const video = show.videos?.find(v => v.id === t.sourceId);
+    return video && t.kind === 'speed' ? { min: SPEED_RANGE.min, max: SPEED_RANGE.max, label: `${video.name} · Speed` } : null;
+  }
   if (t.kind === 'shape') {
     const shape = show.shapes.find(s => s.id === t.shapeId);
     if (!shape) return null;

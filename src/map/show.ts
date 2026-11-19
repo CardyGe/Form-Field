@@ -49,12 +49,14 @@ export interface InstrumentSource { id: string; kind: 'instrument'; project: Pro
 export type Source = InstrumentSource;
 /** stageCorners: where the stage's four corners go on the projector (to fix a nudged projector), or null for none. */
 /** Stage 5: scenes (with the live one and the default fade in seconds), and the links and triggers sound and MIDI drive. */
-export interface ShowDocument { format: 'formshow'; version: 6; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null;
+/** Stage 6: a video file a shape plays, left where it is on disk. Its id begins `video-`; shapes name it as their sourceId. */
+export interface VideoSource { id: string; path: string; name: string; speed: number; tempoSync: number | null }
+export interface ShowDocument { format: 'formshow'; version: 7; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null; videos: VideoSource[];
   scenes: Scene[]; sceneId: string | null; sceneFade: number; links: Link[]; triggers: Trigger[] }
 /** A source as the wall first hears of it: everything but the composition, which travels in its own message. */
 export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number; tempoSync: number | null }
 /** The show as sent to the wall: no compositions, and never the photo. */
-export interface WireShow { format: 'formshow'; version: 6; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[];
+export interface WireShow { format: 'formshow'; version: 7; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[];
   /** The show plays Live somewhere (a shape, or a scene): the wall keeps Live's camera running. */
   usesLive: boolean }
 
@@ -84,6 +86,22 @@ export const MIN_OUTLINE_AREA = 1 / (1920 * 1080);
 export { MAX_HOLES } from './outline';
 export const MAX_GROUPS = 32;
 export const MAX_LINKS = 64;
+/** Stage 6: videos in a show, and pictures stored in it (by decoded size). */
+export const MAX_VIDEOS = 16;
+export const IMAGE_FILE_LIMIT = 8 * 1024 * 1024;
+export const IMAGE_SHOW_LIMIT = 32 * 1024 * 1024;
+export const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.webm'];
+export const isVideoId = (id: string | null | undefined): id is string => !!id && id.startsWith('video-');
+export const isVideoPath = (path: string) => typeof path === 'string' && VIDEO_EXTENSIONS.some(e => path.toLowerCase().endsWith(e));
+/** The decoded size of a data URL's base64 payload. */
+export const dataUrlBytes = (dataUrl: string) => { const i = dataUrl.indexOf(','); return i < 0 ? 0 : Math.floor((dataUrl.length - i - 1) * 3 / 4); };
+/** The pictures stored in the show, by decoded size, each distinct picture counted once. */
+export function imageBytes(show: Pick<ShowDocument, 'sources'>): number {
+  const seen = new Set<string>();
+  for (const s of show.sources) for (const l of s.project.layers) if (l.image?.dataUrl) seen.add(l.image.dataUrl);
+  return [...seen].reduce((n, d) => n + dataUrlBytes(d), 0);
+}
+
 export const MAX_TRIGGERS = 32;
 export const DEFAULT_SCENE_FADE = 2;
 /** Loops an instrument can run in, in beats of the tempo clock. */
@@ -102,7 +120,7 @@ export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'so
   ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour', placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, brightness: 1, tint: '#ffffff' });
 
 export function createShow(): ShowDocument {
-  return { format: 'formshow', version: 6, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null, scenes: [], sceneId: null, sceneFade: DEFAULT_SCENE_FADE, links: [], triggers: [] };
+  return { format: 'formshow', version: 7, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null, scenes: [], sceneId: null, sceneFade: DEFAULT_SCENE_FADE, links: [], triggers: [], videos: [] };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -253,7 +271,7 @@ export function normaliseGroups<T extends { shapes: Shape[]; groups: Group[] }>(
 function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaired: boolean; ok: boolean } {
   if (!isRecord(value)) return { shapes: [], groups: [], repaired: true, ok: false };
   // Version 1 and 2 shows open with every later field at its default, which is not a repair.
-  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5 && value.version !== 6);
+  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5 && value.version !== 6 && value.version !== 7);
   if (!isRecord(value.stage) || value.stage.width !== STAGE_SIZE.width || value.stage.height !== STAGE_SIZE.height) repaired = true;
   if (!Array.isArray(value.shapes)) return { shapes: [], groups: [], repaired: true, ok: false };
   if (value.shapes.length > MAX_SHAPES) repaired = true;
@@ -349,13 +367,19 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
   // From version 6 a shape (or a scene) may play Live, which is no source of the file's.
   if (sources.has(LIVE_SOURCE_ID)) { sources.delete(LIVE_SOURCE_ID); repaired = true; }
   const known = new Map<string, unknown>(sources);
-  if (value.version === 6) known.set(LIVE_SOURCE_ID, true);
+  if (value.version === 6 || value.version === 7) known.set(LIVE_SOURCE_ID, true);
+  // Videos (version 7): each is known by its id, as a source is.
+  const videos = readVideos(value.videos);
+  if (videos.repaired) repaired = true;
+  for (const v of videos.videos) known.set(v.id, true);
   if (linkSources(show.shapes, known)) repaired = true;
   // Scenes, then the instruments any shape or scene plays, then the links and triggers that name what is left.
   const scenes = readScenes(value, show, known);
   if (scenes.repaired) repaired = true;
   show.sources = [...sources.values()].filter(source => playedBy(show, source.id));
   if (show.sources.length !== sources.size) repaired = true;
+  show.videos = videos.videos.filter(v => playedBy(show, v.id));
+  if (show.videos.length !== videos.videos.length) repaired = true;
   const links = readLinks(value.links, show), triggers = readTriggers(value.triggers, show);
   show.links = links.links; show.triggers = triggers.triggers;
   if (links.repaired || triggers.repaired) repaired = true;
@@ -381,7 +405,7 @@ export function validateWireShow(value: unknown): WireShow {
   known.set(LIVE_SOURCE_ID, true);
   linkSources(shapes, known);
   const kept = [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id));
-  return { format: 'formshow', version: 6, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
+  return { format: 'formshow', version: 7, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
     links: isRecord(value) ? readLinks(value.links, { shapes, sources: kept }, true).links : [],
     usesLive: (isRecord(value) && value.usesLive === true) || shapes.some(s => s.sourceId === LIVE_SOURCE_ID) };
 }
@@ -529,3 +553,19 @@ function readTriggers(value: unknown, show: Pick<ShowDocument, 'scenes' | 'sourc
   return { triggers, repaired };
 }
 export { capture as captureScene };
+
+/** A show file's videos, checked field by field: an unreadable one is left out (its shapes play their colour). */
+function readVideos(value: unknown): { videos: VideoSource[]; repaired: boolean } {
+  if (value === undefined) return { videos: [], repaired: false };
+  if (!Array.isArray(value)) return { videos: [], repaired: true };
+  const videos: VideoSource[] = [];
+  let repaired = value.length > MAX_VIDEOS;
+  for (const raw of value.slice(0, MAX_VIDEOS)) {
+    if (!isRecord(raw) || !isVideoId(raw.id as string) || (raw.id as string).length > MAX_ID_LENGTH || typeof raw.path !== 'string' || !isVideoPath(raw.path) || videos.some(v => v.id === raw.id)) { repaired = true; continue; }
+    const speed = readSpeed(raw.speed), sync = readTempoSync(raw.tempoSync);
+    const name = typeof raw.name === 'string' ? cleanName(raw.name).slice(0, 120) : raw.path.split(/[\\/]/).pop() ?? 'Video';
+    if (speed.repaired || sync.repaired || name !== raw.name) repaired = true;
+    videos.push({ id: raw.id as string, path: raw.path, name, speed: speed.speed, tempoSync: sync.value });
+  }
+  return { videos, repaired };
+}
