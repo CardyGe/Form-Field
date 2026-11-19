@@ -9,7 +9,7 @@ import { LayerShapeControls, Parameter, gradingKeys } from './LayerControls';
 import { EditGrouper } from '../map/undo-group';
 import { visibleParameterDefinitions } from '../core/project';
 import { ReactTo, linkFor } from './ReactControls';
-import { newItemId, newSourceId } from './mapActions';
+import { mapActions, newItemId } from './mapActions';
 import { reactable } from '../map/targets';
 import type { Shape } from '../map/show';
 import type { Layer, ParameterDefinition } from '../shared/types';
@@ -28,11 +28,12 @@ export default function MapEffectTab({ map, shape, locked, linked, setNote }: { 
   const sharers = map.show.shapes.filter(s => s.sourceId === source.id);
   const finish = visibleParameterDefinitions(layer).filter(d => gradingKeys.includes(d.key));
 
-  /** The source to edit: with "Change all" off on a shared effect, this shape first gets its own copy. */
-  const target = (): string | null => {
+  /** The source to edit: with "Change all" off on a shared effect, this shape first gets its own copy (in the same undo step). */
+  const target = (merge?: string): string | null => {
     if (sharers.length > 1 && !linked) {
-      const id = newSourceId();
-      return map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: id }) ? id : null;
+      const made = mapActions(map).separate(shape.id, merge);
+      if (made?.left) setNote(`${made.left} of the effect's reactions stayed with the other shapes: the show has as many reactions as it can hold`);
+      return made?.id ?? null;
     }
     return source.id;
   };
@@ -42,13 +43,15 @@ export default function MapEffectTab({ map, shape, locked, linked, setNote }: { 
     const changed = Object.keys({ ...layer.params, ...next.params }).filter(k => layer.params[k] !== next.params[k]);
     const { params: _a, ...restBefore } = layer, { params: _b, ...restAfter } = next;
     const onlyNumbers = JSON.stringify(restBefore) === JSON.stringify(restAfter) && changed.every(k => typeof next.params[k] === 'number');
-    const id = target();
+    // One key for the whole change: the copy (if any) and the change are one undo step.
+    const merge = grouper.current.key(onlyNumbers ? `param-${source.id}-${index}-${changed.join(',')}` : `project-${source.id}-${index}`);
+    const id = target(merge);
     if (!id) return;
     if (onlyNumbers && changed.length) {
-      map.dispatch({ type: 'setSourceLayer', sourceId: id, layer: index, params: Object.fromEntries(changed.map(k => [k, next.params[k]])) }, grouper.current.key(`param-${id}-${index}-${changed.join(',')}`));
+      map.dispatch({ type: 'setSourceLayer', sourceId: id, layer: index, params: Object.fromEntries(changed.map(k => [k, next.params[k]])) }, merge);
     } else {
-      const project = map.show.sources.find(s => s.id === id)?.project ?? source.project;
-      map.dispatch({ type: 'setSourceProject', sourceId: id, project: { ...project, layers: project.layers.map((l, n) => n === index ? next : l) } }, grouper.current.key(`project-${id}-${index}`));
+      const project = map.currentShow().sources.find(s => s.id === id)?.project ?? source.project;
+      map.dispatch({ type: 'setSourceProject', sourceId: id, project: { ...project, layers: project.layers.map((l, n) => n === index ? next : l) } }, merge);
     }
   };
   const targetOf = (d: ParameterDefinition) => `source.${source.id}.param.${index}.${d.key}`;
@@ -63,7 +66,7 @@ export default function MapEffectTab({ map, shape, locked, linked, setNote }: { 
   return <div className="map-effect-settings">
     {layers.length > 1 && <div className="map-layer-chips" role="group" aria-label="Layer">{layers.map((l, i) =>
       <button key={l.id} className={`look-chip ${i === index ? 'on' : ''}`} aria-pressed={i === index} onClick={() => setLayerIndex(i)}>{i + 1} · {l.name}</button>)}</div>}
-    <LayerShapeControls layer={layer} edit={edit} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()}
+    <LayerShapeControls locked={locked} layer={layer} edit={edit} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()}
       seed={source.project.seed} duration={source.project.duration} notify={text => setNote(text)}
       oilFine={oilFine} setOilFine={change => setOilFine(change)} paramExtra={extra} readOnly={d => locked || !!layer.modulations[d.key]} />
     {/* Studio's Finish tab, for this layer: its grading and finish settings, then Opacity. */}

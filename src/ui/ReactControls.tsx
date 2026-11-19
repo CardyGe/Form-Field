@@ -37,8 +37,10 @@ function Meter({ label, value }: { label: string; value: number }) {
 }
 
 /** The sound input, MIDI and tempo, with meters. With no engine yet, a single button starts it. */
-export function ReactDevices({ engine, meter, onStart, layout = 'column', audioOnly = false }: {
+export function ReactDevices({ engine, meter, onStart, layout = 'column', audioOnly = false, needsInput = false }: {
   engine: ReactivityEngine | null; meter: MeterStore; onStart: () => void; layout?: 'column' | 'strip'; audioOnly?: boolean;
+  /** A reaction listens to sound but no input is chosen: the input select is highlighted. */
+  needsInput?: boolean;
 }) {
   useEngine(engine);
   // Only this part re-renders with the meters.
@@ -60,7 +62,7 @@ export function ReactDevices({ engine, meter, onStart, layout = 'column', audioO
   const beat = Math.floor(signals['tempo.beat'] ?? 0) % 4, bpm = signals['tempo.bpm'] ?? p.bpm;
   const midiActive = performance.now() - engine.midi.lastMessage < 250;
   return <div className={`react-devices ${layout}`}>
-    <label className="map-field">Sound input<select aria-label="Sound input" value={p.audioDevice ?? ''} onChange={e => engine.setPrefs({ audioDevice: e.target.value || null })}>
+    <label className={`map-field ${needsInput && !p.audioDevice ? 'react-needs-input' : ''}`} title={needsInput && !p.audioDevice ? 'A reaction listens to sound: choose an input' : undefined}>Sound input<select aria-label="Sound input" value={p.audioDevice ?? ''} onChange={e => engine.setPrefs({ audioDevice: e.target.value || null })}>
       <option value="">Off</option>
       {inputs.map(i => <option key={i.id} value={i.id}>{i.label}</option>)}
       {p.audioDevice && p.audioDevice !== TEST_TONE && !inputs.some(i => i.id === p.audioDevice) && <option value={p.audioDevice}>Saved input</option>}

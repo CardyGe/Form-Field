@@ -521,7 +521,7 @@ export function useMap(onError: (message: string) => void) {
   const setSnap = (on: boolean) => { kept.snap = on; setSnapState(on); };
   const setPhotoShown = (on: boolean) => { kept.photoShown = on; setPhotoShownState(on); };
 
-  return { live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
+  return { currentShow: () => stateRef.current.show, live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
     show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
     solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };

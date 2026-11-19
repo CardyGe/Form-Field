@@ -161,3 +161,41 @@ test('final review: a layer’s Opacity changes in place, never preparing the ef
   const p = base().sources[0].project;
   assert.equal(needsPrepare(p, { ...p, layers: [{ ...p.layers[0], opacity: 0.4 }] }), false);
 });
+
+test('later: on an effect with several layers, a reaction’s label names its layer', async () => {
+  const { targetRange } = await import('../src/map/targets');
+  const show = base();
+  const p = show.sources[0].project, d = reactableKey(p);
+  const two = ok(show, { type: 'setSourceProject', sourceId: 'sa', project: { ...p, layers: [p.layers[0], { ...p.layers[0], id: 'second' }] } });
+  assert.equal(targetRange(two, `source.sa.param.1.${d.key}`)?.label, `${p.name}, layer 2 · ${d.label}`);
+  assert.equal(targetRange(show, `source.sa.param.0.${d.key}`)?.label, `${p.name} · ${d.label}`, 'one layer: no layer named');
+});
+
+test('later: the first edit with Change all off (its own copy, then the change) is one undo step', () => {
+  const show = base();
+  const d = reactableKey(show.sources[0].project);
+  let state = initialMapState(show);
+  state = mapReducer(state, { type: 'edit', action: { type: 'makeSeparate', shapeId: 'a', sourceId: 'own' }, merge: 'k1' });
+  state = mapReducer(state, { type: 'edit', action: { type: 'setSourceLayer', sourceId: 'own', layer: 0, params: { [d.key]: d.min } }, merge: 'k1' });
+  assert.equal(state.past.length, 1);
+  state = mapReducer(state, { type: 'undo' });
+  assert.equal(shapeOf(state.show, 'a').sourceId, 'sa', 'one Undo puts both back');
+});
+
+test('later: reactions left behind at the 64-link limit are counted, for a note', async () => {
+  const { linksLeftBehind } = await import('../src/map/targets');
+  let full = base();
+  for (let i = 0; i < 63; i++) full = ok(full, { type: 'addLink', link: link(`f${i}`, 'source.sa.speed') });
+  const after = ok(full, { type: 'makeSeparate', shapeId: 'a', sourceId: 'sa2' });
+  assert.equal(linksLeftBehind(full, after, 'sa', 'sa2'), 62);
+  assert.equal(linksLeftBehind(base(), ok(base(), { type: 'makeSeparate', shapeId: 'a', sourceId: 'sa2' }), 'sa', 'sa2'), 0);
+});
+
+test('later: holding an arrow key (many key-downs, one key-up) is one undo step', async () => {
+  const { EditGrouper } = await import('../src/map/undo-group');
+  const g = new EditGrouper();
+  g.begin(); const a = g.key('x'); g.begin(); const b = g.key('x'); g.begin(); const c = g.key('x');
+  assert.equal(a, b); assert.equal(b, c);
+  g.end();
+  assert.notEqual(g.key('x'), a);
+});

@@ -2,6 +2,7 @@
 import type { useMap } from './useMap';
 import { selectionBox } from '../map/gestures';
 import { scaleAbout } from '../map/outline';
+import { linksLeftBehind } from '../map/targets';
 
 type Map = ReturnType<typeof useMap>;
 
@@ -52,6 +53,15 @@ export function mapActions(map: Map) {
       if (map.dispatch({ type: 'makeGrid', shapeId, rows, cols, gapPx, ids, sourceIds: several(n, newSourceId), groupId: newGroupId(), spread })) map.selectMany(ids);
     },
     /** What a shape plays: 'grid', 'colour', 'live' or 'preset:<id>'. linked: shapes sharing its instrument change with it. */
+    /**
+     * Make separate: this shape gets its own copy of its effect, with the effect's reactions as far as the link limit
+     * allows. Returns the new effect's id and how many reactions stayed behind (for a note), or null when refused.
+     */
+    separate(shapeId: string, merge?: string): { id: string; left: number } | null {
+      const before = map.show, from = before.shapes.find(s => s.id === shapeId)?.sourceId, id = newSourceId();
+      if (!from || !map.dispatch({ type: 'makeSeparate', shapeId, sourceId: id }, merge)) return null;
+      return { id, left: linksLeftBehind(before, map.currentShow(), from, id) };
+    },
     play(shapeId: string, value: string, linked = true) {
       if (value === 'colour' || value === 'grid' || value === 'live') map.dispatch({ type: 'setContent', shapeId, content: { kind: value, linked } });
       else if (value.startsWith('preset:')) map.dispatch({ type: 'setContent', shapeId, content: { kind: 'preset', presetId: value.slice('preset:'.length), sourceId: newSourceId(), seed: randomSeed(), linked } });

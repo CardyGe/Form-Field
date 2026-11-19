@@ -25,7 +25,7 @@ export default function MapSoundStrip({ map }: { map: Map }) {
   }, [showOpen]);
   const count = map.show.triggers.length;
   return <div className="map-sound-strip" role="region" aria-label="Sound and scenes">
-    <ReactDevices engine={map.engine} meter={map.signals} onStart={map.startEngine} layout="strip" />
+    <ReactDevices engine={map.engine} meter={map.signals} onStart={map.startEngine} layout="strip" needsInput={map.show.links.some(l => l.on && /^(audio|beat)\./.test(l.input))} />
     <MapScenes map={map} />
     <button ref={button} className={`text-button ${showOpen ? 'live-toggle on' : ''}`} aria-label="Show-wide sound and triggers" aria-expanded={showOpen}
       title="Triggers, and reactions only a scene not on screen uses" onClick={() => setShowOpen(o => !o)}>Show{count ? <small> · {count}</small> : null}</button>

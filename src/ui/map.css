@@ -233,3 +233,13 @@
 .react-meter i { box-shadow: none; }
 .react-meter { background-image: linear-gradient(var(--line), var(--line)); background-repeat: no-repeat; background-size: calc(100% - 44px) 6px; background-position: right center; }
 .react-devices.strip .react-meter { background-size: 40px 6px; }
+/* A locked shape's effect controls: the fieldset only disables them, it draws nothing of its own. */
+fieldset.layer-controls { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset.layer-controls:disabled { opacity: .55; }
+/* The strip's sound input, when a reaction is waiting for one. */
+.react-needs-input select { outline: 2px solid #f0b060; outline-offset: 1px; }
+/* A locked shape's effect controls: the fieldset only disables them, it draws nothing of its own. */
+fieldset.layer-controls { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset.layer-controls:disabled { opacity: .55; }
+/* The strip's sound input, when a reaction is waiting for one. */
+.react-needs-input select { outline: 2px solid #f0b060; outline-offset: 1px; }

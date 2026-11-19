@@ -869,15 +869,15 @@ Built 18–19 November 2026, from [the sound and screen pass design](superpowers
   - separate edits merged into one undo step
   - the Finish settings and Opacity were missing
   - ∿ with "Change all" off still went to the shared effect
-- **Deferred from the review:**
-  - labels don't name the layer on multi-layer effects
-  - the first edit with "Change all" off takes two undo steps
-  - no note when copied reactions hit the 64-link limit
-  - the chosen layer carries over to the next shape
-  - a locked shape's choices and swatches look active
-  - a held arrow key makes one undo step per repeat
-  - the strip's input isn't highlighted when a reaction needs it
-  - dragging while a restart is pending restarts it again
+- **The review's eight smaller points, fixed afterwards:**
+  - labels name the layer on multi-layer effects
+  - the first edit with "Change all" off is one undo step
+  - a note says when copied reactions hit the 64-link limit
+  - the chosen layer resets per shape
+  - a locked shape's whole effect panel is disabled
+  - a held arrow key is one undo step
+  - the strip's sound input is highlighted while a reaction waits for one
+  - dragging while a restart is pending no longer restarts it again
 - **Effects that animate themselves:** for these, "the wall follows the change" in the checks means "the change was taken in". The checks read a counter the wall keeps.
 
 ## Stage 0 results

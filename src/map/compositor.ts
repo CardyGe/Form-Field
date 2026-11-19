@@ -41,6 +41,8 @@ const RESTART_AFTER_MS = 5000;
 /** One instrument source on this stage. */
 interface Slot {
   canvas: HTMLCanvasElement;
+  /** Newer settings that can follow sound, arrived while `pending` was being prepared: used when it is ready. */
+  latest?: Project | null;
   renderer: StudioRenderer | null;
   /** The composition being drawn, once prepared; the one being prepared, if any. */
   project: Project | null;
@@ -277,7 +279,9 @@ export class MapCompositor {
       if (!slot) continue;
       // A setting that can follow sound changed (Map's Effect tab): the playing effect is adjusted in place, never restarted.
       if (project !== slot.project && slot.project && !slot.pending && slot.failedProject === null && !needsPrepare(slot.project, project)) { slot.project = project; this.adjusted++; }
-      else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) this.prepare(slot, project);
+      // A drag while a restart is still being prepared: the newer settings wait for it, rather than restarting it again.
+      else if (slot.pending && project !== slot.pending && project !== slot.project && !needsPrepare(slot.pending, project)) slot.latest = project;
+      else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) { slot.latest = null; this.prepare(slot, project); }
       if (!slot.project || !slot.renderer) continue;
       if (!this.frozen) {
         // In tempo sync the loop follows the clock's beats; without a clock it runs at its own speed.
@@ -400,7 +404,7 @@ export class MapCompositor {
       if (slot.pending !== project) return; // a newer composition arrived meanwhile
       // An evolving composition plays from its start; a looping one carries on where it was.
       if (isEvolving(project)) slot.phase = 0;
-      slot.project = project; slot.pending = null; slot.failed = null; slot.failedProject = null;
+      slot.project = slot.latest && !needsPrepare(project, slot.latest) ? slot.latest : project; slot.latest = null; slot.pending = null; slot.failed = null; slot.failedProject = null;
       this.dirty = true;
     }).catch(error => {
       if (slot.pending !== project) return;

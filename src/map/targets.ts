@@ -58,7 +58,9 @@ export function targetRange(show: Pick<ShowDocument, 'shapes' | 'sources'>, targ
   if (!layer || !canLinkParameter(layer, t.key)) return null;
   const def = readParameterDefinitions(layer.kind).find(d => d.key === t.key);
   if (!def || typeof layer.params[t.key] !== 'number') return null;
-  return { min: def.min, max: def.max, label: `${source.project.name} · ${def.label}` };
+  // On an effect with several layers, the label says which.
+  const layerName = source.project.layers.length > 1 ? `, layer ${t.layer + 1}` : '';
+  return { min: def.min, max: def.max, label: `${source.project.name}${layerName} · ${def.label}` };
 }
 
 /** For the wall, which does not hold compositions: shapes and sources only, settings checked when drawn. */
@@ -143,4 +145,11 @@ export function linkInUse(show: Pick<ShowDocument, 'sources'>, link: ShowDocumen
   if (!t || t.kind !== 'param') return true;
   const layer = show.sources.find(s => s.id === t.sourceId)?.project.layers[t.layer];
   return !!layer && visibleParameterDefinitions(layer).some(d => d.key === t.key);
+}
+
+/** How many of an effect's reactions did not come with a copy made by Make separate (the 64-link limit), for a note. */
+export function linksLeftBehind(before: Pick<ShowDocument, 'links'>, after: Pick<ShowDocument, 'links'>, fromSource: string, toSource: string): number {
+  const had = before.links.filter(l => l.target.startsWith(`source.${fromSource}.`)).length;
+  const came = after.links.filter(l => l.target.startsWith(`source.${toSource}.`)).length;
+  return Math.max(0, had - came);
 }

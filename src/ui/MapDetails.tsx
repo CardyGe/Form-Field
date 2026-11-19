@@ -100,7 +100,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
     const one = !!first?.sourceId && ids.every(id => map.show.shapes.find(s => s.id === id)?.sourceId === first.sourceId);
     return <>
       <p>{ids.length} shapes selected{one ? ', one instrument' : ''}</p>
-      {one && first && <ContentCard map={map} shape={first} locked={anyLocked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked setLinked={() => {}} whole />}
+      {one && first && <ContentCard setNote={setNote} map={map} shape={first} locked={anyLocked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked setLinked={() => {}} whole />}
       <p className="muted-text">Drag any of them to move them all; drag the box corners to scale, the round handle to turn. Shift-click a shape to add or remove it.</p>
       <div className="map-toggles"><button className="text-button" disabled={anyLocked} title="Put these shapes in a folder · ⌘G" onClick={() => act.group(ids)}>Group</button>
         <button className="text-button" title="Copy these shapes · ⌘D" onClick={() => act.duplicate(ids)}>Duplicate</button>
@@ -245,10 +245,10 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
     {!point && <p className="muted-text map-hint">Click a point on the stage to set its exact position. Double-click a side to add a point.</p>}
     </>}
     {tab === 'effect' && <>
-      <ContentCard map={map} shape={shape} locked={locked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked={linked} setLinked={setLinked} />
+      <ContentCard setNote={setNote} map={map} shape={shape} locked={locked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked={linked} setLinked={setLinked} />
       {!shape.blocker && !shape.sourceId && <p className="muted-text">Choose an effect first: Change… above. Its settings, and what can react to sound, show here.</p>}
       {!shape.blocker && shape.sourceId === LIVE_SOURCE_ID && <MapLiveCard map={map} locked={locked} onError={text => setNote(text)} localStatus={liveStatus} />}
-      {!shape.blocker && shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID && <MapEffectTab map={map} shape={shape} locked={locked} linked={linked} setNote={setNote} />}
+      {!shape.blocker && shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID && <MapEffectTab key={shape.id} map={map} shape={shape} locked={locked} linked={linked} setNote={setNote} />}
     </>}
     {tab === 'sound' && <MapSoundTab map={map} shape={shape} locked={locked} setNote={setNote} />}
   </>;
@@ -259,7 +259,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
  * Shapes sharing an instrument are one instrument: the card says so, and a change of look reaches them all unless
  * "Change all" is unticked.
  */
-function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, setLinked, whole = false }: { map: Map; shape: Shape; locked: boolean; onOpenLooks: () => void; onEditInStudio?: (sourceId: string, shapeId: string) => void; linked: boolean; setLinked: (on: boolean) => void; whole?: boolean }) {
+function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, setLinked, whole = false, setNote }: { map: Map; shape: Shape; locked: boolean; onOpenLooks: () => void; onEditInStudio?: (sourceId: string, shapeId: string) => void; linked: boolean; setLinked: (on: boolean) => void; whole?: boolean; setNote?: (text: string | null) => void }) {
   const source = shape.sourceId ? map.show.sources.find(s => s.id === shape.sourceId) ?? null : null;
   // Shapes playing the same thing (an instrument, or Live) are one: a new look reaches them all.
   const sharers = shape.sourceId ? map.show.shapes.filter(s => s.sourceId === shape.sourceId) : [];
@@ -292,7 +292,7 @@ function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, 
         <label className="map-field">Loop with the tempo<select aria-label="Loop with the tempo" value={source.tempoSync ?? ''} disabled={locked} title="Off: the instrument runs at its own speed. A number: one loop of it every that many beats of the tempo."
           onChange={e => { map.startEngine(); map.dispatch({ type: 'setTempoSync', sourceId: source.id, beats: e.target.value ? Number(e.target.value) : null }); }}>
           <option value="">Off</option>{TEMPO_SYNC_BEATS.map(n => <option key={n} value={n}>Every {n} {n === 1 ? 'beat' : 'beats'}</option>)}</select></label>
-        {sharers.length > 1 && !whole && <button className="text-button" disabled={locked} title="Unlink: give this shape its own copy of the instrument, to change on its own" onClick={() => map.dispatch({ type: 'makeSeparate', shapeId: shape.id, sourceId: newSourceId() })}>Make separate</button>}
+        {sharers.length > 1 && !whole && <button className="text-button" disabled={locked} title="Unlink: give this shape its own copy of the instrument, to change on its own" onClick={() => { const made = mapActions(map).separate(shape.id); if (made?.left) setNote?.(`${made.left} of the effect's reactions stayed with the other shapes: the show has as many reactions as it can hold`); }}>Make separate</button>}
       </>}
       {!shape.blocker && !whole && playing.length > 0 && <label className="map-field">Share with<select aria-label="Share with" value="" disabled={locked}
         onChange={e => { if (e.target.value) map.dispatch({ type: 'shareSource', shapeId: shape.id, withShapeId: e.target.value }); }}>
