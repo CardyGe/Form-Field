@@ -4,6 +4,7 @@
 // --pin pins every shape and sets the stage corners.
 // --react gives every shape a reaction (pulse, bass zoom, highs flicker, instrument on the bass, in turn) driven by
 //   the test beat (stage 5).
+// --video adds two shapes playing one test video each (stage 6), made with the system ffmpeg.
 // --live adds a ninth shape playing Live on the test pattern (Live in Map).
 // --edges gives every shape a 40 px soft edge and a 6 px border with an 8 px glow (stage 3).
 // Uses a throwaway user-data folder under work/map-measure/. Prints a table and writes work/map-measure/results.json.
@@ -42,6 +43,7 @@ const SECONDS = arg('--seconds', 30), WARMUP = 4;
 const EDGES = process.argv.includes('--edges');
 const REACT = process.argv.includes('--react');
 const LIVE = process.argv.includes('--live');
+const VIDEO = process.argv.includes('--video');
 const REACTIONS = ['pulse', 'bass-zoom', 'highs-flicker', 'instrument-bass'];
 // --pin pins every shape in perspective and sets the stage corners (stage 4).
 const PIN = process.argv.includes('--pin');
@@ -61,6 +63,12 @@ for (const [mix, presets] of Object.entries(MIXES)) {
   const env = { ...process.env, STUDIO_LIVE_TEST_WINDOW: '1' };
   delete env.ELECTRON_RUN_AS_NODE; delete env.STUDIO_DEV_URL;
   const app = await electron.launch({ args: [root, `--user-data-dir=${userData}`], env });
+  if (VIDEO) {
+    const { execFileSync } = await import('node:child_process');
+    await fs.mkdir(out, { recursive: true });
+    for (const n of [1, 2]) execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `testsrc2=size=1280x720:rate=30:duration=${n * 2}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(out, `measure-${n}.mp4`)]);
+    await app.evaluate(({ dialog }) => { globalThis.__picks = []; dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [globalThis.__picks.shift()] }); });
+  }
   try {
     const studio = await app.firstWindow();
     await studio.setViewportSize({ width: 1500, height: 900 }).catch(() => {});
@@ -95,6 +103,17 @@ for (const [mix, presets] of Object.entries(MIXES)) {
       await studio.getByRole('button', { name: 'Stage corners', exact: true }).click();
       await studio.mouse.move(...at(0, 0)); await studio.mouse.down(); await studio.mouse.move(...at(.02, .03), { steps: 4 }); await studio.mouse.up();
       await studio.getByRole('button', { name: 'Stage corners', exact: true }).click();
+    }
+    if (VIDEO) {
+      for (const [n, box] of [[1, [0.3, 0.3, 0.45, 0.6]], [2, [0.55, 0.3, 0.7, 0.6]]]) {
+        await app.evaluate((_e, f) => { globalThis.__picks.push(f); }, path.join(out, `measure-${n}.mp4`));
+        // Nothing selected, so the drag draws a new shape over the others instead of working on the selected one.
+        await studio.locator('main.map-stage').focus(); await studio.keyboard.press('Escape');
+        await studio.getByRole('button', { name: 'Rectangle', exact: true }).click();
+        await studio.mouse.move(...at(box[0], box[1])); await studio.mouse.down(); await studio.mouse.move(...at(box[2], box[3]), { steps: 4 }); await studio.mouse.up();
+        await playLook(studio, 'video');
+      }
+      await output.waitForFunction(() => Object.values(window.__mapStats?.videos ?? {}).filter(v => v.state === 'playing').length === 2, null, { timeout: 30000 });
     }
     if (LIVE) {
       await studio.getByRole('button', { name: 'Rectangle', exact: true }).click();
@@ -137,7 +156,7 @@ for (const [mix, presets] of Object.entries(MIXES)) {
 }
 
 await fs.mkdir(out, { recursive: true });
-await fs.writeFile(path.join(out, PIN ? 'results-pin.json' : LIVE ? 'results-live.json' : REACT ? 'results-react.json' : EDGES ? 'results-edges.json' : 'results.json'), JSON.stringify(results, null, 2));
+await fs.writeFile(path.join(out, PIN ? 'results-pin.json' : VIDEO ? 'results-video.json' : LIVE ? 'results-live.json' : REACT ? 'results-react.json' : EDGES ? 'results-edges.json' : 'results.json'), JSON.stringify(results, null, 2));
 for (const [mix, r] of Object.entries(results)) {
   console.log(`${mix.padEnd(7)} ${r.presets.join(', ')}`);
   console.log(`        ${r.frames} frames in ${r.seconds} s · median ${r.medianMs} ms · p95 ${r.p95Ms} ms · max ${r.maxMs} ms · ${r.over16_7} frames over 16.7 ms · governor levels ${r.governorLevels.join(',')} · fps reported ${Math.min(...r.fpsReported)}–${Math.max(...r.fpsReported)} · failing ${r.failing.length}${r.edges ? ` · soft edges made during the run ${r.edgeBuildsDuringRun}` : ''}`);

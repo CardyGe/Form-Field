@@ -97,11 +97,12 @@ export const isVideoId = (id: string | null | undefined): id is string => !!id &
 export const isVideoPath = (path: string) => typeof path === 'string' && VIDEO_EXTENSIONS.some(e => path.toLowerCase().endsWith(e));
 /** The decoded size of a data URL's base64 payload. */
 export const dataUrlBytes = (dataUrl: string) => { const i = dataUrl.indexOf(','); return i < 0 ? 0 : Math.floor((dataUrl.length - i - 1) * 3 / 4); };
-/** The pictures stored in the show, by decoded size, each distinct picture counted once. */
+/** The pictures stored in the show, by decoded size. Shapes sharing a picture share its one copy. */
 export function imageBytes(show: Pick<ShowDocument, 'sources'>): number {
-  const seen = new Set<string>();
-  for (const s of show.sources) for (const l of s.project.layers) if (l.image?.dataUrl) seen.add(l.image.dataUrl);
-  return [...seen].reduce((n, d) => n + dataUrlBytes(d), 0);
+  // Every stored copy counts: a picture made separate is stored, saved and sent again.
+  let bytes = 0;
+  for (const s of show.sources) for (const l of s.project.layers) if (l.image?.dataUrl) bytes += dataUrlBytes(l.image.dataUrl);
+  return bytes;
 }
 
 export const MAX_TRIGGERS = 32;
@@ -410,7 +411,7 @@ export function validateWireShow(value: unknown): WireShow {
   linkSources(shapes, known);
   const kept = [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id));
   return { format: 'formshow', version: 7, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
-    links: isRecord(value) ? readLinks(value.links, { shapes, sources: kept }, true).links : [],
+    links: isRecord(value) ? readLinks(value.links, { shapes, sources: [...kept, ...videos] }, true).links : [],
     usesLive: (isRecord(value) && value.usesLive === true) || shapes.some(s => s.sourceId === LIVE_SOURCE_ID),
     videos };
 }

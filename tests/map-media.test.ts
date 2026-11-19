@@ -152,3 +152,33 @@ test('an unknown length plays at Speed; Speed is used when tempo looping is off'
   assert.deepEqual(videoRate(0, 1.5, 4, 120), { rate: 1.5, beats: null });
   assert.deepEqual(videoRate(3, 2, null, 120), { rate: 2, beats: null });
 });
+
+test('review: a copy of a video shape, and the cells of a grid made from one, play the same video', () => {
+  let show = video(base(), 'a', 'video-1');
+  show = ok(show, { type: 'duplicateShapes', shapeIds: ['a'], ids: ['a2'], sourceIds: ['unused'] });
+  assert.equal(shapeOf(show, 'a2').sourceId, 'video-1');
+  for (const spread of [true, false]) {
+    const g = ok(video(base(), 'a', 'video-1'), { type: 'makeGrid', shapeId: 'a', rows: 1, cols: 2, gapPx: 0, ids: ['g1', 'g2'], sourceIds: ['x1', 'x2'], groupId: 'grp', spread });
+    assert.deepEqual(['g1', 'g2'].map(id => shapeOf(g, id).sourceId), ['video-1', 'video-1'], `spread ${spread}`);
+    assert.equal(g.videos.length, 1);
+  }
+});
+
+test('review: a reaction on a video’s speed reaches the projector', async () => {
+  const { toWire } = await import('../src/map/messages');
+  const { validateWireShow } = await import('../src/map/show');
+  let show = video(base(), 'a', 'video-1');
+  show = ok(show, { type: 'addLink', link: { id: 'l', input: 'audio.bass', target: 'source.video-1.speed', mode: 'modulate', amount: .3, low: 0, high: 1, attackMs: 0, releaseMs: 100, on: true, name: '' } });
+  assert.equal(validateWireShow(JSON.parse(JSON.stringify(toWire(show)))).links.length, 1);
+});
+
+test('review: copies of a picture share it, so it is stored once; a separate copy counts against the budget', () => {
+  const show = ok(base(), { type: 'setContent', shapeId: 'a', content: { kind: 'image', sourceId: 'img1', image: picture() } });
+  const dup = ok(show, { type: 'duplicateShapes', shapeIds: ['a'], ids: ['a2'], sourceIds: ['img2'] });
+  assert.equal(shapeOf(dup, 'a2').sourceId, 'img1');
+  assert.equal(dup.sources.length, 1);
+  const grid = ok(show, { type: 'makeGrid', shapeId: 'a', rows: 2, cols: 2, gapPx: 0, ids: ['g1', 'g2', 'g3', 'g4'], sourceIds: ['x1', 'x2', 'x3', 'x4'], groupId: 'grp', spread: false });
+  assert.equal(grid.sources.length, 1, 'a grid of a picture stores it once');
+  const sep = ok(ok(show, { type: 'shareSource', shapeId: 'b', withShapeId: 'a' }), { type: 'makeSeparate', shapeId: 'b', sourceId: 'img3' });
+  assert.equal(imageBytes(sep), 2 * imageBytes(show), 'a separate copy is counted');
+});

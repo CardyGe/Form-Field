@@ -330,8 +330,11 @@ export class MapCompositor {
 
     // Each video's newest frame, once for every shape that plays it.
     for (const [id, slot] of this.videoSlots) {
-      this.videoTextures.set(id, slot.frame(this.frozen ? this.frozenSignals : this.signals, this.drawn.speed.get(id)));
-      if (slot.fresh) rendered = true;
+      const had = !!this.videoTextures.get(id);
+      const now = slot.frame(this.frozen ? this.frozenSignals : this.signals, this.drawn.speed.get(id));
+      this.videoTextures.set(id, now);
+      // A video that fails mid-show stops giving a picture: its shapes go to their fill at once.
+      if (slot.fresh || had !== !!now) rendered = true;
     }
     // Live's newest picture, once for every shape that plays it.
     // A Live whose own graphics context was lost is made again; meanwhile its shapes play their fill.

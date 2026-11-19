@@ -41,7 +41,19 @@ await fs.mkdir(userData, { recursive: true });
 
 const env = { ...process.env, STUDIO_LIVE_TEST_WINDOW: '1' };
 delete env.ELECTRON_RUN_AS_NODE; delete env.STUDIO_DEV_URL;
+// Stage 6: a 2 s test clip (moving test pattern) and a red test picture, made with ffmpeg.
+const { execFileSync } = await import('node:child_process');
+// The system's ffmpeg has the test-pattern generators; the app's bundled one is cut down to what export needs.
+const ffmpeg = (() => { try { execFileSync('ffmpeg', ['-hide_banner', '-filters'], { stdio: 'pipe' }); return 'ffmpeg'; } catch { return path.join(root, 'build/media/ffmpeg'); } })();
+const CLIP = path.join(out, 'test-loop.mp4'), MOVED = path.join(out, 'test-loop-moved.mp4'), PICTURE = path.join(out, 'test-red.png');
+await fs.mkdir(out, { recursive: true });
+await fs.rm(MOVED, { force: true });
+execFileSync(ffmpeg, ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30:duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', CLIP]);
+execFileSync(ffmpeg, ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=64x64', '-frames:v', '1', PICTURE]);
 const app = await electron.launch({ args: [root, `--user-data-dir=${userData}`], env });
+// The app's file dialogs are answered with whatever the next check sets.
+await app.evaluate(({ dialog }) => { globalThis.__nextPick = null; dialog.showOpenDialog = async () => globalThis.__nextPick ? { canceled: false, filePaths: [globalThis.__nextPick] } : { canceled: true, filePaths: [] }; });
+const nextPick = file => app.evaluate((_e, f) => { globalThis.__nextPick = f; }, file);
 const results = [];
 const check = async (name, run) => {
   try { await run(); results.push(`ok    ${name}`); }
@@ -889,6 +901,84 @@ try {
     }
     await studio.setViewportSize({ width: 1500, height: 900 });
     await sleep(300);
+  });
+
+  // ---- Stage 6: pictures and videos ----
+  const videoStats = () => output.evaluate(() => window.__mapStats?.videos ?? {});
+  const shapeHash = () => output.evaluate(() => { const c = document.querySelector('canvas'), o = new OffscreenCanvas(c.width, c.height), x = o.getContext('2d'); x.drawImage(c, 0, 0); let h = 0, dark = 0;
+    for (let i = 0; i < 30; i++) for (let j = 0; j < 16; j++) { const d = x.getImageData(Math.floor(c.width * (.22 + i * .009)), Math.floor(c.height * (.22 + j * .022)), 1, 1).data; h = (h * 31 + d[0] + d[1] * 7 + d[2] * 13) >>> 0; if (d[0] + d[1] + d[2] < 20) dark++; }
+    return { h, dark }; });
+  const pickLook = async value => { await openSection(studio, 'effect'); await studio.getByRole('button', { name: 'Change look' }).click(); await studio.locator(`[data-look="${value}"]`).click(); };
+
+  await check('an image tile plays a chosen picture in a shape on the wall', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.5, .5]);
+    await tool('Select'); await asColour();
+    const chooser = studio.waitForEvent('filechooser');
+    await pickLook('image');
+    await (await chooser).setFiles(PICTURE);
+    await studio.getByRole('button', { name: 'Close looks' }).click().catch(() => {});
+    await wallUntil([[.35, .35]], c => c[0][0] > 200 && c[0][1] < 40 && c[0][2] < 40 && !near(c[0], RED, 15), 'the red picture');
+    assert.match(await studio.locator('.map-shape-list li .map-row-plays').first().textContent(), /^Image · test-red\.png/);
+  });
+
+  await check('a video plays in two shapes from one player, and moves; Freeze holds it and unfreezing resumes it', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.5, .5]);
+    await tool('Select');
+    await nextPick(CLIP);
+    await pickLook('video');
+    await studio.getByRole('button', { name: 'Close looks' }).click().catch(() => {});
+    await tool('Rectangle'); await dragOn([.55, .2], [.8, .5]);
+    await tool('Select');
+    const names = await studio.locator('.map-shape-list li .map-row-name').allTextContents();
+    await openSection(studio, 'effect');
+    await studio.getByLabel('Share with', { exact: true }).selectOption({ label: names[0] });
+    await output.waitForFunction(() => Object.values(window.__mapStats?.videos ?? {}).some(v => v.state === 'playing'), null, { timeout: 15000 });
+    assert.equal(Object.keys(await videoStats()).length, 1, 'one player for both shapes');
+    const a = await shapeHash(); await sleep(400); const b = await shapeHash();
+    assert.notEqual(a.h, b.h, 'the video is not moving on the wall');
+    await studio.getByRole('button', { name: 'Freeze', exact: true }).click();
+    await sleep(500); const f1 = await shapeHash(); await sleep(600); const f2 = await shapeHash();
+    assert.equal(f1.h, f2.h, 'Freeze did not hold the video');
+    await studio.getByRole('button', { name: 'Freeze', exact: true }).click();
+    await sleep(600); const f3 = await shapeHash();
+    assert.notEqual(f3.h, f2.h, 'the video did not resume after Freeze');
+  });
+
+  await check('Loop with the tempo, with the test beat, fits the clip to the beats', async () => {
+    await openSection(studio, 'effect');
+    await reactReady().catch(async () => { await studio.getByRole('button', { name: /Turn on sound and MIDI|Choose a sound input/ }).first().click().catch(() => {}); await reactReady(); });
+    await react('testBeat', true);
+    await studio.getByLabel('Video loop with the tempo', { exact: true }).selectOption('4');
+    await output.waitForFunction(() => Object.values(window.__mapStats?.videos ?? {}).some(v => v.playsAs !== null), null, { timeout: 10000 })
+      .catch(async () => { throw new Error(`no tempo loop: ${JSON.stringify(await videoStats())}`); });
+    await react('testBeat', false);
+    await studio.getByLabel('Video loop with the tempo', { exact: true }).selectOption('');
+  });
+
+  await check('a video moved on disk falls back to the shape’s fill with a note, never black; Find… brings it back', async () => {
+    await fs.rename(CLIP, MOVED);
+    // The output reopened (as after a restart) loads every video afresh, and finds this one gone.
+    const closed = output.waitForEvent('close', { timeout: 10000 });
+    await studio.getByRole('button', { name: 'Close output' }).click();
+    await closed;
+    const opened = app.waitForEvent('window', { timeout: 15000 });
+    await studio.getByRole('button', { name: 'Open output' }).click();
+    output = await opened;
+    output.on('pageerror', e => errors.push(String(e)));
+    await output.waitForURL(/#map-output/);
+    await output.waitForFunction(() => Object.values(window.__mapStats?.videos ?? {}).some(v => v.state === 'missing'), null, { timeout: 15000 })
+      .catch(async () => { throw new Error(`the moved file was not noticed: ${JSON.stringify(await videoStats())}`); });
+    const hash = await shapeHash();
+    assert.ok(hash.dark < 400, `the wall went black: ${hash.dark} of 480 samples dark`);
+    await openSection(studio, 'effect');
+    await studio.waitForFunction(() => /can’t be found/.test(document.querySelector('.map-video-panel [role=status]')?.textContent ?? ''), null, { timeout: 5000 });
+    await nextPick(MOVED);
+    await studio.getByRole('button', { name: 'Find…' }).click();
+    await output.waitForFunction(() => { const v = Object.values(window.__mapStats?.videos ?? {}); return v.length > 0 && v.every(x => x.state === 'playing'); }, null, { timeout: 15000 })
+      .catch(async () => { throw new Error(`Find… did not bring it back: ${JSON.stringify(await videoStats())}`); });
+    assert.match(await studio.locator('.map-video-name').textContent(), /test-loop-moved\.mp4/);
   });
 
   await check('Escape in the output window closes it', async () => {

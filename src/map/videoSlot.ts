@@ -23,6 +23,9 @@ export class VideoSlot {
   private newFrame = false;
   private frozen = false;
   private loop = -1;
+  /** Bumped on every load, so a late answer about an older load is ignored. */
+  private generation = 0;
+  private watching = false;
   private source: VideoSource;
 
   constructor(private readonly gpu: Gpu, source: VideoSource) {
@@ -46,7 +49,10 @@ export class VideoSlot {
   setFrozen(on: boolean): void {
     if (on === this.frozen) return;
     this.frozen = on;
-    if (on) this.video.pause(); else if (this.state === 'playing') void this.video.play().catch(() => {});
+    if (on) { this.video.pause(); return; }
+    // Unfrozen: a video that loaded while frozen starts now; a tempo loop joins the beat where it is.
+    this.loop = -1;
+    if (this.state === 'playing' || this.state === 'loading') void this.video.play().catch(() => {});
   }
 
   /** The picture to draw: the latest frame, or null until it plays. `speed`: the Speed links leave it at this frame. */
@@ -86,20 +92,28 @@ export class VideoSlot {
   }
 
   private load(): void {
+    this.generation++;
     this.state = 'loading'; this.loop = -1;
     this.video.src = videoUrl(this.source.path);
-    void this.video.play().catch(() => { /* an error event says why */ });
+    // Frozen, it loads but waits; it starts when unfrozen.
+    if (!this.frozen) void this.video.play().catch(() => { /* an error event says why */ });
+    else this.video.load();
   }
   private watchFrames(): void {
     const v = this.video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
     if (!v.requestVideoFrameCallback) { this.newFrame = true; return; }
-    const next = () => { this.newFrame = true; if (this.state === 'playing') v.requestVideoFrameCallback!(next); };
+    // One chain of frame callbacks per video, however often it starts playing again.
+    if (this.watching) return;
+    this.watching = true;
+    const next = () => { this.newFrame = true; if (this.state === 'playing') v.requestVideoFrameCallback!(next); else this.watching = false; };
     v.requestVideoFrameCallback(next);
   }
   /** Missing (the file is gone or not allowed) or unplayable (a format the player cannot decode). */
   private async failed(): Promise<void> {
-    const url = this.video.currentSrc || videoUrl(this.source.path);
-    try { const res = await fetch(url, { method: 'HEAD' }); this.state = res.status === 404 || res.status === 403 ? 'missing' : 'unplayable'; }
-    catch { this.state = 'missing'; }
+    const url = this.video.currentSrc || videoUrl(this.source.path), generation = this.generation;
+    let state: VideoState;
+    try { const res = await fetch(url, { method: 'HEAD' }); state = res.status === 404 || res.status === 403 ? 'missing' : 'unplayable'; }
+    catch { state = 'missing'; }
+    if (generation === this.generation) this.state = state;
   }
 }

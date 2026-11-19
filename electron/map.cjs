@@ -112,8 +112,9 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
   const checkText = text => { if (typeof text !== 'string' || text.length > SHOW_TEXT_LIMIT) throw new Error('This show cannot be saved.'); };
 
   // Stage 6: the videos a show names may play once the show is opened through the app (Open, or its own autosave).
-  const grantVideos = show => { if (show && videoFiles) videoFiles.allowFromShow(show); return show; };
-  handle('loadAutosave', async () => grantVideos(await queued(() => loadShowFile(autosavePath))));
+  // The autosave is written by the page, so it only restores videos granted before; a show Greg opens grants its own.
+  const grantVideos = (show, trusted) => { if (show && videoFiles) videoFiles.allowFromShow(show, { trusted }); return show; };
+  handle('loadAutosave', async () => { await videoFiles?.ready; return grantVideos(await queued(() => loadShowFile(autosavePath)), false); });
   handle('saveAutosave', text => { checkText(text); return queuedSave(autosavePath, text); });
   // The parsed show; null when the person cancelled; { damaged: true } when the chosen file cannot be read.
   handle('openShow', async () => {
@@ -124,7 +125,7 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     try { show = await queued(() => loadShowFile(file)); } catch { show = null; }
     if (!show) return { damaged: true };
     showPath = file;
-    return grantVideos(show);
+    return grantVideos(show, true);
   });
   // Returns the file written, or null when the person cancelled the dialog.
   handle('saveShow', async (text, saveAs) => {
@@ -167,7 +168,7 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     const result = await dialog.showOpenDialog(studio(), { title, properties: ['openFile'], filters: VIDEO_FILTERS });
     if (result.canceled || !result.filePaths?.length) return null;
     const file = result.filePaths[0];
-    if (!videoFiles || !videoFiles.allow(file)) return null;
+    if (!videoFiles || !videoFiles.allow(file, { record: true })) return null;
     return { path: file, name: path.basename(file) };
   };
   handle('chooseVideo', () => pickVideo('Choose a video'));

@@ -167,6 +167,9 @@ const MAX_GRID_SIDE = 16;
 /** Sources no shape plays any more are dropped. */
 const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => playedBy(show, src.id)); show.videos = show.videos.filter(v => playedBy(show, v.id)); };
 
+/** True when a source is one of Greg's pictures (a one-layer image composition). */
+const isPictureSource = (show: ShowDocument, id: string) => { const p = show.sources.find(s => s.id === id)?.project; return !!p && p.layers.length === 1 && p.layers[0].kind === 'image'; };
+
 /** A one-layer composition of a picture (Studio's image layer, cover fit), as a file would load it; null if it is not valid. */
 export function imageComposition(image: { name: string; dataUrl: string; width: number; height: number }): Project | null {
   const project = createProject();
@@ -266,8 +269,9 @@ function addCopies(next: ShowDocument, originals: Shape[], ids: string[], source
   for (const [n, shape] of originals.entries()) {
     const copy: Shape = { ...structuredClone(shape), ...place(shape), id: ids[n], name: name(shape), visible: true, locked: false };
     // The copy gets its own source, so from here on its settings are its own.
-    // A copy of a Live shape plays Live: there is only one.
-    if (shape.sourceId !== null && shape.sourceId !== LIVE_SOURCE_ID) {
+    // A copy of a Live shape plays Live: there is only one. A copy of a video or a picture shares it: one player, one
+    // stored copy (Make separate gives it its own).
+    if (shape.sourceId !== null && shape.sourceId !== LIVE_SOURCE_ID && !isVideoId(shape.sourceId) && !isPictureSource(next, shape.sourceId)) {
       const original = next.sources.find(s => s.id === shape.sourceId);
       const sourceId = sourceIds[n];
       if (!sourceId) return { reason: 'needs-source-id' };
@@ -663,6 +667,8 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (next.sources.length >= MAX_SOURCES) return { reason: 'too-many-sources' };
       next.sources.push({ ...source, id: action.sourceId, revision: 0 });
       shape.sourceId = action.sourceId;
+      // A picture made separate is stored again, so it counts against the show's budget.
+      if (imageBytes(next) > IMAGE_SHOW_LIMIT) return { reason: 'images-over-budget' };
       // The effect's reactions come with the copy, as far as the link limit allows.
       const from = `source.${source.id}.`, room = MAX_LINKS - next.links.length;
       const copies = next.links.filter(l => l.target.startsWith(from)).slice(0, Math.max(0, room))
@@ -755,7 +761,9 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const taken = new Set([...next.shapes.filter(s => s !== shape).map(s => s.id), ...next.sources.map(s => s.id)]);
   if (action.ids.some(id => taken.has(id))) return { reason: 'duplicate-id' };
   const source = shape.sourceId ? next.sources.find(s => s.id === shape.sourceId) : undefined;
-  if (source && !action.spread) {
+  // A video or a picture is shared by every cell, as one picture across them or each on its own.
+  const sharedMedia = isVideoId(shape.sourceId) || (!!shape.sourceId && isPictureSource(next, shape.sourceId));
+  if (source && !action.spread && !sharedMedia) {
     if (action.sourceIds.length !== count || new Set(action.sourceIds).size !== count || action.sourceIds.some(id => taken.has(id) || action.ids.includes(id))) return { reason: 'duplicate-id' };
     const sharedElsewhere = playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes }, source.id);
     if (next.sources.length - (sharedElsewhere ? 0 : 1) + count > MAX_SOURCES) return { reason: 'too-many-sources' };
@@ -773,10 +781,10 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const made: Shape[] = cells.map((points, k) => ({
     ...structuredClone(shape), id: action.ids[k], name: `${base} ${k + 1}`, points, holes: [], groupId, locked: false, visible: true,
     placement: { ...shape.placement, pin: null },
-    sourceId: shape.sourceId === LIVE_SOURCE_ID ? LIVE_SOURCE_ID : source ? (action.spread ? source.id : action.sourceIds[k]) : null,
+    sourceId: shape.sourceId === LIVE_SOURCE_ID || isVideoId(shape.sourceId) ? shape.sourceId : source ? (action.spread || sharedMedia ? source.id : action.sourceIds[k]) : null,
     ...(action.spread ? { placement: { ...shape.placement, kind: 'across-group' as const, pin: null } } : {}),
   }));
-  if (source && !action.spread) next.sources.push(...action.sourceIds.map(id => ({ ...source, id, revision: 0 })));
+  if (source && !action.spread && !sharedMedia) next.sources.push(...action.sourceIds.map(id => ({ ...source, id, revision: 0 })));
   next.shapes.splice(next.shapes.indexOf(shape), 1, ...made);
   dropUnplayed(next);
   return { show: normaliseGroups(next), touched: made };

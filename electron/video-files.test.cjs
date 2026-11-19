@@ -66,3 +66,42 @@ test('the page’s url for a path reads back to the same path', () => {
   assert.equal(videoPathFromUrl(url('/Users/greg/My Clips/loop #1.mp4')), '/Users/greg/My Clips/loop #1.mp4');
   assert.equal(videoPathFromUrl('formfield-video://other/x'), null);
 });
+
+test('review: a HEAD request answers with headers only, never reading the file', async () => {
+  const { files, clip } = await setup();
+  files.allow(clip);
+  const res = await files.handle(new Request(url(clip), { method: 'HEAD' }));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-length'), '16');
+  assert.equal((await res.text()).length, 0);
+});
+
+test('review: the autosave only grants paths Greg granted before (kept by the main process), never new ones', async () => {
+  const { dir, clip } = await setup();
+  const record = path.join(dir, 'granted.json');
+  const first = createVideoFiles({ fs, recordFile: record });
+  await first.ready;
+  first.allow(clip, { record: true });
+  await first.saved;
+  const other = path.join(dir, 'other.mp4'); await fs.writeFile(other, 'x');
+  const later = createVideoFiles({ fs, recordFile: record });
+  await later.ready;
+  const autosave = JSON.stringify({ videos: [{ path: clip }, { path: other }] });
+  assert.equal(later.allowFromShow(autosave, { trusted: false }), 1, 'only the path granted before');
+  assert.equal((await later.handle(new Request(url(other)))).status, 403);
+  assert.equal(later.allowFromShow(autosave, { trusted: true }), 2, 'a show Greg opened grants its videos');
+});
+
+test('review: a path through a symlink is served only as the file it really is', async () => {
+  const { dir, clip, files } = await setup();
+  const sub = path.join(dir, 'sub'); await fs.mkdir(sub);
+  const link = path.join(dir, 'link'); await fs.symlink(sub, link);
+  files.allow(clip);
+  // /dir/link/../loop.mp4 normalises to /dir/loop.mp4, but read raw it would be /dir/sub/../loop.mp4 → /dir/loop.mp4 too;
+  // a request must open exactly the allowed file.
+  const res = await files.handle(new Request(url(path.join(link, '..', 'loop.mp4'))));
+  assert.ok(res.status === 403 || (res.status === 200 && (await res.text()) === '0123456789abcdef'));
+  const sneaky = path.join(sub, 'loop.mp4'); await fs.writeFile(sneaky, 'SECRET');
+  const viaLink = await files.handle(new Request(url(`${link}/../loop.mp4`)));
+  if (viaLink.status === 200) assert.equal(await viaLink.text(), '0123456789abcdef', 'never the other file');
+});

@@ -4,7 +4,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell, Menu, screen, systemPreferen
 const { createVideoFiles } = require('./video-files.cjs');
 // Stage 6: Map's video files reach the page only through this scheme, which answers only files Greg chose.
 protocol.registerSchemesAsPrivileged([{ scheme: 'formfield-video', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true } }]);
-const videoFiles = createVideoFiles({ fs: require('node:fs/promises') });
+let videoFiles = createVideoFiles({ fs: require('node:fs/promises') });
 const { version: applicationVersion } = require('../package.json');
 const fs = require('node:fs/promises');
 const { mkdirSync } = require('node:fs');
@@ -234,6 +234,8 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Videos Greg granted are kept in the app's own data, so a restored autosave can play them again (and nothing else).
+  videoFiles = createVideoFiles({ fs: require('node:fs/promises'), recordFile: path.join(app.getPath('userData'), 'granted-videos.json') });
   const tools = resolveMediaTools({ allowSystemFallback: !app.isPackaged && process.env.STUDIO_ALLOW_SYSTEM_FFMPEG === '1' });
   manager = new ExportManager({ ...tools, rendererFingerprint: await rendererFingerprint(), jobsDirectory: path.join(app.getPath('userData'), 'export-jobs'), defaultExportDir: defaultExportDir(), onProgress: progress => { if (window && !window.isDestroyed()) window.webContents.send('studio:export', progress); } });
   await manager.initializing;
