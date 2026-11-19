@@ -880,6 +880,54 @@ Built 18–19 November 2026, from [the sound and screen pass design](superpowers
   - dragging while a restart is pending no longer restarts it again
 - **Effects that animate themselves:** for these, "the wall follows the change" in the checks means "the change was taken in". The checks read a counter the wall keeps.
 
+## Stage 6 results: pictures and video in shapes
+
+Built 19 November 2026, from [the images and video design](superpowers/specs/2026-11-19-map-images-video-design.md). With Live in Map, this finishes stage 6.
+
+**What it does:**
+- **Image…** picks a PNG or JPEG. The shape plays it as Studio's own image layer, stored in the show, with Fit (Cover or Contain) and Replace… in the Effect tab.
+  - Limits: 8 MB a picture, and 32 MB for all the pictures in a show.
+  - A picture picked twice, copied or made into a grid is stored once and shared; Make separate stores a second copy, and that counts.
+- **Video…** picks an MP4, MOV, M4V or WebM. It stays on disk, and the show keeps its path.
+  - Always looping and muted. One player per video, so the shapes sharing it are on the same frame.
+  - **Speed** (0.1 to 4×), with ∿.
+  - **Loop with the tempo** stretches or squeezes the clip to 1–16 beats, and says when it has to use the nearest beat count that fits.
+  - **A missing or unplayable file** shows the shape's own colour, never black. The Effect tab says why, and **Find…** points every shape and scene at the file's new place. **Try again** reloads.
+  - **Freeze** pauses videos. Unfreezing resumes them, and a tempo loop rejoins the beat.
+- **Which files the projector may open:**
+  - video files picked in Video… or Find…
+  - the videos in a show opened with Open
+  - on restart, only videos granted before, kept in a record the main process writes itself
+
+  Nothing else on disk can be reached through a show. Files are streamed, never read whole into memory.
+- **In the show file:** version 7, with a `videos` list. Version 6 files open unchanged.
+
+**Measured** (`measure-map --video`, the eight-effect show plus two shapes each playing a 1280×720 test clip, 30 s, the Mac busy with other work): 101–119 fps, the governor never stepped down, and 39 (medium) and 27 (heavy) frames slower than 16.7 ms. The same show without the videos had 0–16 slow frames.
+
+**Checked in the app** (`npm run test:map`, 48 checks, 4 new):
+- a picture plays on the wall
+- one video plays in two shapes from one player, and moves
+- Freeze holds the video, and unfreezing resumes it
+- Loop with the tempo, with the test beat, fits the clip to the beats
+- a video moved on disk falls back to the shape's fill, never black, with a note; Find… brings it back
+
+The video checks need ffmpeg on the Mac to make their test clip.
+
+**Reviewed:** a review found eight important problems, and a symlink case was added to them; all are fixed. Among them:
+- duplicates and grids of a video shape lost the video
+- video Speed reactions didn't reach the projector
+- the autosave could add paths to the allowed list
+- a failed video read the whole file into memory
+- Freeze, unfreeze and a mid-show failure misbehaved
+- copies of a picture each stored it again
+
+**Known limits:**
+- The video leaving a scene holds still during the crossfade, as effects do.
+- The budget note doesn't say how much is used.
+- Replacing a picture near the budget can be refused, even though the old one would be freed.
+- HAP and ProRes clips don't play; MP4 (H.264) does.
+- Not yet tried with Greg's own clips on the projector.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
