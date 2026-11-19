@@ -187,6 +187,8 @@ function stageSource(next: ShowDocument, action: Extract<EditAction, { sourceId:
     if (!layer || !Number.isInteger(action.layer)) return { reason: 'not-found' };
     const defs = readParameterDefinitions(layer.kind), params = { ...layer.params };
     for (const [key, raw] of Object.entries(action.params)) {
+      // The seed is every layer's, not one of its definitions: a whole number, as Studio keeps it.
+      if (key === 'seed') { if (!Number.isFinite(raw)) return { reason: 'bad-setting' }; params.seed = clamp(Math.round(raw), 0, 4294967295); continue; }
       const d = defs.find(x => x.key === key);
       if (!d || !Number.isFinite(raw)) return { reason: 'bad-setting' };
       const v = clamp(raw, d.min, d.max);

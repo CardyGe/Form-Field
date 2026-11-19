@@ -124,3 +124,40 @@ test('Make separate copies the effect’s links to the new copy; past 64 links, 
   assert.equal(capped.links.length, 64);
   assert.equal(capped.links.filter(l => l.target === 'source.sa2.speed').length, 1);
 });
+
+test('final review: Seed can be changed from the Effect tab, as in Studio', () => {
+  const show = base();
+  const after = ok(show, { type: 'setSourceLayer', sourceId: 'sa', layer: 0, params: { seed: 1234.6 } });
+  assert.equal(after.sources[0].project.layers[0].params.seed, 1235);
+  assert.equal(ok(show, { type: 'setSourceLayer', sourceId: 'sa', layer: 0, params: { seed: -5 } }).sources[0].project.layers[0].params.seed, 0);
+});
+
+test('final review: a setting that only the visible rules mark as restarting (Living Ink scale in evolving chemistry) prepares again', () => {
+  const ink = PRESETS.find(p => p.kind === 'livingink');
+  assert.ok(ink, 'a Living Ink preset');
+  const show = base(ink!.id), p = show.sources[0].project;
+  const evolving = { ...p, layers: [{ ...p.layers[0], params: { ...p.layers[0].params, inkMode: 2 } }] };
+  const d = visibleParameterDefinitions(evolving.layers[0]).find(x => x.key === 'scale');
+  assert.equal(d?.preparation, true, 'scale restarts in evolving chemistry');
+  const scaled = { ...evolving, layers: [{ ...evolving.layers[0], params: { ...evolving.layers[0].params, scale: ((evolving.layers[0].params as Record<string, number>).scale ?? 1) * 1.1 } }] };
+  assert.equal(needsPrepare(evolving, scaled), true);
+});
+
+test('final review: edits outside a drag are separate undo steps; one drag is one', async () => {
+  const { EditGrouper } = await import('../src/map/undo-group');
+  const g = new EditGrouper();
+  const a = g.key('drift'), b = g.key('drift');
+  assert.notEqual(a, b, 'two clicks of reset, or two typed values, are two steps');
+  g.begin();
+  const c = g.key('drift'), d = g.key('drift');
+  assert.equal(c, d, 'one drag is one step');
+  g.end();
+  assert.notEqual(g.key('drift'), c, 'the next drag is its own step');
+  const h = new EditGrouper();
+  assert.notEqual(h.key('drift'), a, 'a new panel never reuses an old key');
+});
+
+test('final review: a layer’s Opacity changes in place, never preparing the effect again', () => {
+  const p = base().sources[0].project;
+  assert.equal(needsPrepare(p, { ...p, layers: [{ ...p.layers[0], opacity: 0.4 }] }), false);
+});

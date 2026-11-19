@@ -837,10 +837,16 @@ try {
     const slider = effectSlider();
     const label = await slider.getAttribute('aria-label'), start = await slider.inputValue();
     const min = Number(await slider.getAttribute('min')), max = Number(await slider.getAttribute('max'));
-    for (let i = 1; i <= 5; i++) { await slider.fill(String(min + (max - min) * i / 6)); await sleep(80); }
+    const adjustedBefore = (await wallStats()).adjusted ?? 0;
+    // A real drag with the mouse: one gesture, so one undo step however many values it passes through.
+    const box = await slider.boundingBox();
+    await studio.mouse.move(box.x + 4, box.y + box.height / 2); await studio.mouse.down();
+    for (let i = 1; i <= 8; i++) { await studio.mouse.move(box.x + 4 + (box.width - 8) * i / 9, box.y + box.height / 2); await sleep(40); }
+    await studio.mouse.up();
     assert.notEqual(await slider.inputValue(), start, `${label} did not move`);
     await sleep(2500);
     assert.equal(await output.evaluate(() => JSON.stringify(window.__mapStats.prepares)), prepares, 'the effect was prepared again');
+    assert.ok(((await wallStats()).adjusted ?? 0) > adjustedBefore, 'the wall never took the new setting');
     await studio.getByRole('button', { name: 'Undo', exact: true }).click();
     await studio.waitForFunction(([l, v]) => document.querySelector(`.map-effect-settings input[type="range"][aria-label="${l}"]`)?.value === v, [label, start], { timeout: 3000 })
       .catch(async () => { throw new Error(`one Undo left ${label} at ${await effectSlider().inputValue()}, not ${start}`); });

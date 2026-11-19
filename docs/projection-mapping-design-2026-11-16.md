@@ -821,6 +821,65 @@ Live costs a few slow frames in the heaviest mix, but the show holds 110–121 f
   - Closing a shape's card with Sound & MIDI for Live open leaves the meters running.
 - Not yet seen with a real camera on the projector. That needs Greg and the room.
 
+## Sound and screen pass results
+
+Built 18–19 November 2026, from [the sound and screen pass design](superpowers/specs/2026-11-18-map-sound-ux-design.md) (layout A).
+
+**What changed on screen:**
+- **Details has Shape, Effect and Sound tabs** for the selected shape.
+  - **Shape:** placement, look, edge, and the shape itself.
+  - **Effect:**
+    - the instrument card
+    - the effect's own settings, through Studio's own controls: the same ranges, groups and folding
+    - ∿ beside every setting that can follow sound; greyed with the reason for settings that only change by restarting the effect
+    - "animated in Studio" on settings Studio animates
+    - layer buttons when an effect has more than one layer
+    - a **Finish** section with the layer's grading and finish settings, and Opacity
+  - **Sound:** only this shape's reactions, as compact rows that open to their full controls. A row says when it is not in use, or when no sound input is chosen.
+- **The shape list** marks reacting shapes with ∿ and a count.
+- **One strip under the stage**, always visible, holds:
+  - the sound input with meters
+  - tempo and Tap
+  - MIDI
+  - the scenes
+  - **Show**: a popover with the triggers, and reactions that only a scene not on screen uses
+- **The global Sound & MIDI tab is gone.** Snap and the room photo moved up beside the drawing tools, and the stage got the height of the two old bars.
+
+**How it works underneath:**
+- **One set of controls:** Studio's layer controls moved out of `App.tsx` into `LayerControls.tsx`, which Studio and Map share.
+- **No restart for small changes:** a change to a playing effect's settings that can follow sound no longer prepares it again. The compositor takes the new settings in place (`needsPrepare`), and one drag is one undo step.
+- **Make separate** brings the effect's reactions along, within the 64-link limit.
+
+**Checked:**
+- 460 unit tests and 82 main-process tests pass.
+- `npm run test:map`: all 44 checks pass, 6 of them new:
+  - an Effect slider moved with the output open adjusts the effect without preparing it again, and one Undo puts it back
+  - ∿ on an effect setting moves it on the wall with the test beat
+  - greyed ∿ for restart settings
+  - Show lists the triggers
+  - the strip keeps the input, meters and scenes on screen at 1280 wide
+- `npm run test:ui` (Studio): 26 checks pass before the long-standing "Project saved." stop, so Studio's controls work through the shared component.
+
+**Known limits:**
+- **Not in use after a Style change:** a reaction is marked "Not in use" when a Style change hides its setting. Unit tests check this, but no in-app check does.
+- **Layer buttons:** they appear only for effects with more than one layer, which only Studio can make. No in-app check covers them.
+- **Reviewed:** a final review found no critical problems and five important ones, all fixed:
+  - Seed could not be changed
+  - Living Ink's Pattern scale in evolving chemistry was adjusted in place instead of restarting
+  - separate edits merged into one undo step
+  - the Finish settings and Opacity were missing
+  - ∿ with "Change all" off still went to the shared effect
+- **Deferred from the review:**
+  - labels don't name the layer on multi-layer effects
+  - the first edit with "Change all" off takes two undo steps
+  - no note when copied reactions hit the 64-link limit
+  - the chosen layer carries over to the next shape
+  - a locked shape's choices and swatches look active
+  - a held arrow key makes one undo step per repeat
+  - the strip's input isn't highlighted when a reaction needs it
+  - dragging while a restart is pending restarts it again
+- **Effects that animate themselves:** for these, "the wall follows the change" in the checks means "the change was taken in". The checks read a counter the wall keeps.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.

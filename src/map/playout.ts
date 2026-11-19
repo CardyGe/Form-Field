@@ -5,7 +5,7 @@
 import { playbackPhase } from '../core/playback';
 import { frameCount } from '../core/timeline';
 import type { Project } from '../shared/types';
-import { readParameterDefinitions, visibleParameterDefinitions } from '../core/project';
+import { visibleParameterDefinitions } from '../core/project';
 import { reactable } from './targets';
 import { STAGE_SIZE, type Point } from './show';
 
@@ -105,13 +105,15 @@ export function needsPrepare(before: Project, after: Project): boolean {
   const { layers: a, ...restA } = before, { layers: b, ...restB } = after;
   if (JSON.stringify(restA) !== JSON.stringify(restB) || a.length !== b.length) return true;
   for (let i = 0; i < a.length; i++) {
-    const { params: pa, ...la } = a[i], { params: pb, ...lb } = b[i];
+    // Opacity is read each frame when the effect is drawn, as its settings are.
+    const { params: pa, opacity: _oa, ...la } = a[i], { params: pb, opacity: _ob, ...lb } = b[i];
     if (JSON.stringify(la) !== JSON.stringify(lb)) return true;
     const visible = visibleParameterDefinitions(b[i]);
     for (const key of new Set([...Object.keys(pa), ...Object.keys(pb)])) {
       if (pa[key] === pb[key]) continue;
-      const d = readParameterDefinitions(b[i].kind).find(x => x.key === key);
-      if (!d || typeof pb[key] !== 'number' || !reactable(d).ok || !visible.some(x => x.key === key)) return true;
+      // The definition as shown for this layer: some settings restart the effect only in some modes.
+      const d = visible.find(x => x.key === key);
+      if (!d || typeof pb[key] !== 'number' || !reactable(d).ok) return true;
     }
   }
   return false;
