@@ -3,7 +3,7 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu, screen, systemPreferences, powerSaveBlocker, protocol } = require('electron');
 const { createVideoFiles } = require('./video-files.cjs');
 // Stage 6: Map's video files reach the page only through this scheme, which answers only files Greg chose.
-protocol.registerSchemesAsPrivileged([{ scheme: 'formfield-video', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: 'formfield-video', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true } }]);
 const videoFiles = createVideoFiles({ fs: require('node:fs/promises') });
 const { version: applicationVersion } = require('../package.json');
 const fs = require('node:fs/promises');
@@ -219,7 +219,7 @@ function createWindow() {
   if (!session.protocol.isProtocolHandled('formfield-video')) session.protocol.handle('formfield-video', request => videoFiles.handle(request));
   session.setPermissionRequestHandler((contents, permission, callback, details) => callback(live.allowPermission(permission, details, ours(contents), studioWindow(contents))));
   session.setPermissionCheckHandler((contents, permission, _origin, details) => live.allowPermissionCheck(permission, details, ours(contents), studioWindow(contents)));
-  const csp = ["default-src 'self'", `script-src 'self' 'wasm-unsafe-eval'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "media-src 'self' blob: formfield-video:", "font-src 'self' data:", `connect-src 'self'${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');
+  const csp = ["default-src 'self'", `script-src 'self' 'wasm-unsafe-eval'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "media-src 'self' blob: formfield-video:", "font-src 'self' data:", `connect-src 'self' formfield-video:${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');
   session.webRequest.onHeadersReceived((details, callback) => callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [csp] } }));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-attach-webview', event => event.preventDefault());

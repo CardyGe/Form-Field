@@ -10,8 +10,9 @@ import type { Shape } from '../map/show';
 import { BORDER_MAX, BRIGHTNESS_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, ZOOM_RANGE, isShapeLocked, type Placement, type PlacementKind } from '../map/show';
 import { ownCornersPinnable } from '../map/placement';
 import { REACTIONS, reactionLinks, reactsLabel, targetRange, type Reaction } from '../map/targets';
-import { LIVE_SOURCE_ID, TEMPO_SYNC_BEATS } from '../map/show';
+import { LIVE_SOURCE_ID, TEMPO_SYNC_BEATS, isVideoId } from '../map/show';
 import MapLiveCard from './MapLiveCard';
+import MapVideoPanel from './MapVideoPanel';
 import MapEffectTab from './MapEffectTab';
 import MapSoundTab from './MapSoundTab';
 import { LOOK_LABELS } from '../live/settings';
@@ -74,7 +75,7 @@ function ReactButton({ map, target, label, disabled }: { map: Map; target: strin
 let lastTab: 'shape' | 'effect' | 'sound' = 'shape';
 
 /** The Details panel: the selected shape's name, colour, what it plays, its edge, shape tools and its chosen point. */
-export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, linked, setLinked, liveStatus = null }: { liveStatus?: { running: boolean; state: string } | null; map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void; onOpenLooks: () => void; linked: boolean; setLinked: (on: boolean) => void }) {
+export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, linked, setLinked, liveStatus = null, videoStatus = {} }: { videoStatus?: Record<string, { state: string; playsAs: number | null }>; liveStatus?: { running: boolean; state: string } | null; map: Map; onEditInStudio?: (sourceId: string, shapeId: string) => void; setNote: (text: string | null) => void; onOpenLooks: () => void; linked: boolean; setLinked: (on: boolean) => void }) {
   const act = mapActions(map);
   const [tab, setTab] = useState<'shape' | 'effect' | 'sound'>(lastTab);
   const chooseTab = (t: 'shape' | 'effect' | 'sound') => { lastTab = t; setTab(t); };
@@ -248,7 +249,8 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
       <ContentCard setNote={setNote} map={map} shape={shape} locked={locked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked={linked} setLinked={setLinked} />
       {!shape.blocker && !shape.sourceId && <p className="muted-text">Choose an effect first: Change… above. Its settings, and what can react to sound, show here.</p>}
       {!shape.blocker && shape.sourceId === LIVE_SOURCE_ID && <MapLiveCard map={map} locked={locked} onError={text => setNote(text)} localStatus={liveStatus} />}
-      {!shape.blocker && shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID && <MapEffectTab key={shape.id} map={map} shape={shape} locked={locked} linked={linked} setNote={setNote} />}
+      {!shape.blocker && isVideoId(shape.sourceId) && <MapVideoPanel map={map} shape={shape} locked={locked} status={videoStatus[shape.sourceId] ?? null} />}
+      {!shape.blocker && shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID && !isVideoId(shape.sourceId) && <MapEffectTab key={shape.id} map={map} shape={shape} locked={locked} linked={linked} setNote={setNote} />}
     </>}
     {tab === 'sound' && <MapSoundTab map={map} shape={shape} locked={locked} setNote={setNote} />}
   </>;
@@ -265,12 +267,14 @@ function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, 
   const sharers = shape.sourceId ? map.show.shapes.filter(s => s.sourceId === shape.sourceId) : [];
   const isLive = shape.sourceId === LIVE_SOURCE_ID;
   const playing = map.show.shapes.filter(s => s.id !== shape.id && s.sourceId !== null && s.sourceId !== shape.sourceId);
+  const video = isVideoId(shape.sourceId) ? map.show.videos.find(v => v.id === shape.sourceId) : undefined;
+  const image = source?.project.layers.length === 1 && source.project.layers[0].kind === 'image' ? source.project.layers[0].image : undefined;
   const presetId = source?.project.layers.length === 1 ? PRESETS.find(p => p.name === source.project.name)?.id : undefined;
-  const thumb = presetId ? LookPreviews.known(presetId) ?? kindArt(PRESETS.find(p => p.id === presetId)!.kind) : source ? kindArt(source.project.layers[0]?.kind ?? '') : undefined;
-  const playsName = shape.blocker ? 'Blocker' : isLive ? 'Live' : source ? source.project.name : shape.fill === 'grid' ? 'Grid pattern' : 'Its colour';
+  const thumb = image ? image.dataUrl : presetId ? LookPreviews.known(presetId) ?? kindArt(PRESETS.find(p => p.id === presetId)!.kind) : source ? kindArt(source.project.layers[0]?.kind ?? '') : undefined;
+  const playsName = shape.blocker ? 'Blocker' : isLive ? 'Live' : video ? `Video · ${video.name}` : image ? `Image · ${image.name}` : source ? source.project.name : shape.fill === 'grid' ? 'Grid pattern' : 'Its colour';
   return <div className="map-content-card">
       <div className="map-content-top">
-        <span className={`map-content-thumb ${shape.blocker ? 'blocker' : isLive ? 'live' : !source ? (shape.fill === 'grid' ? 'grid' : 'colour') : ''}`} style={{ ['--shape-colour' as string]: shape.colour }}>{thumb && !shape.blocker && <img src={thumb} alt="" />}</span>
+        <span className={`map-content-thumb ${shape.blocker ? 'blocker' : isLive ? 'live' : video ? 'video' : !source ? (shape.fill === 'grid' ? 'grid' : 'colour') : ''}`} style={{ ['--shape-colour' as string]: shape.colour }}>{thumb && !shape.blocker && <img src={thumb} alt="" />}</span>
         <div className="map-content-name"><strong>{playsName}</strong>
           {sharers.length > 1 && <small>{isLive ? 'Live' : 'One instrument'} across {sharers.length} shapes</small>}</div>
       </div>

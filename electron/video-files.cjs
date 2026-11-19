@@ -51,7 +51,8 @@ function createVideoFiles({ fs }) {
     try {
       const buffer = Buffer.alloc(end - start + 1);
       await handleFile.read(buffer, 0, buffer.length, start);
-      const headers = { 'content-type': type, 'content-length': String(buffer.length), 'accept-ranges': 'bytes' };
+      // The projector copies frames into the graphics card, which needs the page to be allowed to read them.
+      const headers = { 'content-type': type, 'content-length': String(buffer.length), 'accept-ranges': 'bytes', 'access-control-allow-origin': '*' };
       if (status === 206) headers['content-range'] = `bytes ${start}-${end}/${size}`;
       return new Response(buffer, { status, headers });
     } finally { await handleFile.close(); }

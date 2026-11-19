@@ -63,7 +63,13 @@ export default function MapEffectTab({ map, shape, locked, linked, setNote }: { 
       onAdd={input => { const id = target(); if (id) map.dispatch({ type: 'addLink', link: linkFor(newItemId('link'), input, `source.${id}.param.${index}.${d.key}`, '') }); }}
       onStop={() => map.dispatch({ type: 'removeLinks', target: t })} />;
   };
+  const picture = layer.kind === 'image' ? layer.image : undefined;
   return <div className="map-effect-settings">
+    {picture && <div className="map-image-panel">
+      <label className="map-field">Fit<select aria-label="Picture fit" value={picture.fit} disabled={locked} onChange={e => edit(l => ({ ...l, image: { ...l.image!, fit: e.target.value === 'contain' ? 'contain' : 'cover' } }))}>
+        <option value="cover">Cover: fills the shape, cropping the edges</option><option value="contain">Contain: the whole picture, with bars</option></select></label>
+      <button className="text-button" disabled={locked} title="Choose another picture for this shape" onClick={() => mapActions(map).play(shape.id, 'image', linked)}>Replace…</button>
+    </div>}
     {layers.length > 1 && <div className="map-layer-chips" role="group" aria-label="Layer">{layers.map((l, i) =>
       <button key={l.id} className={`look-chip ${i === index ? 'on' : ''}`} aria-pressed={i === index} onClick={() => setLayerIndex(i)}>{i + 1} · {l.name}</button>)}</div>}
     <LayerShapeControls locked={locked} layer={layer} edit={edit} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()}

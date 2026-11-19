@@ -16,7 +16,7 @@ import { ellipseRing, hitShape, isCurved, squareBox, triangleRing } from '../map
 import { joinedAnchors, snapMove, snapPoint, type SnapTarget } from '../map/snap';
 import { boxHandles, marqueeSelect, pick, selectionBox, transformFor, type Box, type BoxHandle } from '../map/gestures';
 import { ownCornersPinnable } from '../map/placement';
-import { LIVE_SOURCE_ID, usesLive, MAX_NAME_LENGTH, STAGE_SIZE, isShapeLocked, isShapeShown, type CurvePoint, type Point, type ShowDocument } from '../map/show';
+import { LIVE_SOURCE_ID, isVideoId, usesLive, MAX_NAME_LENGTH, STAGE_SIZE, isShapeLocked, isShapeShown, type CurvePoint, type Point, type ShowDocument } from '../map/show';
 import { MapCompositor } from '../map/compositor';
 import { GOVERNOR_SCALES } from '../map/playout';
 
@@ -29,7 +29,12 @@ const REASONS: Record<string, string> = {
   'bad-colour': 'That colour could not be used', 'bad-photo': 'That picture could not be used',
   'not-found': 'That shape is gone', 'too-many-shapes': 'Too many shapes', 'duplicate-id': 'That shape already exists',
   'name-too-long': `Names can be at most ${MAX_NAME_LENGTH} characters`,
-  'too-many-sources': 'Too many instruments in this show', 'needs-source-id': 'That shape could not be copied',
+  'too-many-sources': 'Too many instruments in this show',
+  'image-too-large': 'That picture is over 8 MB: save it smaller (a JPEG of the size the projector shows is plenty)',
+  'images-over-budget': 'The show already holds 32 MB of pictures: use smaller ones, or fewer',
+  'bad-image': 'That file could not be read as a PNG or JPEG picture',
+  'too-many-videos': 'A show can hold 16 videos',
+  'not-a-video': 'That is not a video file (MP4, MOV, M4V or WebM)', 'needs-source-id': 'That shape could not be copied',
   'unknown-preset': 'That look is not in the Library', 'bad-palette': 'That palette could not be used',
   'pin-folded': 'Those four corners fold over: the picture cannot be laid on them', 'pin-flat': 'Those four corners are too close to a line to carry a picture',
   'pin-own-corners': 'This shape pins by its own four corners: drag those', 'not-pinned': 'Choose Pin first', 'nothing-to-share': 'That shape plays no instrument to share',
@@ -158,15 +163,18 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   // Live's Clear and Capture empty room reach this screen's Live directly.
   // This screen's own Live, as the Live card's status line shows it while the output is closed.
   const [localLive, setLocalLive] = useState<{ running: boolean; state: string } | null>(null);
+  const [localVideos, setLocalVideos] = useState<Record<string, { state: string; playsAs: number | null }>>({});
   useEffect(() => {
-    if (map.outputOpen) { setLocalLive(null); return; }
+    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); return; }
     const timer = setInterval(() => {
       const next = compositor.current?.stats().live ?? null;
       setLocalLive(old => old?.running === next?.running && old?.state === next?.state ? old : next);
+      const videos = compositor.current?.stats().videos ?? {};
+      setLocalVideos(old => JSON.stringify(old) === JSON.stringify(videos) ? old : videos);
     }, 500);
     return () => clearInterval(timer);
   }, [map.outputOpen]);
-  map.onLiveAction.current = action => { if (action === 'clear') compositor.current?.liveClear(); else if (action === 'retry') compositor.current?.liveRetry(); else compositor.current?.liveCaptureRoom(); };
+  map.onLiveAction.current = action => { if (action === 'clear') compositor.current?.liveClear(); else if (action === 'retry') compositor.current?.liveRetry(); else if (action === 'videoRetry') compositor.current?.videoRetry(); else compositor.current?.liveCaptureRoom(); };
   useEffect(() => {
     if (!canvas.current) return;
     // It draws on its own hidden canvas; this screen copies that picture and draws its marks over it.
@@ -712,6 +720,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const currentLook = (shape: typeof lookShape & {}) => {
     if (!shape.sourceId) return shape.fill;
     if (shape.sourceId === LIVE_SOURCE_ID) return 'live';
+    if (isVideoId(shape.sourceId)) return 'video';
+    if (map.show.sources.find(s => s.id === shape.sourceId)?.project.layers[0]?.kind === 'image') return 'image';
     const project = map.show.sources.find(s => s.id === shape.sourceId)?.project;
     const preset = project && project.layers.length === 1 ? PRESETS.find(p => p.name === project.name) : undefined;
     return preset ? `preset:${preset.id}` : '';
@@ -767,7 +777,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         <MapSoundStrip map={map} />
       </div>
       <aside className="live-column map-inspector" aria-label="Details">
-        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} liveStatus={localLive} />
+        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} liveStatus={localLive} videoStatus={map.outputOpen ? map.wallState?.videos ?? {} : localVideos} />
       </aside>
     </div>
     <footer className="map-status" role="status">{status}</footer>

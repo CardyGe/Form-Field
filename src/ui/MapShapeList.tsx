@@ -1,7 +1,7 @@
 import { useState, type MouseEvent } from 'react';
 import type { useMap } from './useMap';
 import MapIcon from './mapIcons';
-import { LIVE_SOURCE_ID, type Shape } from '../map/show';
+import { LIVE_SOURCE_ID, isVideoId, type Shape } from '../map/show';
 import { reactsLabel } from '../map/targets';
 
 type Map = ReturnType<typeof useMap>;
@@ -38,7 +38,10 @@ export default function MapShapeList({ map, onMenu }: { map: Map; onMenu: (e: Mo
   const soloShape = (id: string) => map.setSolo({ ...map.solo, shapes: map.solo.shapes.includes(id) ? map.solo.shapes.filter(s => s !== id) : [...map.solo.shapes, id] });
   const soloGroup = (id: string) => map.setSolo({ ...map.solo, groups: map.solo.groups.includes(id) ? map.solo.groups.filter(g => g !== id) : [...map.solo.groups, id] });
   /** What a shape plays, in a word or two. */
-  const plays = (shape: Shape) => shape.blocker ? 'Blocker' : shape.sourceId === LIVE_SOURCE_ID ? 'Live' : shape.sourceId ? map.show.sources.find(s => s.id === shape.sourceId)?.project.name ?? '' : shape.fill === 'grid' ? 'Grid' : 'Colour';
+  const plays = (shape: Shape) => shape.blocker ? 'Blocker' : shape.sourceId === LIVE_SOURCE_ID ? 'Live'
+    : isVideoId(shape.sourceId) ? `Video · ${map.show.videos.find(v => v.id === shape.sourceId)?.name ?? ''}`
+    : map.show.sources.find(s => s.id === shape.sourceId)?.project.layers[0]?.kind === 'image' ? `Image · ${map.show.sources.find(s => s.id === shape.sourceId)!.project.layers[0].image?.name ?? ''}`
+    : shape.sourceId ? map.show.sources.find(s => s.id === shape.sourceId)?.project.name ?? '' : shape.fill === 'grid' ? 'Grid' : 'Colour';
   const toggles = (label: string, shown: boolean, locked: boolean, soloed: boolean, on: { show: () => void; lock: () => void; solo: () => void }) => <span className="map-row-icons">
     <button className={`map-icon ${!shown ? 'set' : ''}`} aria-pressed={shown} aria-label={`${shown ? 'Hide' : 'Show'} ${label}`} title={shown ? 'Shown · click to hide' : 'Hidden · click to show'} onClick={on.show}><MapIcon name={shown ? 'eye' : 'eyeOff'} /></button>
     <button className={`map-icon ${locked ? 'set' : ''}`} aria-pressed={locked} aria-label={`${locked ? 'Unlock' : 'Lock'} ${label}`} title={locked ? 'Locked · click to unlock' : 'Click to lock'} onClick={on.lock}><MapIcon name={locked ? 'lock' : 'unlock'} /></button>

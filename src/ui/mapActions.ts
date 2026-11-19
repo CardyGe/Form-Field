@@ -12,6 +12,28 @@ export const newSourceId = () => `source-${stamp()}`;
 export const newGroupId = () => `group-${stamp()}`;
 export const newItemId = (kind: 'link' | 'trigger' | 'scene') => `${kind}-${stamp()}`;
 export const randomSeed = () => Math.floor(Math.random() * 1e6);
+
+/** Stage 6: a PNG or JPEG picked by Greg, read as a data URL with its size; null when cancelled or unreadable. */
+export function pickImage(): Promise<{ name: string; dataUrl: string; width: number; height: number } | null> {
+  return new Promise(resolve => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/png,image/jpeg';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) { resolve(null); return; }
+      const reader = new FileReader();
+      reader.onerror = () => resolve(null);
+      reader.onload = () => {
+        const dataUrl = String(reader.result), img = new Image();
+        img.onload = () => resolve({ name: file.name, dataUrl, width: img.naturalWidth, height: img.naturalHeight });
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  });
+}
 const several = (n: number, make: () => string) => Array.from({ length: n }, make);
 
 export function mapActions(map: Map) {
@@ -63,6 +85,8 @@ export function mapActions(map: Map) {
       return { id, left: linksLeftBehind(before, map.currentShow(), from, id) };
     },
     play(shapeId: string, value: string, linked = true) {
+      if (value === 'image') { void pickImage().then(image => { if (image) map.dispatch({ type: 'setContent', shapeId, content: { kind: 'image', sourceId: newSourceId(), image, linked } }); }); return; }
+      if (value === 'video') { void window.studio?.map?.chooseVideo().then(file => { if (file) map.dispatch({ type: 'setContent', shapeId, content: { kind: 'video', videoId: `video-${stamp()}`, path: file.path, name: file.name, linked } }); }); return; }
       if (value === 'colour' || value === 'grid' || value === 'live') map.dispatch({ type: 'setContent', shapeId, content: { kind: value, linked } });
       else if (value.startsWith('preset:')) map.dispatch({ type: 'setContent', shapeId, content: { kind: 'preset', presetId: value.slice('preset:'.length), sourceId: newSourceId(), seed: randomSeed(), linked } });
     },

@@ -38,7 +38,7 @@ function Tile({ look, previews, current, onPick }: { look: Look; previews: LookP
   const art = preset ? still ?? kindArt(look.kind) : undefined;
   return <button ref={tile} type="button" className={`look-tile ${current ? 'current' : ''}`} data-look={look.value} aria-label={`Play ${look.name}`} aria-pressed={current} title={look.description}
     onClick={() => onPick(look.value)} onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
-    <span className={`look-art ${look.value === 'grid' ? 'grid' : look.value === 'colour' ? 'colour' : look.value === 'live' ? 'live' : ''}`}>
+    <span className={`look-art ${look.value === 'grid' ? 'grid' : look.value === 'colour' ? 'colour' : look.value === 'live' ? 'live' : look.value === 'image' ? 'image' : look.value === 'video' ? 'video' : ''}`}>
       {art && <img src={art} alt="" />}
       {preset && <canvas ref={live} width={192} height={108} className={hover ? 'playing' : ''} />}
     </span>

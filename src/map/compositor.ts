@@ -15,6 +15,8 @@ import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, STAGE_SIZE, usesLive, type Group, type Point, type Shape } from './show';
 import type { Scene } from './scenes';
 import { LiveSlot, LIVE_ASPECT } from './liveSlot';
+import { VideoSlot } from './videoSlot';
+import { isVideoId, type VideoSource } from './show';
 import type { LiveSettings } from '../live/settings';
 import { ringBounds } from './outline';
 import { IDENTITY, invert, multiply, quadToQuad, apply, type H3 } from './homography';
@@ -28,7 +30,9 @@ import { borderPicture, coveragePicture, flatPatternPicture, outlinePath, patter
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
 export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null }[]; groups: Group[]; links?: Link[];
   /** Live in Map: the wall is told whether the show uses Live; the operator screen has the scenes to work it out. */
-  usesLive?: boolean; scenes?: Scene[] }
+  usesLive?: boolean; scenes?: Scene[];
+  /** Stage 6: the videos shapes play. */
+  videos?: VideoSource[] }
 
 /**
  * Most instruments that play at once. Chromium caps live WebGL contexts per page; past the cap it silently kills the
@@ -85,6 +89,8 @@ export interface CompositorStats {
   contextLost: boolean;
   /** Live in Map: whether the show's Live runs (null: none, camera off). */
   live?: { running: boolean; state: string } | null;
+  /** Stage 6: each video playing, by id: its state, and the beats a tempo loop plays as. */
+  videos?: Record<string, { state: string; playsAs: number | null }>;
   linked?: Record<string, number>;
   /** How many times a playing effect took new settings without being prepared again (for checks). */
   adjusted?: number;
@@ -145,7 +151,7 @@ export class MapCompositor {
     this.canvas = canvas;
     this.gpu = new Gpu(canvas);
     // A lost context blanks the wall until Chromium gives it back; then every picture is made again.
-    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; });
+    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); });
     canvas.addEventListener('webglcontextrestored', () => {
       this.gpu.setUp();
       this.pictures.clear(); this.overlay = null;
@@ -154,6 +160,7 @@ export class MapCompositor {
       for (const [id, fade] of [...this.fades]) if (typeof fade.from !== 'string') this.fades.delete(id);
       this.lost = false; this.dirty = true;
       this.updateLive();
+      this.updateVideos();
     });
   }
 
@@ -180,7 +187,7 @@ export class MapCompositor {
       const next: Playing = { sourceId: shape.sourceId, kinds: shape.sourceId === LIVE_SOURCE_ID ? 'live' : kindsOf(shape.sourceId ? this.projects.get(shape.sourceId) : null) };
       const before = this.playing.get(shape.id);
       if (shouldFade(before, next) && !this.lost) {
-        const old = before!.sourceId === LIVE_SOURCE_ID ? this.live?.current ?? null : before!.sourceId ? this.slots.get(before!.sourceId)?.texture : null;
+        const old = before!.sourceId === LIVE_SOURCE_ID ? this.live?.current ?? null : isVideoId(before!.sourceId) ? this.videoSlots.get(before!.sourceId)?.current ?? null : before!.sourceId ? this.slots.get(before!.sourceId)?.texture : null;
         const held = this.fades.get(shape.id);
         // Changing again before the last change was ready keeps fading from what is on the wall, not from the colour.
         const from = old ? this.gpu.copy(old) : held ? held.from : shape.colour;
@@ -198,7 +205,26 @@ export class MapCompositor {
     for (const id of [...this.restartAt.keys()]) if (!live.has(id)) this.restartAt.delete(id);
     // Live last, like the sources: a shape leaving Live has already copied its picture to fade from.
     this.updateLive();
+    this.updateVideos();
   }
+
+  // ---- Stage 6: videos ----
+  private readonly videoSlots = new Map<string, VideoSlot>();
+  private videoTextures = new Map<string, Texture | null>();
+  /** One player per video a shape on screen plays; the others are closed. */
+  private updateVideos(): void {
+    const videos = this.show.videos ?? [];
+    const wanted = new Set(this.lost || this.disposed ? [] : this.show.shapes.filter(s => isVideoId(s.sourceId) && !s.blocker).map(s => s.sourceId!));
+    for (const [id, slot] of this.videoSlots) if (!wanted.has(id) || !videos.some(v => v.id === id)) { slot.dispose(); this.videoSlots.delete(id); this.videoTextures.delete(id); this.dirty = true; }
+    for (const video of videos) {
+      if (!wanted.has(video.id)) continue;
+      const slot = this.videoSlots.get(video.id);
+      if (slot) slot.update(video);
+      else { const made = new VideoSlot(this.gpu, video); made.setFrozen(this.frozen); this.videoSlots.set(video.id, made); }
+    }
+  }
+  /** Find…'s Try again: every video that cannot play loads again. */
+  videoRetry(): void { for (const slot of this.videoSlots.values()) if (slot.state !== 'playing') slot.retry(); }
 
   /** Called every frame by the operator screen, so only a real change counts. */
   setOptions(options: DrawOptions): void {
@@ -213,7 +239,7 @@ export class MapCompositor {
     if (this.frozen) return;
     if (this.show.links?.length || this.show.sources.some(s => s.tempoSync)) this.dirty = true;
   }
-  setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.frozenSignals = this.signals; this.live?.setFrozen(frozen); this.dirty = true; } }
+  setFrozen(frozen: boolean): void { if (frozen !== this.frozen) { this.frozen = frozen; this.frozenSignals = this.signals; this.live?.setFrozen(frozen); for (const v of this.videoSlots.values()) v.setFrozen(frozen); this.dirty = true; } }
 
   // ---- Live in Map ----
   private adjusted = 0;
@@ -266,7 +292,9 @@ export class MapCompositor {
     let rendered = false;
     // The links applied for this frame (for drawing only); with none, the show itself.
     // Frozen, the links are held at the signals of the moment Freeze went on, and their smoothing stands still.
-    this.drawn = this.modulator.apply(this.show, this.projects, this.frozen ? this.frozenSignals : this.signals, this.frozen ? 0 : seconds);
+    // Videos' speed can be linked like an effect's, so the links see them as sources.
+    const modShow = this.show.videos?.length ? { ...this.show, sources: [...this.show.sources, ...this.show.videos] } : this.show;
+    this.drawn = this.modulator.apply(modShow, this.projects, this.frozen ? this.frozenSignals : this.signals, this.frozen ? 0 : seconds);
     const show = this.drawn.show;
     for (const source of this.show.sources) {
       const project = this.projects.get(source.id);
@@ -300,6 +328,11 @@ export class MapCompositor {
       } catch (error) { slot.failed = String((error as Error)?.message ?? error); }
     }
 
+    // Each video's newest frame, once for every shape that plays it.
+    for (const [id, slot] of this.videoSlots) {
+      this.videoTextures.set(id, slot.frame(this.frozen ? this.frozenSignals : this.signals, this.drawn.speed.get(id)));
+      if (slot.fresh) rendered = true;
+    }
     // Live's newest picture, once for every shape that plays it.
     // A Live whose own graphics context was lost is made again; meanwhile its shapes play their fill.
     if (this.live?.broken) { this.live.dispose(); this.live = null; this.dirty = true; this.updateLive(); }
@@ -332,6 +365,7 @@ export class MapCompositor {
       edgeBuilds: this.edgeBuilds,
       contextLost: this.lost,
       live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status } : null,
+      videos: Object.fromEntries([...this.videoSlots].map(([id, v]) => [id, { state: v.state, playsAs: v.playsAs }])),
       // For the scripted checks: the effect settings links are moving now, as drawn (source:layer:key → value).
       adjusted: this.adjusted,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
@@ -342,6 +376,7 @@ export class MapCompositor {
     this.disposed = true;
     for (const [id, slot] of this.slots) this.release(id, slot);
     this.live?.dispose(); this.live = null;
+    for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear();
     for (const id of [...this.pictures.keys()]) this.dropPictures(id);
     for (const id of [...this.fades.keys()]) this.endFade(id);
     this.gpu.free(this.overlay?.texture);
@@ -513,21 +548,24 @@ export class MapCompositor {
     const p = this.picturesFor(shape, palette);
     if (p.box.w < 0.5 || p.box.h < 0.5 || !p.coverage) return;
     const land = landing(shape, this.drawn.show), inv = inverseOf(land);
-    const isLive = shape.sourceId === LIVE_SOURCE_ID;
-    const slot = shape.sourceId && !isLive ? this.slots.get(shape.sourceId) : undefined;
+    const isLive = shape.sourceId === LIVE_SOURCE_ID, isVideo = isVideoId(shape.sourceId);
+    const videoSlot = isVideo ? this.videoSlots.get(shape.sourceId!) : undefined;
+    const slot = shape.sourceId && !isLive && !isVideo ? this.slots.get(shape.sourceId) : undefined;
     // A source that will not play (failing, over the limit, restarting, or with no composition) plays the shape's own fill.
-    const cannotPlay = !isLive && shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === project) || !project);
+    const cannotPlay = !isLive && !isVideo && shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === project) || !project);
     const fill = (): ShapeDraw['content'] => this.own(shape, p, land);
     let content: ShapeDraw['content'];
     if (shape.blocker) content = { kind: 'colour', rgba: [0, 0, 0, 1] };
     else if (shape.sourceId === null || cannotPlay) content = fill();
     // Live covers the place it lands and is cropped, never stretched; until it has a picture the shape plays its fill.
+    // A video covers the place it lands, cropped, never stretched; until it plays (or when its file is missing) the fill.
+    else if (isVideo) { const t = this.videoTextures.get(shape.sourceId!); content = t && videoSlot ? { kind: 'picture', texture: t, inv: multiply(coverCrop(landingAspect(land), videoSlot.aspect), inv) } : fill(); }
     else if (isLive) content = this.liveTexture ? { kind: 'picture', texture: this.liveTexture, inv: multiply(coverCrop(landingAspect(land), LIVE_ASPECT), inv) } : fill();
     else if (slot?.project && slot.texture) content = { kind: 'picture', texture: slot.texture, inv };
     else content = fill(); // a source not ready yet plays the shape's own fill, never black
     // A fade waits for the composition the shape should now play, not one still drawing from before.
     // A fade into Live waits only while Live is starting; a camera that cannot play lets it finish to the fill.
-    const ready = shape.blocker || shape.sourceId === null || cannotPlay || (isLive ? !this.live || this.live.readiness !== 'wait' : slot?.project === project && !!slot?.texture);
+    const ready = shape.blocker || shape.sourceId === null || cannotPlay || (isVideo ? !videoSlot || videoSlot.state !== 'loading' : isLive ? !this.live || this.live.readiness !== 'wait' : slot?.project === project && !!slot?.texture);
     let from: ShapeDraw['from'] = null, mix = 1;
     const fade = this.fades.get(shape.id);
     if (fade && !shape.blocker) {

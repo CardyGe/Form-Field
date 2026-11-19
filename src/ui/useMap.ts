@@ -410,8 +410,9 @@ export function useMap(onError: (message: string) => void) {
   const [panelOpen, setPanelOpen] = useState(false);
   useEffect(() => { if (outputOpen) sendLive(); }, [live, showUsesLive, outputOpen]);
   /** This screen's own compositor hears Live's Clear and Capture empty room here, as the wall does through messages. */
-  const onLiveAction = useRef<((action: 'clear' | 'captureRoom' | 'retry') => void) | null>(null);
+  const onLiveAction = useRef<((action: 'clear' | 'captureRoom' | 'retry' | 'videoRetry') => void) | null>(null);
   const clearLive = () => { onLiveAction.current?.('clear'); if (outputOpen) bridge?.send({ type: 'liveClear' }); };
+  const retryVideos = () => { onLiveAction.current?.('videoRetry'); if (outputOpen) bridge?.send({ type: 'videoRetry' }); };
   const retryLive = () => { onLiveAction.current?.('retry'); if (outputOpen) bridge?.send({ type: 'liveRetry' }); };
   const captureLiveRoom = () => { onLiveAction.current?.('captureRoom'); if (outputOpen) bridge?.send({ type: 'liveCaptureRoom' }); };
   useEffect(() => { if ((reacts || panelOpen) && !engine) setEngine(reactivity()); }, [reacts, panelOpen, engine]);
@@ -521,7 +522,7 @@ export function useMap(onError: (message: string) => void) {
   const setSnap = (on: boolean) => { kept.snap = on; setSnapState(on); };
   const setPhotoShown = (on: boolean) => { kept.photoShown = on; setPhotoShownState(on); };
 
-  return { currentShow: () => stateRef.current.show, live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
+  return { currentShow: () => stateRef.current.show, live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, retryVideos, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
     show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
     solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };

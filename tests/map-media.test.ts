@@ -129,3 +129,26 @@ test('the wall is sent the videos with their paths, and keeps the shapes that pl
   assert.equal(wire.shapes.find(s => s.id === 'a')!.sourceId, 'video-1');
   assert.equal(videoUrl('/My Clips/a #1.mp4'), 'formfield-video://file/%2FMy%20Clips%2Fa%20%231.mp4');
 });
+
+test('videoRate fits a 2 s clip to 4 beats at 120 BPM at rate 1', async () => {
+  const { videoRate } = await import('../src/map/videoRate');
+  assert.deepEqual(videoRate(2, 1, 4, 120), { rate: 1, beats: 4 });
+  assert.deepEqual(videoRate(2, 1, 8, 120), { rate: 0.5, beats: 8 });
+});
+
+test('a 12 s clip at 1 beat and 120 BPM is too long: it plays as the nearest beat count that fits', async () => {
+  const { videoRate } = await import('../src/map/videoRate');
+  const r = videoRate(12, 1, 1, 120);
+  assert.ok(r.beats === 8 || r.beats === 16, `beats ${r.beats}`);
+  assert.ok(r.rate >= 0.1 && r.rate <= 4, `rate ${r.rate}`);
+  assert.equal(r.beats, 8, 'the nearest that fits: 12 s needs at least 6 beats at 4×');
+  const slow = videoRate(0.5, 1, 16, 60);
+  assert.ok(slow.rate >= 0.1 && slow.beats !== null && slow.beats < 16, `a short clip over many slow beats plays faster: ${JSON.stringify(slow)}`);
+});
+
+test('an unknown length plays at Speed; Speed is used when tempo looping is off', async () => {
+  const { videoRate } = await import('../src/map/videoRate');
+  assert.deepEqual(videoRate(null, 1.5, 4, 120), { rate: 1.5, beats: null });
+  assert.deepEqual(videoRate(0, 1.5, 4, 120), { rate: 1.5, beats: null });
+  assert.deepEqual(videoRate(3, 2, null, 120), { rate: 2, beats: null });
+});

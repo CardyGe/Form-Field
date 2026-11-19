@@ -95,6 +95,7 @@ const PARITY: [string, unknown, boolean][] = [
   ['live clear', { type: 'liveClear' }, true],
   ['live capture room', { type: 'liveCaptureRoom' }, true],
   ['live retry', { type: 'liveRetry' }, true],
+  ['video retry', { type: 'videoRetry' }, true],
   ['unknown', { type: 'explode' }, false],
   ['null', null, false],
   ['array', [], false],

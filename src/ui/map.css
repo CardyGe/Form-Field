@@ -243,3 +243,10 @@ fieldset.layer-controls { border: 0; margin: 0; padding: 0; min-width: 0; }
 fieldset.layer-controls:disabled { opacity: .55; }
 /* The strip's sound input, when a reaction is waiting for one. */
 .react-needs-input select { outline: 2px solid #f0b060; outline-offset: 1px; }
+
+/* Stage 6: your own pictures and videos */
+.look-art.image, .look-art.video, .map-content-thumb.video { position: relative; background: linear-gradient(135deg, #2b3a55, #6a3d6e); }
+.look-art.video::after, .map-content-thumb.video::after { content: '▶'; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 14px; }
+.look-art.image::after { content: '▣'; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 16px; }
+.map-video-panel, .map-image-panel { display: grid; gap: 6px; }
+.map-video-name { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

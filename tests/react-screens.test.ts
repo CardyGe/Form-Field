@@ -32,5 +32,7 @@ test('the look browser offers Live, beside the shape’s own fills', async () =>
   assert.ok(live, 'a Live tile');
   assert.equal(live!.group, 'Live');
   assert.equal(live!.description, 'The Live screen’s look, from the camera');
-  assert.deepEqual(OWN_LOOKS.map(l => l.value), ['grid', 'colour', 'live']);
+  assert.deepEqual(OWN_LOOKS.map(l => l.value), ['grid', 'colour', 'live', 'image', 'video']);
+  assert.equal(OWN_LOOKS.find(l => l.value === 'image')!.group, 'Your own');
+  assert.equal(OWN_LOOKS.find(l => l.value === 'video')!.description, 'A short loop of your own: MP4 or MOV');
 });
