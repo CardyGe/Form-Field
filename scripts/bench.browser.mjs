@@ -32,7 +32,7 @@ const parityPoint = i => PARITY_MIN + (i + .5) / PARITY_GRID * (PARITY_MAX - PAR
 
 /** Compares the shader's fold with foldPoint, then checks the textureGrad path against a known texture. */
 async function kaleidoscopeParity(entry, modules) {
-  const { THREE, SYMMETRY_GROUPS, foldPoint, spiralTau, kaleidoscopeGLSL, kaleidoscopeUniforms, KaleidoscopeRenderer, createLayer } = modules;
+  const { THREE, SYMMETRY_GROUPS, foldPoint, spiralTau, parityAverage, kaleidoscopeGLSL, kaleidoscopeUniforms, KaleidoscopeRenderer, createLayer } = modules;
   const canvas = document.createElement('canvas');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
   const logs = [];
@@ -42,7 +42,7 @@ async function kaleidoscopeParity(entry, modules) {
   const scene = new THREE.Scene(), camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
   scene.add(quad);
-  const floatTarget = size => new THREE.WebGLRenderTarget(size, size, { type: THREE.FloatType, format: THREE.RGBAFormat,
+  const floatTarget = (width, height = width) => new THREE.WebGLRenderTarget(width, height, { type: THREE.FloatType, format: THREE.RGBAFormat,
     minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, generateMipmaps: false });
   const target = floatTarget(PARITY_GRID);
   const vertexShader = 'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}';
@@ -56,7 +56,8 @@ async function kaleidoscopeParity(entry, modules) {
       vec2 q=uKSpiral==1?spiralDomain(p,dx,dy):foldDomain(p,dx,dy);gl_FragColor=uGradients>.5?vec4(dx,dy):vec4(q,0.,1.);}` });
   const groups = {};
   const image = { maxDifference: 0, points: 0 };
-  let texture = null, imageTarget = null, kaleidoscope = null;
+  const spiralCentre = [];
+  let texture = null, imageTarget = null, centreTarget = null, kaleidoscope = null;
   try {
     quad.material = fold;
     const pixels = new Float32Array(PARITY_GRID * PARITY_GRID * 4), gradients = new Float32Array(pixels.length);
@@ -130,13 +131,43 @@ async function kaleidoscopeParity(entry, modules) {
       image.points++;
     }
     if (!(image.maxDifference < IMAGE_LIMIT)) throw new Error(`textureGrad path failed: ${image.maxDifference}`);
+
+    // An odd frame puts a pixel centre exactly on the spiral centre. Its footprint must stay large,
+    // so it resolves to the same average as its neighbours instead of one unfiltered sample.
+    const CENTRE_W = 961, CENTRE_H = 541, CENTRE_LIMIT = .02, block = new Float32Array(9 * 4);
+    centreTarget = floatTarget(CENTRE_W, CENTRE_H);
+    for (const source of ['lines', 'squares', 'parity', 'texture']) for (const [a, b] of [[1, 2], [2, 3]]) {
+      const centreLayer = createLayer('kaleidoscope');
+      Object.assign(centreLayer.params, { spiral: 1, spiralA: a, spiralB: b, sourceDrift: 0, warpIn: 0, warpOut: 0, motif: Math.max(0, ['lines', 'squares', 'parity'].indexOf(source)) });
+      kaleidoscope.draw({ layer: centreLayer, phase: TAU * .3, width: CENTRE_W, height: CENTRE_H, target: centreTarget, input: source === 'texture' ? texture : null, history: null, imageAspect: 1,
+        draw(material, output) { quad.material = material; renderer.setRenderTarget(output); renderer.render(scene, camera); } });
+      renderer.readRenderTargetPixels(centreTarget, (CENTRE_W - 1) / 2 - 1, (CENTRE_H - 1) / 2 - 1, 3, 3, block);
+      let difference = 0;
+      for (let c = 0; c < 3; c++) {
+        let around = 0;
+        for (let i = 0; i < 9; i++) if (i !== 4) around += block[i * 4 + c] / 8;
+        difference = Math.max(difference, Math.abs(block[4 * 4 + c] - around));
+      }
+      const entry = { source, a, b, difference };
+      if (source === 'parity') {
+        // The centre must land on the true parity average for this phase, not just match its neighbours.
+        const { coverage, ink } = parityAverage(kaleidoscopeUniforms(centreLayer, .3).uKPhase);
+        const [ground, first, second] = [5, 4, 2].map(i => new THREE.Color(centreLayer.palette[i]));
+        const want = ['r', 'g', 'b'].map(k => ground[k] * (1 - coverage) + first[k] * (coverage - ink) + second[k] * ink);
+        entry.averageDifference = Math.max(...want.map((v, c) => Math.abs(block[4 * 4 + c] - v)));
+        if (!(entry.averageDifference < 1e-3)) throw new Error(`Parity average mismatch: ${JSON.stringify(entry)}`);
+      }
+      spiralCentre.push(entry);
+    }
+    const worstCentre = spiralCentre.reduce((x, y) => y.difference > x.difference ? y : x);
+    if (!(worstCentre.difference < CENTRE_LIMIT)) throw new Error(`Spiral centre speck: ${JSON.stringify(worstCentre)}`);
     const shaderWarnings = logs.filter(line => /shader|program|glsl/i.test(line));
     if (shaderWarnings.length) throw new Error(`Shader warnings: ${shaderWarnings.join(' | ')}`);
-    return { id: entry.id, title: entry.title, limit: PARITY_LIMIT, groups, image, shaderWarnings: 0 };
+    return { id: entry.id, title: entry.title, limit: PARITY_LIMIT, groups, image, spiralCentre, shaderWarnings: 0 };
   } finally {
     console.warn = original.warn; console.error = original.error;
     renderer.setRenderTarget(null);
-    kaleidoscope?.dispose(); texture?.dispose(); imageTarget?.dispose();
+    kaleidoscope?.dispose(); texture?.dispose(); imageTarget?.dispose(); centreTarget?.dispose();
     target.dispose(); fold.dispose(); quad.geometry.dispose(); renderer.dispose();
   }
 }

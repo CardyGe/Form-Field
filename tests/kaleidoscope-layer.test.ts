@@ -5,6 +5,7 @@ import { tileBlockers } from '../src/core/tile-edges';
 import { KIND_LABELS } from '../src/core/library';
 import { canvasAxes } from '../src/core/canvas-interaction';
 import { kaleidoscopeGLSL, kaleidoscopeUniforms } from '../src/rendering/kaleidoscope-glsl';
+import * as kaleidoscopeMath from '../src/core/kaleidoscope-math';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const withLayer = (kind: 'kaleidoscope' | 'surface') => { const p = createProject(); p.layers = [createLayer(kind)]; return p; };
@@ -116,4 +117,43 @@ test('the shader differentiates only the continuous pre-fold coordinate', () => 
   assert.match(kaleidoscopeGLSL, /vec2 spiralDomain\(vec2 z, inout vec2 dx, inout vec2 dy\)/);
   assert.match(kaleidoscopeGLSL, /textureGrad\(/);
   assert.doesNotMatch(kaleidoscopeGLSL, /dFdx|dFdy|fwidth/);
+});
+
+/** Brute-force parity over one tile: the mask's area and its ink weight (.5 + .5 cos 2 pi (x + y)). */
+function integrateParity(centres: number[], radii: number[], n = 1400) {
+  let coverage = 0, ink = 0;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const x = (i + .5) / n, y = (j + .5) / n;
+    let parity = 0;
+    for (let d = 0; d < 3; d++) {
+      const ex = x - centres[d * 2], ey = y - centres[d * 2 + 1];
+      const wx = ex - Math.floor(ex + .5), wy = ey - Math.floor(ey + .5);
+      if (wx * wx + wy * wy < radii[d] * radii[d]) parity ^= 1;
+    }
+    if (parity) { coverage++; ink += .5 + .5 * Math.cos(2 * Math.PI * (x + y)); }
+  }
+  return { coverage: coverage / (n * n), ink: ink / (n * n) };
+}
+
+test('the parity fade target matches numeric integration as the discs move', () => {
+  const { parityAverage, parityCentres, PARITY_RADII } = kaleidoscopeMath as any;
+  const known: [number, number][] = [[0, .3958], [1.88, .5732], [1.20, .5829], [3.50, .3969]];
+  for (const [phase, coverage] of known) {
+    const measured = integrateParity(parityCentres(phase), PARITY_RADII);
+    const average = parityAverage(phase);
+    assert.ok(Math.abs(measured.coverage - coverage) < 1e-3, `reference ${phase}: ${measured.coverage}`);
+    assert.ok(Math.abs(average.coverage - measured.coverage) < 1e-3, `coverage ${phase}: ${average.coverage} vs ${measured.coverage}`);
+    assert.ok(Math.abs(average.ink - measured.ink) < 1e-3, `ink ${phase}: ${average.ink} vs ${measured.ink}`);
+  }
+});
+
+test('parity uniforms carry the current centres and average, and close over the loop', () => {
+  const { parityAverage, parityCentres } = kaleidoscopeMath as any;
+  const l = kLayer({ motif: 2, cycles: 1 });
+  const u = kaleidoscopeUniforms(l, .3);
+  const phase = u.uKPhase as number, average = parityAverage(phase);
+  assert.deepEqual(u.uKParityCentres, parityCentres(phase));
+  assert.deepEqual(u.uKParityAverage, [average.coverage, average.ink]);
+  assert.notDeepEqual(kaleidoscopeUniforms(l, .1).uKParityAverage, u.uKParityAverage);
+  assert.deepEqual(kaleidoscopeUniforms(l, 1).uKParityAverage, kaleidoscopeUniforms(l, 0).uKParityAverage);
 });

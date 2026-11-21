@@ -101,3 +101,48 @@ export function spiralTau(z: Vec2, a: number, b: number, lambda: number): Vec2 {
   const gi = -a * lnL / (2 * Math.PI);
   return { x: (b * wr - gi * wi) / lnL, y: (b * wi + gi * wr) / (2 * Math.PI) };
 }
+
+/** Circle-parity discs, in tile units. Each radius is under half a tile, so a disc never meets its own image. */
+export const PARITY_RADII = [0.33, 0.29, 0.24];
+
+/** Disc centres at a loop phase, flat as x0, y0, x1, y1, x2, y2. Every term is a whole multiple of the phase. */
+export function parityCentres(phase: number): number[] {
+  const c = Math.cos(phase), s = Math.sin(phase), c2 = Math.cos(2 * phase);
+  return [0.5 + 0.07 * c, 0.5 + 0.07 * s, 0.25 + 0.06 * c2, 0.75 + 0.06 * s, 0.75 + 0.05 * s, 0.25 + 0.05 * c2];
+}
+
+const PARITY_ROWS = 128;
+const nearestWrap = (v: number) => v - Math.floor(v + 0.5);
+
+/**
+ * The true tile average of the parity mask at this phase: its area, and its integral against the
+ * ink blend .5 + .5 cos(2 pi (x + y)). Each row toggles at the disc edges and is integrated exactly along x.
+ */
+export function parityAverage(phase: number): { coverage: number; ink: number } {
+  const centres = parityCentres(phase), toggles = new Float64Array(6);
+  let length = 0, moment = 0;
+  for (let row = 0; row < PARITY_ROWS; row++) {
+    const y = (row + 0.5) / PARITY_ROWS;
+    let count = 0, inside = false;
+    for (let d = 0; d < 3; d++) {
+      const h = nearestWrap(y - centres[d * 2 + 1]), squared = PARITY_RADII[d] ** 2 - h * h;
+      if (squared <= 0) continue;
+      const half = Math.sqrt(squared), x = centres[d * 2];
+      if (Math.abs(nearestWrap(x)) < half) inside = !inside;
+      for (const edge of [x - half, x + half]) toggles[count++] = edge - Math.floor(edge);
+    }
+    toggles.subarray(0, count).sort();
+    let from = 0;
+    for (let i = 0; i <= count; i++) {
+      const to = i < count ? toggles[i] : 1;
+      if (inside) {
+        length += to - from;
+        moment += (Math.sin(2 * Math.PI * (to + y)) - Math.sin(2 * Math.PI * (from + y))) / (2 * Math.PI);
+      }
+      inside = !inside;
+      from = to;
+    }
+  }
+  const coverage = length / PARITY_ROWS;
+  return { coverage, ink: 0.5 * coverage + 0.5 * moment / PARITY_ROWS };
+}

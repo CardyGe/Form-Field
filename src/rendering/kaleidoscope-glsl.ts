@@ -1,4 +1,4 @@
-import { GROUP_TABLES, SYMMETRY_GROUPS, sanitiseSpiral } from '../core/kaleidoscope-math';
+import { GROUP_TABLES, PARITY_RADII, SYMMETRY_GROUPS, parityAverage, parityCentres, sanitiseSpiral } from '../core/kaleidoscope-math';
 import { parameterDefinitions } from '../core/project';
 import type { Layer } from '../shared/types';
 
@@ -28,6 +28,10 @@ export function kaleidoscopeUniforms(layer: Layer, loopFraction: number): Record
   const cycles = control(layer, 'cycles', true);
   const motifScale = control(layer, 'motifScale');
   const turns = loop * cycles;
+  const phase = (turns - Math.floor(turns)) * TAU;
+  const motif = control(layer, 'motif', true);
+  // The parity average is only read by that motif, so the other two do not pay for it.
+  const parity = motif === 2 ? parityAverage(phase) : { coverage: 0, ink: 0 };
   return {
     uKInput: control(layer, 'input', true),
     uKGroup: control(layer, 'group', true),
@@ -40,7 +44,7 @@ export function kaleidoscopeUniforms(layer: Layer, loopFraction: number): Record
     uKZoomCycles: zoomCycles,
     uKZoom: zoomCycles * loop,
     uKCycles: cycles,
-    uKPhase: (turns - Math.floor(turns)) * TAU,
+    uKPhase: phase,
     uKSourceX: control(layer, 'sourceX'),
     uKSourceY: control(layer, 'sourceY'),
     uKSourceScale: control(layer, 'sourceScale'),
@@ -48,7 +52,9 @@ export function kaleidoscopeUniforms(layer: Layer, loopFraction: number): Record
     uKSourceDrift: control(layer, 'sourceDrift'),
     uKWarpIn: control(layer, 'warpIn'),
     uKWarpOut: control(layer, 'warpOut'),
-    uKMotif: control(layer, 'motif', true),
+    uKMotif: motif,
+    uKParityCentres: parityCentres(phase),
+    uKParityAverage: [parity.coverage, parity.ink],
     // After the spiral everything must repeat once per unit of tau, so the count is whole.
     uKMotifScale: spiral === 1 ? Math.max(1, Math.round(motifScale)) : motifScale,
     uKLineWidth: control(layer, 'lineWidth'),
@@ -84,7 +90,8 @@ uniform int uKGroup, uKSpiral, uKSpiralA, uKSpiralB, uKMotif;
 uniform float uKSectors, uKCell, uKSpiralScale, uKZoom, uKPhase;
 uniform float uKSourceX, uKSourceY, uKSourceScale, uKSourceTurn, uKSourceDrift;
 uniform float uKWarpIn, uKWarpOut, uKMotifScale, uKLineWidth, uKHasImage;
-uniform vec2 uKImageFit;
+uniform vec2 uKImageFit, uKParityAverage;
+uniform vec2 uKParityCentres[3];
 uniform vec3 uKPalette[6];
 uniform sampler2D uKImage;
 const float K_PI = 3.14159265358979;
@@ -141,7 +148,8 @@ vec2 spiralDomain(vec2 z, inout vec2 dx, inout vec2 dy) {
   vec2 gamma = vec2(float(uKSpiralB), -float(uKSpiralA) * lnScale / K_TAU);
   vec2 unit = vec2(1. / lnScale, 1. / K_TAU);
   // d(log z) = dz / z, then the same linear map as tau itself.
-  vec2 inverse = vec2(z.x, -z.y) / r2;
+  // At the centre itself 1/z has no direction: keep the footprint huge so it filters to the average.
+  vec2 inverse = r2 < 1e-12 ? vec2(1e6, 0.) : vec2(z.x, -z.y) / r2;
   dx = kComplexMul(gamma, kComplexMul(dx, inverse)) * unit;
   dy = kComplexMul(gamma, kComplexMul(dy, inverse)) * unit;
   return kComplexMul(gamma, w) * unit;
@@ -227,17 +235,16 @@ float kDisc(vec2 q, vec2 centre, float radius, float footprint) {
 // Each disc drifts around its own home, so parity changes only where an edge passes.
 vec3 kCircleParity(vec2 q, vec2 dx, vec2 dy) {
   float footprint = max(length(dx) + length(dy), 1e-5);
-  const vec3 radii = vec3(.33, .29, .24);
-  float a = kDisc(q, vec2(.5) + .07 * vec2(cos(uKPhase), sin(uKPhase)), radii.x, footprint);
-  float b = kDisc(q, vec2(.25, .75) + .06 * vec2(cos(2. * uKPhase), sin(uKPhase)), radii.y, footprint);
-  float c = kDisc(q, vec2(.75, .25) + .05 * vec2(sin(uKPhase), cos(2. * uKPhase)), radii.z, footprint);
+  const vec3 radii = vec3(${PARITY_RADII.map(float).join(',')});
+  float a = kDisc(q, uKParityCentres[0], radii.x, footprint);
+  float b = kDisc(q, uKParityCentres[1], radii.y, footprint);
+  float c = kDisc(q, uKParityCentres[2], radii.z, footprint);
   float parity = a + b - 2. * a * b;
   parity = parity + c - 2. * parity * c;
   vec3 ground = uKPalette[5];
   vec3 ink = mix(uKPalette[4], uKPalette[2], .5 + .5 * cos(K_TAU * (q.x + q.y)));
-  vec3 areas = K_PI * radii * radii;
-  float meanParity = .5 * (1. - (1. - 2. * areas.x) * (1. - 2. * areas.y) * (1. - 2. * areas.z));
-  vec3 average = mix(ground, .5 * (uKPalette[4] + uKPalette[2]), meanParity);
+  // The true tile average for this phase, including how the ink blend falls inside the mask.
+  vec3 average = ground * (1. - uKParityAverage.x) + uKPalette[4] * (uKParityAverage.x - uKParityAverage.y) + uKPalette[2] * uKParityAverage.y;
   return mix(mix(ground, ink, parity), average, kFade(dx, dy));
 }
 

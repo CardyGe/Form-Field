@@ -41,7 +41,7 @@ app.whenReady().then(async () => {
     "export {GpuTimer} from './src/rendering/gpu-timer';",
     "export {summarise} from './src/core/bench-stats';",
     "export {createProject,createLayer,applyPreset,PRESETS} from './src/core/project';",
-    "export {SYMMETRY_GROUPS,foldPoint,spiralTau} from './src/core/kaleidoscope-math';",
+    "export {SYMMETRY_GROUPS,foldPoint,spiralTau,parityAverage} from './src/core/kaleidoscope-math';",
     "export {kaleidoscopeGLSL,kaleidoscopeUniforms} from './src/rendering/kaleidoscope-glsl';",
     "export {KaleidoscopeRenderer} from './src/rendering/KaleidoscopeRenderer';",
     "export * as THREE from 'three';",
