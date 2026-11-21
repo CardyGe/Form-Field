@@ -39,7 +39,7 @@ Source: `reports/Fractal and kaleidoscope live audit.md`, Phase 1 rows 1–4. Th
 - Presets: current Mandelbox and Kaleidoscope (the audit baselines), then each new Kaleidoscope input as it lands.
 - **Accept:** two runs of the same commit agree within 5% on median on the M5 Pro.
 
-### T2. `kaleidoscope` layer kind and inputs (audit row 2, 1–1.5 weeks, plus video, see decision)
+### T2. `kaleidoscope` layer kind and inputs (audit row 2, 1–1.5 weeks, plus 3–4 days for video)
 
 - `LayerKind` gains `'kaleidoscope'` (`src/shared/types.ts`); validation and defaults in `src/core/project.ts` (kind list at the `choice(...)` call, parameter definitions, default name, palette).
 - `Layer.kaleidoscope?: { input: 'motif' | 'image' | 'below' | 'feedback' | 'video' | 'camera'; image?: {...same shape as Layer.image}; video?: { path: string; name: string } }`. Input-specific state lives here, not in `params`.
@@ -70,7 +70,7 @@ Source: `reports/Fractal and kaleidoscope live audit.md`, Phase 1 rows 1–4. Th
 
 Weaving, the 13 non-mirror groups, hyperbolic and spherical modes, audio, strobe and inversion controls (wait for the Phase 2 limiter), clip-matched presets.
 
-## Decision needed: video file input
+## Decision: video file input (settled 2026-11-21: option 1)
 
 Video is the only input with no existing path in Studio or Map, and Studio's frame-exact export is what makes it hard. Options:
 
