@@ -43,6 +43,8 @@ Status: built and smoke-tested with software rendering; see `docs/benchmark-harn
 
 ### T2. `kaleidoscope` layer kind and inputs (audit row 2, 1–1.5 weeks, plus 3–4 days for video)
 
+Status: first slice done. Kaleidoscope layer with built-in lines, image and layers-below inputs, all five mirror groups with exact texture footprints (pulled forward from T3), library card, and fractal style 0 renamed Folded Lace. Image input reuses `layer.image` and a numeric `input` setting instead of a new sub-object. Still to do: feedback, camera, video, and the Live look.
+
 - `LayerKind` gains `'kaleidoscope'` (`src/shared/types.ts`); validation and defaults in `src/core/project.ts` (kind list at the `choice(...)` call, parameter definitions, default name, palette).
 - `Layer.kaleidoscope?: { input: 'motif' | 'image' | 'below' | 'feedback' | 'video' | 'camera'; image?: {...same shape as Layer.image}; video?: { path: string; name: string } }`. Input-specific state lives here, not in `params`.
 - New `src/rendering/kaleidoscope.ts`: material, uniforms, `drawKaleidoscope(layer, phase, input: THREE.Texture)`. `StudioRenderer.drawSource()` dispatches to it; `renderFrame()` passes `below.texture` when input is `below`.

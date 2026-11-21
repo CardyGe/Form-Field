@@ -28,6 +28,7 @@ import { super8ProjectorFragment } from './super8-projector';
 import { super8Clock, super8History, super8Transport, SUPER8_HISTORY } from './super8-motion';
 import { sculptureDeformation, sculptureDetail, createSculptureTorusGeometry } from './sculpture';
 import type { PassTimer } from './gpu-timer';
+import { KaleidoscopeSource, type KaleidoscopeInput } from './kaleidoscope';
 import {
   fullscreenVertex, surfaceFragment, imageFragment, compositeFragment,
   finishFragment, displayFragment,
@@ -160,6 +161,9 @@ export class StudioRenderer {
   /** Tile edges for this frame: the project asks for it and every visible layer can tile. */
   private tiling = false;
   private readonly fractal: THREE.ShaderMaterial;
+  private readonly kaleidoscope: KaleidoscopeSource;
+  /** The composite of the layers under the one being drawn; a Kaleidoscope can fold it. */
+  private belowTexture: THREE.Texture | null = null;
   private readonly image: THREE.ShaderMaterial;
   private readonly super8: THREE.ShaderMaterial;
   private readonly super8Projector: THREE.ShaderMaterial;
@@ -241,6 +245,7 @@ export class StudioRenderer {
     this.fallback.needsUpdate = true;
 
     this.surface = material(surfaceFragment, surfaceUniforms());
+    this.kaleidoscope = new KaleidoscopeSource(viewUniforms(), DEFAULT_PALETTE);
     this.fractal = material(fractalFragment, {
       ...viewUniforms(),
       uPalette: { value: DEFAULT_PALETTE.map((hex) => new THREE.Color(hex)) },
@@ -414,15 +419,16 @@ export class StudioRenderer {
   // Looked up every frame. Building the key by joining strings would copy and
   // hash a multi-megabyte data URL each time, so keys are remembered per URL.
   private readonly assetKeys = new Map<string, string[]>();
-  private assetKey(url: string, mask: boolean, repeat = false): string {
-    const slot = mask ? 0 : repeat ? 1 : 2;
+  /** `mirror` wraps with mirrored repeat: a Kaleidoscope may sample far outside the picture. */
+  private assetKey(url: string, mask: boolean, repeat = false, mirror = false): string {
+    const slot = mask ? 0 : mirror ? 3 : repeat ? 1 : 2;
     let keys = this.assetKeys.get(url);
     if (!keys) { if (this.assetKeys.size > 16) this.assetKeys.clear(); keys = []; this.assetKeys.set(url, keys); }
-    return keys[slot] ??= `${mask ? 'mask' : repeat ? 'repeat' : 'color'}:${url}`;
+    return keys[slot] ??= `${mask ? 'mask' : mirror ? 'mirror' : repeat ? 'repeat' : 'color'}:${url}`;
   }
 
-  private loadAsset(url: string, mask: boolean, repeat = false): Asset {
-    const key = this.assetKey(url, mask, repeat);
+  private loadAsset(url: string, mask: boolean, repeat = false, mirror = false): Asset {
+    const key = this.assetKey(url, mask, repeat, mirror);
     const cached = this.assets.get(key);
     if (cached) return cached;
     const texture = new THREE.Texture();
@@ -430,6 +436,7 @@ export class StudioRenderer {
     texture.minFilter = THREE.LinearMipmapLinearFilter;
     texture.magFilter = THREE.LinearFilter;
     if(repeat) texture.wrapS=texture.wrapT=THREE.RepeatWrapping;
+    if(mirror) texture.wrapS=texture.wrapT=THREE.MirroredRepeatWrapping;
     texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     const promise = new Promise<THREE.Texture>((resolve, reject) => {
       const image = new Image();
@@ -457,6 +464,10 @@ export class StudioRenderer {
     const required = new Set<string>();
     const pending: Promise<THREE.Texture>[] = [];
     for (const layer of project.layers) {
+      if (layer.kind === 'kaleidoscope' && layer.image) {
+        required.add(this.assetKey(layer.image.dataUrl, false, false, true));
+        pending.push(this.loadAsset(layer.image.dataUrl, false, false, true).promise);
+      }
       if (layer.kind === 'image' && layer.image) {
         const repeat=layer.params.repeat>1;
         required.add(this.assetKey(layer.image.dataUrl, false, repeat));
@@ -473,6 +484,7 @@ export class StudioRenderer {
       this.instruments.prepare(project,(m,t)=>this.draw(m,t),layer=>layer.mask.dataUrl?this.assets.get(this.assetKey(layer.mask.dataUrl,true))?.texture.image as CanvasImageSource|undefined:undefined);
       for (const [key, asset] of this.assets) if (!required.has(key)) { asset.texture.dispose(); this.assets.delete(key); }
       if (!project.layers.some(layer => layer.kind === 'oil' && layer.visible)) this.releaseOilTargets();
+      if (!project.layers.some(layer => layer.kind === 'kaleidoscope' && layer.visible && Math.round(layer.params.input) === 2)) this.kaleidoscope.releaseBelow();
       if (!project.layers.some(layer => layer.kind === 'graphic' && layer.visible)) {
         this.graphicSource?.dispose(); this.graphicSource = null;
       }
@@ -619,7 +631,7 @@ export class StudioRenderer {
   private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10): THREE.Texture {
     const aspect = this.width / this.height;
     const surface = this.tiling ? this.tiledSurface ??= tiledSurfaceMaterial() : this.surface;
-    const uniforms=layer.kind==='surface'?surface.uniforms:layer.kind==='fractal'?this.fractal.uniforms:
+    const uniforms=layer.kind==='surface'?surface.uniforms:layer.kind==='fractal'?this.fractal.uniforms:layer.kind==='kaleidoscope'?this.kaleidoscope.material.uniforms:
       layer.kind==='oil'?this.oilFields.uniforms:layer.kind==='liquid'?this.liquid.uniforms:layer.kind==='super8'?this.super8Projector.uniforms:
       layer.kind==='image'?this.image.uniforms:layer.kind==='sculpture'?this.sculptureUniforms:null;
     // Tile edges snap the view to quarter turns so the frame stays a whole period.
@@ -699,6 +711,9 @@ export class StudioRenderer {
         this.copy.uniforms.uImage.value = this.fractalPreview.texture;
         this.draw(this.copy, this.source);
       } else this.draw(this.fractal, this.source);
+    } else if (layer.kind === 'kaleidoscope') {
+      this.kaleidoscope.bind(layer, phase, aspect, this.kaleidoscopeInput(layer));
+      this.draw(this.kaleidoscope.material, this.source);
     } else if (layer.kind === 'image') {
       if (!layer.image) { this.renderer.setRenderTarget(this.source); this.renderer.clear(); return this.source.texture; }
       const asset = this.assets.get(this.assetKey(layer.image.dataUrl, false,layer.params.repeat>1));
@@ -762,6 +777,16 @@ export class StudioRenderer {
     return this.source.texture;
   }
 
+  private kaleidoscopeInput(layer: Layer): KaleidoscopeInput {
+    const input = Math.round(number(layer, 'input', 0));
+    if (input === 0) return { kind: 'motif' };
+    if (input === 2) return this.belowTexture ? this.kaleidoscope.belowInput(this.belowTexture, this.width, this.height, (m, t) => this.draw(m, t)) : { kind: 'none' };
+    if (!layer.image) return { kind: 'none' };
+    const asset = this.assets.get(this.assetKey(layer.image.dataUrl, false, false, true));
+    if (!asset?.texture.image) throw new Error('The image is still loading. Wait for preparation before rendering.');
+    return { kind: 'texture', texture: asset.texture, aspect: layer.image.width / layer.image.height, straight: true };
+  }
+
   private renderFrame(project: Project, phase: number, width: number, height: number): void {
     this.assertUsable();
     if (!Number.isFinite(phase)) throw new Error('Frame phase must be finite.');
@@ -788,6 +813,7 @@ export class StudioRenderer {
       const layer = evaluateLayer(original, sourcePhase);
       if (layer.opacity <= 0) continue;
       this.timer?.mark(`source:${original.kind}`);
+      this.belowTexture = below.texture;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration);
@@ -1210,6 +1236,7 @@ export class StudioRenderer {
     this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow = null; this.glowBright.dispose();
     this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.graphics.dispose(); this.instruments.dispose();
+    this.kaleidoscope.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;

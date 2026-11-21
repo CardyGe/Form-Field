@@ -137,6 +137,28 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
     parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
   ],
+  kaleidoscope: [
+    { ...parameter('input', 'Input', 0, 2, 1, 0, 'Shape'), description: 'What the mirrors fold: a built-in pattern, an imported image, or the layers below this one.' },
+    parameter('group', 'Symmetry', 0, 4, 1, 0, 'Shape'),
+    { ...parameter('segments', 'Mirrors', 2, 24, 1, 6, 'Shape'), description: 'Rosette only: the number of mirrors. The picture repeats twice this many times around the centre.' },
+    { ...parameter('cell', 'Tile size', 0.05, 1, 0.01, 0.25, 'Shape'), description: 'Tiled symmetries only: the size of one mirror cell, as a share of the picture height.' },
+    { ...parameter('cellAspect', 'Tile proportion', 0.25, 4, 0.01, 1, 'Shape'), description: 'Rectangles only: width of a mirror cell relative to its height.' },
+    { ...parameter('insideScale', 'Inside zoom', 0.1, 4, 0.01, 1, 'Shape'), description: 'Magnifies what is inside the mirrors.' },
+    { ...parameter('insideAngle', 'Inside angle', -Math.PI, Math.PI, 0.01, 0, 'Shape'), description: 'Turns what is inside the mirrors.' },
+    { ...parameter('insideX', 'Inside horizontal', -1, 1, 0.01, 0, 'Shape'), description: 'Moves what is inside the mirrors.' },
+    { ...parameter('insideY', 'Inside vertical', -1, 1, 0.01, 0, 'Shape'), description: 'Moves what is inside the mirrors.' },
+    { ...parameter('density', 'Line count', 0.5, 12, 0.01, 3, 'Shape'), description: 'Built-in pattern only: lines across one mirror cell.' },
+    { ...parameter('lineWidth', 'Line weight', 0.05, 0.95, 0.01, 0.5, 'Shape'), description: 'Built-in pattern only: share of each line period that is drawn.' },
+    { ...parameter('drift', 'Inside drift', 0, 1, 0.01, 0.2, 'Motion'), description: 'Moves what is inside the mirrors round a small circle once per cycle.' },
+    { ...parameter('insideTurns', 'Inside turns per loop', -3, 3, 1, 0, 'Motion'), description: 'Turns what is inside the mirrors whole times each cycle.' },
+    { ...parameter('spin', 'Mirror turns per loop', -3, 3, 1, 0, 'Motion'), description: 'Turns the mirrors themselves whole times each cycle.' },
+    parameter('cycles', 'Cycles per loop', 1, 8, 1, 1, 'Motion'),
+    parameter('zoom', 'Framing', 0.25, 8, 0.01, 1, 'Camera'),
+    parameter('angle', 'Mirror angle', -Math.PI, Math.PI, 0.01, 0, 'Camera'),
+    parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
+    parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
+    parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
+  ],
   liquid: [
     parameter('scale', 'Cell size', 0.4, 3, 0.01, 1, 'Shape'),
     {...parameter('sizeRange', 'Size range', 4, 40, 0.5, 16, 'Shape'), preparation: true, description: 'How many times larger the biggest droplets are than the smallest.'},
@@ -360,6 +382,11 @@ function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
     const keys=new Set([...TIMING_KEYS,'panelMix','concertina','reliefMode','scale','columns','gap','stagger','hingeBias','opening','depth','axis','phaseSpread','organic','motion','cycles','phrase','phaseOffset','lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key));
   }
+  if (layer.kind === 'kaleidoscope') {
+    const group = Math.round(layer.params.group ?? 0), input = Math.round(layer.params.input ?? 0);
+    const hidden = new Set([...(group === 0 ? ['cell', 'cellAspect'] : ['segments']), ...(group === 1 ? [] : ['cellAspect']), ...(input === 0 ? [] : ['density', 'lineWidth'])]);
+    return definitions.filter(d => !hidden.has(d.key));
+  }
   if (layer.kind !== 'fractal') return definitions;
   const family = Math.round(layer.params.style ?? 0), variant = Math.round(layer.params.variant ?? 0);
   const familySpecific: Record<string, number[]> = {
@@ -507,12 +534,12 @@ export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
     id: crypto.randomUUID(),
-    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'scope' ? 'Oscilloscope' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
+    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'kaleidoscope' ? 'Kaleidoscope' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'scope' ? 'Oscilloscope' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
     kind, visible: true, opacity: 1, blend: 'normal',
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     mask: { kind: 'none', softness: 0.15, invert: false, size: 0.8 },
     params: { ...defaultParams(kind), ...(isInstrument(kind) ? INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].params : kind === 'graphic' ? GRAPHIC_LOOKS[0].params : kind === 'super8' ? SUPER8_PROJECTOR_LOOK : {}), seed: 1729 },
-    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
+    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' || kind === 'kaleidoscope' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
   };
 }
 
@@ -783,7 +810,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
     if(!isSimplePolygon(surface.points as {x:number;y:number}[]))fail(`${path}.surface.points`,'must form a simple polygon with a useful area.');
     if(surface.source==='mask'&&(layer.mask as Record<string,unknown>)?.kind!=='image')fail(`${path}.surface.source`,'requires an imported image mask.');
   }
-  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
+  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'kaleidoscope', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
   text(layer.id, `${path}.id`, 100); text(layer.name, `${path}.name`);
   boolean(layer.visible, `${path}.visible`); number(layer.opacity, `${path}.opacity`, 0, 1);
   choice(layer.blend, ['normal', 'screen', 'multiply', 'add', 'source'] as const, `${path}.blend`);
@@ -810,7 +837,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
   if (!Array.isArray(layer.palette) || layer.palette.length !== 6) fail(`${path}.palette`, 'must contain exactly six hex colors.');
   layer.palette.forEach((color, i) => hex(color, `${path}.palette[${i}]`));
   if (own(layer, 'image')) {
-    if (kind !== 'image') fail(`${path}.image`, 'is only allowed on an image layer.');
+    if (kind !== 'image' && kind !== 'kaleidoscope') fail(`${path}.image`, 'is only allowed on an image or kaleidoscope layer.');
     const image = object(layer.image, `${path}.image`);
     keys(image, ['name', 'dataUrl', 'width', 'height', 'fit'], `${path}.image`);
     text(image.name, `${path}.image.name`, 250);
