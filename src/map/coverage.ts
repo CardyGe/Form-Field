@@ -75,7 +75,8 @@ export function borderRunPicture(shape: Shape, path: Path2D, box: Box): Offscree
   const samples = runSamples(shape.points, 3);
   ctx.save();
   ctx.clip(path, 'evenodd');
-  ctx.lineWidth = (shape.border.width + shape.border.glow) * 2 + 2; ctx.lineCap = 'round';
+  // Wide enough to cover the border's glow as well (its blur reaches about one and a half times the glow).
+  ctx.lineWidth = (shape.border.width + shape.border.glow * 1.5) * 2 + 4; ctx.lineCap = 'round';
   for (let i = 0; i < samples.length; i++) {
     const a = samples[i], b = samples[(i + 1) % samples.length], angle = a.t * Math.PI * 2;
     ctx.strokeStyle = `rgb(${Math.round(127.5 + 127.5 * Math.cos(angle))},${Math.round(127.5 + 127.5 * Math.sin(angle))},0)`;

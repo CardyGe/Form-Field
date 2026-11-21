@@ -963,7 +963,8 @@ Built 21 November 2026, from [the stage 7 plan](superpowers/plans/2026-11-21-map
 
 **What it does:**
 - **Follow the shape's outline** (effect card: Off, Flow around, Grow from inside, Trace edges).
-  - The effect takes the outline of the first shape playing it as its own surface, through that shape's placement, so Across and Pin shapes follow where the picture lands.
+  - The effect takes a smaller copy of the outline of the first shape playing it (65 % of its size, about its middle) as its own surface, through that shape's placement, so Across and Pin shapes follow where the picture lands.
+  - Why a smaller copy: the shape's own outline covers the whole picture, so Flow around would leave the shape black, Trace edges would leave only a hairline at the outline, and Grow from inside would change nothing. With the copy, Flow around fills a frame round a dark inner shape, Trace edges draws a glowing echo of the outline inside the shape, and Grow from inside fills a core in the outline's form.
   - Only the effect as played changes; the saved composition and Studio's own are untouched.
   - Moving a corner prepares the effect again (at most once a frame). Moving the whole shape does not, and an evolving effect is never sent back to its start by a drag.
 - **Stagger** (Group section, 0 to 1 s).
@@ -985,17 +986,24 @@ Built 21 November 2026, from [the stage 7 plan](superpowers/plans/2026-11-21-map
 
 **Checked in the app** (`npm run test:map`, 5 new checks):
 - a border run lights only part of the border, and the lit part goes round; switched off, the whole border is back
-- Stagger: the cells of one picture show different moments, never black
+- Stagger: the cells of one picture show different moments, the most delayed still moving, never black
 - Vary each and Palette shift give each cell its own copy, each one undo step
-- Follow the outline prepares the effect again when switched on and when a corner moves, never black
-- Auto moves scene with the test beat, and waits while Freeze is on
+- Follow the outline: each of its three ways leaves part of the shape showing the effect; a moved corner prepares it again, never black
+- Auto moves scene with the test beat, waits while Freeze is on, and carries on once it is let go
 
 **Reviewed:** an independent review of the show, the border runs and the drawing found three important problems, all fixed:
 - Chase ran backwards (from the last shape to the first).
 - Dragging an outline sent an evolving effect back to its start.
 - Stagger's memory had no cap: Vary each on a big staggered group could have filled the graphics card.
 
-Smaller fixes: a run's direction no longer depends on how the outline was drawn, holes keep their border, a hidden shape's run no longer redraws the wall every frame, and corners pressed together at the picture's edge are merged.
+The final review of the whole stage found that Follow the outline, as first built, left the shape black with Flow around and almost black with Trace edges (the shape's own outline covered the whole picture). It now follows the smaller copy, described above, and the in-app check tries all three ways. Its smaller findings are fixed too:
+- The Group section is greyed out while any of its shapes is locked, not only when the group is.
+- A run's light now covers the whole of a wide glow.
+- Auto-advance no longer clears a note on screen.
+- Auto stays visible, so it can be switched off, after scenes are deleted down to one.
+- Only a source following its outline skips the restart of an evolving effect, so Studio edits behave as before.
+
+Smaller fixes from the first review: a run's direction no longer depends on how the outline was drawn, holes keep their border, a hidden shape's run no longer redraws the wall every frame, and corners pressed together at the picture's edge are merged.
 
 **Known limits:**
 - **Follow the outline:**
@@ -1007,7 +1015,10 @@ Smaller fixes: a run's direction no longer depends on how the outline was drawn,
 - **Border runs:**
   - On a shape thinner than about twice the border plus its glow, the run can show on both sides at once.
   - A tempo run jumps when the tempo clock starts or stops.
-- **Auto by bars** needs the tempo; with no beat it waits.
+- **Auto:**
+  - By bars it needs the tempo; with no beat it waits.
+  - Like triggers, it runs only while the Map screen is showing: during Edit in Studio the wall keeps playing, but scenes do not advance, and the count starts again on return.
+- **A tempo border run** that is only in a scene other than the current one does not start the beat listening until that scene is on; meanwhile it runs at its laps a minute.
 - **Not yet tried** on the projector.
 
 ## On the projector

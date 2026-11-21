@@ -57,7 +57,7 @@ export default function MapScenes({ map }: { map: Map }) {
     <button className="text-button" disabled={show.scenes.length >= MAX_SCENES} title={show.scenes.length ? 'Keep the stage as it is now as a new scene' : 'Keep the stage as it is now as scene 1; change it, then + again for scene 2'} onClick={add}>+ Scene</button>
     {show.scenes.length > 0 && <label className="map-inline-range">Fade<select aria-label="Scene fade" value={show.sceneFade} onChange={e => map.dispatch({ type: 'setSceneFade', sceneId: null, seconds: Math.min(FADE_RANGE.max, Number(e.target.value)) })}>
       {(FADES.includes(show.sceneFade) ? FADES : [...FADES, show.sceneFade].sort((a, b) => a - b)).map(f => <option key={f} value={f}>{seconds(f)}</option>)}</select></label>}
-    {show.scenes.length > 1 && <AutoAdvanceField map={map} />}
+    {(show.scenes.length > 1 || show.autoAdvance) && <AutoAdvanceField map={map} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label="Scene" entries={entries(menu.id)} onClose={() => setMenu(null)} />}
   </div>;
 }

@@ -5,7 +5,7 @@ import { applyEdit, type EditAction } from '../src/map/editor';
 import { createShow, validateShow, MAX_SOURCES, type CurvePoint, type ShowDocument } from '../src/map/show';
 import { staggerDelays, chaseOffsets, rotatePalette, outlinePolygon, nextAutoScene, autoAdvanceDue, runHead, outlineLength, runSamples, withSurface } from '../src/map/wild';
 import { historyIndex } from '../src/map/frameHistory';
-import { chaseHead, onlySurfaceDiffers } from '../src/map/wild';
+import { chaseHead, onlySurfaceDiffers, insetOutline, OUTLINE_INSET } from '../src/map/wild';
 import { initialMapState, mapReducer } from '../src/map/state';
 
 const sq = (x0: number, y0: number, x1: number, y1: number): CurvePoint[] => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
@@ -227,4 +227,15 @@ test('review: a composition that differs only in its surface is not a new start'
   assert.equal(onlySurfaceDiffers(withSurface(project, poly, 'edge'), withSurface(project, poly.map(p => ({ x: p.x * .5, y: p.y })), 'edge')), true);
   const other = structuredClone(project); other.layers[0].params = { ...other.layers[0].params, seed: 99999 };
   assert.equal(onlySurfaceDiffers(project, other), false);
+});
+
+test('final review: the effect follows a smaller copy of the outline, centred in the shape, so no mode covers the whole picture', () => {
+  const poly = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+  const inset = insetOutline(poly);
+  assert.ok(OUTLINE_INSET > .4 && OUTLINE_INSET < .9);
+  const k = (1 - OUTLINE_INSET) / 2;
+  assert.deepEqual(inset.map(p => [+p.x.toFixed(6), +p.y.toFixed(6)]), [[k, k], [1 - k, k], [1 - k, 1 - k], [k, 1 - k]].map(([x, y]) => [+x.toFixed(6), +y.toFixed(6)]));
+  // A shape in one corner of its picture shrinks about its own middle, not the picture's.
+  const corner = insetOutline([{ x: 0, y: 0 }, { x: .4, y: 0 }, { x: .4, y: .4 }, { x: 0, y: .4 }]);
+  assert.ok(corner.every(p => p.x > 0 && p.x < .4 && p.y > 0 && p.y < .4));
 });

@@ -129,3 +129,17 @@ export function onlySurfaceDiffers(a: Project, b: Project): boolean {
   const strip = (p: Project) => JSON.stringify({ ...p, schemaVersion: 0, layers: p.layers.map(({ surface: _s, ...l }) => l) });
   return strip(a) === strip(b);
 }
+
+/**
+ * Outline drives the instrument: how big the copy of the outline the effect follows is, against the shape itself.
+ * The shape's own outline would cover the whole picture: Flow around would leave nothing, Trace edges only a hairline,
+ * and Grow from inside would change nothing. A smaller copy in the middle gives each a shape to work with.
+ */
+export const OUTLINE_INSET = 0.65;
+/** The outline shrunk about the middle of its own box. */
+export function insetOutline(polygon: { x: number; y: number }[], k = OUTLINE_INSET): { x: number; y: number }[] {
+  if (!polygon.length) return polygon;
+  const xs = polygon.map(p => p.x), ys = polygon.map(p => p.y);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  return polygon.map(p => ({ x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k }));
+}

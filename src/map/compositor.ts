@@ -22,7 +22,7 @@ import { flatten, ringBounds } from './outline';
 import { IDENTITY, invert, multiply, quadToQuad, apply, type H3 } from './homography';
 import { coverCrop, landing, landingAspect, sourceSizeFor, type Landing } from './placement';
 import { Gpu, type ShapeDraw, type Texture } from './gpu';
-import { chaseHead, chaseOffsets, onlySurfaceDiffers, outlinePolygon, staggerDelays, withSurface } from './wild';
+import { chaseHead, chaseOffsets, insetOutline, onlySurfaceDiffers, outlinePolygon, staggerDelays, withSurface } from './wild';
 import { FrameHistory } from './frameHistory';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
 import type { Link } from '../react/links';
@@ -316,7 +316,7 @@ export class MapCompositor {
       if (project !== slot.project && slot.project && !slot.pending && slot.failedProject === null && !needsPrepare(slot.project, project)) { slot.project = project; this.adjusted++; }
       // A drag while a restart is still being prepared: the newer settings wait for it, rather than restarting it again.
       else if (slot.pending && project !== slot.pending && project !== slot.project && !needsPrepare(slot.pending, project)) slot.latest = project;
-      else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) { slot.latest = null; this.prepare(slot, project); }
+      else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) { slot.latest = null; this.prepare(slot, project, !!source.followOutline); }
       if (!slot.project || !slot.renderer) continue;
       if (!this.frozen) {
         // In tempo sync the loop follows the clock's beats; without a clock it runs at its own speed.
@@ -448,7 +448,7 @@ export class MapCompositor {
   }
 
   /** Prepares a composition in the background. Until it is ready the shape keeps its last picture. */
-  private prepare(slot: Slot, project: Project): void {
+  private prepare(slot: Slot, project: Project, follows = false): void {
     if (!slot.renderer) return;
     slot.pending = project;
     slot.prepares++;
@@ -456,7 +456,7 @@ export class MapCompositor {
       if (slot.pending !== project) return; // a newer composition arrived meanwhile
       // An evolving composition plays from its start; a looping one carries on where it was.
       // Not when only the outline it follows moved: dragging a shape never sends its effect back to the start.
-      if (isEvolving(project) && !(slot.project && onlySurfaceDiffers(slot.project, project))) slot.phase = 0;
+      if (isEvolving(project) && !(follows && slot.project && onlySurfaceDiffers(slot.project, project))) slot.phase = 0;
       slot.project = slot.latest && !needsPrepare(project, slot.latest) ? slot.latest : project; slot.latest = null; slot.pending = null; slot.failed = null; slot.failedProject = null;
       this.dirty = true;
     }).catch(error => {
@@ -482,7 +482,8 @@ export class MapCompositor {
       if (!source.followOutline || !base || !shape) { this.outlined.delete(source.id); continue; }
       const inv = inverseOf(landing(shape, show));
       const picture = flatten(ringPx(shape.points)).map(p => apply(inv, p));
-      const rounded = outlinePolygon(picture, { x: 0, y: 0, w: 1, h: 1 }).map(p => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
+      // A smaller copy of the outline in the middle of the shape, so each way of following it has something to show.
+      const rounded = insetOutline(outlinePolygon(picture, { x: 0, y: 0, w: 1, h: 1 })).map(p => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
       // Corners pressed together at the picture's edge (a zoom or an offset) are one corner.
       const polygon = rounded.filter((p, i) => { const q = rounded[(i + 1) % rounded.length]; return rounded.length < 4 || Math.hypot(p.x - q.x, p.y - q.y) > .002; });
       const key = JSON.stringify([source.followOutline, polygon]), memo = this.outlined.get(source.id);

@@ -366,7 +366,8 @@ export function useMap(onError: (message: string) => void) {
   const dispatch = useCallback((action: EditAction, merge?: string) => {
     if (!canEdit(loadedRef.current)) { setLastRefusal('Loading the show…'); return false; }
     const after = step({ type: 'edit', action, merge });
-    setLastRefusal(after.refusal);
+    // What triggers and auto-advance do never clears a note the operator may be reading.
+    if (merge !== 'trigger' || after.refusal !== null) setLastRefusal(after.refusal);
     return after.refusal === null;
   }, [step]);
   const undo = useCallback(() => { if (canEdit(loadedRef.current)) step({ type: 'undo' }); }, [step]);

@@ -301,8 +301,8 @@ function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, 
         <label className="map-field">Loop with the tempo<select aria-label="Loop with the tempo" value={source.tempoSync ?? ''} disabled={locked} title="Off: the instrument runs at its own speed. A number: one loop of it every that many beats of the tempo."
           onChange={e => { map.startEngine(); map.dispatch({ type: 'setTempoSync', sourceId: source.id, beats: e.target.value ? Number(e.target.value) : null }); }}>
           <option value="">Off</option>{TEMPO_SYNC_BEATS.map(n => <option key={n} value={n}>Every {n} {n === 1 ? 'beat' : 'beats'}</option>)}</select></label>
-        {source.project.layers.some(l => isInstrument(l.kind)) && <label className="map-field">Follow the shape's outline<select aria-label="Follow the shape's outline" value={source.followOutline ?? ''} disabled={locked}
-          title="The effect takes the outline of the first shape playing it as its own shape: flowing around it, growing from inside it, or tracing its edges. The saved effect is not changed."
+        {source.project.layers.some(l => isInstrument(l.kind)) && <label className="map-field">Follow the shape's outline<select aria-label="Follow the shape's outline" value={source.followOutline ?? ''} disabled={locked || sharers.some(s => isShapeLocked(map.show, s))}
+          title="The effect takes a smaller copy of the shape's outline, in its middle, as its own shape: flowing around it, growing from inside it, or tracing its edges. The saved effect is not changed."
           onChange={e => map.dispatch({ type: 'setFollowOutline', sourceId: source.id, mode: (e.target.value || null) as FollowOutline | null })}>
           <option value="">Off</option><option value="obstacle">Flow around</option><option value="emitter">Grow from inside</option><option value="edge">Trace edges</option></select></label>}
         {sharers.length > 1 && !whole && <button className="text-button" disabled={locked} title="Unlink: give this shape its own copy of the instrument, to change on its own" onClick={() => { const made = mapActions(map).separate(shape.id); if (made?.left) setNote?.(`${made.left} of the effect's reactions stayed with the other shapes: the show has as many reactions as it can hold`); }}>Make separate</button>}
@@ -373,7 +373,8 @@ function GroupCard({ map, group }: { map: Map; group: Group }) {
   const members = map.show.shapes.filter(s => s.groupId === group.id);
   const playing = members.filter(s => s.sourceId && map.show.sources.some(src => src.id === s.sourceId));
   const runs = members.some(s => s.border.width > 0 && s.border.run);
-  const locked = group.locked;
+  // The editor refuses group changes while the group or any of its shapes is locked.
+  const locked = group.locked || members.some(s => isShapeLocked(map.show, s));
   const summary = [group.stagger ? `stagger ${group.stagger.toFixed(2)} s` : '', group.chase ? 'chase' : ''].filter(Boolean).join(' · ') || `${members.length} shapes`;
   return <Section id="group" title={`Group · ${group.name}`} summary={summary}>
     <SliderField key={`stagger-${group.id}`} label="Stagger" value={group.stagger ?? 0} min={0} max={STAGGER_MAX} step={0.05} disabled={locked} format={v => v ? `${v.toFixed(2)} s` : 'Off'}

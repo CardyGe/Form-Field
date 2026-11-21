@@ -1032,14 +1032,17 @@ try {
     const inCell = [[.04, .05], [.1, .15], [.15, .08], [.08, .12], [.13, .17], [.06, .16]];
     const places = [[0, 0], [.2, 0], [0, .2], [.2, .2]].flatMap(([ox, oy]) => inCell.map(([x, y]) => [.2 + ox + x, .2 + oy + y]));
     // The effect rests between moves, so the cells are watched for about four seconds.
-    const broken = async () => { let most = 0; for (let i = 0; i < 30; i++) { const { colours } = await sample(output, places); let n = 0; for (let k = 6; k < colours.length; k++) if (!near(colours[k], colours[k % 6], 40)) n++; most = Math.max(most, n); await sleep(120); } return most; };
+    let lastCellMoved = 0, lastCell = null;
+    const broken = async () => { let most = 0; for (let i = 0; i < 30; i++) { const { colours } = await sample(output, places); const cell = colours.slice(18).join(); if (lastCell !== null && cell !== lastCell) lastCellMoved++; lastCell = cell; let n = 0; for (let k = 6; k < colours.length; k++) if (!near(colours[k], colours[k % 6], 40)) n++; most = Math.max(most, n); await sleep(120); } return most; };
     const before = await broken();
     await studio.locator('.map-group-row').click();
     await openSection(studio, 'group');
     await slide('Stagger', 1);
     await output.waitForFunction(() => (window.__mapStats?.delayed ?? 0) === 3 && window.__mapStats.staggered === 1, null, { timeout: 5000 });
     await sleep(1200);
+    lastCellMoved = 0; lastCell = null;
     const after = await broken();
+    assert.ok(lastCellMoved >= 3, `the most delayed cell stood still (${lastCellMoved} changes in about four seconds)`);
     assert.ok(before <= 3, `the cells did not match before Stagger: ${before} of 18 places differ`);
     assert.ok(after >= before + 4, `the cells did not show different moments with Stagger on: ${before} → ${after} of 18 places differ`);
     await wallUntil([[.3, .3], [.5, .3], [.3, .5], [.5, .5]], c => c.every(coloured), 'every cell shows its picture');
@@ -1071,8 +1074,23 @@ try {
     await sleep(500);
     const start = await prepared();
     await openSection(studio, 'effect');
-    await studio.getByLabel("Follow the shape's outline", { exact: true }).selectOption('emitter');
-    await output.waitForFunction(n => Object.values(window.__mapStats.prepares).reduce((a, b) => a + b, 0) > n, start, { timeout: 10000 });
+    // Every way of following leaves part of the shape showing the effect.
+    const grid = []; for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) grid.push([.22 + i * .07, .22 + j * .07]);
+    let count = start;
+    for (const mode of ['obstacle', 'edge', 'emitter']) {
+      await openSection(studio, 'effect');
+      await studio.getByLabel("Follow the shape's outline", { exact: true }).selectOption(mode);
+      await output.waitForFunction(n => Object.values(window.__mapStats.prepares).reduce((a, b) => a + b, 0) > n, count, { timeout: 10000 });
+      count = await prepared();
+      await sleep(600);
+      // Trace edges draws a thin line along the smaller copy of the outline (65 % of the shape, about its middle: .27 to .53).
+      const ring = []; for (const t of [.31, .36, .4, .44, .49]) ring.push([.27, t], [.53, t], [t, .27], [t, .53]);
+      const places = mode === 'edge' ? ring : grid;
+      let most = 0;
+      for (let i = 0; i < 10; i++) { const { colours } = await sample(output, places); most = Math.max(most, colours.filter(coloured).length); await sleep(150); }
+      assert.ok(most >= 4, `${mode}: only ${most} of ${places.length} places in the shape show anything`);
+      await fs.writeFile(path.join(out, `output-follow-${mode}.png`), Buffer.from((await sample(output, [])).png, 'base64'));
+    }
     await wallUntil([[.4, .4]], c => c.every(coloured), 'the effect after following');
     const followed = await prepared();
     await dragOn([.6, .6], [.66, .64]);
@@ -1099,6 +1117,7 @@ try {
     await sleep(10000); // longer than four bars at 120 BPM
     assert.equal(await currentScene(), held, 'auto-advance moved on while Freeze was on');
     await freeze.click();
+    await studio.waitForFunction(was => document.querySelector('.map-scenes .map-scene[aria-pressed="true"]')?.textContent !== was, held, { timeout: 25000 });
     await studio.getByLabel('Scene auto-advance', { exact: true }).selectOption('');
     await react('testBeat', false);
   });
