@@ -31,6 +31,9 @@ const SCOPE_PALETTE = ['#ff2a8a', '#ff1e6e', '#c81050', '#ffffff', '#ff7ad0', '#
 const LIQUID_PALETTE = ['#7a0006', '#ff1414', '#ff7a00', '#ffe81a', '#1a1aff', '#050002'];
 const OIL_PALETTE = ['#eeff00', '#a7de12', '#060710', '#25b8ed', '#071275', '#e2a51c'];
 
+/** Where a Kaleidoscope layer takes the picture it folds. */
+export const KALEIDOSCOPE_INPUT = { motif: 0, image: 1, below: 2, feedback: 3 } as const;
+
 const parameter = (key: string, label: string, min: number, max: number, step: number, value: number, section: ParameterDefinition['section']): ParameterDefinition =>
   ({ key, label, min, max, step, default: value, section });
 
@@ -292,6 +295,31 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
   ],
   graphic: GRAPHIC_PARAMETERS,
+  kaleidoscope: [
+    parameter('input', 'Source', 0, 3, 1, 0, 'Shape'),
+    parameter('group', 'Symmetry', 0, 4, 1, 0, 'Shape'),
+    parameter('sectors', 'Mirrors', 3, 24, 1, 6, 'Shape'),
+    parameter('cell', 'Repeat size', 0.1, 4, 0.01, 1, 'Shape'),
+    parameter('spiral', 'Spiral', 0, 1, 1, 0, 'Shape'),
+    parameter('spiralA', 'Spiral arms', -6, 6, 1, 1, 'Shape'),
+    parameter('spiralB', 'Spiral rings', -6, 6, 1, 2, 'Shape'),
+    parameter('spiralScale', 'Spiral step', 2, 256, 0.01, 4, 'Shape'),
+    parameter('zoomCycles', 'Zoom per loop', -4, 4, 1, 1, 'Motion'),
+    parameter('cycles', 'Cycles per loop', 1, 8, 1, 1, 'Motion'),
+    parameter('sourceX', 'Source position X', -1, 1, 0.001, 0, 'Camera'),
+    parameter('sourceY', 'Source position Y', -1, 1, 0.001, 0, 'Camera'),
+    parameter('sourceScale', 'Source size', 0.1, 8, 0.01, 1, 'Camera'),
+    parameter('sourceTurn', 'Source turn', -Math.PI, Math.PI, 0.01, 0, 'Shape'),
+    parameter('sourceDrift', 'Source drift', 0, 1, 0.01, 0.15, 'Motion'),
+    parameter('warpIn', 'Warp before fold', 0, 1, 0.01, 0, 'Shape'),
+    parameter('warpOut', 'Warp after fold', 0, 1, 0.01, 0, 'Shape'),
+    parameter('motif', 'Motif', 0, 2, 1, 0, 'Shape'),
+    parameter('motifScale', 'Motif scale', 0.25, 8, 0.01, 2, 'Shape'),
+    parameter('lineWidth', 'Line weight', 0.25, 6, 0.01, 2, 'Shape'),
+    parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
+    parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
+    parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
+  ],
   image: [
     parameter('mirror', 'Mirror', 0, 3, 1, 0, 'Shape'),
     parameter('repeat', 'Repeat', 1, 8, 1, 1, 'Shape'),
@@ -507,7 +535,7 @@ export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
     id: crypto.randomUUID(),
-    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'scope' ? 'Oscilloscope' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
+    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'scope' ? 'Oscilloscope' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : kind === 'kaleidoscope' ? 'Kaleidoscope' : 'Image'),
     kind, visible: true, opacity: 1, blend: 'normal',
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     mask: { kind: 'none', softness: 0.15, invert: false, size: 0.8 },
@@ -783,7 +811,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
     if(!isSimplePolygon(surface.points as {x:number;y:number}[]))fail(`${path}.surface.points`,'must form a simple polygon with a useful area.');
     if(surface.source==='mask'&&(layer.mask as Record<string,unknown>)?.kind!=='image')fail(`${path}.surface.source`,'requires an imported image mask.');
   }
-  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
+  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', 'kaleidoscope', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
   text(layer.id, `${path}.id`, 100); text(layer.name, `${path}.name`);
   boolean(layer.visible, `${path}.visible`); number(layer.opacity, `${path}.opacity`, 0, 1);
   choice(layer.blend, ['normal', 'screen', 'multiply', 'add', 'source'] as const, `${path}.blend`);
@@ -810,7 +838,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
   if (!Array.isArray(layer.palette) || layer.palette.length !== 6) fail(`${path}.palette`, 'must contain exactly six hex colors.');
   layer.palette.forEach((color, i) => hex(color, `${path}.palette[${i}]`));
   if (own(layer, 'image')) {
-    if (kind !== 'image') fail(`${path}.image`, 'is only allowed on an image layer.');
+    if (kind !== 'image' && kind !== 'kaleidoscope') fail(`${path}.image`, 'is only allowed on an image or Kaleidoscope layer.');
     const image = object(layer.image, `${path}.image`);
     keys(image, ['name', 'dataUrl', 'width', 'height', 'fit'], `${path}.image`);
     text(image.name, `${path}.image.name`, 250);

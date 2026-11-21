@@ -747,6 +747,9 @@ export class StudioRenderer {
       }
       (this.image.uniforms.uFit.value as THREE.Vector2).set(x, y);
       this.draw(this.image, this.source);
+    } else if (layer.kind === 'kaleidoscope') {
+      // No draw path until the Kaleidoscope renderer lands; show nothing rather than a stale or wrong picture.
+      this.renderer.setRenderTarget(this.source); this.renderer.clear(); return this.source.texture;
     } else {
       const u = this.sculptureUniforms;
       for(const [key,value] of Object.entries(SCULPTURE_SHAPE_DEFAULTS))u[`studio${key[0].toUpperCase()}${key.slice(1)}`].value=number(layer,key,value);
