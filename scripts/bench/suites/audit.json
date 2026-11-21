@@ -1,0 +1,14 @@
+{
+  "description": "Baselines from the fractal and kaleidoscope live audit. Preview mode is what Map and the studio play live; export mode is delivery quality.",
+  "frames": 300,
+  "warmup": 60,
+  "cases": [
+    { "name": "kaleidoscope-4k-preview", "preset": "prismatic-fold", "width": 3840, "height": 2160, "mode": "preview" },
+    { "name": "julia-4k-preview", "preset": "velvet-julia", "width": 3840, "height": 2160, "mode": "preview" },
+    { "name": "mandelbox-4k-preview", "preset": "abyssal-cathedral", "width": 3840, "height": 2160, "mode": "preview" },
+    { "name": "kaleidoscope-1080p-preview", "preset": "prismatic-fold", "width": 1920, "height": 1080, "mode": "preview" },
+    { "name": "mandelbox-1080p-preview", "preset": "abyssal-cathedral", "width": 1920, "height": 1080, "mode": "preview" },
+    { "name": "kaleidoscope-4k-export", "preset": "prismatic-fold", "width": 3840, "height": 2160, "mode": "export" },
+    { "name": "mandelbox-4k-export", "preset": "abyssal-cathedral", "width": 3840, "height": 2160, "mode": "export" }
+  ]
+}

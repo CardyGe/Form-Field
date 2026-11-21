@@ -27,6 +27,7 @@ import { super8Fragment } from './super8';
 import { super8ProjectorFragment } from './super8-projector';
 import { super8Clock, super8History, super8Transport, SUPER8_HISTORY } from './super8-motion';
 import { sculptureDeformation, sculptureDetail, createSculptureTorusGeometry } from './sculpture';
+import type { PassTimer } from './gpu-timer';
 import {
   fullscreenVertex, surfaceFragment, imageFragment, compositeFragment,
   finishFragment, displayFragment,
@@ -190,6 +191,8 @@ export class StudioRenderer {
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
+  /** Benchmark only: names each GPU pass as it starts. Null in the app. */
+  private timer: PassTimer | null = null;
   private readonly sculptureScene = new THREE.Scene();
   private readonly sculptureCamera = new THREE.PerspectiveCamera(40, 1, .1, 50);
   private readonly sculptureGeometry = new THREE.SphereGeometry(1, 320, 192);
@@ -784,6 +787,7 @@ export class StudioRenderer {
       const sourcePhase = this.sourcePhase(original, framePhase, duration);
       const layer = evaluateLayer(original, sourcePhase);
       if (layer.opacity <= 0) continue;
+      this.timer?.mark(`source:${original.kind}`);
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration);
@@ -810,6 +814,7 @@ export class StudioRenderer {
       u.uMaskSize.value = layer.mask.size; u.uMaskSoftness.value = layer.mask.softness;
       u.uMaskInvert.value = Number(layer.mask.invert);
       u.uGlow.value = number(layer, 'glow', layer.kind === 'sculpture' ? .12 : 0);
+      this.timer?.mark('glow');
       this.bindGlow(original, layer, sourceTexture, width, height);
       this.bindPrint(original, layer, wrapped);
       for(const d of FINISH_PARAMETERS)u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=number(layer,d.key,d.default);
@@ -829,9 +834,11 @@ export class StudioRenderer {
         if (!asset?.texture.image) throw new Error('The mask is still loading.');
         u.uMask.value = asset.texture;
       }
+      this.timer?.mark('composite');
       this.draw(this.composite, next);
       [below, next] = [next, below];
     }
+    this.timer?.mark('finish');
     this.finish.uniforms.uImage.value = below.texture;
     (this.finish.uniforms.uBackground.value as THREE.Color).set(project.background);
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
@@ -1097,8 +1104,35 @@ export class StudioRenderer {
     // only when the size changes.
     const canvasSize = this.renderer.getSize(this.canvasSize);
     if (canvasSize.x !== w || canvasSize.y !== h) this.renderer.setSize(w, h, false);
+    this.timer?.mark('display');
     this.display.uniforms.uImage.value = this.linearOutput.texture;
     this.draw(this.display, null);
+    this.timer?.end();
+  }
+
+  /** Benchmark only: times each pass from the next frame on. Pass null to stop. */
+  setTimer(timer: PassTimer | null): void { this.timer = timer; }
+
+  /** Benchmark only: the context, for timer queries and readback fences. */
+  gpuContext(): WebGL2RenderingContext { return this.renderer.getContext() as WebGL2RenderingContext; }
+
+  /**
+   * Benchmark only: one frame at export quality (full-size Mandelbox, chosen
+   * fractal sampling, exact feedback history), drawn to the canvas with no
+   * readback. Call prepare() first.
+   */
+  renderExportQuality(project: Project, phase: number, width: number, height: number, supersample = 1): void {
+    if (this.exporting) throw new Error('Wait for the current frame export before rendering.');
+    this.exporting = true; this.exactFeedback = true;
+    try {
+      const output = this.renderOutput(project, phase, width, height, supersample);
+      const canvasSize = this.renderer.getSize(this.canvasSize);
+      if (canvasSize.x !== width || canvasSize.y !== height) this.renderer.setSize(width, height, false);
+      this.timer?.mark('display');
+      this.display.uniforms.uImage.value = output.texture;
+      this.draw(this.display, null);
+      this.display.uniforms.uImage.value = this.linearOutput.texture;
+    } finally { this.timer?.end(); this.exporting = false; this.exactFeedback = false; }
   }
 
   /**
@@ -1115,6 +1149,7 @@ export class StudioRenderer {
       throw new Error(`${supersample}× supersampling needs ${sourceWidth} × ${sourceHeight} pixels; this GPU allows ${this.maxTargetSize}. Choose a lower factor.`);
     }
     this.renderFrame(project, phase, sourceWidth, sourceHeight);
+    this.timer?.mark('downsample');
     if (this.resolved.width !== width || this.resolved.height !== height) this.resolved.setSize(width, height);
     const u = this.downsample.uniforms;
     u.uImage.value = this.linearOutput.texture;

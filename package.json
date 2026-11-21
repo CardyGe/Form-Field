@@ -22,6 +22,8 @@
     "test:packaged": "node scripts/verify-packaged.mjs",
     "test:map": "npm run build && node scripts/verify-map.mjs",
     "test:live": "npm run build && node scripts/verify-live.mjs && node scripts/verify-live-ui.mjs",
+    "bench": "env -u ELECTRON_RUN_AS_NODE electron scripts/bench/bench.cjs",
+    "bench:compare": "node scripts/bench/compare.mjs",
     "test:projection": "npm run build && node scripts/verify-projection-media.mjs --performance --native && node scripts/verify-projection-media-ui.mjs"
   },
   "devDependencies": {

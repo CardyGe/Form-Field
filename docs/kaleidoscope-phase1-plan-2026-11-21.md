@@ -32,6 +32,8 @@ Source: `reports/Fractal and kaleidoscope live audit.md`, Phase 1 rows 1–4. Th
 
 ### T1. Benchmark harness (audit row 1, 3–4 days)
 
+Status: built and smoke-tested with software rendering; see `docs/benchmark-harness.md`. Acceptance still needs two runs on the M5 Pro.
+
 - `scripts/bench/` Electron runner modelled on `scripts/fractal-study.*`: loads a project, warms up, renders N≥300 frames at a fixed phase step, full output size.
 - Per-pass GPU timing with `EXT_disjoint_timer_query_webgl2`, wrapped in a `GpuTimer` helper (`src/rendering/gpu-timer.ts`) that `StudioRenderer` calls around `drawSource`, feedback steps and composite when a debug flag is set. No cost when off.
 - Cold-start metric: time from `new StudioRenderer` + `prepare()` to first frame, with shader compile separated where `KHR_parallel_shader_compile` allows.
