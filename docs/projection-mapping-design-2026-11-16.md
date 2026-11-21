@@ -928,6 +928,35 @@ The video checks need ffmpeg on the Mac to make their test clip.
 - HAP and ProRes clips don't play; MP4 (H.264) does.
 - Not yet tried with Greg's own clips on the projector.
 
+## Stage 7 decisions: wild options
+
+Made 21 November 2026, when Greg asked for stage 7 after trying Map on the projector. They follow the design's "Wild options" and Stagger lines. They are my calls; each option is off until switched on, works on its own, and is saved in the show (version 8; version 7 files open with everything off).
+
+- **Outline drives the instrument.**
+  - What it is: a setting on an instrument card, **Follow the shape's outline**: Off, Flow around, Grow from inside, or Trace edges. It is offered only for instruments that support Studio's surface influence.
+  - How it works: when drawing, the shape's outline (the first shape playing the instrument, measured in its own picture box) becomes the instrument's surface polygon, simplified to Studio's 12 points.
+  - What stays untouched: the composition itself is never changed, so Studio and the file keep their own surface.
+  - Cost: the outline is sent again only when the shape changes, so dragging a point rebuilds it, and nothing else does.
+- **Stagger** (a group setting, 0 to 1 s).
+  - Shapes in the group show the shared picture each a little later than the one before, in list order, so it ripples from shape to shape.
+  - The instrument is still drawn once a frame. The projector keeps its last second of pictures (30 a second) while a staggered group plays it, and each shape shows the one from its delay.
+  - It works for instruments, videos and Live alike.
+- **Vary each** (a group action).
+  - Every shape in the group gets its own copy of the instrument, each a different variation (Vary with a different seed).
+  - It is one undo step. The source limit applies, with a note.
+- **Palette shift** (a group action).
+  - Every shape gets its own copy, with the palette turned one step further round for each shape in order.
+  - It is one undo step.
+- **Border runs** (in the Edge section, once a border is on): a bright stretch of light that travels round the outline.
+  - Settings: **Speed** (laps a minute, or with the tempo: one lap every 1 to 16 beats) and **Length** (a share of the outline).
+  - In a group with **Chase** on, the run passes from shape to shape in list order, one after the other.
+  - It is drawn by the graphics card from a picture of each point's position along the outline, made with the border.
+- **Scene auto-advance** (in the scene bar).
+  - Settings: Off, or next scene every N seconds (5 s to 10 min) or every N bars of the tempo.
+  - Order: in order or at random, never the same scene twice in a row.
+  - It runs in the studio window, like triggers, and each change is the usual fade.
+  - It pauses while Freeze or Blackout is on, and is not an undo step: the changes share one undo step, as triggers do.
+
 ## On the projector
 
 21 November 2026. Greg tried Map on his projector: "it's working well!" He reported no specific issues.
