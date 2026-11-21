@@ -105,3 +105,30 @@ test('review: a path through a symlink is served only as the file it really is',
   const viaLink = await files.handle(new Request(url(`${link}/../loop.mp4`)));
   if (viaLink.status === 200) assert.equal(await viaLink.text(), '0123456789abcdef', 'never the other file');
 });
+
+test('final review: the record of granted videos is written whole (a temporary file, then a rename)', async () => {
+  const calls = [];
+  const spy = { ...fs, readFile: fs.readFile, writeFile: (...a) => { calls.push(['write', a[0]]); return fs.writeFile(...a); }, rename: (...a) => { calls.push(['rename', a[0], a[1]]); return fs.rename(...a); } };
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'video-record-'));
+  const record = path.join(dir, 'granted.json');
+  const files = createVideoFiles({ fs: spy, recordFile: record });
+  await files.ready;
+  files.allow(path.join(dir, 'a.mp4'), { record: true });
+  await files.saved;
+  assert.ok(calls.some(c => c[0] === 'write' && c[1] !== record), 'written to a temporary file first');
+  assert.ok(calls.some(c => c[0] === 'rename' && c[2] === record), 'then renamed into place');
+  assert.deepEqual(JSON.parse(await fs.readFile(record, 'utf8')), [path.join(dir, 'a.mp4')]);
+});
+
+test('final review: through a two-level symlink, only the allowed file is ever served', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'video-link-'));
+  await fs.mkdir(path.join(dir, 'a', 'b'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'loop.mp4'), 'ALLOWED');
+  await fs.writeFile(path.join(dir, 'a', 'loop.mp4'), 'SECRET');
+  await fs.symlink(path.join(dir, 'a', 'b'), path.join(dir, 'deep'));
+  const files = createVideoFiles({ fs });
+  files.allow(path.join(dir, 'loop.mp4'));
+  // Read raw, deep/../loop.mp4 is a/loop.mp4 (the kernel follows the link first); normalised it is the allowed file.
+  const res = await files.handle(new Request(url(`${dir}/deep/../loop.mp4`)));
+  if (res.status === 200) assert.equal(await res.text(), 'ALLOWED', 'never the file behind the link');
+});

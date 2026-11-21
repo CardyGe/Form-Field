@@ -34,7 +34,9 @@ function createVideoFiles({ fs, recordFile = null }) {
     if (!recordFile || granted.has(p)) return;
     granted.add(p);
     const list = [...granted].slice(-MAX_RECORD);
-    saved = saved.then(() => fs.writeFile(recordFile, JSON.stringify(list))).catch(() => {});
+    // Written whole: a temporary file, then a rename, so a crash mid-write never leaves half a record.
+    const temporary = `${recordFile}.${process.pid}.tmp`;
+    saved = saved.then(async () => { await fs.writeFile(temporary, JSON.stringify(list)); await fs.rename(temporary, recordFile); }).catch(() => fs.rm?.(temporary, { force: true }).catch(() => {}));
   };
   /** Puts a video file on the list. record: Greg chose it here (a dialog, or a show he opened), so it is kept. */
   const allow = (p, { record = false } = {}) => {
