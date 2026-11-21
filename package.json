@@ -16,6 +16,7 @@
     "test:interaction": "npm run build && node scripts/verify-canvas-interaction.mjs",
     "test:zoom": "npm run build && node scripts/verify-zoom-quality.mjs",
     "package": "node scripts/package.mjs",
+    "bench": "env -u ELECTRON_RUN_AS_NODE electron scripts/bench.cjs",
     "build:media": "node scripts/build-media-tools.mjs",
     "test:ui": "npm run build && node scripts/verify-ui.mjs",
     "test:workspace": "npm run build && node scripts/verify-workspace-ui.mjs",

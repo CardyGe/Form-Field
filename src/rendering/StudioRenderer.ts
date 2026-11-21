@@ -25,6 +25,7 @@ import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid
 import { finiteEvolving } from '../core/playback';
 import { super8Fragment } from './super8';
 import { super8ProjectorFragment } from './super8-projector';
+import type { GpuTimer } from './gpu-timer';
 import { super8Clock, super8History, super8Transport, SUPER8_HISTORY } from './super8-motion';
 import { sculptureDeformation, sculptureDetail, createSculptureTorusGeometry } from './sculpture';
 import {
@@ -97,7 +98,7 @@ function material(fragmentShader: string, uniforms: Uniforms): THREE.ShaderMater
 /** Chromatic Field with the periodic TILE branch; see surface.ts. */
 function tiledSurfaceMaterial(): THREE.ShaderMaterial {
   const result = material(surfaceFragment, { ...surfaceUniforms(), uTile: { value: new THREE.Vector2() } });
-  result.defines = { TILE: '' };
+  result.defines = { TILE: '' }; result.name = 'tiledSurface';
   return result;
 }
 
@@ -214,6 +215,7 @@ export class StudioRenderer {
   private width = 1;
   private height = 1;
   private disposed = false;
+  private passTimer: GpuTimer | null = null;
   private exporting = false;
   private prepareRevision = 0;
 
@@ -492,7 +494,21 @@ export class StudioRenderer {
   private draw(mat: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget | null): void {
     this.quad.material = mat;
     this.renderer.setRenderTarget(output);
+    const timer = this.passTimer;
+    if (timer === null) { this.renderer.render(this.quadScene, this.quadCamera); return; }
+    timer.begin(mat.name || 'pass');
     this.renderer.render(this.quadScene, this.quadCamera);
+    timer.end();
+  }
+
+  /** Times every fullscreen pass by material name. Pass null to stop; with no timer draw pays one null check. */
+  setPassTimer(timer: GpuTimer | null): void {
+    if (timer !== null) {
+      for (const [key, value] of Object.entries(this)) {
+        if (value instanceof THREE.ShaderMaterial && value.name === '') value.name = key;
+      }
+    }
+    this.passTimer = timer;
   }
 
   private releaseOilTargets(): void {
