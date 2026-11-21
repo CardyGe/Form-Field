@@ -10,7 +10,7 @@
 .map-swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #484848; flex-shrink: 0; }
 .map-shape-list .text-button { min-height: 24px; padding: 2px 6px; font-size: 10px; }
 .map-shape-list .text-button[aria-pressed="false"] { color: var(--muted); }
-.map-status { padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); background: var(--panel); }
+.map-status { display: flex; justify-content: space-between; gap: 12px; padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); background: var(--panel); }
 
 .map-stage:focus { outline: none; }
 .map-inspector { display: grid; align-content: start; gap: 8px; }
@@ -42,26 +42,22 @@
 /* Stage 3: tools, the bar under the stage, groups in the list, Details sections */
 .map-centre { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .map-centre .map-stage { flex: 1; }
-.map-tools, .map-stage-bar { display: flex; align-items: center; gap: 4px; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.map-stage-bar { border-bottom: 0; border-top: 1px solid var(--line); font-size: 11px; }
+.map-tools { display: flex; align-items: center; gap: 4px; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .map-tools .text-button[aria-pressed="true"] { background: var(--raised); color: var(--accent); }
 .map-tool-hint { margin-left: 8px; font-size: 11px; }
 .map-bar-gap { flex: 1; }
 .map-check { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink); }
 .map-inline-range { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .map-inline-range input { width: 90px; }
-.map-shape-list li.map-member { padding-left: 18px; }
 .map-shape-list li.map-group-row .map-shape-name { font-weight: 600; }
 .map-folder { width: 18px; min-height: 24px; padding: 0; border: 0; background: none; color: var(--muted); }
 .map-swatch.blocker { background: repeating-linear-gradient(45deg, #111 0 3px, #777 3px 5px); }
-.map-list-actions { margin-top: 8px; }
 .map-inspector { overflow-y: auto; }
 .map-grid-tool summary { cursor: pointer; font-size: 12px; margin-top: 4px; }
 .map-grid-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 6px 0; }
 .map-group-line { display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 6px; }
 .map-shapes { overflow-x: hidden; }
 .map-shape-list li { min-width: 0; }
-.map-shape-list li.map-member { padding-left: 14px; }
 .map-shape-list .text-button { padding: 2px 4px; }
 .map-photo-button { margin-left: 12px; }
 .map-tints { display: flex; gap: 6px; margin-top: 4px; }
@@ -193,7 +189,6 @@
 .react-link-body { display: grid; gap: 4px; padding-top: 6px; }
 .react-trigger { display: grid; gap: 4px; }
 .react-trigger-head { display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 6px; }
-.map-react-line { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; }
 .live-react { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 8px; }
 .live-react > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
 .live-react .react-to-menu { right: 0; }
@@ -250,3 +245,28 @@ fieldset.layer-controls:disabled { opacity: .55; }
 .look-art.image::after { content: '▣'; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 16px; }
 .map-video-panel, .map-image-panel { display: grid; gap: 6px; }
 .map-video-name { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Audit pass: the Map screen matches Studio and Live. */
+/* Labels and buttons are not text to select, so a drag on the stage never highlights them; fields keep their own selection. */
+.map-shell { user-select: none; -webkit-user-select: none; }
+.map-shell input:not([type="range"]):not([type="checkbox"]), .map-shell textarea, .map-status { user-select: text; -webkit-user-select: text; }
+/* The same lime as Live's sliders and ticks, not the system blue. */
+.map-shell input[type="range"], .map-shell input[type="checkbox"], .map-shell input[type="radio"] { accent-color: var(--accent); }
+.map-shell input[type="range"]:disabled { opacity: .35; }
+/* Header: the status sits where Studio shows its project name, and the actions never wrap onto a second row. */
+.map-actions { flex-wrap: nowrap; gap: 6px; min-width: 0; }
+.map-actions .text-button, .map-actions .primary-button { white-space: nowrap; flex-shrink: 0; }
+.map-actions .divider { margin: 0 2px; flex-shrink: 0; }
+.map-actions .live-inline select { max-width: 200px; min-width: 0; text-overflow: ellipsis; }
+/* As the window narrows the labels go, as in Studio, and the buttons keep their icons and tooltips. */
+@media (max-width: 1360px) {
+  .map-shell .brand > div:nth-child(2) { display: none; }
+  .map-actions { margin-left: auto; }
+  .map-actions .text-button { font-size: 0; gap: 0; padding: 6px; }
+  .map-actions .text-button > span { font-size: 0; }
+  .map-actions .live-toggle.on:not(:has(svg)) { font-size: 12px; }
+  .map-actions .live-inline { font-size: 0; gap: 0; }
+  .map-actions .live-inline select { font-size: 11px; max-width: 150px; }
+}
+.map-saved { flex-shrink: 0; color: var(--muted); }
+.map-saved.save-failed { color: #f3aaa4; }

@@ -3,6 +3,7 @@ import { useMap, showReacts, type MapTool } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
 import MapShapeList from './MapShapeList';
 import MapIcon from './mapIcons';
+import { Icon } from './LayerControls';
 import MapDetails from './MapDetails';
 import MapSoundStrip from './MapSoundStrip';
 import MapLookBrowser from './MapLookBrowser';
@@ -729,23 +730,27 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   };
 
   return <section className="live-shell map-shell" role="region" aria-label="Map">
-    <header className="app-header">{header}<div className="live-actions">
-      <button className="text-button" disabled={!map.desktop || !map.loaded} title="Open a show file; it replaces the shapes here" onClick={() => void map.openShow()}>Open</button>
-      <button className="text-button" disabled={!map.desktop || !map.loaded} title="Save the show to a file you name" onClick={() => void map.saveShowAs()}>Save As</button>
-      <label className="live-inline">Projector<select aria-label="Projector" value={map.display ?? ''} disabled={map.outputOpen || !map.displays.length} onChange={e => map.setDisplay(Number(e.target.value))}>
-        {map.displays.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
-      {map.outputOpen ? <button className="primary-button" onClick={map.closeOutput}>Close output</button>
-        : <button className="primary-button" disabled={!map.desktop || map.display === null} title="Show the stage on the chosen projector, full screen · On this screen it opens as a window you can move · Esc closes it" onClick={() => void map.openOutput()}>Open output</button>}
-      <button className={`text-button live-toggle ${map.blackout ? 'on' : ''}`} aria-pressed={map.blackout} onClick={() => map.setBlackout(!map.blackout)}>Blackout</button>
-      <button className={`text-button live-toggle ${map.freeze ? 'on' : ''}`} aria-pressed={map.freeze} title="Hold the picture: the instruments stop where they are" onClick={() => map.setFreeze(!map.freeze)}>Freeze</button>
-      <button className="text-button" aria-pressed={map.testGrid} onClick={() => map.setTestGrid(!map.testGrid)}>Test grid</button>
-      <button className={`text-button live-toggle ${cornersMode ? 'on' : ''}`} aria-pressed={cornersMode} title="Fix a projector that was nudged: drag the four numbered corners (or use the arrow keys) until the picture lands where it did" onClick={() => { setCornersMode(!cornersMode); clearDrag(); }}>Stage corners</button>
-      {(cornersMode || map.show.stageCorners) && <button className="text-button" disabled={!map.show.stageCorners} title="Put the stage corners back at the projector's corners" onClick={() => map.dispatch({ type: 'setStageCorners', corners: null })}>Reset corners</button>}
-      {soloOn && <button className="text-button live-toggle on" title="Only soloed shapes are shown, on the projector too · click to show everything" onClick={() => map.setSolo({ shapes: [], groups: [] })}>Solo on · Clear</button>}
-      <button className="text-button" disabled={!map.selectedId || !map.desktop} title="Flash the selected shape on the projector" onClick={map.identify}>Identify</button>
-      <button className="text-button" disabled={!map.canUndo} title="Undo · ⌘Z" onClick={map.undo}>Undo</button>
-      <button className="text-button" disabled={!map.canRedo} title="Redo · ⇧⌘Z" onClick={map.redo}>Redo</button>
-    </div></header>
+    <header className="app-header">{header}
+      <div className="live-actions map-actions">
+        <button className="text-button" disabled={!map.desktop || !map.loaded} title="Open a show file; it replaces the shapes here" onClick={() => void map.openShow()}><Icon name="folder" size={16} /><span>Open</span></button>
+        <button className="text-button" disabled={!map.desktop || !map.loaded} title="Save the show to a file you name" onClick={() => void map.saveShowAs()}><Icon name="save" size={16} /><span>Save As</span></button>
+        <span className="divider" />
+        <label className="live-inline">Projector<select aria-label="Projector" value={map.display ?? ''} disabled={map.outputOpen || !map.displays.length} onChange={e => map.setDisplay(Number(e.target.value))}>
+          {map.displays.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
+        {map.outputOpen ? <button className="primary-button" onClick={map.closeOutput}>Close output</button>
+          : <button className="primary-button" disabled={!map.desktop || map.display === null} title="Show the stage on the chosen projector, full screen · On this screen it opens as a window you can move · Esc closes it" onClick={() => void map.openOutput()}>Open output</button>}
+        <span className="divider" />
+        <button className={`text-button live-toggle ${map.blackout ? 'on' : ''}`} aria-pressed={map.blackout} title="Black out the projector" onClick={() => map.setBlackout(!map.blackout)}><Icon name="eyeOff" size={16} /><span>Blackout</span></button>
+        <button className={`text-button live-toggle ${map.freeze ? 'on' : ''}`} aria-pressed={map.freeze} title="Hold the picture: the instruments stop where they are" onClick={() => map.setFreeze(!map.freeze)}><Icon name="pause" size={16} /><span>Freeze</span></button>
+        <button className="text-button" aria-pressed={map.testGrid} title="Show a numbered grid and each shape's outline on the projector" onClick={() => map.setTestGrid(!map.testGrid)}><Icon name="grid" size={16} /><span>Test grid</span></button>
+        <button className={`text-button live-toggle ${cornersMode ? 'on' : ''}`} aria-pressed={cornersMode} title="Fix a projector that was nudged: drag the four numbered corners (or use the arrow keys) until the picture lands where it did" onClick={() => { setCornersMode(!cornersMode); clearDrag(); }}><Icon name="focus" size={16} /><span>Stage corners</span></button>
+        {(cornersMode || map.show.stageCorners) && <button className="text-button" disabled={!map.show.stageCorners} title="Put the stage corners back at the projector's corners" onClick={() => map.dispatch({ type: 'setStageCorners', corners: null })}><Icon name="reset" size={16} /><span>Reset corners</span></button>}
+        {soloOn && <button className="text-button live-toggle on" title="Only soloed shapes are shown, on the projector too · click to show everything" onClick={() => map.setSolo({ shapes: [], groups: [] })}>Solo on · Clear</button>}
+        <button className="text-button" disabled={!map.selectedId || !map.desktop} title="Flash the selected shape on the projector" onClick={map.identify}><Icon name="eye" size={16} /><span>Identify</span></button>
+        <span className="divider" />
+        <button className="icon-button" aria-label="Undo" disabled={!map.canUndo} title="Undo · ⌘Z" onClick={map.undo}><Icon name="undo" /></button>
+        <button className="icon-button" aria-label="Redo" disabled={!map.canRedo} title="Redo · ⇧⌘Z" onClick={map.redo}><Icon name="redo" /></button>
+      </div></header>
     <div className="map-body">
       <aside className="live-column map-shapes" aria-label="Shapes">
         <div className="map-list-head"><h2>Shapes <span className="muted-text">{map.show.shapes.length || ''}</span></h2>
@@ -781,7 +786,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} liveStatus={localLive} videoStatus={map.outputOpen ? map.wallState?.videos ?? {} : localVideos} />
       </aside>
     </div>
-    <footer className="map-status" role="status">{status}</footer>
+    <footer className="map-status" role="status"><span>{status}</span>{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
     {looksOpen && lookShape && <MapLookBrowser current={currentLook(lookShape)} colour={lookShape.colour} onPick={value => act.play(lookShape.id, value, sharedSelection || linkedChanges)} onClose={() => setLooksOpen(false)} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label={menu.shapeId ? 'Shape' : 'Stage'} entries={menuEntries(menu.shapeId)} onClose={() => setMenu(null)} />}
   </section>;

@@ -9,28 +9,20 @@ import { shouldCommit } from '../map/keys';
 import type { Shape } from '../map/show';
 import { BORDER_MAX, BRIGHTNESS_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, ZOOM_RANGE, isShapeLocked, type Placement, type PlacementKind } from '../map/show';
 import { ownCornersPinnable } from '../map/placement';
-import { REACTIONS, reactionLinks, reactsLabel, targetRange, type Reaction } from '../map/targets';
+import { reactsLabel } from '../map/targets';
 import { LIVE_SOURCE_ID, RUN_LAPS, RUN_LENGTH, STAGGER_MAX, TEMPO_SYNC_BEATS, isVideoId, type FollowOutline, type Group } from '../map/show';
 import { isInstrument } from '../core/instruments';
 import MapLiveCard from './MapLiveCard';
 import MapVideoPanel from './MapVideoPanel';
 import MapEffectTab from './MapEffectTab';
 import MapSoundTab from './MapSoundTab';
-import { LOOK_LABELS } from '../live/settings';
 import { ReactTo, linkFor } from './ReactControls';
 import { newItemId } from './mapActions';
-import { signalLabel } from '../react/signals';
 import { PRESETS } from '../core/project';
-import { KIND_LABELS } from '../core/library';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, POUR, SOLAR } from '../core/palettes';
 
 type Map = ReturnType<typeof useMap>;
 
-/** The Library, grouped as Studio groups it. */
-const LIBRARY = Object.entries(PRESETS.reduce<Record<string, typeof PRESETS>>((groups, preset) => {
-  (groups[preset.kind] ??= []).push(preset);
-  return groups;
-}, {})).map(([kind, presets]) => ({ label: KIND_LABELS[kind as keyof typeof KIND_LABELS] ?? kind, presets }));
 const PALETTES: [string, string[]][] = [
   ['Neon strata', NEON_STRATA], ['Acid drip', ACID_DRIP], ['Pop portal', POP_PORTAL], ['Hot signal', HOT_SIGNAL], ['Lime violet', LIME_VIOLET],
   ['Electric', ELECTRIC], ['Candy', CANDY], ['Solar', SOLAR], ['Cyan yellow', CYAN_YELLOW], ['Pour', POUR],
@@ -84,13 +76,9 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
   const many = map.selectedIds.length > 1;
   const shape = map.show.shapes.find(s => s.id === map.selectedId) ?? null;
   const locked = shape ? isShapeLocked(map.show, shape) : false;
-  const source = shape?.sourceId ? map.show.sources.find(s => s.id === shape.sourceId) ?? null : null;
   const group = shape?.groupId ? map.show.groups.find(g => g.id === shape.groupId) ?? null : null;
   const ring = shape && map.selectedIndex !== null ? (map.selectedRing < 0 ? shape.points : shape.holes[map.selectedRing]) : null;
   const point = ring && map.selectedIndex !== null ? ring[map.selectedIndex] ?? null : null;
-  // Shapes playing this shape's instrument, and other shapes whose instrument it could share.
-  const sharers = source ? map.show.shapes.filter(s => s.sourceId === source.id) : [];
-  const playing = shape ? map.show.shapes.filter(s => s.id !== shape.id && s.sourceId !== null && s.sourceId !== shape.sourceId) : [];
   const place = shape?.placement ?? { kind: 'fit' as PlacementKind, zoom: 1, offset: { x: 0, y: 0 }, turn: 0, pin: null };
   const setPlacement = (change: Partial<Placement>) => { if (shape) map.dispatch({ type: 'setPlacement', shapeId: shape.id, placement: change }); };
 
@@ -120,10 +108,6 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
     if (!/^#[0-9a-f]{6}$/i.test(colour)) { setNote('Colour must look like #rrggbb'); return; }
     setNote(null);
     if (colour !== shape.colour) map.dispatch({ type: 'setColour', shapeId: shape.id, colour });
-  };
-  const choosePlays = (value: string) => {
-    if (value === 'colour' || value === 'grid') map.dispatch({ type: 'setContent', shapeId: shape.id, content: { kind: value } });
-    else if (value.startsWith('preset:')) map.dispatch({ type: 'setContent', shapeId: shape.id, content: { kind: 'preset', presetId: value.slice('preset:'.length), sourceId: newSourceId(), seed: randomSeed() } });
   };
   const commitPosition = (axis: 'x' | 'y', text: string) => {
     if (!point || map.selectedIndex === null) return;
