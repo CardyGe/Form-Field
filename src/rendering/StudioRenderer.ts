@@ -3,14 +3,14 @@ import { InstrumentRenderer } from './InstrumentRenderer';
 import { isInstrument } from '../core/instruments';
 import * as THREE from 'three';
 import { GraphicRenderer } from './GraphicRenderer';
-import { KaleidoscopeRenderer } from './KaleidoscopeRenderer';
+import { KaleidoscopeRenderer, kaleidoscopeInputMode } from './KaleidoscopeRenderer';
 import { graphicRenderPlan } from './graphic-view';
 import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
-import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
+import { echoAppliedInSource, echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames, kaleidoscopeInput } from './feedback';
 import { slitActive, slitFragment, sliceDelays } from './slitscan';
-import { parameterDefinitions } from '../core/project';
+import { KALEIDOSCOPE_INPUT, parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
 import { fractalFragment } from './fractal';
@@ -149,6 +149,12 @@ export class StudioRenderer {
   private readonly copy = material(`precision highp float;varying vec2 vUv;uniform sampler2D uImage;void main(){gl_FragColor=texture2D(uImage,vUv);}`, { uImage: { value: null } });
   private readonly graphics = new GraphicRenderer();
   private kaleidoscope: KaleidoscopeRenderer | null = null;
+  /** A mip-mapped copy of the composite, held only while a visible Kaleidoscope folds the layer below. */
+  private belowCapture: THREE.WebGLRenderTarget | null = null;
+  /** The capture for the layer being drawn; null when there is nothing below it. */
+  private belowInput: THREE.Texture | null = null;
+  /** The previous output during a feedback step, for a source that folds its own echo. */
+  private feedbackHistory: THREE.Texture | null = null;
   private readonly instruments = new InstrumentRenderer();
   private readonly accumA = target();
   private readonly accumB = target();
@@ -463,6 +469,11 @@ export class StudioRenderer {
         required.add(this.assetKey(layer.image.dataUrl, false, repeat));
         pending.push(this.loadAsset(layer.image.dataUrl, false, repeat).promise);
       }
+      if (layer.kind === 'kaleidoscope' && layer.image) {
+        required.add(this.assetKey(layer.image.dataUrl, false));
+        // A picture that cannot be decoded leaves the layer on its motif.
+        pending.push(this.loadAsset(layer.image.dataUrl, false).promise.catch(() => this.fallback));
+      }
       if (layer.mask.kind === 'image' && layer.mask.dataUrl) {
         required.add(this.assetKey(layer.mask.dataUrl, true));
         pending.push(this.loadAsset(layer.mask.dataUrl, true).promise);
@@ -751,8 +762,14 @@ export class StudioRenderer {
       this.draw(this.image, this.source);
     } else if (layer.kind === 'kaleidoscope') {
       this.kaleidoscope ??= new KaleidoscopeRenderer();
+      const asset = layer.image ? this.assets.get(this.assetKey(layer.image.dataUrl, false)) : undefined;
+      const picture = asset?.texture.image ? asset.texture : null;
+      const mode = kaleidoscopeInputMode(layer, { image: picture !== null, hasBelow: this.belowInput !== null });
       this.kaleidoscope.draw({ layer, phase, width: this.width, height: this.height, target: this.source,
-        draw: (m, t) => this.draw(m, t), input: null, history: null, imageAspect: 1 });
+        draw: (m, t) => this.draw(m, t), mode, imageFit: layer.image?.fit,
+        input: mode === 'image' ? picture : mode === 'below' ? this.belowInput : null,
+        history: mode === 'feedback' ? this.feedbackHistory : null,
+        imageAspect: mode === 'image' && layer.image ? layer.image.width / layer.image.height : aspect });
     } else {
       const u = this.sculptureUniforms;
       for(const [key,value] of Object.entries(SCULPTURE_SHAPE_DEFAULTS))u[`studio${key[0].toUpperCase()}${key.slice(1)}`].value=number(layer,key,value);
@@ -816,6 +833,8 @@ export class StudioRenderer {
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
     this.releaseFeedback(project);
+    this.releaseBelowCapture(project);
+    let hasBelow = false;
     for (const original of project.layers) {
       if (!original.visible) continue;
       // Feedback layers advance in whole loop frames: every frame of the
@@ -825,6 +844,8 @@ export class StudioRenderer {
       const sourcePhase = this.sourcePhase(original, framePhase, duration);
       const layer = evaluateLayer(original, sourcePhase);
       if (layer.opacity <= 0) continue;
+      this.belowInput = hasBelow && layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) === KALEIDOSCOPE_INPUT.below
+        ? this.captureBelow(below.texture) : null;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration);
@@ -872,12 +893,33 @@ export class StudioRenderer {
       }
       this.draw(this.composite, next);
       [below, next] = [next, below];
+      hasBelow = true;
     }
+    this.belowInput = null;
     this.finish.uniforms.uImage.value = below.texture;
     (this.finish.uniforms.uBackground.value as THREE.Color).set(project.background);
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
     this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
     this.draw(this.finish, this.linearOutput);
+  }
+
+  /** Copies the composite so far, so the Kaleidoscope never samples a target being written. */
+  private captureBelow(composite: THREE.Texture): THREE.Texture {
+    if (!this.belowCapture) {
+      this.belowCapture = target();
+      this.belowCapture.texture.generateMipmaps = true;
+      this.belowCapture.texture.minFilter = THREE.LinearMipmapLinearFilter;
+    }
+    if (this.belowCapture.width !== this.width || this.belowCapture.height !== this.height) this.belowCapture.setSize(this.width, this.height);
+    this.copy.uniforms.uImage.value = composite;
+    this.draw(this.copy, this.belowCapture);
+    return this.belowCapture.texture;
+  }
+
+  private releaseBelowCapture(project: Project): void {
+    if (!this.belowCapture) return;
+    if (project.layers.some(l => l.visible && l.kind === 'kaleidoscope' && kaleidoscopeInput(l.params) === KALEIDOSCOPE_INPUT.below)) return;
+    this.belowCapture.dispose(); this.belowCapture = null;
   }
 
   /**
@@ -981,14 +1023,18 @@ export class StudioRenderer {
   /** One feedback step: the source at `phase` over the faded, transformed echo in `from`. */
   private feedbackStep(original: Layer, phase: number, total: number, duration: number, from: THREE.WebGLRenderTarget, to: THREE.WebGLRenderTarget): void {
     const layer = evaluateLayer(original, this.sourcePhase(original, phase, duration));
-    const source = slitActive(original) ? this.slitSource(original, phase, total, duration) : this.plainSource(original, phase, duration);
+    this.feedbackHistory = from.texture;
+    let source: THREE.Texture;
+    try { source = slitActive(original) ? this.slitSource(original, phase, total, duration) : this.plainSource(original, phase, duration); }
+    finally { this.feedbackHistory = null; }
     const p = echoSettings(layer, phase), u = this.feedback.uniforms;
     u.uSource.value = source; u.uPrevious.value = from.texture;
     u.uAspect.value = this.width / this.height;
     u.uZoom.value = p.echoZoom ?? 1;
     u.uRotate.value = (p.echoRotate ?? 0) * Math.PI / 180;
     (u.uDrift.value as THREE.Vector2).set(p.echoDriftX ?? 0, p.echoDriftY ?? 0);
-    u.uFade.value = echoFade(p);
+    // A source that folded its own echo already holds the previous frame.
+    u.uFade.value = echoAppliedInSource(layer) ? 0 : echoFade(p);
     u.uHue.value = (p.echoHue ?? 0) * Math.PI / 180;
     u.uWarp.value = p.echoMelt ?? 0;
     u.uMode.value = p.echoBlend ?? 0;
@@ -1210,6 +1256,7 @@ export class StudioRenderer {
     this.releaseOilTargets();
     this.graphicSource?.dispose(); this.graphicSource = null;
     this.super8Source?.dispose(); this.super8Source = null;
+    this.belowCapture?.dispose(); this.belowCapture = null;
     for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
     this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
     this.feedbackStates.clear();

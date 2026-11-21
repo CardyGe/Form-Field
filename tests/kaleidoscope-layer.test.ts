@@ -6,6 +6,7 @@ import { KIND_LABELS } from '../src/core/library';
 import { canvasAxes } from '../src/core/canvas-interaction';
 import { kaleidoscopeGLSL, kaleidoscopeUniforms } from '../src/rendering/kaleidoscope-glsl';
 import * as kaleidoscopeMath from '../src/core/kaleidoscope-math';
+import { kaleidoscopeImageFit, kaleidoscopeInputMode } from '../src/rendering/KaleidoscopeRenderer';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const withLayer = (kind: 'kaleidoscope' | 'surface') => { const p = createProject(); p.layers = [createLayer(kind)]; return p; };
@@ -156,4 +157,42 @@ test('parity uniforms carry the current centres and average, and close over the 
   assert.deepEqual(u.uKParityAverage, [average.coverage, average.ink]);
   assert.notDeepEqual(kaleidoscopeUniforms(l, .1).uKParityAverage, u.uKParityAverage);
   assert.deepEqual(kaleidoscopeUniforms(l, 1).uKParityAverage, kaleidoscopeUniforms(l, 0).uKParityAverage);
+});
+
+test('the input mode falls back calmly and never needs a ready input', () => {
+  const on = (input: number, echo = 0) => kLayer({ input, echo });
+  const { motif, image, below, feedback } = KALEIDOSCOPE_INPUT;
+  const all = { image: true, hasBelow: true }, none = { image: false, hasBelow: false };
+  assert.equal(kaleidoscopeInputMode(on(motif), all), 'motif');
+  assert.equal(kaleidoscopeInputMode(on(image), all), 'image');
+  assert.equal(kaleidoscopeInputMode(on(image), none), 'motif', 'a missing or loading image shows the motif');
+  assert.equal(kaleidoscopeInputMode(on(below), all), 'below');
+  assert.equal(kaleidoscopeInputMode(on(below), none), 'empty', 'the bottom layer has nothing to fold');
+  assert.equal(kaleidoscopeInputMode(on(feedback, .5), none), 'feedback');
+  assert.equal(kaleidoscopeInputMode(on(feedback, 0), all), 'motif', 'no echo means no history');
+});
+
+test('the input mode rounds and clamps a modulated input like the uniforms do', () => {
+  const ready = { image: true, hasBelow: true };
+  assert.equal(kaleidoscopeInputMode(kLayer({ input: .6 }), ready), 'image');
+  assert.equal(kaleidoscopeInputMode(kLayer({ input: 1.6 }), ready), 'below');
+  assert.equal(kaleidoscopeInputMode(kLayer({ input: 99, echo: .5 }), ready), 'feedback');
+  assert.equal(kaleidoscopeInputMode(kLayer({ input: NaN }), ready), 'motif');
+});
+
+test('image fit keeps the picture aspect for cover and contain', () => {
+  assert.deepEqual(kaleidoscopeImageFit(1, 'cover'), { x: 1, y: 1 });
+  assert.deepEqual(kaleidoscopeImageFit(2, 'cover'), { x: .5, y: 1 }, 'wide: crop the sides');
+  assert.deepEqual(kaleidoscopeImageFit(.5, 'cover'), { x: 1, y: .5 }, 'tall: crop top and bottom');
+  assert.deepEqual(kaleidoscopeImageFit(2, 'contain'), { x: 1, y: 2 }, 'wide: bars above and below');
+  assert.deepEqual(kaleidoscopeImageFit(.5, 'contain'), { x: 2, y: 1 }, 'tall: bars at the sides');
+  assert.deepEqual(kaleidoscopeImageFit(NaN, 'cover'), { x: 1, y: 1 });
+  assert.deepEqual(kaleidoscopeImageFit(0, 'contain'), { x: 1, y: 1 });
+});
+
+test('a visible Kaleidoscope blocks tile edges on every input', () => {
+  for (const input of Object.values(KALEIDOSCOPE_INPUT)) {
+    const p = withLayer('kaleidoscope'); p.layers[0].params.input = input;
+    assert.equal(tileBlockers(p).length, 1, `input ${input}`);
+  }
 });

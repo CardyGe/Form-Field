@@ -90,10 +90,11 @@ uniform int uKGroup, uKSpiral, uKSpiralA, uKSpiralB, uKMotif;
 uniform float uKSectors, uKCell, uKSpiralScale, uKZoom, uKPhase;
 uniform float uKSourceX, uKSourceY, uKSourceScale, uKSourceTurn, uKSourceDrift;
 uniform float uKWarpIn, uKWarpOut, uKMotifScale, uKLineWidth, uKHasImage;
+uniform float uKAssociated, uKEmpty, uKFeedback, uKGain;
 uniform vec2 uKImageFit, uKParityAverage;
 uniform vec2 uKParityCentres[3];
 uniform vec3 uKPalette[6];
-uniform sampler2D uKImage;
+uniform sampler2D uKImage, uKHistory;
 const float K_PI = 3.14159265358979;
 const float K_TAU = 6.28318530717959;
 const int K_MAX_PASSES = 6;
@@ -195,22 +196,25 @@ float kFade(vec2 dx, vec2 dy) {
 }
 float kWeight() { return clamp(.03 * uKLineWidth, .005, .18); }
 
-vec3 kLineField(vec2 q, vec2 dx, vec2 dy) {
+// On the feedback input the motif's ground is clear, so the folded history shows between its marks.
+vec4 kGround() { return uKFeedback > .5 ? vec4(0.) : vec4(uKPalette[5], 1.); }
+
+vec4 kLineField(vec2 q, vec2 dx, vec2 dy) {
   float t = K_TAU * q.x;
   // Four lines per tile: a whole count, so the field still repeats once per unit of q.
   float height = 4. * q.y + .55 * sin(t + uKPhase) + .18 * sin(2. * t - 2. * uKPhase);
   vec2 slope = vec2(K_TAU * (.55 * cos(t + uKPhase) + .36 * cos(2. * t - 2. * uKPhase)), 4.);
   float w = kWeight();
   float cover = kPulse(height, w, abs(dot(slope, dx)) + abs(dot(slope, dy)));
-  vec3 ground = uKPalette[5];
-  vec3 ink = mix(uKPalette[0], uKPalette[2], .5 + .5 * cos(t));
-  vec3 average = mix(ground, .5 * (uKPalette[0] + uKPalette[2]), 2. * w);
+  vec4 ground = kGround();
+  vec4 ink = vec4(mix(uKPalette[0], uKPalette[2], .5 + .5 * cos(t)), 1.);
+  vec4 average = mix(ground, vec4(.5 * (uKPalette[0] + uKPalette[2]), 1.), 2. * w);
   return mix(mix(ground, ink, cover), average, kFade(dx, dy));
 }
 
 float kSquare(vec2 q, float w, vec2 footprint) { return kPulse(q.x, w, footprint.x) * kPulse(q.y, w, footprint.y); }
 
-vec3 kSquareTile(vec2 q, vec2 dx, vec2 dy) {
+vec4 kSquareTile(vec2 q, vec2 dx, vec2 dy) {
   vec2 footprint = abs(dx) + abs(dy);
   // Off the mirror lines, so the fold shows in the tile instead of landing on its symmetry.
   q += vec2(.19, .07) + .04 * vec2(cos(uKPhase), sin(uKPhase));
@@ -219,10 +223,10 @@ vec3 kSquareTile(vec2 q, vec2 dx, vec2 dy) {
   float core = .15 + .05 * sin(uKPhase);
   float ring = kSquare(q, outer, footprint) - kSquare(q, inner, footprint);
   float centre = kSquare(q, core, footprint);
-  vec3 ground = uKPalette[5];
-  vec3 color = ground * (1. - ring - centre) + uKPalette[1] * ring + uKPalette[3] * centre;
+  vec4 ground = kGround(), line = vec4(uKPalette[1], 1.), middle = vec4(uKPalette[3], 1.);
+  vec4 color = ground * (1. - ring - centre) + line * ring + middle * centre;
   float ringArea = 4. * (outer * outer - inner * inner), coreArea = 4. * core * core;
-  vec3 average = ground * (1. - ringArea - coreArea) + uKPalette[1] * ringArea + uKPalette[3] * coreArea;
+  vec4 average = ground * (1. - ringArea - coreArea) + line * ringArea + middle * coreArea;
   return mix(color, average, kFade(dx, dy));
 }
 
@@ -233,7 +237,7 @@ float kDisc(vec2 q, vec2 centre, float radius, float footprint) {
 }
 
 // Each disc drifts around its own home, so parity changes only where an edge passes.
-vec3 kCircleParity(vec2 q, vec2 dx, vec2 dy) {
+vec4 kCircleParity(vec2 q, vec2 dx, vec2 dy) {
   float footprint = max(length(dx) + length(dy), 1e-5);
   const vec3 radii = vec3(${PARITY_RADII.map(float).join(',')});
   float a = kDisc(q, uKParityCentres[0], radii.x, footprint);
@@ -241,30 +245,48 @@ vec3 kCircleParity(vec2 q, vec2 dx, vec2 dy) {
   float c = kDisc(q, uKParityCentres[2], radii.z, footprint);
   float parity = a + b - 2. * a * b;
   parity = parity + c - 2. * parity * c;
-  vec3 ground = uKPalette[5];
-  vec3 ink = mix(uKPalette[4], uKPalette[2], .5 + .5 * cos(K_TAU * (q.x + q.y)));
+  vec4 ground = kGround();
+  vec4 ink = vec4(mix(uKPalette[4], uKPalette[2], .5 + .5 * cos(K_TAU * (q.x + q.y))), 1.);
   // The true tile average for this phase, including how the ink blend falls inside the mask.
-  vec3 average = ground * (1. - uKParityAverage.x) + uKPalette[4] * (uKParityAverage.x - uKParityAverage.y) + uKPalette[2] * uKParityAverage.y;
+  vec4 average = ground * (1. - uKParityAverage.x) + vec4(uKPalette[4], 1.) * (uKParityAverage.x - uKParityAverage.y) + vec4(uKPalette[2], 1.) * uKParityAverage.y;
   return mix(mix(ground, ink, parity), average, kFade(dx, dy));
 }
 
 vec4 kMotif(vec2 p, vec2 dx, vec2 dy) {
   vec2 q = p * uKMotifScale;
   dx *= uKMotifScale; dy *= uKMotifScale;
-  vec3 color = uKMotif == 0 ? kLineField(q, dx, dy) : uKMotif == 1 ? kSquareTile(q, dx, dy) : kCircleParity(q, dx, dy);
-  return vec4(color, 1.);
+  return uKMotif == 0 ? kLineField(q, dx, dy) : uKMotif == 1 ? kSquareTile(q, dx, dy) : kCircleParity(q, dx, dy);
 }
 
-// One filtered tap, read through a period-1 triangle wave so it closes around the spiral.
-vec4 kImage(vec2 p, vec2 dx, vec2 dy) {
+// The picture's coordinate, read through a period-1 triangle wave so it closes around the spiral.
+vec2 kPictureUv(vec2 p, out vec2 slope) {
   float scale = uKSpiral == 1 ? 1. : .5;
   vec2 x = fract(uKSpiral == 1 ? p : .75 + scale * p);
-  vec2 slope = 2. * scale * vec2(x.x > .5 ? 1. : -1., x.y > .5 ? 1. : -1.) * uKImageFit;
-  vec2 uv = .5 + (abs(2. * x - 1.) - .5) * uKImageFit;
-  return textureGrad(uKImage, uv, dx * slope, dy * slope);
+  slope = 2. * scale * vec2(x.x > .5 ? 1. : -1., x.y > .5 ? 1. : -1.) * uKImageFit;
+  return .5 + (abs(2. * x - 1.) - .5) * uKImageFit;
+}
+
+// One filtered tap. A fit above 1 on an axis is a contain bar: its edge is box filtered exactly.
+vec4 kImage(vec2 p, vec2 dx, vec2 dy) {
+  vec2 slope;
+  vec2 uv = kPictureUv(p, slope);
+  vec2 gx = dx * slope, gy = dy * slope;
+  vec4 color = textureGrad(uKImage, uv, gx, gy);
+  // Image files are straight alpha; the composite below is already associated.
+  if (uKAssociated < .5) color.rgb *= color.a;
+  vec2 footprint = max(abs(gx) + abs(gy), vec2(1e-6));
+  vec2 inside = clamp((min(uv + .5 * footprint, vec2(1.)) - max(uv - .5 * footprint, vec2(0.))) / footprint, 0., 1.);
+  return color * (uKImageFit.x > 1. ? inside.x : 1.) * (uKImageFit.y > 1. ? inside.y : 1.);
+}
+
+// The history has no mip chain, so it is read at level 0 with linear filtering.
+vec4 kHistory(vec2 p) {
+  vec2 slope;
+  return textureLod(uKHistory, kPictureUv(p, slope), 0.);
 }
 
 vec4 kaleidoscopeColor(vec2 frame, vec2 dx, vec2 dy) {
+  if (uKEmpty > .5) return vec4(0.);
   float c = cos(uKSourceTurn), s = sin(uKSourceTurn);
   mat2 turn = mat2(c, s, -s, c) / uKSourceScale;
   vec2 drift = .25 * uKSourceDrift * vec2(cos(uKPhase), sin(uKPhase));
@@ -279,6 +301,10 @@ vec4 kaleidoscopeColor(vec2 frame, vec2 dx, vec2 dy) {
     p = foldDomain(p, dx, dy);
   }
   p = kWarpAfter(p, dx, dy);
+  if (uKFeedback > .5) {
+    vec4 motif = kMotif(p, dx, dy);
+    return motif + (1. - motif.a) * uKGain * kHistory(p);
+  }
   return uKHasImage > .5 ? kImage(p, dx, dy) : kMotif(p, dx, dy);
 }
 `;

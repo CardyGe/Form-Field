@@ -1,5 +1,5 @@
 // Renderer benchmark harness.
-//   npm run bench -- --case <id|a,b|all> --size 1080p|4k --frames 300 --out <file.json>
+//   npm run bench -- --case <id|a,b|all> --size 1080p|4k --frames 300 --out <file.json> [--images <dir>]
 // Runs in a hidden Electron window with a throwaway profile; nothing leaves this machine.
 const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('node:fs');
@@ -19,6 +19,8 @@ const caseSelector = option('--case', 'all');
 const size = option('--size', '1080p');
 const frames = Number(option('--frames', '300'));
 const out = path.resolve(process.cwd(), option('--out', path.join(root, 'work', 'bench', 'latest.json')));
+const images = option('--images', null);
+const imageDir = images === null ? null : path.resolve(process.cwd(), images);
 const SIZES = { '1080p': [1920, 1080], '4k': [3840, 2160] };
 if (!SIZES[size]) throw new Error('--size must be 1080p or 4k.');
 if (!Number.isInteger(frames) || frames < 10 || frames > 100000) throw new Error('--frames must be a whole number from 10 up.');
@@ -53,8 +55,14 @@ app.whenReady().then(async () => {
 
   const machine = { model: os.cpus()[0]?.model, cpus: os.cpus().length, memoryGB: Math.round(os.totalmem() / 2 ** 30),
     platform: os.platform(), release: os.release(), arch: os.arch() };
-  ipcMain.handle('bench-config', () => ({ caseSelector, size, width: SIZES[size][0], height: SIZES[size][1], frames }));
+  ipcMain.handle('bench-config', () => ({ caseSelector, size, width: SIZES[size][0], height: SIZES[size][1], frames, images: imageDir !== null }));
   ipcMain.handle('bench-note', (_, text) => { console.log(text); });
+  ipcMain.handle('bench-image', (_, name, base64) => {
+    if (!imageDir) return;
+    if (!/^[\w-]+$/.test(name)) throw new Error(`Bad image name ${name}.`);
+    fs.mkdirSync(imageDir, { recursive: true });
+    fs.writeFileSync(path.join(imageDir, `${name}.png`), Buffer.from(base64, 'base64'));
+  });
   ipcMain.handle('bench-done', (_, report) => {
     const result = { date: new Date().toISOString(), machine, electron: process.versions.electron, chrome: process.versions.chrome, ...report };
     fs.mkdirSync(path.dirname(out), { recursive: true });
