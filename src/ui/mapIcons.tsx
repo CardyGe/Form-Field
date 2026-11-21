@@ -13,6 +13,11 @@ const PATHS: Record<string, string> = {
   close: 'M6 6l12 12M18 6L6 18',
   shuffle: 'M4 7h3l10 10h3M4 17h3l3-3M14 10l3-3h3M17 4l3 3-3 3M17 14l3 3-3 3',
   open: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
+  select: 'M5 3l14 8-6 2-2 6z',
+  rectangle: 'M4 6h16v12H4z',
+  triangle: 'M12 4l9 16H3z',
+  ellipse: 'M12 5c5 0 9 3 9 7s-4 7-9 7-9-3-9-7 4-7 9-7z',
+  pen: 'M4 20l1-4L16 5l3 3L8 19zM14 7l3 3',
 };
 
 export default function MapIcon({ name, size = 14 }: { name: keyof typeof PATHS; size?: number }) {

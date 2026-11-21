@@ -760,9 +760,9 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       </aside>
       <div className="map-centre">
         <div className="map-tools" role="toolbar" aria-label="Tools">
-          {TOOLS.map(t => <button key={t.tool} className="text-button" aria-pressed={map.tool === t.tool} title={`${t.title} · ${t.key}`} onClick={() => chooseTool(t.tool)}>{t.label}</button>)}
+          {TOOLS.map(t => <button key={t.tool} className="text-button map-tool" aria-label={t.label} aria-pressed={map.tool === t.tool} title={`${t.title} · ${t.key}`} onClick={() => chooseTool(t.tool)}><MapIcon name={t.tool} size={15} /><span aria-hidden="true">{t.label}</span><kbd aria-hidden="true">{t.key}</kbd></button>)}
           <button className="text-button map-photo-button" disabled={!map.loaded} title="A photograph of the room or object you are mapping, to trace over. Only on this screen: it never reaches the projector. You can also drop a picture on the stage." onClick={() => photoInput.current?.click()}>{map.show.photo ? 'Room photo ✓' : 'Room photo…'}</button>
-          <span className="muted-text map-tool-hint">{map.tool === 'select' ? 'Alt-drag copies · double-click a side to add a point' : map.tool === 'pen' ? 'Alt on the first click inside the selected shape cuts a hole' : 'Alt-drag inside the selected shape cuts a hole'}</span>
+          {(() => { const hint = map.tool === 'select' ? 'Alt-drag copies · double-click a side to add a point' : map.tool === 'pen' ? 'Alt on the first click inside the selected shape cuts a hole' : 'Alt-drag inside the selected shape cuts a hole'; return <span className="muted-text map-tool-hint" title={hint}>{hint}</span>; })()}
           <span className="map-bar-gap" />
           <label className="map-check" title="Points join other shapes' points and sides, and the stage's edges and centre. Corners on the same spot move together. Hold Ctrl to switch it off for a moment.">
             <input type="checkbox" aria-label="Snap" checked={map.snap} onChange={e => map.setSnap(e.target.checked)} />Snap</label>

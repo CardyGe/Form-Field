@@ -275,3 +275,14 @@ fieldset.layer-controls:disabled { opacity: .55; }
 .map-shell select:disabled { opacity: .5; cursor: default; }
 /* The first thing to do with a new shape: a visible button, not a link. */
 .map-choose { min-height: 32px; padding: 5px 12px; font-size: 12px; }
+/* Drawing tools: an icon, the name and the key, as the shortcut is the quick way to switch. */
+.map-tool { gap: 6px; }
+.map-tool kbd { font: inherit; font-size: 10px; min-width: 14px; padding: 0 3px; text-align: center; border: 1px solid #484848; border-radius: 3px; color: var(--muted); }
+.map-tools .map-tool[aria-pressed="true"] kbd { border-color: #5c6843; color: var(--accent); }
+/* One row: the hint shortens with an ellipsis before anything else moves. */
+.map-tools { flex-wrap: nowrap; }
+.map-tools > button, .map-tools > label { flex-shrink: 0; }
+.map-tools .map-tool-hint { flex: 1 1 0; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-tools .map-bar-gap { flex: 0 0 4px; }
+/* With a room photo loaded there are more controls than fit on one row, so the strip may wrap. */
+.map-tools:has(.map-inline-range) { flex-wrap: wrap; }
