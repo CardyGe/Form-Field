@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyEdit, type EditAction } from '../src/map/editor';
 import { createShow, validateShow, MAX_SOURCES, type CurvePoint, type ShowDocument } from '../src/map/show';
-import { staggerDelays, chaseOffsets, rotatePalette, outlinePolygon, nextAutoScene, autoAdvanceDue } from '../src/map/wild';
+import { staggerDelays, chaseOffsets, rotatePalette, outlinePolygon, nextAutoScene, autoAdvanceDue, runHead, outlineLength, runSamples } from '../src/map/wild';
 import { initialMapState, mapReducer } from '../src/map/state';
 
 const sq = (x0: number, y0: number, x1: number, y1: number): CurvePoint[] => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
@@ -130,4 +130,46 @@ test('every setter keeps values in range, and refuses on a locked shape or group
   const locked = ok(show, { type: 'setGroupLocked', groupId: 'g', locked: true });
   refused(locked, { type: 'setGroupStagger', groupId: 'g', seconds: .2 }, 'locked');
   refused(locked, { type: 'varyEach', groupId: 'g', sourceIds: ['v1', 'v2', 'v3'], entropy: 1 }, 'locked');
+});
+
+// ---- Task 2: border runs ----
+
+test('runHead: laps a minute from the clock, or with the tempo every N beats, plus a chase offset, always 0..1', () => {
+  const run = { lapsPerMinute: 30, beats: null, length: .2 };
+  assert.equal(runHead(run, 0, null, 0), 0);
+  assert.ok(Math.abs(runHead(run, 1, null, 0) - .5) < 1e-9, 'half a lap a second');
+  assert.ok(Math.abs(runHead(run, 3, null, 0) - .5) < 1e-9, 'wraps');
+  assert.ok(Math.abs(runHead(run, 1, null, .75) - .25) < 1e-9, 'offset wraps');
+  const tempo = { lapsPerMinute: 30, beats: 4, length: .2 };
+  assert.ok(Math.abs(runHead(tempo, 99, 2, 0) - .5) < 1e-9, 'two beats of four');
+  assert.ok(Math.abs(runHead(tempo, 1, null, 0) - .5) < 1e-9, 'no clock: its own speed');
+});
+
+test('outlineLength measures the outline in stage pixels, along curves too', () => {
+  assert.ok(Math.abs(outlineLength(sq(0, 0, .5, .5)) - (960 + 540) * 2) < 1e-6);
+  // A circle of radius r made of four curved corners: its length is close to 2πr.
+  const k = .5523, r = .1, c = { x: .5, y: .5 };
+  const circle: CurvePoint[] = [0, 1, 2, 3].map(i => {
+    const a = i * Math.PI / 2, d = { x: -Math.sin(a), y: Math.cos(a) };
+    const p = { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) };
+    return { ...p, in: { x: -d.x * r * k, y: -d.y * r * k }, out: { x: d.x * r * k, y: d.y * r * k } };
+  });
+  // In stage fractions; the stage is wider than tall, so on the stage it is an ellipse.
+  const len = outlineLength(circle);
+  const a = r * 1920, b = r * 1080, ramanujan = Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
+  assert.ok(Math.abs(len - ramanujan) / ramanujan < .01, `${len} vs ${ramanujan}`);
+});
+
+test('runSamples walk the outer outline at an even spacing, even along curves, their positions 0..1 by distance', () => {
+  const k = .5523, r = .1;
+  const circle: CurvePoint[] = [0, 1, 2, 3].map(i => {
+    const a = i * Math.PI / 2, d = { x: -Math.sin(a), y: Math.cos(a) };
+    return { x: .5 + r * Math.cos(a), y: .5 + r * Math.sin(a), in: { x: -d.x * r * k, y: -d.y * r * k }, out: { x: d.x * r * k, y: d.y * r * k } };
+  });
+  const samples = runSamples(circle, 4);
+  assert.ok(samples.length > 100);
+  const gaps = samples.slice(1).map((s, i) => Math.hypot(s.x - samples[i].x, s.y - samples[i].y));
+  assert.ok(Math.max(...gaps) < 4.01 && Math.min(...gaps) > 3.5, `${Math.min(...gaps)}..${Math.max(...gaps)}`);
+  assert.equal(samples[0].t, 0);
+  assert.ok(samples.every((s, i) => i === 0 || s.t > samples[i - 1].t) && samples.at(-1)!.t < 1);
 });

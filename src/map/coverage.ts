@@ -6,6 +6,7 @@ import { ringPx, traceRing } from './draw';
 import { drawFlatPattern, drawPattern } from './pattern';
 import { effectiveSoftEdge, fadeSize } from './edge';
 import type { Shape } from './show';
+import { runSamples } from './wild';
 
 export interface Box { x: number; y: number; w: number; h: number }
 /** Pictures are at most this many pixels a side, which a shape on a 1920 × 1080 stage never needs. */
@@ -59,6 +60,26 @@ export function borderPicture(shape: Shape, path: Path2D, box: Box, colour: stri
   ctx.strokeStyle = colour; ctx.lineWidth = shape.border.width * 2; ctx.lineJoin = 'round';
   if (shape.border.glow > 0) { ctx.shadowColor = colour; ctx.shadowBlur = shape.border.glow; }
   ctx.stroke(path);
+  ctx.restore();
+  return canvas;
+}
+
+/**
+ * Border runs: each border pixel's position round the outer outline, 0..1, as an angle (red the cosine, green the
+ * sine), so neighbours blended by the edges and the filtering still read as a position between them, and the lap's
+ * end meets its start with no seam. Holes' borders are left empty: a run goes round the outer outline only.
+ */
+export function borderRunPicture(shape: Shape, path: Path2D, box: Box): OffscreenCanvas {
+  const { canvas, ctx } = over(box, 1);
+  const samples = runSamples(shape.points, 3);
+  ctx.save();
+  ctx.clip(path, 'evenodd');
+  ctx.lineWidth = (shape.border.width + shape.border.glow) * 2 + 2; ctx.lineCap = 'round';
+  for (let i = 0; i < samples.length; i++) {
+    const a = samples[i], b = samples[(i + 1) % samples.length], angle = a.t * Math.PI * 2;
+    ctx.strokeStyle = `rgb(${Math.round(127.5 + 127.5 * Math.cos(angle))},${Math.round(127.5 + 127.5 * Math.sin(angle))},0)`;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
   ctx.restore();
   return canvas;
 }

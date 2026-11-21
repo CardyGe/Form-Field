@@ -22,10 +22,11 @@ import { ringBounds } from './outline';
 import { IDENTITY, invert, multiply, quadToQuad, apply, type H3 } from './homography';
 import { coverCrop, landing, landingAspect, sourceSizeFor, type Landing } from './placement';
 import { Gpu, type ShapeDraw, type Texture } from './gpu';
+import { chaseOffsets, runHead } from './wild';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
 import type { Link } from '../react/links';
 import type { Signals } from '../react/signals';
-import { borderPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
+import { borderPicture, borderRunPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
 export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null }[]; groups: Group[]; links?: Link[];
@@ -72,6 +73,7 @@ interface Pictures {
   geometry: string; path: Path2D; box: Box;
   coverageKey: string; coverage: Texture | null;
   decorKey: string; decor: Texture | null; borderColour: string;
+  runKey: string; run: Texture | null;
   ownKey: string; own: Texture | null; ownFor: { shape: Shape; pinned: boolean; w: number; h: number } | null;
 }
 
@@ -344,7 +346,9 @@ export class MapCompositor {
       this.liveTexture = this.live.frame();
       if (this.live.fresh) rendered = true;
     } else this.liveTexture = null;
-    const drawn = this.dirty || rendered || this.fades.size > 0 || this.glides.size > 0;
+    // A border run moves every frame (it holds with Freeze).
+    const running = !this.frozen && this.show.shapes.some(s => s.border.run && s.border.width > 0 && !s.blocker);
+    const drawn = this.dirty || rendered || running || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
     this.frameIndex++;
     const work = performance.now() - started;
@@ -406,7 +410,7 @@ export class MapCompositor {
 
   private dropPictures(id: string): void {
     const p = this.pictures.get(id);
-    if (p && !this.lost) { this.gpu.free(p.coverage); this.gpu.free(p.decor); this.gpu.free(p.own); }
+    if (p && !this.lost) { this.gpu.free(p.coverage); this.gpu.free(p.decor); this.gpu.free(p.run); this.gpu.free(p.own); }
     this.pictures.delete(id);
   }
 
@@ -505,7 +509,7 @@ export class MapCompositor {
     if (!p || p.geometry !== geometry) {
       const b = ringBounds([shape.points]);
       const box = { x: b.x0 * STAGE_SIZE.width, y: b.y0 * STAGE_SIZE.height, w: (b.x1 - b.x0) * STAGE_SIZE.width, h: (b.y1 - b.y0) * STAGE_SIZE.height };
-      p = { shape, geometry, path: outlinePath(shape), box, coverageKey: '', coverage: p?.coverage ?? null, decorKey: '', decor: p?.decor ?? null, borderColour: '', ownKey: '', own: p?.own ?? null, ownFor: null };
+      p = { shape, geometry, path: outlinePath(shape), box, coverageKey: '', coverage: p?.coverage ?? null, decorKey: '', decor: p?.decor ?? null, borderColour: '', runKey: '', run: p?.run ?? null, ownKey: '', own: p?.own ?? null, ownFor: null };
     }
     p.shape = shape; p.borderColour = colour;
     const coverageKey = `${fadeKey(shape)}|${geometry}`;
@@ -519,6 +523,12 @@ export class MapCompositor {
       if (shape.border.width > 0 && !shape.blocker) p.decor = this.gpu.upload(borderPicture(shape, p.path, p.box, borderColour(shape, palette)), p.decor);
       else { this.gpu.free(p.decor); p.decor = null; }
       p.decorKey = decorKey;
+    }
+    const runKey = shape.border.run && shape.border.width > 0 && !shape.blocker ? JSON.stringify([shape.points, shape.holes, shape.border.width, shape.border.glow]) : '';
+    if (p.runKey !== runKey) {
+      if (runKey) p.run = this.gpu.upload(borderRunPicture(shape, p.path, p.box), p.run);
+      else { this.gpu.free(p.run); p.run = null; }
+      p.runKey = runKey;
     }
     this.pictures.set(shape.id, p);
     return p;
@@ -542,6 +552,15 @@ export class MapCompositor {
     }
     p.ownFor = { shape, pinned, w: landed.w, h: landed.h };
     return { kind: 'picture', texture: p.own!, inv: pinned ? inverseOf(land) : boxInverse(p.box) };
+  }
+
+  /** Where a shape's border run is: by the show's clock (it holds with Freeze), or the tempo's beats; chasing round its group. */
+  private runHeadOf(shape: Shape, now: number): number {
+    const signals = this.frozen ? this.frozenSignals : this.signals;
+    const beat = signals['tempo.beat'] !== undefined && signals['tempo.phase'] !== undefined ? signals['tempo.beat'] + signals['tempo.phase'] : null;
+    const group = shape.groupId ? this.drawn.show.groups.find(g => g.id === shape.groupId) : undefined;
+    const offset = group?.chase ? chaseOffsets(this.drawn.show, group.id).get(shape.id) ?? 0 : 0;
+    return runHead(shape.border.run!, now / 1000, beat, offset);
   }
 
   /** One shape: what it plays through its placement, its crossfade, its look, its coverage and its border. */
@@ -584,6 +603,7 @@ export class MapCompositor {
       look: shape.blocker ? [1, 1, 1] : [tint[0] * b, tint[1] * b, tint[2] * b],
       decor: p.decor,
       alpha,
+      run: p.run && shape.border.run ? { texture: p.run, head: this.runHeadOf(shape, now), length: shape.border.run.length } : null,
     });
   }
 }

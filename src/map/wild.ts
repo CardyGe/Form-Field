@@ -1,8 +1,9 @@
 /**
  * Map stage 7, the wild options: the rules behind them, kept apart from drawing so they can be tested.
  */
-import type { CurvePoint, Point, ShowDocument } from './show';
+import type { BorderRun, CurvePoint, Point, ShowDocument } from './show';
 import { flatten } from './outline';
+import { ringPx } from './draw';
 
 /** A group's shapes in list order (the order the shape list shows them). */
 const members = (show: Pick<ShowDocument, 'shapes'>, groupId: string) => show.shapes.filter(s => s.groupId === groupId);
@@ -63,4 +64,39 @@ export function nextAutoScene(show: Pick<ShowDocument, 'scenes' | 'autoAdvance'>
 export function autoAdvanceDue(setting: ShowDocument['autoAdvance'], elapsedS: number, bars: number): boolean {
   if (!setting) return false;
   return setting.unit === 'bars' ? bars >= setting.every : elapsedS >= setting.every;
+}
+
+/** Border runs: where the run's head is round the outline, 0..1. With the tempo when it has beats and a clock is running; otherwise laps a minute. */
+export function runHead(run: BorderRun, seconds: number, beat: number | null, offset: number): number {
+  const laps = run.beats && beat !== null ? beat / run.beats : seconds * run.lapsPerMinute / 60;
+  const h = laps + offset;
+  return h - Math.floor(h);
+}
+
+/** The outline (stage fractions) as straight pieces in stage pixels, closed. */
+const piecesPx = (ring: CurvePoint[]): Point[] => flatten(ringPx(ring), 32);
+
+/** The outline's length in stage pixels, curves measured along their path. */
+export function outlineLength(ring: CurvePoint[]): number {
+  const pts = piecesPx(ring);
+  let total = 0;
+  for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; total += Math.hypot(b.x - a.x, b.y - a.y); }
+  return total;
+}
+
+/** Points every `step` stage pixels round the outline, each with its position along it (0..1 by distance). */
+export function runSamples(ring: CurvePoint[], step: number): { x: number; y: number; t: number }[] {
+  const pts = piecesPx(ring), total = outlineLength(ring), out: { x: number; y: number; t: number }[] = [];
+  if (!(total > 0) || !(step > 0)) return out;
+  let along = 0, next = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length], len = Math.hypot(b.x - a.x, b.y - a.y);
+    while (next < along + len && next < total) {
+      const f = (next - along) / len;
+      out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, t: next / total });
+      next += step;
+    }
+    along += len;
+  }
+  return out;
 }
