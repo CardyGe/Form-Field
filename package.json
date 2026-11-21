@@ -7,6 +7,9 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:signal": "vite --config vite.signal.config.ts",
+    "build:signal": "tsc --noEmit && vite build --config vite.signal.config.ts",
+    "preview:signal": "vite preview --config vite.signal.config.ts",
     "build": "tsc --noEmit && vite build",
     "start": "npm run build && electron .",
     "test": "tsx --test tests/*.test.ts && node --test electron/*.test.cjs",

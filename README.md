@@ -134,6 +134,12 @@ Five looks: Feedback Glitch, Neon Collapse, Glitch Staircase, Static Bloom and M
 
 Live turns a camera into projected artwork as it happens. It is a separate screen: switch between **Studio** and **Live** in the header. Nothing in Live is exported or recorded, and camera video never leaves the computer.
 
+### Signal Melt in a browser
+
+Run `npm run dev:signal` and open [Signal Melt](http://localhost:5174). Drag the demo figure or focus the artwork and use the arrow keys. **Use camera** turns the participant's silhouette into colour and pose trails. Hold still to charge the effect, then move to release it. Use **Fullscreen** to fill a display.
+
+For sharing, `npm run build:signal` creates the static site in `work/signal-melt-web`. Open its `index.html` directly for the interactive demo. For camera play, run `npm run preview:signal` locally or publish the contents of the folder, including `mediapipe`, to an HTTPS static host. The browser asks for camera access when a participant chooses **Use camera**. Camera frames are processed on the device.
+
 **Setting up**
 
 1. Put the camera at the wall you are projecting on, facing out at the people. Keep the projected picture out of the camera's view, or the artwork reacts to itself.

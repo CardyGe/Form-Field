@@ -357,7 +357,7 @@ function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
     return definitions.filter(d=>keys.has(d.key));
   }
   if(layer.kind==='relief'&&layer.params.reliefMode===1){
-    const keys=new Set([...TIMING_KEYS,'panelMix','reliefMode','scale','columns','gap','stagger','hingeBias','opening','depth','axis','phaseSpread','organic','motion','cycles','phrase','phaseOffset','lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
+    const keys=new Set([...TIMING_KEYS,'panelMix','concertina','reliefMode','scale','columns','gap','stagger','hingeBias','opening','depth','axis','phaseSpread','organic','motion','cycles','phrase','phaseOffset','lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key));
   }
   if (layer.kind !== 'fractal') return definitions;

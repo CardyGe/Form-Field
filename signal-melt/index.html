@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:5174; object-src 'none'; base-uri 'none'" />
+    <link rel="icon" href="data:," />
+    <title>Signal Melt</title>
+  </head>
+  <body>
+    <main class="player">
+      <header class="heading">
+        <h1>Signal Melt</h1>
+        <div class="source" role="group" aria-label="Source">
+          <button id="demo" type="button">Restart demo</button>
+          <button id="camera" class="primary" type="button">Use camera</button>
+        </div>
+      </header>
+
+      <div id="stage" class="stage">
+        <canvas id="art" width="1280" height="720" aria-label="Signal Melt artwork" aria-describedby="instructions" tabindex="0"></canvas>
+        <button id="exit-fullscreen" class="exit" type="button">Exit fullscreen</button>
+      </div>
+
+      <div class="controls">
+        <label class="looks">Look <select id="look"></select></label>
+        <div class="stage-actions" role="group" aria-label="Artwork">
+          <button id="clear" type="button">Clear trails</button>
+          <button id="fullscreen" type="button">Fullscreen</button>
+        </div>
+      </div>
+      <div class="information">
+        <p id="instructions">Drag across the figure or use the arrow keys. Pause to build light, then move to release it.</p>
+        <p id="status" role="status"></p>
+        <p class="privacy">Camera frames stay on your device.</p>
+      </div>
+      <noscript>Enable JavaScript to play Signal Melt.</noscript>
+    </main>
+    <script type="module" src="../src/live/player.ts"></script>
+  </body>
+</html>
