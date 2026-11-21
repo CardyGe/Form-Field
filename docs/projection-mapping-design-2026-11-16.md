@@ -928,6 +928,10 @@ The video checks need ffmpeg on the Mac to make their test clip.
 - HAP and ProRes clips don't play; MP4 (H.264) does.
 - Not yet tried with Greg's own clips on the projector.
 
+## On the projector
+
+21 November 2026. Greg tried Map on his projector: "it's working well!" He reported no specific issues.
+
 ## Stage 0 results
 
 Measured 17 November 2026 on this Mac (Electron 45, real GPU, display at 120 Hz). Harness: `scripts/map-spike/` (throwaway; not part of the app). Each source is drawn at 640 × 360, roughly one shape, and composited into a 1920 × 1080 stage every frame. Each frame's time covers all renders, the composite and a GPU sync per source. Twenty seconds per run after a three-second warm-up.
