@@ -4,6 +4,7 @@ import { createLayer, createProject, validateProject, parameterDefinitions, KALE
 import { tileBlockers } from '../src/core/tile-edges';
 import { KIND_LABELS } from '../src/core/library';
 import { canvasAxes } from '../src/core/canvas-interaction';
+import { kaleidoscopeGLSL, kaleidoscopeUniforms } from '../src/rendering/kaleidoscope-glsl';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const withLayer = (kind: 'kaleidoscope' | 'surface') => { const p = createProject(); p.layers = [createLayer(kind)]; return p; };
@@ -60,4 +61,59 @@ test('tile edges name a visible Kaleidoscope layer and ignore a hidden one', () 
 test('canvas drag axes come from the kind\'s own keys', () => {
   const axes = canvasAxes(createLayer('kaleidoscope'), { structure: false, material: false } as never);
   assert.deepEqual(axes.slice(0, 2).map(a => a.key), ['cell', 'sourceTurn']);
+});
+
+const kLayer = (params: Record<string, number> = {}) => { const l = createLayer('kaleidoscope'); Object.assign(l.params, params); return l; };
+
+test('uniforms round integer controls at the render boundary', () => {
+  const u = kaleidoscopeUniforms(kLayer({ input: 0.6, group: 2.6, sectors: 7.4, spiral: 0.7, spiralA: 2.4, spiralB: -3.6, zoomCycles: 1.6, motif: 1.5, cycles: 2.5 }), 0);
+  assert.deepEqual([u.uKInput, u.uKGroup, u.uKSectors, u.uKSpiral, u.uKSpiralA, u.uKSpiralB, u.uKMotif], [1, 3, 7, 1, 2, -4, 2]);
+  assert.equal(u.uKZoomCycles, 2);
+  assert.equal(u.uKCycles, 3);
+});
+
+test('uniforms clamp to the definition range and replace non-finite values with the default', () => {
+  const u = kaleidoscopeUniforms(kLayer({ group: 99, sectors: 1, cell: 100, warpIn: -2, spiralScale: 1, sourceScale: NaN, lineWidth: Infinity, motifScale: -Infinity }), 0.25);
+  assert.equal(u.uKGroup, 4); assert.equal(u.uKSectors, 3); assert.equal(u.uKCell, 4); assert.equal(u.uKWarpIn, 0);
+  assert.equal(u.uKSpiralScale, 2); assert.equal(u.uKSourceScale, 1); assert.equal(u.uKLineWidth, 2); assert.equal(u.uKMotifScale, 2);
+  const missing = createLayer('kaleidoscope'); delete missing.params.sectors;
+  assert.equal(kaleidoscopeUniforms(missing, 0).uKSectors, 6);
+  const bad = createLayer('kaleidoscope');
+  for (const key of Object.keys(bad.params)) bad.params[key] = NaN;
+  for (const [key, value] of Object.entries(kaleidoscopeUniforms(bad, NaN))) {
+    for (const n of [value].flat() as number[]) assert.ok(Number.isFinite(n), key);
+  }
+});
+
+test('spiral (0,0) is sanitised, also after rounding', () => {
+  const u = kaleidoscopeUniforms(kLayer({ spiralA: 0.2, spiralB: -0.3 }), 0);
+  assert.deepEqual([u.uKSpiralA, u.uKSpiralB], [0, 1]);
+  assert.ok(Object.is(u.uKSpiralA, 0));
+});
+
+test('spiral mode uses a whole motif repeat of at least one; fold mode keeps the fractional scale', () => {
+  assert.equal(kaleidoscopeUniforms(kLayer({ spiral: 1, motifScale: 2.6 }), 0).uKMotifScale, 3);
+  assert.equal(kaleidoscopeUniforms(kLayer({ spiral: 1, motifScale: 0.25 }), 0).uKMotifScale, 1);
+  assert.equal(kaleidoscopeUniforms(kLayer({ spiral: 0, motifScale: 2.6 }), 0).uKMotifScale, 2.6);
+});
+
+test('uniforms are identical at loop fractions 0 and 1, and zoom advances by whole cycles', () => {
+  const l = kLayer({ zoomCycles: 3, cycles: 4, spiral: 1 });
+  assert.deepEqual(kaleidoscopeUniforms(l, 1), kaleidoscopeUniforms(l, 0));
+  assert.deepEqual(kaleidoscopeUniforms(l, 2), kaleidoscopeUniforms(l, 0));
+  assert.ok(Math.abs((kaleidoscopeUniforms(l, 0.5).uKZoom as number) - 1.5) < 1e-12);
+  assert.ok(Math.abs((kaleidoscopeUniforms(l, 0.125).uKPhase as number) - Math.PI) < 1e-12);
+});
+
+test('kaleidoscopeUniforms does not change the layer', () => {
+  const l = kLayer({ group: 2.6 }); const before = structuredClone(l);
+  kaleidoscopeUniforms(l, 0.3);
+  assert.deepEqual(l, before);
+});
+
+test('the shader differentiates only the continuous pre-fold coordinate', () => {
+  assert.match(kaleidoscopeGLSL, /vec2 foldDomain\(vec2 p, inout vec2 dx, inout vec2 dy\)/);
+  assert.match(kaleidoscopeGLSL, /vec2 spiralDomain\(vec2 z, inout vec2 dx, inout vec2 dy\)/);
+  assert.match(kaleidoscopeGLSL, /textureGrad\(/);
+  assert.doesNotMatch(kaleidoscopeGLSL, /dFdx|dFdy|fwidth/);
 });

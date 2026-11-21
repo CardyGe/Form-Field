@@ -3,6 +3,7 @@ import { InstrumentRenderer } from './InstrumentRenderer';
 import { isInstrument } from '../core/instruments';
 import * as THREE from 'three';
 import { GraphicRenderer } from './GraphicRenderer';
+import { KaleidoscopeRenderer } from './KaleidoscopeRenderer';
 import { graphicRenderPlan } from './graphic-view';
 import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
@@ -147,6 +148,7 @@ export class StudioRenderer {
   private readonly fractalPreview = target();
   private readonly copy = material(`precision highp float;varying vec2 vUv;uniform sampler2D uImage;void main(){gl_FragColor=texture2D(uImage,vUv);}`, { uImage: { value: null } });
   private readonly graphics = new GraphicRenderer();
+  private kaleidoscope: KaleidoscopeRenderer | null = null;
   private readonly instruments = new InstrumentRenderer();
   private readonly accumA = target();
   private readonly accumB = target();
@@ -748,8 +750,9 @@ export class StudioRenderer {
       (this.image.uniforms.uFit.value as THREE.Vector2).set(x, y);
       this.draw(this.image, this.source);
     } else if (layer.kind === 'kaleidoscope') {
-      // No draw path until the Kaleidoscope renderer lands; show nothing rather than a stale or wrong picture.
-      this.renderer.setRenderTarget(this.source); this.renderer.clear(); return this.source.texture;
+      this.kaleidoscope ??= new KaleidoscopeRenderer();
+      this.kaleidoscope.draw({ layer, phase, width: this.width, height: this.height, target: this.source,
+        draw: (m, t) => this.draw(m, t), input: null, history: null, imageAspect: 1 });
     } else {
       const u = this.sculptureUniforms;
       for(const [key,value] of Object.entries(SCULPTURE_SHAPE_DEFAULTS))u[`studio${key[0].toUpperCase()}${key.slice(1)}`].value=number(layer,key,value);
@@ -1216,6 +1219,7 @@ export class StudioRenderer {
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;
+    this.kaleidoscope?.dispose(); this.kaleidoscope = null;
     this.sliceSource?.dispose(); this.sliceSource = null;
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();

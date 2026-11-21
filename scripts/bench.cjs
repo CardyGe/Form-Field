@@ -41,6 +41,10 @@ app.whenReady().then(async () => {
     "export {GpuTimer} from './src/rendering/gpu-timer';",
     "export {summarise} from './src/core/bench-stats';",
     "export {createProject,createLayer,applyPreset,PRESETS} from './src/core/project';",
+    "export {SYMMETRY_GROUPS,foldPoint,spiralTau} from './src/core/kaleidoscope-math';",
+    "export {kaleidoscopeGLSL,kaleidoscopeUniforms} from './src/rendering/kaleidoscope-glsl';",
+    "export {KaleidoscopeRenderer} from './src/rendering/KaleidoscopeRenderer';",
+    "export * as THREE from 'three';",
   ].join('\n'), resolveDir: root, sourcefile: 'bench-entry.ts', loader: 'ts' },
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(scratch, 'renderer.js'), logLevel: 'silent' });
   fs.copyFileSync(path.join(__dirname, 'bench.browser.mjs'), path.join(scratch, 'bench.browser.mjs'));
