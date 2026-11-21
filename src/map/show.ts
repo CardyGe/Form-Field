@@ -20,7 +20,9 @@ export interface CurvePoint extends Point { in?: Handle; out?: Handle }
 /** A closed outline: a shape's own, or a hole in it. */
 export type Ring = CurvePoint[];
 /** How a border looks: drawn inside the outline, in projector pixels. colour: the shape's own, its instrument's first palette colour, or fixed. */
-export interface Border { width: number; colour: 'shape' | 'palette' | string; glow: number }
+/** Stage 7: a border run, a stretch of light travelling round the outline (beats: one lap every that many beats instead). */
+export interface BorderRun { lapsPerMinute: number; beats: number | null; length: number }
+export interface Border { width: number; colour: 'shape' | 'palette' | string; glow: number; run?: BorderRun | null }
 /**
  * sourceId: the instrument source the shape plays, or null when it plays its own colour.
  * holes: outlines cut out of the shape. blocker: plays nothing and blacks out everything beneath it.
@@ -40,23 +42,30 @@ export interface Shape {
 export type PlacementKind = 'fit' | 'pin' | 'across-group' | 'across-stage';
 export interface Placement { kind: PlacementKind; zoom: number; offset: Point; turn: number; pin: Point[] | null }
 /** A folder of shapes, one level deep. Hidden or locked, it hides or locks its members without changing their own settings. */
-export interface Group { id: string; name: string; visible: boolean; locked: boolean }
+/** stagger (stage 7): seconds from the first shape to the last; chase: border runs pass from shape to shape. */
+export interface Group { id: string; name: string; visible: boolean; locked: boolean; stagger?: number; chase?: boolean }
+/** Stage 7: scenes change by themselves. */
+export interface AutoAdvance { every: number; unit: 'seconds' | 'bars'; order: 'next' | 'random' }
+export type FollowOutline = 'obstacle' | 'emitter' | 'edge';
 /** A photograph to trace over, on the operator screen only: a JPEG or PNG as a data URL. */
 export interface Photo { data: string; opacity: number }
 /** A Studio composition playing in one or more shapes. revision goes up with every change, so the wall knows what it has. */
 /** tempoSync: null plays at its own speed; a number of beats runs one loop in that many beats of the tempo clock. */
-export interface InstrumentSource { id: string; kind: 'instrument'; project: Project; speed: number; revision: number; tempoSync: number | null }
+export interface InstrumentSource { id: string; kind: 'instrument'; project: Project; speed: number; revision: number; tempoSync: number | null;
+  /** Stage 7: the shape's outline drives the instrument (its surface), when drawn. Not saved in the composition. */
+  followOutline?: FollowOutline | null }
 export type Source = InstrumentSource;
 /** stageCorners: where the stage's four corners go on the projector (to fix a nudged projector), or null for none. */
 /** Stage 5: scenes (with the live one and the default fade in seconds), and the links and triggers sound and MIDI drive. */
 /** Stage 6: a video file a shape plays, left where it is on disk. Its id begins `video-`; shapes name it as their sourceId. */
 export interface VideoSource { id: string; path: string; name: string; speed: number; tempoSync: number | null }
-export interface ShowDocument { format: 'formshow'; version: 7; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null; videos: VideoSource[];
+export interface ShowDocument { format: 'formshow'; version: 8; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null; videos: VideoSource[];
+  autoAdvance?: AutoAdvance | null;
   scenes: Scene[]; sceneId: string | null; sceneFade: number; links: Link[]; triggers: Trigger[] }
 /** A source as the wall first hears of it: everything but the composition, which travels in its own message. */
-export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number; tempoSync: number | null }
+export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number; tempoSync: number | null; followOutline?: FollowOutline | null }
 /** The show as sent to the wall: no compositions, and never the photo. */
-export interface WireShow { format: 'formshow'; version: 7; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[];
+export interface WireShow { format: 'formshow'; version: 8; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[];
   /** The show plays Live somewhere (a shape, or a scene): the wall keeps Live's camera running. */
   usesLive: boolean;
   /** Stage 6: the videos shapes play, with their paths (the wall fetches them through the app). */
@@ -90,6 +99,12 @@ export const MAX_GROUPS = 32;
 export const MAX_LINKS = 64;
 /** Stage 6: videos in a show, and pictures stored in it (by decoded size). */
 export const MAX_VIDEOS = 16;
+/** Stage 7 limits. */
+export const STAGGER_MAX = 1;
+export const RUN_LAPS = { min: 1, max: 120 };
+export const RUN_LENGTH = { min: 0.02, max: 0.5 };
+export const AUTO_SECONDS = { min: 5, max: 600 };
+export const AUTO_BARS = { min: 1, max: 64 };
 export const IMAGE_FILE_LIMIT = 8 * 1024 * 1024;
 export const IMAGE_SHOW_LIMIT = 32 * 1024 * 1024;
 export const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.webm'];
@@ -123,7 +138,7 @@ export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'so
   ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour', placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, brightness: 1, tint: '#ffffff' });
 
 export function createShow(): ShowDocument {
-  return { format: 'formshow', version: 7, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null, scenes: [], sceneId: null, sceneFade: DEFAULT_SCENE_FADE, links: [], triggers: [], videos: [] };
+  return { format: 'formshow', version: 8, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null, scenes: [], sceneId: null, sceneFade: DEFAULT_SCENE_FADE, links: [], triggers: [], videos: [] };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -178,7 +193,10 @@ function readBorder(value: unknown): { border: Border; repaired: boolean } {
   if (!isRecord(value)) return { border: { ...DEFAULT_BORDER }, repaired: true };
   const width = clampNumber(value.width, BORDER_MAX), glow = clampNumber(value.glow, GLOW_MAX);
   const colourOk = value.colour === 'shape' || value.colour === 'palette' || (typeof value.colour === 'string' && HEX.test(value.colour));
-  return { border: { width: width.value, colour: colourOk ? value.colour as string : 'shape', glow: glow.value }, repaired: width.repaired || glow.repaired || !colourOk };
+  const run = readBorderRun(value.run);
+  const border: Border = { width: width.value, colour: colourOk ? value.colour as string : 'shape', glow: glow.value };
+  if (run.run) border.run = run.run;
+  return { border, repaired: width.repaired || glow.repaired || !colourOk || run.repaired };
 }
 
 function readGroups(value: unknown): { groups: Group[]; repaired: boolean } {
@@ -192,7 +210,11 @@ function readGroups(value: unknown): { groups: Group[]; repaired: boolean } {
     const visible = typeof raw.visible === 'boolean' ? raw.visible : true;
     const locked = typeof raw.locked === 'boolean' ? raw.locked : false;
     if (name !== raw.name || visible !== raw.visible || locked !== raw.locked) repaired = true;
-    groups.push({ id: raw.id, name, visible, locked });
+    const group: Group = { id: raw.id, name, visible, locked };
+    // Stage 7: saved only when on.
+    if (raw.stagger !== undefined) { const st = clampNumber(raw.stagger, STAGGER_MAX); if (st.repaired) repaired = true; if (st.value > 0) group.stagger = st.value; }
+    if (raw.chase !== undefined) { if (typeof raw.chase !== 'boolean') repaired = true; else if (raw.chase) group.chase = true; }
+    groups.push(group);
   }
   return { groups, repaired };
 }
@@ -274,7 +296,7 @@ export function normaliseGroups<T extends { shapes: Shape[]; groups: Group[] }>(
 function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaired: boolean; ok: boolean } {
   if (!isRecord(value)) return { shapes: [], groups: [], repaired: true, ok: false };
   // Version 1 and 2 shows open with every later field at its default, which is not a repair.
-  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5 && value.version !== 6 && value.version !== 7);
+  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5 && value.version !== 6 && value.version !== 7 && value.version !== 8);
   if (!isRecord(value.stage) || value.stage.width !== STAGE_SIZE.width || value.stage.height !== STAGE_SIZE.height) repaired = true;
   if (!Array.isArray(value.shapes)) return { shapes: [], groups: [], repaired: true, ok: false };
   if (value.shapes.length > MAX_SHAPES) repaired = true;
@@ -370,7 +392,7 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
   // From version 6 a shape (or a scene) may play Live, which is no source of the file's.
   if (sources.has(LIVE_SOURCE_ID)) { sources.delete(LIVE_SOURCE_ID); repaired = true; }
   const known = new Map<string, unknown>(sources);
-  if (value.version === 6 || value.version === 7) known.set(LIVE_SOURCE_ID, true);
+  if (value.version === 6 || value.version === 7 || value.version === 8) known.set(LIVE_SOURCE_ID, true);
   // Videos (version 7): each is known by its id, as a source is.
   const videos = readVideos(value.videos);
   if (videos.repaired) repaired = true;
@@ -383,6 +405,9 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
   if (show.sources.length !== sources.size) repaired = true;
   show.videos = videos.videos.filter(v => playedBy(show, v.id));
   if (show.videos.length !== videos.videos.length) repaired = true;
+  const auto = readAutoAdvance(value.autoAdvance);
+  if (auto.value) show.autoAdvance = auto.value;
+  if (auto.repaired) repaired = true;
   const links = readLinks(value.links, show), triggers = readTriggers(value.triggers, show);
   show.links = links.links; show.triggers = triggers.triggers;
   if (links.repaired || triggers.repaired) repaired = true;
@@ -400,7 +425,7 @@ export function validateWireShow(value: unknown): WireShow {
     for (const raw of value.sources) {
       if (sources.size >= MAX_SOURCES) break;
       if (!isRecord(raw) || raw.kind !== 'instrument' || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH || sources.has(raw.id)) continue;
-      sources.set(raw.id, { id: raw.id, kind: 'instrument', speed: readSpeed(raw.speed).speed, revision: readRevision(raw.revision), tempoSync: readTempoSync(raw.tempoSync).value });
+      sources.set(raw.id, { id: raw.id, kind: 'instrument', speed: readSpeed(raw.speed).speed, revision: readRevision(raw.revision), tempoSync: readTempoSync(raw.tempoSync).value, ...(readFollowOutline(raw.followOutline).value ? { followOutline: readFollowOutline(raw.followOutline).value } : {}) });
     }
   }
   const shapes = read.shapes;
@@ -410,7 +435,7 @@ export function validateWireShow(value: unknown): WireShow {
   for (const v of videos) known.set(v.id, true);
   linkSources(shapes, known);
   const kept = [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id));
-  return { format: 'formshow', version: 7, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
+  return { format: 'formshow', version: 8, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
     links: isRecord(value) ? readLinks(value.links, { shapes, sources: [...kept, ...videos] }, true).links : [],
     usesLive: (isRecord(value) && value.usesLive === true) || shapes.some(s => s.sourceId === LIVE_SOURCE_ID),
     videos };
@@ -438,7 +463,10 @@ function validateSource(value: unknown): { source: Source; repaired: boolean } |
   const { speed, repaired: speedRepaired } = readSpeed(value.speed);
   const revision = readRevision(value.revision);
   const sync = readTempoSync(value.tempoSync);
-  return { source: { id: value.id, kind: 'instrument', project, speed, revision, tempoSync: sync.value }, repaired: speedRepaired || revision !== value.revision || sync.repaired };
+  const follow = readFollowOutline(value.followOutline);
+  const source: Source = { id: value.id, kind: 'instrument', project, speed, revision, tempoSync: sync.value };
+  if (follow.value) source.followOutline = follow.value;
+  return { source, repaired: speedRepaired || revision !== value.revision || sync.repaired || follow.repaired };
 }
 
 
@@ -574,4 +602,29 @@ function readVideos(value: unknown): { videos: VideoSource[]; repaired: boolean 
     videos.push({ id: raw.id as string, path: raw.path, name, speed: speed.speed, tempoSync: sync.value });
   }
   return { videos, repaired };
+}
+
+// ---- Stage 7: the wild options, each saved only when on ----
+const clampTo = (v: unknown, lo: number, hi: number): { value: number; repaired: boolean } => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return { value: lo, repaired: true };
+  const c = Math.min(hi, Math.max(lo, v));
+  return { value: c, repaired: c !== v };
+};
+export function readBorderRun(value: unknown): { run: BorderRun | null; repaired: boolean } {
+  if (value === undefined || value === null) return { run: null, repaired: false };
+  if (!isRecord(value)) return { run: null, repaired: true };
+  const laps = clampTo(value.lapsPerMinute, RUN_LAPS.min, RUN_LAPS.max), length = clampTo(value.length, RUN_LENGTH.min, RUN_LENGTH.max);
+  const beats = value.beats === null || value.beats === undefined ? null : TEMPO_SYNC_BEATS.includes(value.beats as number) ? value.beats as number : null;
+  return { run: { lapsPerMinute: laps.value, beats, length: length.value }, repaired: laps.repaired || length.repaired || (value.beats !== null && value.beats !== undefined && beats === null) };
+}
+export function readFollowOutline(value: unknown): { value: FollowOutline | null; repaired: boolean } {
+  if (value === undefined || value === null) return { value: null, repaired: false };
+  return value === 'obstacle' || value === 'emitter' || value === 'edge' ? { value, repaired: false } : { value: null, repaired: true };
+}
+export function readAutoAdvance(value: unknown): { value: AutoAdvance | null; repaired: boolean } {
+  if (value === undefined || value === null) return { value: null, repaired: false };
+  if (!isRecord(value) || (value.unit !== 'seconds' && value.unit !== 'bars')) return { value: null, repaired: true };
+  const range = value.unit === 'bars' ? AUTO_BARS : AUTO_SECONDS, every = clampTo(value.every, range.min, range.max);
+  const order = value.order === 'random' ? 'random' : 'next';
+  return { value: { every: value.unit === 'bars' ? Math.round(every.value) : every.value, unit: value.unit, order }, repaired: every.repaired || order !== value.order };
 }

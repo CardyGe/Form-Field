@@ -1,10 +1,11 @@
 import {
   BORDER_MAX, GLOW_MAX, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, PHOTO_TEXT_LIMIT, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE,
   BRIGHTNESS_MAX, ZOOM_RANGE, MAX_LINKS, MAX_TRIGGERS, TEMPO_SYNC_BEATS, playedBy, readLink, readTrigger, cleanName, isShapeLocked, normaliseGroups, shapeExtras,
-  type Border, type Placement, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source, LIVE_SOURCE_ID,
+  type Border, type BorderRun, type AutoAdvance, type FollowOutline, STAGGER_MAX, readBorderRun, readAutoAdvance, type Placement, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source, LIVE_SOURCE_ID,
   IMAGE_FILE_LIMIT, IMAGE_SHOW_LIMIT, MAX_VIDEOS, dataUrlBytes, imageBytes, isVideoId, isVideoPath,
 } from './show';
 import { clampToStage, nudge, rectangleFromDrag } from './geometry';
+import { rotatePalette } from './wild';
 import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
 import { joinedAnchors } from './snap';
 import { capture, withState, MAX_SCENES, FADE_RANGE } from './scenes';
@@ -81,6 +82,14 @@ export type EditAction =
   | { type: 'makeSeparate'; shapeId: string; sourceId: string }
   /** Find…: every video that played `path` plays `to` from now on. */
   | { type: 'relinkVideo'; path: string; to: string; name: string }
+  /** Stage 7: the wild options. */
+  | { type: 'setFollowOutline'; sourceId: string; mode: FollowOutline | null }
+  | { type: 'setGroupStagger'; groupId: string; seconds: number }
+  | { type: 'setGroupChase'; groupId: string; on: boolean }
+  | { type: 'setBorderRun'; shapeId: string; run: BorderRun | null }
+  | { type: 'setAutoAdvance'; autoAdvance: AutoAdvance | null }
+  | { type: 'varyEach'; groupId: string; sourceIds: string[]; entropy: number }
+  | { type: 'paletteShift'; groupId: string; sourceIds: string[] }
   /** Map's Effect tab: some of one layer's settings, each kept inside its own range. */
   | { type: 'setSourceLayer'; sourceId: string; layer: number; params: Record<string, number> }
   | { type: 'setLook'; shapeId: string; brightness?: number; tint?: string }
@@ -168,6 +177,9 @@ const MAX_GRID_SIDE = 16;
 const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => playedBy(show, src.id)); show.videos = show.videos.filter(v => playedBy(show, v.id)); };
 
 /** True when a source is one of Greg's pictures (a one-layer image composition). */
+/** A group is locked when it, or any of its shapes, is. */
+const groupLocked = (show: ShowDocument, groupId: string) => show.groups.some(g => g.id === groupId && g.locked) || show.shapes.some(s => s.groupId === groupId && isShapeLocked(show, s));
+
 const isPictureSource = (show: ShowDocument, id: string) => { const p = show.sources.find(s => s.id === id)?.project; return !!p && p.layers.length === 1 && p.layers[0].kind === 'image'; };
 
 /** A one-layer composition of a picture (Studio's image layer, cover fit), as a file would load it; null if it is not valid. */
@@ -400,6 +412,53 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (links.some(l => targetLocked(next, l.target))) return { reason: 'locked' };
       next.links = [...next.links, ...links];
       return done();
+    }
+    case 'setFollowOutline': {
+      const i = next.sources.findIndex(s => s.id === action.sourceId);
+      if (i < 0) return { reason: 'not-found' };
+      if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+      const mode = action.mode === 'obstacle' || action.mode === 'emitter' || action.mode === 'edge' ? action.mode : null;
+      const { followOutline: _old, ...rest } = next.sources[i];
+      next.sources[i] = mode ? { ...rest, followOutline: mode } : rest;
+      return { show: next, touched: [] };
+    }
+    case 'setGroupStagger': case 'setGroupChase': {
+      const g = next.groups.findIndex(x => x.id === action.groupId);
+      if (g < 0) return { reason: 'not-found' };
+      if (groupLocked(next, action.groupId)) return { reason: 'locked' };
+      const { stagger: _s, chase: _c, ...rest } = next.groups[g];
+      const stagger = action.type === 'setGroupStagger' ? clamp(Number.isFinite(action.seconds) ? action.seconds : 0, 0, STAGGER_MAX) : next.groups[g].stagger ?? 0;
+      const chase = action.type === 'setGroupChase' ? action.on : next.groups[g].chase ?? false;
+      next.groups[g] = { ...rest, ...(stagger > 0 ? { stagger } : {}), ...(chase ? { chase: true } : {}) };
+      return { show: next, touched: [] };
+    }
+    case 'setAutoAdvance': {
+      next.autoAdvance = readAutoAdvance(action.autoAdvance).value;
+      if (!next.autoAdvance) delete next.autoAdvance;
+      return { show: next, touched: [] };
+    }
+    case 'varyEach': case 'paletteShift': {
+      // Every shape in the group gets its own copy of what it plays: varied, or its palette turned one step further.
+      if (!next.groups.some(g => g.id === action.groupId)) return { reason: 'not-found' };
+      if (groupLocked(next, action.groupId)) return { reason: 'locked' };
+      const members = next.shapes.filter(s => s.groupId === action.groupId && s.sourceId && next.sources.some(src => src.id === s.sourceId));
+      if (!members.length) return { reason: 'nothing-to-vary' };
+      if (action.sourceIds.length < members.length || new Set(action.sourceIds).size !== action.sourceIds.length) return { reason: 'needs-source-id' };
+      if (action.sourceIds.some(id => next.sources.some(s => s.id === id) || isVideoId(id) || id === LIVE_SOURCE_ID)) return { reason: 'duplicate-id' };
+      const leaving = new Set(members.map(m => m.sourceId!));
+      const stays = next.sources.filter(src => !leaving.has(src.id) || playedBy({ shapes: next.shapes.filter(s => !members.includes(s)), scenes: next.scenes }, src.id)).length;
+      if (stays + members.length > MAX_SOURCES) return { reason: 'too-many-sources' };
+      members.forEach((shape, i) => {
+        const source = next.sources.find(s => s.id === shape.sourceId)!;
+        const project = structuredClone(source.project);
+        project.layers = project.layers.map((layer, n) => action.type === 'varyEach'
+          ? varyLayer(layer, VARY_STRENGTH, NO_LOCKS, action.entropy + i * 101 + n)
+          : { ...layer, palette: rotatePalette(layer.palette, i) });
+        next.sources.push({ ...source, id: action.sourceIds[i], project, revision: 0 });
+        shape.sourceId = action.sourceIds[i];
+      });
+      dropUnplayed(next);
+      return { show: next, touched: [] };
     }
     case 'relinkVideo': {
       if (!isVideoPath(action.to)) return { reason: 'not-a-video' };
@@ -687,10 +746,16 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (action.blocker) { shape.sourceId = null; dropUnplayed(next); }
       return done();
     case 'setSoftEdge': shape.softEdge = clamp(Number.isFinite(action.px) ? action.px : 0, 0, SOFT_EDGE_MAX); return done();
+    case 'setBorderRun': {
+      const run = readBorderRun(action.run).run;
+      const { run: _old, ...rest } = shape.border;
+      shape.border = run ? { ...rest, run } : rest;
+      return done();
+    }
     case 'setBorder': {
       const { width, colour, glow } = action.border;
       if (colour !== 'shape' && colour !== 'palette' && !HEX.test(colour)) return { reason: 'bad-colour' };
-      shape.border = { width: clamp(Number.isFinite(width) ? width : 0, 0, BORDER_MAX), colour, glow: clamp(Number.isFinite(glow) ? glow : 0, 0, GLOW_MAX) };
+      shape.border = { width: clamp(Number.isFinite(width) ? width : 0, 0, BORDER_MAX), colour, glow: clamp(Number.isFinite(glow) ? glow : 0, 0, GLOW_MAX), ...(shape.border.run ? { run: shape.border.run } : {}) };
       return done();
     }
     case 'reorder': {

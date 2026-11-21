@@ -91,7 +91,7 @@ test('relinkVideo moves every video on the missing path, and scenes keep their s
 test('version 7 round-trips; version 6 opens with no videos, unrepaired; a video id with no video in the file is a missing source, repaired', () => {
   let show = video(base(), 'a', 'video-1');
   show = ok(show, { type: 'setContent', shapeId: 'b', content: { kind: 'image', sourceId: 'img1', image: picture() } });
-  assert.equal(show.version, 7);
+  assert.equal(show.version, 8);
   const again = validateShow(JSON.parse(JSON.stringify(show)));
   assert.equal(again.repaired, false);
   assert.deepEqual(again.show.videos, show.videos);
