@@ -76,6 +76,9 @@ export function runHead(run: BorderRun, seconds: number, beat: number | null, of
   return h - Math.floor(h);
 }
 
+/** Chase: shape i of n runs i/n of a lap behind the first, so the light passes along the list in order. */
+export const chaseHead = (run: BorderRun, seconds: number, beat: number | null, lag: number): number => runHead(run, seconds, beat, -lag);
+
 /** The outline (stage fractions) as straight pieces in stage pixels, closed. */
 const piecesPx = (ring: CurvePoint[]): Point[] => flatten(ringPx(ring), 32);
 
@@ -89,7 +92,11 @@ export function outlineLength(ring: CurvePoint[]): number {
 
 /** Points every `step` stage pixels round the outline, each with its position along it (0..1 by distance). */
 export function runSamples(ring: CurvePoint[], step: number): { x: number; y: number; t: number }[] {
-  const pts = piecesPx(ring), total = outlineLength(ring), out: { x: number; y: number; t: number }[] = [];
+  // One way round for every shape (clockwise on the wall), whichever way its outline was drawn.
+  let pts = piecesPx(ring), twice = 0;
+  for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; twice += a.x * b.y - b.x * a.y; }
+  if (twice < 0) pts = [pts[0], ...pts.slice(1).reverse()];
+  const total = outlineLength(ring), out: { x: number; y: number; t: number }[] = [];
   if (!(total > 0) || !(step > 0)) return out;
   let along = 0, next = 0;
   for (let i = 0; i < pts.length; i++) {
@@ -115,4 +122,10 @@ export function withSurface(project: Project, polygon: { x: number; y: number }[
     schemaVersion: 2,
     layers: project.layers.map(l => isInstrument(l.kind) ? { ...l, surface: { source: 'polygon' as const, role, influence: l.surface?.influence || 1, points: polygon.map(p => ({ ...p })) } } : l),
   };
+}
+
+/** Whether two compositions differ only in their layers' surfaces (Outline drives): no reason to start an evolving one again. */
+export function onlySurfaceDiffers(a: Project, b: Project): boolean {
+  const strip = (p: Project) => JSON.stringify({ ...p, schemaVersion: 0, layers: p.layers.map(({ surface: _s, ...l }) => l) });
+  return strip(a) === strip(b);
 }

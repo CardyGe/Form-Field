@@ -22,7 +22,7 @@ import { flatten, ringBounds } from './outline';
 import { IDENTITY, invert, multiply, quadToQuad, apply, type H3 } from './homography';
 import { coverCrop, landing, landingAspect, sourceSizeFor, type Landing } from './placement';
 import { Gpu, type ShapeDraw, type Texture } from './gpu';
-import { chaseOffsets, outlinePolygon, runHead, staggerDelays, withSurface } from './wild';
+import { chaseHead, chaseOffsets, onlySurfaceDiffers, outlinePolygon, staggerDelays, withSurface } from './wild';
 import { FrameHistory } from './frameHistory';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
 import type { Link } from '../react/links';
@@ -67,6 +67,8 @@ interface Fade { from: Texture | string; start: number | null; duration: number 
 /** A scene switch's glide of a shape's brightness and visibility, from where they were. */
 interface Glide { brightness: number; alpha: number; start: number; duration: number }
 const CHANGE_FADE_MS = 400;
+/** Stagger: how many sources may keep a second of history at once (about 28 to 64 MB of graphics memory each). */
+const MAX_HISTORIES = 4;
 
 /** The pictures a shape reuses until it changes. */
 interface Pictures {
@@ -97,6 +99,8 @@ export interface CompositorStats {
   linked?: Record<string, number>;
   /** How many times a playing effect took new settings without being prepared again (for checks). */
   adjusted?: number;
+  staggered?: number;
+  delayed?: number;
 }
 
 const kindsOf = (project: Project | null | undefined) => project ? project.layers.map(l => l.kind).join(',') : '';
@@ -348,7 +352,7 @@ export class MapCompositor {
       if (this.live.fresh) rendered = true;
     } else this.liveTexture = null;
     // A border run moves every frame (it holds with Freeze).
-    const running = !this.frozen && this.show.shapes.some(s => s.border.run && s.border.width > 0 && !s.blocker);
+    const running = !this.frozen && this.show.shapes.some(s => s.border.run && s.border.width > 0 && !s.blocker && shownOnWall(this.show, s, this.options.solo));
     const staggering = this.keepHistories(show);
     const drawn = this.dirty || rendered || running || staggering || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
@@ -377,6 +381,8 @@ export class MapCompositor {
       videos: Object.fromEntries([...this.videoSlots].map(([id, v]) => [id, { state: v.state, playsAs: v.playsAs }])),
       // For the scripted checks: the effect settings links are moving now, as drawn (source:layer:key → value).
       adjusted: this.adjusted,
+      // Stage 7, for the scripted checks: sources keeping a history for Stagger, and shapes shown with a delay.
+      staggered: this.histories.size, delayed: this.delays.size,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
     };
   }
@@ -449,7 +455,8 @@ export class MapCompositor {
     slot.renderer.prepare(project).then(() => {
       if (slot.pending !== project) return; // a newer composition arrived meanwhile
       // An evolving composition plays from its start; a looping one carries on where it was.
-      if (isEvolving(project)) slot.phase = 0;
+      // Not when only the outline it follows moved: dragging a shape never sends its effect back to the start.
+      if (isEvolving(project) && !(slot.project && onlySurfaceDiffers(slot.project, project))) slot.phase = 0;
       slot.project = slot.latest && !needsPrepare(project, slot.latest) ? slot.latest : project; slot.latest = null; slot.pending = null; slot.failed = null; slot.failedProject = null;
       this.dirty = true;
     }).catch(error => {
@@ -475,7 +482,9 @@ export class MapCompositor {
       if (!source.followOutline || !base || !shape) { this.outlined.delete(source.id); continue; }
       const inv = inverseOf(landing(shape, show));
       const picture = flatten(ringPx(shape.points)).map(p => apply(inv, p));
-      const polygon = outlinePolygon(picture, { x: 0, y: 0, w: 1, h: 1 }).map(p => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
+      const rounded = outlinePolygon(picture, { x: 0, y: 0, w: 1, h: 1 }).map(p => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
+      // Corners pressed together at the picture's edge (a zoom or an offset) are one corner.
+      const polygon = rounded.filter((p, i) => { const q = rounded[(i + 1) % rounded.length]; return rounded.length < 4 || Math.hypot(p.x - q.x, p.y - q.y) > .002; });
       const key = JSON.stringify([source.followOutline, polygon]), memo = this.outlined.get(source.id);
       if (memo && memo.base === base && memo.key === key) { out.set(source.id, memo.played); continue; }
       const played = withSurface(base, polygon, source.followOutline);
@@ -497,7 +506,8 @@ export class MapCompositor {
     this.delays = new Map();
     for (const group of show.groups) if (group.stagger) for (const [id, d] of staggerDelays(show, group.id)) if (d > 0) this.delays.set(id, d);
     const wanted = new Set<string>();
-    for (const shape of show.shapes) if (shape.sourceId && this.delays.has(shape.id) && shownOnWall(show, shape, this.options.solo)) wanted.add(shape.sourceId);
+    // At most four sources keep a history (shapes of others show their source as it is now); with more than one, smaller copies.
+    for (const shape of show.shapes) if (shape.sourceId && this.delays.has(shape.id) && shownOnWall(show, shape, this.options.solo) && (wanted.size < MAX_HISTORIES || wanted.has(shape.sourceId))) wanted.add(shape.sourceId);
     for (const [id, h] of this.histories) if (!wanted.has(id)) { h.dispose(); this.histories.delete(id); }
     if (!wanted.size) return false;
     for (const id of wanted) {
@@ -505,7 +515,7 @@ export class MapCompositor {
       if (!texture || this.frozen) continue;
       let h = this.histories.get(id);
       if (!h) { h = new FrameHistory(this.gpu); this.histories.set(id, h); }
-      h.push(texture, this.fadeClock);
+      h.push(texture, this.fadeClock, wanted.size > 1 ? 640 : 960);
     }
     return !this.frozen;
   }
@@ -613,7 +623,7 @@ export class MapCompositor {
     const beat = signals['tempo.beat'] !== undefined && signals['tempo.phase'] !== undefined ? signals['tempo.beat'] + signals['tempo.phase'] : null;
     const group = shape.groupId ? this.drawn.show.groups.find(g => g.id === shape.groupId) : undefined;
     const offset = group?.chase ? chaseOffsets(this.drawn.show, group.id).get(shape.id) ?? 0 : 0;
-    return runHead(shape.border.run!, now / 1000, beat, offset);
+    return chaseHead(shape.border.run!, now / 1000, beat, offset);
   }
 
   /** One shape: what it plays through its placement, its crossfade, its look, its coverage and its border. */

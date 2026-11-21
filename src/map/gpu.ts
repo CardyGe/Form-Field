@@ -57,7 +57,8 @@ void main() {
   vec4 d = uDecor == 1 ? texture(uDecorTex, cu) : vec4(0.);
   if (uRun == 1) {
     vec4 r = texture(uRunTex, cu);
-    float lit = 0.;
+    // Holes' borders (no place round the outer outline) keep their steady border.
+    float lit = 1.;
     if (r.a > .02) {
       float t = fract(atan(r.g - .5 * r.a, r.r - .5 * r.a) / 6.2831853);
       float behind = fract(uRunAt.x - t);

@@ -1,6 +1,6 @@
 /**
  * Map stage 7, Stagger: the last second of a source's pictures, so each shape of a staggered group can show it a
- * little later than the one before. Copies are kept 30 a second, at most 960 pixels a side, and only while a
+ * little later than the one before. Copies are kept 30 a second, at most 960 pixels a side (640 when several sources keep one), and only while a
  * staggered group plays the source.
  */
 import type { Gpu, Texture } from './gpu';
@@ -8,7 +8,6 @@ import type { Gpu, Texture } from './gpu';
 export const HISTORY_FPS = 30;
 /** One second, plus the newest. */
 export const HISTORY_SIZE = HISTORY_FPS + 1;
-const MAX_SIDE = 960;
 
 /** Which kept copy shows `delayS` seconds ago: `newest` is the last written, `written` how many have been kept. */
 export function historyIndex(ringSize: number, newest: number, delayS: number, fps: number, written: number): number {
@@ -25,10 +24,10 @@ export class FrameHistory {
   constructor(private readonly gpu: Gpu) {}
 
   /** Keeps a copy of the picture if a thirtieth of a second has passed on the show's clock. */
-  push(source: Texture, clockMs: number): void {
+  push(source: Texture, clockMs: number, maxSide = 960): void {
     if (clockMs - this.lastAt < 1000 / HISTORY_FPS - 1 && clockMs >= this.lastAt) return;
     this.lastAt = clockMs;
-    const scale = Math.min(1, MAX_SIDE / Math.max(source.width, source.height));
+    const scale = Math.min(1, maxSide / Math.max(source.width, source.height));
     const w = Math.max(1, Math.round(source.width * scale)), h = Math.max(1, Math.round(source.height * scale));
     this.newest = (this.newest + 1) % HISTORY_SIZE;
     this.ring[this.newest] = this.gpu.scaledCopy(source, this.ring[this.newest], w, h);

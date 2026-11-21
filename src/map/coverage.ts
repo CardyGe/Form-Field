@@ -67,7 +67,8 @@ export function borderPicture(shape: Shape, path: Path2D, box: Box, colour: stri
 /**
  * Border runs: each border pixel's position round the outer outline, 0..1, as an angle (red the cosine, green the
  * sine), so neighbours blended by the edges and the filtering still read as a position between them, and the lap's
- * end meets its start with no seam. Holes' borders are left empty: a run goes round the outer outline only.
+ * end meets its start with no seam. Holes' borders are left empty: a run goes round the outer outline only, and holes
+ * keep their steady border.
  */
 export function borderRunPicture(shape: Shape, path: Path2D, box: Box): OffscreenCanvas {
   const { canvas, ctx } = over(box, 1);

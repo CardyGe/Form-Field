@@ -5,6 +5,7 @@ import { applyEdit, type EditAction } from '../src/map/editor';
 import { createShow, validateShow, MAX_SOURCES, type CurvePoint, type ShowDocument } from '../src/map/show';
 import { staggerDelays, chaseOffsets, rotatePalette, outlinePolygon, nextAutoScene, autoAdvanceDue, runHead, outlineLength, runSamples, withSurface } from '../src/map/wild';
 import { historyIndex } from '../src/map/frameHistory';
+import { chaseHead, onlySurfaceDiffers } from '../src/map/wild';
 import { initialMapState, mapReducer } from '../src/map/state';
 
 const sq = (x0: number, y0: number, x1: number, y1: number): CurvePoint[] => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
@@ -199,4 +200,31 @@ test('withSurface gives each instrument layer the outline as its surface, leavin
   // An outline that crosses itself once simplified is not used: the composition plays as saved.
   const bow = [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }];
   assert.equal(withSurface(project, bow, 'edge'), project);
+});
+
+// ---- Review fixes ----
+
+test('review: Chase passes the light along the list in order — each later shape lights a spot a moment after the one before', () => {
+  const run = { lapsPerMinute: 60, beats: null, length: .2 };
+  // At 1 s a lap, with three shapes, shape 1 reaches each place a third of a second after shape 0.
+  assert.ok(Math.abs(chaseHead(run, 1 / 3, null, 1 / 3) - chaseHead(run, 0, null, 0)) < 1e-9);
+  assert.ok(Math.abs(chaseHead(run, 2 / 3, null, 2 / 3) - chaseHead(run, 0, null, 0)) < 1e-9);
+});
+
+test('review: a run goes the same way round whichever way the outline was drawn', () => {
+  const cw = sq(.2, .2, .4, .4), ccw = [...cw].reverse();
+  const a = runSamples(cw, 10), b = runSamples(ccw, 10);
+  // A quarter of the way round, both have gone the same way from their start.
+  const dir = (s: typeof a) => { const q = s[Math.floor(s.length / 8)]; return [Math.sign(Math.round(q.x - s[0].x)), Math.sign(Math.round(q.y - s[0].y))]; };
+  const cross = (s: typeof a) => { const p = s[0], q = s[Math.floor(s.length / 8)], r = s[Math.floor(s.length * 3 / 8)]; return Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)); };
+  assert.equal(cross(a), cross(b), `${dir(a)} vs ${dir(b)}`);
+});
+
+test('review: a composition that differs only in its surface is not a new start', () => {
+  const project = grouped().sources[0].project;
+  const poly = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+  assert.equal(onlySurfaceDiffers(project, withSurface(project, poly, 'edge')), true);
+  assert.equal(onlySurfaceDiffers(withSurface(project, poly, 'edge'), withSurface(project, poly.map(p => ({ x: p.x * .5, y: p.y })), 'edge')), true);
+  const other = structuredClone(project); other.layers[0].params = { ...other.layers[0].params, seed: 99999 };
+  assert.equal(onlySurfaceDiffers(project, other), false);
 });
