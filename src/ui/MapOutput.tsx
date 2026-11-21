@@ -18,7 +18,7 @@ export default function MapOutput() {
     const element = canvas.current;
     if (!bridge || !element) return;
     let compositor: MapCompositor;
-    try { compositor = new MapCompositor(element); }
+    try { compositor = new MapCompositor(element, { warp: true }); }
     catch (error) { setFailure((error as Error).message); return; }
     let state = initialWall();
     const apply = () => {

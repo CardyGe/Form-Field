@@ -1,6 +1,7 @@
 // Performance record for Map: eight shapes playing four instruments (two shapes each, each with its own source)
 // on a 1920 × 1080 stage, measured in the output window for 30 s after a warm-up.
 // Run: npm run build && node scripts/measure-map.mjs [--seconds 30] [--edges]
+// --pins pins every shape to a skewed quad (stage 4).
 // --edges gives every shape a 40 px soft edge and a 6 px border with an 8 px glow (stage 3).
 // Uses a throwaway user-data folder under work/map-measure/. Prints a table and writes work/map-measure/results.json.
 import fs from 'node:fs/promises';
@@ -13,6 +14,7 @@ const out = path.join(root, 'work/map-measure');
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? Number(process.argv[i + 1]) : fallback; };
 const SECONDS = arg('--seconds', 30), WARMUP = 4;
 const EDGES = process.argv.includes('--edges');
+const PINS = process.argv.includes('--pins');
 const MIXES = {
   medium: ['ivory-coral', 'porcelain-shutters', 'salt-mandala', 'rapid-cuts'],
   heavy: ['prismatic-fold', 'pearl-organism', 'ivory-coral', 'acid-slide'],
@@ -53,6 +55,13 @@ for (const [mix, presets] of Object.entries(MIXES)) {
         const slider = async (label, value) => { const el = studio.getByLabel(label, { exact: true }); await el.fill(String(value)); await el.dispatchEvent('pointerup'); };
         await slider('Soft edge', 40); await slider('Border', 6); await slider('Glow', 8);
       }
+      if (PINS) {
+        // Stage 4: every shape pinned to a slightly skewed quad, so each one takes the triangle grid.
+        await studio.getByLabel('Picture placement', { exact: true }).selectOption('pin');
+        const pin = async (label, px) => { const el = studio.getByLabel(label, { exact: true }); await el.fill(String(px)); await el.press('Enter'); };
+        await pin('Pin bottom right X', Math.round((0.24 + col * 0.24) * 1920) - 40);
+        await pin('Pin top left X', Math.round((0.03 + col * 0.24) * 1920) + 30);
+      }
     }
     await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 8, null, { timeout: 30000 });
     await sleep(WARMUP * 1000);
@@ -76,13 +85,13 @@ for (const [mix, presets] of Object.entries(MIXES)) {
       medianMs: +pick(0.5).toFixed(2), p95Ms: +pick(0.95).toFixed(2), maxMs: +sorted.at(-1).toFixed(1),
       over16_7: record.intervals.filter(v => v > 16.7).length,
       fpsReported: record.fps, governorLevels: [...new Set(record.levels)], failing: record.failing,
-      edges: EDGES, edgeBuildsDuringRun: record.edgeBuilds - edgeBuildsBefore,
+      edges: EDGES, pins: PINS, edgeBuildsDuringRun: record.edgeBuilds - edgeBuildsBefore,
     };
   } finally { await app.close().catch(() => {}); }
 }
 
 await fs.mkdir(out, { recursive: true });
-await fs.writeFile(path.join(out, EDGES ? 'results-edges.json' : 'results.json'), JSON.stringify(results, null, 2));
+await fs.writeFile(path.join(out, PINS ? 'results-pins.json' : EDGES ? 'results-edges.json' : 'results.json'), JSON.stringify(results, null, 2));
 for (const [mix, r] of Object.entries(results)) {
   console.log(`${mix.padEnd(7)} ${r.presets.join(', ')}`);
   console.log(`        ${r.frames} frames in ${r.seconds} s · median ${r.medianMs} ms · p95 ${r.p95Ms} ms · max ${r.maxMs} ms · ${r.over16_7} frames over 16.7 ms · governor levels ${r.governorLevels.join(',')} · fps reported ${Math.min(...r.fpsReported)}–${Math.max(...r.fpsReported)} · failing ${r.failing.length}${r.edges ? ` · soft edges made during the run ${r.edgeBuildsDuringRun}` : ''}`);

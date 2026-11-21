@@ -434,6 +434,46 @@ try {
     await studio.screenshot({ path: path.join(out, 'operator-grid.png') });
   });
 
+  // Stage 4: placement, look and the projector's corners.
+  await check('a pinned shape projects its picture inside its pinned corners only', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.25, .25], [.6, .6]);
+    await tool('Select'); await asColour();
+    await studio.getByLabel('Picture placement', { exact: true }).selectOption('pin');
+    // Bottom right pin moved in to (768, 648) px: the old box's right-hand corner now falls outside the picture.
+    await studio.getByLabel('Pin bottom right X', { exact: true }).fill('768');
+    await studio.getByLabel('Pin bottom right X', { exact: true }).press('Enter');
+    await studio.getByLabel('Pin bottom right Y', { exact: true }).fill('648');
+    await studio.getByLabel('Pin bottom right Y', { exact: true }).press('Enter');
+    await wallUntil([[.3, .4], [.35, .5], [.55, .55]], c => coloured(c[0]) && coloured(c[1]) && near(c[2], BLACK), 'pinned');
+    await sleep(300);
+    await studio.screenshot({ path: path.join(out, 'operator-pin.png') });
+  });
+
+  await check('brightness at 50 % halves the picture on the wall', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.25, .25], [.6, .6]);
+    await tool('Select'); await asColour();
+    const slider = studio.getByLabel('Brightness', { exact: true });
+    await slider.fill('50'); await slider.press('Tab');
+    await wallUntil([[.3, .3], [.425, .425]], c => c.every(v => v[0] > 110 && v[0] < 150 && v[1] < 45), 'brightness');
+  });
+
+  await check('a moved projector corner re-pins the stage on the wall', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.25, .25], [.6, .6]);
+    await tool('Select'); await asColour();
+    await wallUntil([[.32, .32]], c => c[0][0] > 200, 'before the corner moves');
+    await studio.locator('.map-corner-tool summary').click();
+    // The stage's top left corner moves to (30 %, 30 %) of the projector: the old picture at (32 %, 32 %) is now off the stage's corner.
+    await studio.getByLabel('Projector top left X', { exact: true }).fill(String(Math.round(.3 * 1920)));
+    await studio.getByLabel('Projector top left X', { exact: true }).press('Enter');
+    await studio.getByLabel('Projector top left Y', { exact: true }).fill(String(Math.round(.3 * 1080)));
+    await studio.getByLabel('Projector top left Y', { exact: true }).press('Enter');
+    await wallUntil([[.32, .32]], c => !coloured(c[0]), 'after the corner moves');
+    await studio.getByRole('button', { name: 'Reset corners', exact: true }).click();
+  });
+
   await check('the Photo shows on this screen only, never on the wall', async () => {
     await clearStage();
     // A plain white picture, made in the page.

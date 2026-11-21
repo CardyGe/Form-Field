@@ -12,11 +12,22 @@ import { drawPattern } from './pattern';
 import { borderColour, effectiveSoftEdge, fadeKey, fadeSize } from './edge';
 import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
-import { STAGE_SIZE, type Group, type Shape } from './show';
+import { IDENTITY_CORNERS, MIN_OUTLINE_AREA, STAGE_SIZE, type Group, type Point, type Shape } from './show';
 import { ringBounds } from './outline';
+import { affineFromTriangle, pinTriangles, quadUsable, unionRect, type Quad, type Rect } from './placement';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
-export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number }[]; groups: Group[] }
+export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number }[]; groups: Group[]; stageCorners?: Point[] }
+
+/** Pin and stage corners are drawn as a grid of this many cells a side. */
+const PIN_GRID = 8;
+
+/** Where a shape's picture sits: its box, a rectangle within it (Across), or four pinned corners with their triangles. */
+type Place = { kind: 'rect'; rect: Rect } | { kind: 'pin'; quad: Point[]; tris: { src: [Point, Point, Point]; dst: [Point, Point, Point] }[] };
+
+/** Whether the four corners are the stage's own: the wall gets the stage as it is, with no warp. */
+const isIdentityCorners = (corners: Point[]) => corners.every((p, i) => Math.abs(p.x - IDENTITY_CORNERS[i].x) < 1e-9 && Math.abs(p.y - IDENTITY_CORNERS[i].y) < 1e-9);
+const tracePath = (points: Point[]) => { const path = new Path2D(); points.forEach((p, i) => (i ? path.lineTo(p.x, p.y) : path.moveTo(p.x, p.y))); path.closePath(); return path; };
 
 /** A shape's outline and holes as one path in stage pixels, with its box; kept until the shape's geometry changes. */
 interface Outline { shape: Shape; key: string; path: Path2D; box: { x: number; y: number; w: number; h: number } }
@@ -75,7 +86,7 @@ const kindsOf = (project: Project | null | undefined) => project ? project.layer
 
 export class MapCompositor {
   private readonly ctx: CanvasRenderingContext2D;
-  private show: PlayShow = { shapes: [], sources: [], groups: [] };
+  private show: PlayShow = { shapes: [], sources: [], groups: [], stageCorners: IDENTITY_CORNERS };
   private readonly outlines = new Map<string, Outline>();
   private readonly faders = new Map<string, Fader>();
   /** Each grid-pattern shape's pattern, drawn once over its box and reused until the shape changes. */
@@ -103,13 +114,18 @@ export class MapCompositor {
   /** Something changed since the stage was last drawn: the show, the overlays, Freeze, or an instrument became ready. */
   private dirty = true;
   private optionsKey = '';
+  /** The stage as drawn, kept while the stage corners warp it on the wall. */
+  private stageCopy: OffscreenCanvas | null = null;
+  /** Whether this canvas is the wall: only the wall applies the stage corners. */
+  private readonly warp: boolean;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, options: { warp?: boolean } = {}) {
     canvas.width = STAGE_SIZE.width;
     canvas.height = STAGE_SIZE.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('This screen cannot draw the stage.');
     this.ctx = ctx;
+    this.warp = options.warp === true;
   }
 
   /** The shapes and sources to play, and the compositions the stage has for them (by source id). */
@@ -279,6 +295,55 @@ export class MapCompositor {
     }
     ctx.restore();
     drawCommands(ctx, stageCommands(this.show, this.options).filter(c => c.kind !== 'fill' && c.kind !== 'pattern'));
+    if (this.warp) this.warpStage();
+  }
+
+  /**
+   * The wall's stage corners: the drawn stage is taken to the four corners on the output, in a grid, so a projector
+   * that has moved is re-pinned. Shapes and their outlines stay where they are on the stage.
+   */
+  private warpStage(): void {
+    const corners = this.show.stageCorners;
+    if (!corners || corners.length !== 4 || isIdentityCorners(corners) || !quadUsable(corners, MIN_OUTLINE_AREA)) return;
+    const { width: W, height: H } = STAGE_SIZE;
+    if (!this.stageCopy) this.stageCopy = new OffscreenCanvas(W, H);
+    const copy = this.stageCopy.getContext('2d')!;
+    copy.setTransform(1, 0, 0, 1, 0, 0);
+    copy.clearRect(0, 0, W, H);
+    copy.drawImage(this.ctx.canvas, 0, 0);
+    const ctx = this.ctx;
+    const quad = corners.map(p => ({ x: p.x * W, y: p.y * H })) as Quad;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+    for (const t of pinTriangles(quad, W, H, PIN_GRID, PIN_GRID)) {
+      const m = affineFromTriangle(t.src, t.dst);
+      if (!m) continue;
+      ctx.save();
+      ctx.clip(tracePath(t.dst));
+      ctx.setTransform(...m);
+      ctx.drawImage(this.stageCopy, 0, 0, W, H);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  /** Where a shape's picture sits (stage 4): its box, a window on its group or the stage, or four pinned corners. */
+  private placeOf(shape: Shape, box: { x: number; y: number; w: number; h: number }): Place {
+    const mode = shape.placement.mode;
+    if (mode === 'pin' && quadUsable(shape.placement.pins, MIN_OUTLINE_AREA)) {
+      const quad = shape.placement.pins.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }));
+      return { kind: 'pin', quad, tris: pinTriangles(quad as Quad, box.w, box.h, PIN_GRID, PIN_GRID) };
+    }
+    if (mode === 'stage') return { kind: 'rect', rect: { x: -box.x, y: -box.y, w: STAGE_SIZE.width, h: STAGE_SIZE.height } };
+    if (mode === 'group' && shape.groupId !== null) {
+      const members = this.show.shapes.filter(s => s.groupId === shape.groupId).map(s => this.outline(s).box);
+      const union = unionRect(members);
+      if (union) return { kind: 'rect', rect: { x: union.x - box.x, y: union.y - box.y, w: union.w, h: union.h } };
+    }
+    return { kind: 'rect', rect: { x: 0, y: 0, w: box.w, h: box.h } };
   }
 
   /** The shape's outline and holes as one path, made again only when its geometry changes. */
@@ -361,14 +426,34 @@ export class MapCompositor {
       ctx.save();
       ctx.clip(outline.path, 'evenodd');
     }
+    const place = this.placeOf(shape, box);
     const paintWith = (content: Frame | string, alpha: number) => {
       target.globalAlpha = alpha;
-      if (typeof content === 'string') { target.fillStyle = content; target.fillRect(at.x, at.y, box.w, box.h); }
-      else target.drawImage(content, at.x, at.y, box.w, box.h);
+      if (place.kind === 'pin') {
+        // Each triangle of the grid takes its share of the picture, mapped affinely onto its pinned place.
+        for (const t of place.tris) {
+          const dst = t.dst.map(p => ({ x: p.x - box.x + at.x, y: p.y - box.y + at.y })) as [Point, Point, Point];
+          if (typeof content === 'string') { target.fillStyle = content; target.beginPath(); target.moveTo(dst[0].x, dst[0].y); target.lineTo(dst[1].x, dst[1].y); target.lineTo(dst[2].x, dst[2].y); target.closePath(); target.fill(); continue; }
+          const m = affineFromTriangle(t.src, dst);
+          if (!m) continue;
+          target.save();
+          target.clip(tracePath(dst));
+          target.setTransform(...m);
+          target.drawImage(content, 0, 0, box.w, box.h);
+          target.restore();
+        }
+        return;
+      }
+      const r = place.rect;
+      if (typeof content === 'string') { target.fillStyle = content; target.fillRect(at.x + r.x, at.y + r.y, r.w, r.h); }
+      else target.drawImage(content, at.x + r.x, at.y + r.y, r.w, r.h);
     };
 
     if (shape.blocker) paintWith('#000000', 1);
-    else this.paintContent(shape, now, paintWith);
+    else {
+      this.paintContent(shape, now, paintWith);
+      this.applyLook(shape, target, place, box, at);
+    }
 
     if (soft) {
       const t = target as OffscreenCanvasRenderingContext2D;
@@ -396,6 +481,33 @@ export class MapCompositor {
       ctx.stroke(outline.path);
       ctx.restore();
     }
+  }
+
+  /**
+   * Brightness and tint (stage 4), applied once over the picture's region after its content is drawn (so a crossfade
+   * is not darkened twice). Brightness below 1 multiplies, above 1 adds; tint blends its colour by its amount.
+   */
+  private applyLook(shape: Shape, target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, place: Place, box: { x: number; y: number; w: number; h: number }, at: Point): void {
+    const { brightness, tint, tintAmount } = shape.look;
+    if (brightness === 1 && tint === null) return;
+    const region = place.kind === 'pin'
+      ? tracePath(place.quad.map(p => ({ x: p.x - box.x + at.x, y: p.y - box.y + at.y })))
+      : (() => { const path = new Path2D(); path.rect(at.x + place.rect.x, at.y + place.rect.y, place.rect.w, place.rect.h); return path; })();
+    target.save();
+    target.globalAlpha = 1;
+    if (brightness !== 1) {
+      const level = Math.round((brightness < 1 ? brightness : brightness - 1) * 255);
+      target.globalCompositeOperation = brightness < 1 ? 'multiply' : 'lighter';
+      target.fillStyle = `rgb(${level},${level},${level})`;
+      target.fill(region);
+    }
+    if (tint !== null && tintAmount > 0) {
+      target.globalCompositeOperation = 'color';
+      target.globalAlpha = tintAmount;
+      target.fillStyle = tint;
+      target.fill(region);
+    }
+    target.restore();
   }
 
   /** A shape's own fill when it plays nothing: its grid pattern, or its plain colour. */

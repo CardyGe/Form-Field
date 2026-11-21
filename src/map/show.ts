@@ -3,6 +3,7 @@
  * damaged or outdated file field by field, so the Map always opens.
  */
 import { shapeValidity, MAX_HOLES } from './outline';
+import { quadUsable, clampBrightness } from './placement';
 import { validateProject } from '../core/project';
 import type { Project } from '../shared/types';
 
@@ -21,9 +22,19 @@ export interface Border { width: number; colour: 'shape' | 'palette' | string; g
  * softEdge: projector pixels over which the content fades in from the outline.
  * fill: what a shape that plays no instrument shows: its plain colour, or a grid pattern in its colour (new shapes).
  */
+/**
+ * How the picture sits in the shape (stage 4). fit: fills the shape's box. pin: four stage corners take it with
+ * perspective (pins are stage fractions, always four). group / stage: laid over the shape's group, or the whole
+ * stage, so the shape is a window on to it.
+ */
+export type PlacementMode = 'fit' | 'pin' | 'group' | 'stage';
+export interface Placement { mode: PlacementMode; pins: Point[] }
+/** Brightness: a multiplier, 1 as designed. Tint: a colour mixed in by tintAmount (0 to 1); null for none. */
+export interface Look { brightness: number; tint: string | null; tintAmount: number }
 export interface Shape {
   id: string; name: string; points: CurvePoint[]; colour: string; visible: boolean; locked: boolean; sourceId: string | null;
   holes: Ring[]; groupId: string | null; blocker: boolean; softEdge: number; border: Border; fill: 'colour' | 'grid';
+  placement: Placement; look: Look;
 }
 /** A folder of shapes, one level deep. Hidden or locked, it hides or locks its members without changing their own settings. */
 export interface Group { id: string; name: string; visible: boolean; locked: boolean }
@@ -32,11 +43,16 @@ export interface Photo { data: string; opacity: number }
 /** A Studio composition playing in one or more shapes. revision goes up with every change, so the wall knows what it has. */
 export interface InstrumentSource { id: string; kind: 'instrument'; project: Project; speed: number; revision: number }
 export type Source = InstrumentSource;
-export interface ShowDocument { format: 'formshow'; version: 3; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null }
+/**
+ * The stage's four corners on the wall, as fractions of the output (stage 4). Moving them re-pins the whole stage when
+ * the projector moves; the outlines stay where they are on the stage. Identity: the stage fills the output.
+ */
+export const IDENTITY_CORNERS: Point[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+export interface ShowDocument { format: 'formshow'; version: 4; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] }
 /** A source as the wall first hears of it: everything but the composition, which travels in its own message. */
 export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number }
 /** The show as sent to the wall: no compositions, and never the photo. */
-export interface WireShow { format: 'formshow'; version: 3; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[] }
+export interface WireShow { format: 'formshow'; version: 4; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] }
 
 export const MAX_SHAPES = 64;
 export const MAX_POINTS = 32;
@@ -59,11 +75,49 @@ export const GLOW_MAX = 40;
 /** A photo is stored shrunk to the stage as a JPEG, well under this. */
 export const PHOTO_TEXT_LIMIT = 8 * 1024 * 1024;
 export const DEFAULT_BORDER: Border = { width: 0, colour: 'shape', glow: 0 };
+export const DEFAULT_LOOK: Look = { brightness: 1, tint: null, tintAmount: 0.5 };
+export const DEFAULT_PLACEMENT: Placement = { mode: 'fit', pins: [] };
 /** The stage 3 fields of a new shape, at their defaults. */
-export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'softEdge' | 'border' | 'fill'> => ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour' });
+export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'softEdge' | 'border' | 'fill' | 'placement' | 'look'> => ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour', placement: { ...DEFAULT_PLACEMENT, pins: [] }, look: { ...DEFAULT_LOOK } });
 
 export function createShow(): ShowDocument {
-  return { format: 'formshow', version: 3, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null };
+  return { format: 'formshow', version: 4, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: IDENTITY_CORNERS.map(p => ({ ...p })) };
+}
+
+/** Stage corners from a file: four finite points inside the output and forming a usable quad, else the identity. */
+function readStageCorners(value: unknown): { corners: Point[]; repaired: boolean } {
+  if (value === undefined) return { corners: IDENTITY_CORNERS.map(p => ({ ...p })), repaired: false };
+  const ok = Array.isArray(value) && value.length === 4 && value.every(p => isRecord(p) && typeof p.x === 'number' && typeof p.y === 'number' && Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (!ok) return { corners: IDENTITY_CORNERS.map(p => ({ ...p })), repaired: true };
+  const corners = (value as Record<string, number>[]).map(p => ({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) }));
+  const repaired = corners.some((c, i) => c.x !== (value as Record<string, number>[])[i].x || c.y !== (value as Record<string, number>[])[i].y);
+  if (!quadUsable(corners, 0.01)) return { corners: IDENTITY_CORNERS.map(p => ({ ...p })), repaired: true };
+  return { corners, repaired };
+}
+
+/** A placement from a file: an unknown mode is fit; pins that do not form a usable quad turn it back to fit. */
+function readPlacement(value: unknown): { placement: Placement; repaired: boolean } {
+  const fit = { placement: { mode: 'fit' as PlacementMode, pins: [] as Point[] }, repaired: true };
+  if (value === undefined) return { placement: { mode: 'fit', pins: [] }, repaired: false };
+  if (!isRecord(value) || !['fit', 'pin', 'group', 'stage'].includes(value.mode as string)) return fit;
+  const mode = value.mode as PlacementMode;
+  const pins: Point[] = [];
+  if (Array.isArray(value.pins) && value.pins.length === 4 && value.pins.every(p => isRecord(p) && typeof p.x === 'number' && typeof p.y === 'number' && Number.isFinite(p.x) && Number.isFinite(p.y))) {
+    for (const p of value.pins as Record<string, number>[]) pins.push({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) });
+  }
+  if (mode === 'pin' && !quadUsable(pins, MIN_OUTLINE_AREA)) return fit;
+  return { placement: { mode, pins: mode === 'pin' ? pins : [] }, repaired: false };
+}
+
+/** A look from a file: brightness clamped, tint a valid colour or none. */
+function readLook(value: unknown): { look: Look; repaired: boolean } {
+  if (value === undefined) return { look: { ...DEFAULT_LOOK }, repaired: false };
+  if (!isRecord(value)) return { look: { ...DEFAULT_LOOK }, repaired: true };
+  const brightness = clampBrightness(typeof value.brightness === 'number' ? value.brightness : 1);
+  const tintOk = value.tint === null || (typeof value.tint === 'string' && HEX.test(value.tint));
+  const tint = tintOk ? value.tint as string | null : null;
+  const amount = clampNumber(value.tintAmount, 1, 0.5);
+  return { look: { brightness, tint, tintAmount: amount.value }, repaired: brightness !== value.brightness || !tintOk || amount.repaired };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -179,7 +233,7 @@ export function normaliseGroups<T extends { shapes: Shape[]; groups: Group[] }>(
 function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaired: boolean; ok: boolean } {
   if (!isRecord(value)) return { shapes: [], groups: [], repaired: true, ok: false };
   // Version 1 and 2 shows open with every later field at its default, which is not a repair.
-  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3);
+  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4);
   if (!isRecord(value.stage) || value.stage.width !== STAGE_SIZE.width || value.stage.height !== STAGE_SIZE.height) repaired = true;
   if (!Array.isArray(value.shapes)) return { shapes: [], groups: [], repaired: true, ok: false };
   if (value.shapes.length > MAX_SHAPES) repaired = true;
@@ -227,7 +281,9 @@ function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaire
     // Shapes from before the grid pattern keep their plain colour.
     const fill = raw.fill === 'grid' ? 'grid' : 'colour';
     if (raw.fill !== undefined && raw.fill !== 'grid' && raw.fill !== 'colour') repaired = true;
-    shapes.push({ id, name, points, colour: colourOk ? raw.colour as string : '#ffffff', visible, locked, sourceId, holes, groupId, blocker, softEdge: softEdge.value, border: border.border, fill });
+    const placement = readPlacement(raw.placement), look = readLook(raw.look);
+    if (placement.repaired || look.repaired) repaired = true;
+    shapes.push({ id, name, points, colour: colourOk ? raw.colour as string : '#ffffff', visible, locked, sourceId, holes, groupId, blocker, softEdge: softEdge.value, border: border.border, fill, placement: placement.placement, look: look.look });
   }
   const normal = normaliseGroups({ shapes, groups: readG.groups });
   if (normal.shapes !== shapes) repaired = true;
@@ -244,6 +300,9 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
   const photo = readPhoto(value.photo);
   show.photo = photo.photo;
   if (photo.repaired) repaired = true;
+  const corners = readStageCorners(value.stageCorners);
+  show.stageCorners = corners.corners;
+  if (corners.repaired) repaired = true;
 
   // Sources: each composition is checked as Studio checks a file. A source that cannot be read is left out,
   // and its shapes play their colour; so do shapes that name a source the file does not have.
@@ -279,7 +338,7 @@ export function validateWireShow(value: unknown): WireShow {
   }
   const shapes = read.shapes;
   linkSources(shapes, sources);
-  return { format: 'formshow', version: 3, stage: { ...STAGE_SIZE }, shapes, sources: [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id)), groups: read.groups };
+  return { format: 'formshow', version: 4, stage: { ...STAGE_SIZE }, shapes, sources: [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id)), groups: read.groups, stageCorners: isRecord(value) ? readStageCorners(value.stageCorners).corners : IDENTITY_CORNERS.map(p => ({ ...p })) };
 }
 
 /** Shapes that name a source the show does not have play their colour. True when any had to. */

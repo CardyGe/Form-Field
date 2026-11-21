@@ -55,6 +55,7 @@
 .map-list-actions { margin-top: 8px; }
 .map-inspector { overflow-y: auto; }
 .map-grid-tool summary { cursor: pointer; font-size: 12px; margin-top: 4px; }
+.map-corner-tool summary { cursor: pointer; font-size: 12px; margin-top: 4px; }
 .map-grid-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 6px 0; }
 .map-group-line { display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 6px; }
 .map-shapes { overflow-x: hidden; }

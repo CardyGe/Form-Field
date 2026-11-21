@@ -1,11 +1,12 @@
 import {
   BORDER_MAX, GLOW_MAX, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, PHOTO_TEXT_LIMIT, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE,
-  cleanName, isShapeLocked, normaliseGroups, shapeExtras,
-  type Border, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source,
+  cleanName, isShapeLocked, normaliseGroups, shapeExtras, IDENTITY_CORNERS, MIN_OUTLINE_AREA,
+  type Border, type Look, type PlacementMode, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source,
 } from './show';
 import { clampToStage, nudge, rectangleFromDrag } from './geometry';
-import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
+import { gridCells, insertPoint, isCurved, moveHandle, removePoint, ringBounds, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
 import { joinedAnchors } from './snap';
+import { clampBrightness, quadUsable } from './placement';
 import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer } from '../core/project';
 import type { Project } from '../shared/types';
 
@@ -58,7 +59,14 @@ export type EditAction =
   | { type: 'varySource'; sourceId: string; entropy: number }
   | { type: 'setSourcePalette'; sourceId: string; palette: string[] }
   | { type: 'setSourceSpeed'; sourceId: string; speed: number }
-  | { type: 'setSourceProject'; sourceId: string; project: Project };
+  | { type: 'setSourceProject'; sourceId: string; project: Project }
+  /** Placement (stage 4). pins: the four corners for pin; when omitted, the shape's own corners, or its box's corners. */
+  | { type: 'setPlacement'; shapeId: string; mode: PlacementMode; pins?: Point[] }
+  | { type: 'movePin'; shapeId: string; index: number; to: Point }
+  | { type: 'setLook'; shapeId: string; look: Look }
+  /** One of the stage's four corners on the wall, in output fractions. */
+  | { type: 'setStageCorner'; index: number; to: Point }
+  | { type: 'resetStageCorners' };
 
 export type EditResult = { ok: true; show: ShowDocument } | { ok: false; reason: string };
 
@@ -344,6 +352,16 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     }
   }
 
+  if (action.type === 'setStageCorner') {
+    if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3) return { reason: 'bad-corner' };
+    const corners = next.stageCorners.map(p => ({ ...p }));
+    corners[action.index] = clampToStage(action.to);
+    if (!quadUsable(corners, MIN_OUTLINE_AREA)) return { reason: 'bad-corners' };
+    next.stageCorners = corners;
+    return done();
+  }
+  if (action.type === 'resetStageCorners') { next.stageCorners = IDENTITY_CORNERS.map(p => ({ ...p })); return done(); }
+
   const shape = find(action.shapeId);
   if (!shape) return { reason: 'not-found' };
 
@@ -378,6 +396,32 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       shape.blocker = action.blocker;
       if (action.blocker) { shape.sourceId = null; dropUnplayed(next); }
       return done();
+    case 'setPlacement': {
+      if (!['fit', 'pin', 'group', 'stage'].includes(action.mode)) return { reason: 'bad-placement' };
+      if (action.mode !== 'pin') { shape.placement = { mode: action.mode, pins: [] }; return done(); }
+      // A pin takes four corners: the ones given, or the shape's own corners, or the corners of its box.
+      const b = ringBounds([shape.points]);
+      const boxCorners = [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }, { x: b.x0, y: b.y1 }];
+      const pins = action.pins ?? (shape.points.length === 4 ? shape.points.map(p => ({ x: p.x, y: p.y })) : boxCorners);
+      if (!quadUsable(pins, MIN_OUTLINE_AREA)) return { reason: 'bad-pins' };
+      shape.placement = { mode: 'pin', pins: pins.map(p => clampToStage(p)) };
+      return done();
+    }
+    case 'movePin': {
+      if (shape.placement.mode !== 'pin') return { reason: 'not-pinned' };
+      if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3) return { reason: 'bad-corner' };
+      const pins = shape.placement.pins.map(p => ({ ...p }));
+      pins[action.index] = clampToStage(action.to);
+      if (!quadUsable(pins, MIN_OUTLINE_AREA)) return { reason: 'bad-pins' };
+      shape.placement = { mode: 'pin', pins };
+      return done();
+    }
+    case 'setLook': {
+      const { brightness, tint, tintAmount } = action.look;
+      if (tint !== null && !HEX.test(tint)) return { reason: 'bad-colour' };
+      shape.look = { brightness: clampBrightness(brightness), tint, tintAmount: clamp(Number.isFinite(tintAmount) ? tintAmount : 0.5, 0, 1) };
+      return done();
+    }
     case 'setSoftEdge': shape.softEdge = clamp(Number.isFinite(action.px) ? action.px : 0, 0, SOFT_EDGE_MAX); return done();
     case 'setBorder': {
       const { width, colour, glow } = action.border;

@@ -64,7 +64,7 @@ test('long names are shortened and long ids replaced, so a show always fits on t
 
 test('unknown version still loads valid shapes', () => {
   const r = validateShow(doc([shape()], { version: 9 }));
-  assert.equal(r.show.version, 3);
+  assert.equal(r.show.version, 4);
   assert.equal(r.show.shapes.length, 1);
 });
 
@@ -108,7 +108,7 @@ const doc2 = (shapes: unknown[], sources: unknown[], over: Record<string, unknow
 
 test('a version 1 file opens as an all-colour show without being called repaired', () => {
   const r = validateShow(doc([shape()]));
-  assert.equal(r.show.version, 3);
+  assert.equal(r.show.version, 4);
   assert.equal(r.show.shapes[0].sourceId, null);
   assert.deepEqual(r.show.sources, []);
   assert.equal(r.repaired, false);

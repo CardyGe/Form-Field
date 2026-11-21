@@ -4,7 +4,7 @@ import { mapActions, newSourceId, randomSeed } from './mapActions';
 import { parsePixelField } from '../map/geometry';
 import { isCurved } from '../map/outline';
 import { shouldCommit } from '../map/keys';
-import { BORDER_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, isShapeLocked } from '../map/show';
+import { BORDER_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, isShapeLocked, type Look, type PlacementMode, type Point } from '../map/show';
 import { PRESETS } from '../core/project';
 import { KIND_LABELS } from '../core/library';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, POUR, SOLAR } from '../core/palettes';
@@ -70,7 +70,10 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
       <ShapeTools act={act} ids={ids} locked={anyLocked} />
     </>;
   }
-  if (!shape) return <p className="muted-text">Pick a shape to see its details. Shift-click or drag a box on the stage to pick several.</p>;
+  if (!shape) return <>
+    <p className="muted-text">Pick a shape to see its details. Shift-click or drag a box on the stage to pick several.</p>
+    <StageCorners map={map} setNote={setNote} />
+  </>;
 
   const commitName = (text: string) => { const name = text.trim(); if (name && name !== shape.name) map.dispatch({ type: 'rename', shapeId: shape.id, name }); };
   const commitColour = (text: string) => {
@@ -90,6 +93,17 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
     const to = axis === 'x' ? { x: px / STAGE_SIZE.width, y: point.y } : { x: point.x, y: px / STAGE_SIZE.height };
     if (to.x === point.x && to.y === point.y) return;
     map.dispatch({ type: 'movePoint', shapeId: shape.id, ring: map.selectedRing, index: map.selectedIndex, to, joined: map.snap });
+  };
+  const setLook = (changes: Partial<Look>) => map.dispatch({ type: 'setLook', shapeId: shape.id, look: { ...shape.look, ...changes } });
+  const choosePlacement = (mode: PlacementMode) => map.dispatch({ type: 'setPlacement', shapeId: shape.id, mode });
+  const commitPin = (index: number, axis: 'x' | 'y', text: string) => {
+    const pin = shape.placement.pins[index];
+    const px = parsePixelField(text, { min: 0, max: axis === 'x' ? STAGE_SIZE.width : STAGE_SIZE.height });
+    if (!pin || px === null) return;
+    const to = axis === 'x' ? { x: px / STAGE_SIZE.width, y: pin.y } : { x: pin.x, y: px / STAGE_SIZE.height };
+    if (to.x === pin.x && to.y === pin.y) return;
+    if (!map.dispatch({ type: 'movePin', shapeId: shape.id, index, to })) setNote('Those corners would fold the picture over; it keeps its last place');
+    else setNote(null);
   };
   const border = shape.border;
   const borderMode = border.colour === 'shape' || border.colour === 'palette' ? border.colour : 'fixed';
@@ -153,6 +167,34 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
       </>}
     </>}
 
+    <h3>Placement</h3>
+    <label className="map-field">Picture<select aria-label="Picture placement" value={shape.placement.mode} disabled={locked} onChange={e => choosePlacement(e.target.value as PlacementMode)}>
+      <option value="fit">Fit</option>
+      <option value="pin">Pin</option>
+      <option value="group" disabled={shape.groupId === null}>Across group</option>
+      <option value="stage">Across stage</option>
+    </select></label>
+    {shape.placement.mode === 'pin' && <>
+      <p className="muted-text">Four corners take the picture with perspective. The outline still cuts it.</p>
+      {shape.placement.pins.map((pin, i) => <div key={`pin-${shape.id}-${i}`} className="map-grid-fields">
+        <CommitField label={`Pin ${['top left', 'top right', 'bottom right', 'bottom left'][i]} X`} value={String(Math.round(pin.x * STAGE_SIZE.width))} onCommit={t => commitPin(i, 'x', t)} narrow disabled={locked} />
+        <CommitField label={`Pin ${['top left', 'top right', 'bottom right', 'bottom left'][i]} Y`} value={String(Math.round(pin.y * STAGE_SIZE.height))} onCommit={t => commitPin(i, 'y', t)} narrow disabled={locked} />
+      </div>)}
+    </>}
+    {shape.placement.mode === 'group' && shape.groupId === null && <p className="muted-text">Across group needs the shape to be in a group.</p>}
+
+    <h3>Look</h3>
+    <SliderField key={`bright-${shape.id}`} label="Brightness" value={Math.round(shape.look.brightness * 100)} min={0} max={200} step={1} unit=" %" disabled={locked}
+      onCommit={v => setLook({ brightness: v / 100 })} />
+    <CommitField label="Tint" value={shape.look.tint ?? ''} narrow disabled={locked} onCommit={text => {
+      const t = text.trim();
+      if (t === '') { setNote(null); setLook({ tint: null }); return; }
+      if (!/^#[0-9a-f]{6}$/i.test(t)) { setNote('Tint must look like #rrggbb, or be left empty'); return; }
+      setNote(null); setLook({ tint: t });
+    }} />
+    {shape.look.tint !== null && <SliderField key={`tint-${shape.id}`} label="Tint amount" value={Math.round(shape.look.tintAmount * 100)} min={0} max={100} step={1} unit=" %" disabled={locked}
+      onCommit={v => setLook({ tintAmount: v / 100 })} />}
+
     <h3>Shape</h3>
     <div className="map-toggles">
       <button className="text-button" aria-pressed={shape.visible} onClick={() => map.dispatch({ type: 'setVisible', shapeId: shape.id, visible: !shape.visible })}>{shape.visible ? 'Shown' : 'Hidden'}</button>
@@ -176,6 +218,8 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
       </> : <p className="muted-text">Only a shape with four corners, no curves and no holes can be made into a grid.</p>}
     </details>
 
+    <StageCorners map={map} setNote={setNote} />
+
     {point && map.selectedIndex !== null ? <>
       <h3>{map.selectedRing >= 0 ? `Hole ${map.selectedRing + 1}, ${isCurved(point) ? 'curve point' : 'corner'}` : isCurved(point) ? 'Curve point' : 'Corner'} {map.selectedIndex + 1}</h3>
       <CommitField label="X" value={String(Math.round(point.x * STAGE_SIZE.width))} onCommit={t => commitPosition('x', t)} narrow disabled={locked} />
@@ -187,6 +231,29 @@ export default function MapDetails({ map, onEditInStudio, setNote }: { map: Map;
       <p className="muted-text">Positions are in pixels on the projector. Arrow keys nudge (Shift for 10); Tab steps to the next point. Drag a curve's handles to bend it; Alt moves one handle alone.</p>
     </> : <p className="muted-text">Click a point on the stage to set its exact position. Double-click a side to add a point.</p>}
   </>;
+}
+
+/** The projector's four corners on the wall (stage 4): the stage re-pinned when the projector moves. Outlines do not change. */
+function StageCorners({ map, setNote }: { map: Map; setNote: (text: string | null) => void }) {
+  const names = ['top left', 'top right', 'bottom right', 'bottom left'];
+  const corners = map.show.stageCorners;
+  const commit = (index: number, axis: 'x' | 'y', text: string) => {
+    const corner = corners[index];
+    const px = parsePixelField(text, { min: 0, max: axis === 'x' ? STAGE_SIZE.width : STAGE_SIZE.height });
+    if (px === null) return;
+    const to = axis === 'x' ? { x: px / STAGE_SIZE.width, y: corner.y } : { x: corner.x, y: px / STAGE_SIZE.height };
+    if (!map.dispatch({ type: 'setStageCorner', index, to })) setNote('The stage would fold over on the projector; its corners stay');
+    else setNote(null);
+  };
+  return <details className="map-corner-tool">
+    <summary>Projector corners</summary>
+    <p className="muted-text">Where the stage lands on the projector, in projector pixels. Move a corner when the projector moves.</p>
+    {corners.map((c, i) => <div key={`corner-${i}`} className="map-grid-fields">
+      <CommitField label={`Projector ${names[i]} X`} value={String(Math.round(c.x * STAGE_SIZE.width))} onCommit={t => commit(i, 'x', t)} narrow />
+      <CommitField label={`Projector ${names[i]} Y`} value={String(Math.round(c.y * STAGE_SIZE.height))} onCommit={t => commit(i, 'y', t)} narrow />
+    </div>)}
+    <button className="text-button" onClick={() => map.dispatch({ type: 'resetStageCorners' })}>Reset corners</button>
+  </details>;
 }
 
 function ShapeTools({ act, ids, locked }: { act: ReturnType<typeof mapActions>; ids: string[]; locked: boolean }) {
