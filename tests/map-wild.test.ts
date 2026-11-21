@@ -3,7 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyEdit, type EditAction } from '../src/map/editor';
 import { createShow, validateShow, MAX_SOURCES, type CurvePoint, type ShowDocument } from '../src/map/show';
-import { staggerDelays, chaseOffsets, rotatePalette, outlinePolygon, nextAutoScene, autoAdvanceDue, runHead, outlineLength, runSamples } from '../src/map/wild';
+import { staggerDelays, chaseOffsets, rotatePalette, outlinePolygon, nextAutoScene, autoAdvanceDue, runHead, outlineLength, runSamples, withSurface } from '../src/map/wild';
+import { historyIndex } from '../src/map/frameHistory';
 import { initialMapState, mapReducer } from '../src/map/state';
 
 const sq = (x0: number, y0: number, x1: number, y1: number): CurvePoint[] => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
@@ -172,4 +173,30 @@ test('runSamples walk the outer outline at an even spacing, even along curves, t
   assert.ok(Math.max(...gaps) < 4.01 && Math.min(...gaps) > 3.5, `${Math.min(...gaps)}..${Math.max(...gaps)}`);
   assert.equal(samples[0].t, 0);
   assert.ok(samples.every((s, i) => i === 0 || s.t > samples[i - 1].t) && samples.at(-1)!.t < 1);
+});
+
+// ---- Task 3: stagger and outline drives ----
+
+test('historyIndex goes back delay × 30 frames from the newest, never past what is kept or written', () => {
+  assert.equal(historyIndex(31, 10, 0, 30, 31), 10, 'no delay: the newest');
+  assert.equal(historyIndex(31, 10, .5, 30, 31), 26, 'half a second back, wrapping');
+  assert.equal(historyIndex(31, 10, 1, 30, 31), 11, 'a second back');
+  assert.equal(historyIndex(31, 10, 5, 30, 31), 11, 'never past the oldest kept');
+  assert.equal(historyIndex(31, 3, 1, 30, 4), 0, 'just switched on: the oldest written');
+});
+
+test('withSurface gives each instrument layer the outline as its surface, leaving the saved composition untouched', () => {
+  const show = grouped();
+  const project = show.sources[0].project;
+  const before = JSON.stringify(project);
+  const poly = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+  const played = withSurface(project, poly, 'emitter');
+  assert.equal(JSON.stringify(project), before, 'saved composition unchanged');
+  assert.notEqual(played, project);
+  const layer = played.layers[0];
+  assert.deepEqual(layer.surface, { source: 'polygon', role: 'emitter', influence: 1, points: poly });
+  assert.equal(played.schemaVersion, 2);
+  // An outline that crosses itself once simplified is not used: the composition plays as saved.
+  const bow = [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }];
+  assert.equal(withSurface(project, bow, 'edge'), project);
 });

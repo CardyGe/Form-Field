@@ -133,6 +133,7 @@ export class Gpu {
   private previewTex!: WebGLTexture;
   private previewFb!: WebGLFramebuffer;
   private copyFb!: WebGLFramebuffer;
+  private drawFb!: WebGLFramebuffer;
   private blank!: Texture;
   private readback: { buffer: WebGLBuffer; sync: WebGLSync } | null = null;
   private readbackBuffer: WebGLBuffer | null = null;
@@ -186,6 +187,7 @@ export class Gpu {
     ({ tex: this.stageTex, fb: this.stageFb } = target(STAGE_SIZE.width, STAGE_SIZE.height));
     ({ tex: this.previewTex, fb: this.previewFb } = target(PREVIEW.width, PREVIEW.height));
     this.copyFb = gl.createFramebuffer()!;
+    this.drawFb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -229,6 +231,27 @@ export class Gpu {
     // Let go of the source, so a texture deleted later is not kept alive by this framebuffer.
     gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    return t;
+  }
+
+  /** A copy of a picture at another size (Stagger's history), into `into` when it is already that size. */
+  scaledCopy(source: Texture, into: Texture | null, width: number, height: number): Texture {
+    const gl = this.gl;
+    let t = into;
+    if (!t || t.width !== width || t.height !== height) {
+      this.free(t);
+      t = { tex: this.texture(), width, height };
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.copyFb);
+    gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, source.tex, 0);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.drawFb);
+    gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.tex, 0);
+    gl.blitFramebuffer(0, 0, source.width, source.height, 0, 0, width, height, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+    gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+    gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
     return t;
   }
 

@@ -8,28 +8,29 @@
  */
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
-import { drawCommands, shownOnWall, stageCommands, type DrawOptions } from './draw';
+import { drawCommands, ringPx, shownOnWall, stageCommands, type DrawOptions } from './draw';
 import { borderColour, fadeKey } from './edge';
 import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
-import { LIVE_SOURCE_ID, STAGE_SIZE, usesLive, type Group, type Point, type Shape } from './show';
+import { LIVE_SOURCE_ID, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
 import type { Scene } from './scenes';
 import { LiveSlot, LIVE_ASPECT } from './liveSlot';
 import { VideoSlot } from './videoSlot';
 import { isVideoId, type VideoSource } from './show';
 import type { LiveSettings } from '../live/settings';
-import { ringBounds } from './outline';
+import { flatten, ringBounds } from './outline';
 import { IDENTITY, invert, multiply, quadToQuad, apply, type H3 } from './homography';
 import { coverCrop, landing, landingAspect, sourceSizeFor, type Landing } from './placement';
 import { Gpu, type ShapeDraw, type Texture } from './gpu';
-import { chaseOffsets, runHead } from './wild';
+import { chaseOffsets, outlinePolygon, runHead, staggerDelays, withSurface } from './wild';
+import { FrameHistory } from './frameHistory';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
 import type { Link } from '../react/links';
 import type { Signals } from '../react/signals';
 import { borderPicture, borderRunPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
-export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null }[]; groups: Group[]; links?: Link[];
+export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null; followOutline?: FollowOutline | null }[]; groups: Group[]; links?: Link[];
   /** Live in Map: the wall is told whether the show uses Live; the operator screen has the scenes to work it out. */
   usesLive?: boolean; scenes?: Scene[];
   /** Stage 6: the videos shapes play. */
@@ -156,7 +157,7 @@ export class MapCompositor {
     canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); });
     canvas.addEventListener('webglcontextrestored', () => {
       this.gpu.setUp();
-      this.pictures.clear(); this.overlay = null;
+      this.pictures.clear(); this.overlay = null; this.histories.clear();
       for (const slot of this.slots.values()) slot.texture = null;
       // The old pictures were on the lost card: those fades end, and the shapes show what they play now.
       for (const [id, fade] of [...this.fades]) if (typeof fade.from !== 'string') this.fades.delete(id);
@@ -181,7 +182,7 @@ export class MapCompositor {
       }
     }
     this.show = show;
-    this.projects = new Map(projects);
+    this.projects = this.played(show, projects);
     this.dirty = true;
     // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
@@ -348,7 +349,8 @@ export class MapCompositor {
     } else this.liveTexture = null;
     // A border run moves every frame (it holds with Freeze).
     const running = !this.frozen && this.show.shapes.some(s => s.border.run && s.border.width > 0 && !s.blocker);
-    const drawn = this.dirty || rendered || running || this.fades.size > 0 || this.glides.size > 0;
+    const staggering = this.keepHistories(show);
+    const drawn = this.dirty || rendered || running || staggering || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
     this.frameIndex++;
     const work = performance.now() - started;
@@ -381,6 +383,8 @@ export class MapCompositor {
 
   dispose(): void {
     this.disposed = true;
+    if (!this.lost) for (const h of this.histories.values()) h.dispose();
+    this.histories.clear();
     for (const [id, slot] of this.slots) this.release(id, slot);
     this.live?.dispose(); this.live = null;
     for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear();
@@ -455,6 +459,55 @@ export class MapCompositor {
       slot.failed = String((error as Error)?.message ?? error);
       this.dirty = true;
     });
+  }
+
+  // ---- Stage 7: Outline drives the instrument, and Stagger ----
+  private readonly outlined = new Map<string, { base: Project; key: string; played: Project }>();
+  /**
+   * The compositions as played: a source set to follow its shape's outline gets the outline of the first shape that
+   * plays it as its instruments' surface. The same object is kept while nothing changes, so it is prepared again
+   * only when the outline (to a thousandth of the picture) or the composition changes.
+   */
+  private played(show: PlayShow, projects: ReadonlyMap<string, Project>): Map<string, Project> {
+    const out = new Map(projects);
+    for (const source of show.sources) {
+      const base = projects.get(source.id), shape = show.shapes.find(s => s.sourceId === source.id);
+      if (!source.followOutline || !base || !shape) { this.outlined.delete(source.id); continue; }
+      const inv = inverseOf(landing(shape, show));
+      const picture = flatten(ringPx(shape.points)).map(p => apply(inv, p));
+      const polygon = outlinePolygon(picture, { x: 0, y: 0, w: 1, h: 1 }).map(p => ({ x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }));
+      const key = JSON.stringify([source.followOutline, polygon]), memo = this.outlined.get(source.id);
+      if (memo && memo.base === base && memo.key === key) { out.set(source.id, memo.played); continue; }
+      const played = withSurface(base, polygon, source.followOutline);
+      this.outlined.set(source.id, { base, key, played });
+      out.set(source.id, played);
+    }
+    for (const id of [...this.outlined.keys()]) if (!show.sources.some(s => s.id === id)) this.outlined.delete(id);
+    return out;
+  }
+
+  private readonly histories = new Map<string, FrameHistory>();
+  /** Each staggered shape's delay in seconds (only those above 0). */
+  private delays = new Map<string, number>();
+  /**
+   * Keeps the last second of every source a staggered group plays, and lets the others go. Returns whether any shape
+   * shows a delayed picture, so the stage is drawn each frame while it does (it holds with Freeze).
+   */
+  private keepHistories(show: PlayShow): boolean {
+    this.delays = new Map();
+    for (const group of show.groups) if (group.stagger) for (const [id, d] of staggerDelays(show, group.id)) if (d > 0) this.delays.set(id, d);
+    const wanted = new Set<string>();
+    for (const shape of show.shapes) if (shape.sourceId && this.delays.has(shape.id) && shownOnWall(show, shape, this.options.solo)) wanted.add(shape.sourceId);
+    for (const [id, h] of this.histories) if (!wanted.has(id)) { h.dispose(); this.histories.delete(id); }
+    if (!wanted.size) return false;
+    for (const id of wanted) {
+      const texture = id === LIVE_SOURCE_ID ? this.liveTexture : isVideoId(id) ? this.videoTextures.get(id) ?? null : this.slots.get(id)?.project ? this.slots.get(id)!.texture : null;
+      if (!texture || this.frozen) continue;
+      let h = this.histories.get(id);
+      if (!h) { h = new FrameHistory(this.gpu); this.histories.set(id, h); }
+      h.push(texture, this.fadeClock);
+    }
+    return !this.frozen;
   }
 
   private composite(now: number): void {
@@ -585,6 +638,13 @@ export class MapCompositor {
     else if (isLive) content = this.liveTexture ? { kind: 'picture', texture: this.liveTexture, inv: multiply(coverCrop(landingAspect(land), LIVE_ASPECT), inv) } : fill();
     else if (slot?.project && slot.texture) content = { kind: 'picture', texture: slot.texture, inv };
     else content = fill(); // a source not ready yet plays the shape's own fill, never black
+    // Stagger: a shape later in its group shows its source a little while ago (until a second is kept, the oldest kept).
+    const delay = this.delays.get(shape.id);
+    if (delay && content.kind === 'picture' && shape.sourceId && !cannotPlay && !shape.blocker) {
+      const live = isVideo ? this.videoTextures.get(shape.sourceId) : isLive ? this.liveTexture : slot?.texture;
+      const past = content.texture === live ? this.histories.get(shape.sourceId)?.at(delay) : null;
+      if (past) content = { ...content, texture: past };
+    }
     // A fade waits for the composition the shape should now play, not one still drawing from before.
     // A fade into Live waits only while Live is starting; a camera that cannot play lets it finish to the fill.
     const ready = shape.blocker || shape.sourceId === null || cannotPlay || (isVideo ? !videoSlot || videoSlot.state !== 'loading' : isLive ? !this.live || this.live.readiness !== 'wait' : slot?.project === project && !!slot?.texture);

@@ -4,6 +4,9 @@
 import type { BorderRun, CurvePoint, Point, ShowDocument } from './show';
 import { flatten } from './outline';
 import { ringPx } from './draw';
+import type { Project } from '../shared/types';
+import { isInstrument } from '../core/instruments';
+import { isSimplePolygon } from '../core/surface-layout';
 
 /** A group's shapes in list order (the order the shape list shows them). */
 const members = (show: Pick<ShowDocument, 'shapes'>, groupId: string) => show.shapes.filter(s => s.groupId === groupId);
@@ -99,4 +102,17 @@ export function runSamples(ring: CurvePoint[], step: number): { x: number; y: nu
     along += len;
   }
   return out;
+}
+
+/**
+ * Outline drives the instrument: the composition as played, its instrument layers given the outline as their surface.
+ * The saved composition is never changed. An outline that would not make a usable surface plays the composition as saved.
+ */
+export function withSurface(project: Project, polygon: { x: number; y: number }[], role: 'obstacle' | 'emitter' | 'edge'): Project {
+  if (polygon.length < 3 || !isSimplePolygon(polygon) || !project.layers.some(l => isInstrument(l.kind))) return project;
+  return {
+    ...project,
+    schemaVersion: 2,
+    layers: project.layers.map(l => isInstrument(l.kind) ? { ...l, surface: { source: 'polygon' as const, role, influence: l.surface?.influence || 1, points: polygon.map(p => ({ ...p })) } } : l),
+  };
 }
