@@ -1,0 +1,580 @@
+{
+ "commit": "cd4830c",
+ "render": "1920x1080 at 60 fps, full 10 s loop plus 1 s wrap, no sound input",
+ "grid": "320x180 cells (6x6 px, averaged in linear light)",
+ "method": "Engineering screen modelled on ITU-R BT.1702-3; not a certified analyser",
+ "controls": [
+  {
+   "name": "white 10 Hz, full field",
+   "general": false,
+   "red": true,
+   "ok": true
+  },
+  {
+   "name": "white 2 Hz, full field",
+   "general": true,
+   "red": true,
+   "ok": true
+  },
+  {
+   "name": "white 10 Hz, 20% area",
+   "general": true,
+   "red": true,
+   "ok": true
+  },
+  {
+   "name": "white 10 Hz, 30% area",
+   "general": false,
+   "red": true,
+   "ok": true
+  },
+  {
+   "name": "dim red 10 Hz, full field",
+   "general": true,
+   "red": false,
+   "ok": true
+  }
+ ],
+ "errors": [],
+ "results": [
+  {
+   "label": "twin-orbit",
+   "id": "twin-orbit",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.00674,
+   "peakSaturatedRedAreaPct": 3.203,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0.059,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.413,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 0.057,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.63,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 0.05,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.571,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 1.524,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 0.618,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "atom",
+   "id": "atom",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.00657,
+   "peakSaturatedRedAreaPct": 4.55,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0.576,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.727,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 0.637,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 1.019,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 0.526,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.917,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 3.939,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 1.333,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "ember-ring",
+   "id": "ember-ring",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.04723,
+   "peakSaturatedRedAreaPct": 23.184,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.158,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 0,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.28,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 0,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.231,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 0.128,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 0.337,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "cyan-tangle",
+   "id": "cyan-tangle",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.01363,
+   "peakSaturatedRedAreaPct": 0,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 2.965,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 1.689,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 2.45,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 1.922,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 1.885,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 1.566,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 0,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 0,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "signal-burst",
+   "id": "signal-burst",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.00942,
+   "peakSaturatedRedAreaPct": 0,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0.302,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.484,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 0.245,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.51,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 0.151,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.441,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 0,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 0,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "morse-sphere",
+   "id": "morse-sphere",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.01614,
+   "peakSaturatedRedAreaPct": 0,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 1.71,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 1.134,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 3.269,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 1.686,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 2.63,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 1.531,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 0,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 0,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "ember-pulse",
+   "id": "ember-pulse",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.00237,
+   "peakSaturatedRedAreaPct": 10.418,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.552,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 0.766,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 5.72,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 2.632,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 7.635,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 1.311,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 5.252,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "ember-glacier",
+   "id": "ember-glacier",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.00603,
+   "peakSaturatedRedAreaPct": 0,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0.08,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 2.349,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 12.082,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 10.587,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 18.149,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 12.313,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 0,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 0,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "ember-orchid",
+   "id": "ember-orchid",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.00308,
+   "peakSaturatedRedAreaPct": 0,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0.002,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 1,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 3.53,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 7.467,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 8.017,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 9.771,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 0,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 0,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "ember-acid",
+   "id": "ember-acid",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.0079,
+   "peakSaturatedRedAreaPct": 0,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0.207,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 3.226,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 14.991,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 12,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 20.533,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 13.3,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 0,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 0,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "ember-silver",
+   "id": "ember-silver",
+   "overrides": {},
+   "glError": 0,
+   "meanLinearLuminance": 0.00777,
+   "peakSaturatedRedAreaPct": 0,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0.151,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 2.962,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 13.894,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 11.535,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 19.536,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 12.854,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 0,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 0,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "ember-pulse @ 8 phrases (192 BPM)",
+   "id": "ember-pulse",
+   "overrides": {
+    "emberPhrases": 8
+   },
+   "glError": 0,
+   "meanLinearLuminance": 0.0024,
+   "peakSaturatedRedAreaPct": 10.307,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.651,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 1.227,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 6.925,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 4.776,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 8.986,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 2.792,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 6.408,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "ember-pulse @ 16 phrases (384 BPM)",
+   "id": "ember-pulse",
+   "overrides": {
+    "emberPhrases": 16
+   },
+   "glError": 0,
+   "meanLinearLuminance": 0.00241,
+   "peakSaturatedRedAreaPct": 10.061,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0.003,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.667,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 4.498,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 8.655,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 11.983,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 11.248,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 7.998,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 7.783,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  },
+  {
+   "label": "ember-pulse @ 16 phrases, pulse depth 1",
+   "id": "ember-pulse",
+   "overrides": {
+    "emberPhrases": 16,
+    "emberPulse": 1
+   },
+   "glError": 0,
+   "meanLinearLuminance": 0.00221,
+   "peakSaturatedRedAreaPct": 9.55,
+   "general": {
+    "200nit": {
+     "maxAreaOverLimitPct": 0.002,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 0.786,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1000nit": {
+     "maxAreaOverLimitPct": 4.056,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 8.351,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    },
+    "1500nit": {
+     "maxAreaOverLimitPct": 11.212,
+     "framesOverArea": 0,
+     "peakSingleFrameChangePct": 10.75,
+     "maxWideFlashesPerSecond": 0,
+     "pass": true
+    }
+   },
+   "red": {
+    "maxAreaOverLimitPct": 7.38,
+    "framesOverArea": 0,
+    "peakSingleFrameChangePct": 7.484,
+    "maxWideFlashesPerSecond": 0,
+    "pass": true
+   }
+  }
+ ]
+}
