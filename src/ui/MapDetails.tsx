@@ -10,7 +10,8 @@ import type { Shape } from '../map/show';
 import { BORDER_MAX, BRIGHTNESS_MAX, GLOW_MAX, MAX_NAME_LENGTH, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE, ZOOM_RANGE, isShapeLocked, type Placement, type PlacementKind } from '../map/show';
 import { ownCornersPinnable } from '../map/placement';
 import { REACTIONS, reactionLinks, reactsLabel, targetRange, type Reaction } from '../map/targets';
-import { LIVE_SOURCE_ID, TEMPO_SYNC_BEATS, isVideoId } from '../map/show';
+import { LIVE_SOURCE_ID, RUN_LAPS, RUN_LENGTH, STAGGER_MAX, TEMPO_SYNC_BEATS, isVideoId, type FollowOutline, type Group } from '../map/show';
+import { isInstrument } from '../core/instruments';
 import MapLiveCard from './MapLiveCard';
 import MapVideoPanel from './MapVideoPanel';
 import MapEffectTab from './MapEffectTab';
@@ -107,6 +108,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
         <button className="text-button" title="Copy these shapes · ⌘D" onClick={() => act.duplicate(ids)}>Duplicate</button>
         <button className="text-button danger-button" disabled={anyLocked} onClick={() => act.remove(ids)}>Delete shapes</button></div>
       <ShapeTools act={act} ids={ids} locked={anyLocked} />
+      {(() => { const g = first?.groupId ? map.show.groups.find(x => x.id === first.groupId) : undefined; return g && ids.every(id => map.show.shapes.find(s => s.id === id)?.groupId === g.id) ? <GroupCard map={map} group={g} /> : null; })()}
     </>;
   }
   if (!shape) return <p className="muted-text">Pick a shape to see its details. Shift-click or drag a box on the stage to pick several.</p>;
@@ -145,7 +147,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
 
   const pct = (v: number) => `${Math.round(v * 100)} %`;
   const placeLabel = { fit: 'Fit', pin: 'Pin', 'across-group': 'Across group', 'across-stage': 'Across stage' }[place.kind];
-  const edgeSummary = [shape.softEdge ? `soft ${Math.round(shape.softEdge)} px` : '', border.width ? `border ${Math.round(border.width)} px` : ''].filter(Boolean).join(' · ') || 'none';
+  const edgeSummary = [shape.softEdge ? `soft ${Math.round(shape.softEdge)} px` : '', border.width ? `border ${Math.round(border.width)} px${border.run ? ', running' : ''}` : ''].filter(Boolean).join(' · ') || 'none';
 
   return <>
     <div className="map-detail-head">
@@ -203,6 +205,8 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
         <label className="map-tint custom" title="Any tint"><input type="color" aria-label="Tint colour" value={shape.tint} disabled={locked} onChange={e => map.dispatch({ type: 'setLook', shapeId: shape.id, tint: e.target.value.toLowerCase() })} /></label></div></div>
     </Section>}
 
+    {group && <GroupCard map={map} group={group} />}
+
     <Section id="edge" title="Edge" summary={edgeSummary}>
       <SliderField key={`soft-${shape.id}`} label="Soft edge" value={shape.softEdge} min={0} max={SOFT_EDGE_MAX} step={1} unit=" px" disabled={locked} onCommit={px => map.dispatch({ type: 'setSoftEdge', shapeId: shape.id, px })} />
       {!shape.blocker && <>
@@ -216,6 +220,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
           </select></label>
           {borderMode === 'fixed' && <label className="map-field">Border fixed colour<input type="color" aria-label="Border hex" value={border.colour} disabled={locked} onChange={e => setBorder({ colour: e.target.value.toLowerCase() })} /></label>}
           <SliderField key={`glow-${shape.id}`} label="Glow" value={border.glow} min={0} max={GLOW_MAX} step={1} unit=" px" disabled={locked} onCommit={glow => setBorder({ glow })} />
+          <BorderRunFields map={map} shape={shape} locked={locked} />
         </>}
       </>}
     </Section>
@@ -296,6 +301,10 @@ function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, 
         <label className="map-field">Loop with the tempo<select aria-label="Loop with the tempo" value={source.tempoSync ?? ''} disabled={locked} title="Off: the instrument runs at its own speed. A number: one loop of it every that many beats of the tempo."
           onChange={e => { map.startEngine(); map.dispatch({ type: 'setTempoSync', sourceId: source.id, beats: e.target.value ? Number(e.target.value) : null }); }}>
           <option value="">Off</option>{TEMPO_SYNC_BEATS.map(n => <option key={n} value={n}>Every {n} {n === 1 ? 'beat' : 'beats'}</option>)}</select></label>
+        {source.project.layers.some(l => isInstrument(l.kind)) && <label className="map-field">Follow the shape's outline<select aria-label="Follow the shape's outline" value={source.followOutline ?? ''} disabled={locked}
+          title="The effect takes the outline of the first shape playing it as its own shape: flowing around it, growing from inside it, or tracing its edges. The saved effect is not changed."
+          onChange={e => map.dispatch({ type: 'setFollowOutline', sourceId: source.id, mode: (e.target.value || null) as FollowOutline | null })}>
+          <option value="">Off</option><option value="obstacle">Flow around</option><option value="emitter">Grow from inside</option><option value="edge">Trace edges</option></select></label>}
         {sharers.length > 1 && !whole && <button className="text-button" disabled={locked} title="Unlink: give this shape its own copy of the instrument, to change on its own" onClick={() => { const made = mapActions(map).separate(shape.id); if (made?.left) setNote?.(`${made.left} of the effect's reactions stayed with the other shapes: the show has as many reactions as it can hold`); }}>Make separate</button>}
       </>}
       {!shape.blocker && !whole && playing.length > 0 && <label className="map-field">Share with<select aria-label="Share with" value="" disabled={locked}
@@ -337,4 +346,46 @@ function ShapeTools({ act, ids, locked }: { act: ReturnType<typeof mapActions>; 
       <button className="text-button" title="A mirrored copy on the other side of the stage, top to bottom" onClick={() => act.mirror('horizontal', ids)}>Mirror copy ↕</button>
     </div>
   </>;
+}
+
+/** Border run: a light travelling round the outline, by laps a minute or with the tempo; the border shows only its lit part. */
+function BorderRunFields({ map, shape, locked }: { map: Map; shape: Shape; locked: boolean }) {
+  const run = shape.border.run ?? null;
+  const set = (next: typeof run) => map.dispatch({ type: 'setBorderRun', shapeId: shape.id, run: next });
+  const mode = !run ? '' : run.beats ? 'tempo' : 'laps';
+  return <>
+    <label className="map-field">Border run<select aria-label="Border run" value={mode} disabled={locked} title="A light travelling round the outline; the border shows only its lit part"
+      onChange={e => {
+        const v = e.target.value, base = run ?? { lapsPerMinute: 20, beats: null, length: 0.2 };
+        if (v === 'tempo') map.startEngine();
+        set(v === '' ? null : { ...base, beats: v === 'tempo' ? base.beats ?? 4 : null });
+      }}>
+      <option value="">Off</option><option value="laps">Laps a minute</option><option value="tempo">With the tempo</option></select></label>
+    {run && !run.beats && <SliderField key={`laps-${shape.id}`} label="Run speed" value={run.lapsPerMinute} min={RUN_LAPS.min} max={RUN_LAPS.max} step={1} unit=" a minute" disabled={locked} onCommit={lapsPerMinute => set({ ...run, lapsPerMinute })} />}
+    {run?.beats && <label className="map-field">Run lap<select aria-label="Run lap" value={run.beats} disabled={locked} onChange={e => set({ ...run, beats: Number(e.target.value) })}>
+      {TEMPO_SYNC_BEATS.map(n => <option key={n} value={n}>Every {n} {n === 1 ? 'beat' : 'beats'}</option>)}</select></label>}
+    {run && <SliderField key={`runlen-${shape.id}`} label="Run length" value={run.length} min={RUN_LENGTH.min} max={RUN_LENGTH.max} step={0.01} disabled={locked} format={v => `${Math.round(v * 100)} %`} onCommit={length => set({ ...run, length })} />}
+  </>;
+}
+
+/** A group's own options: Stagger, Chase, and giving each shape its own copy (Vary each, Palette shift). */
+function GroupCard({ map, group }: { map: Map; group: Group }) {
+  const members = map.show.shapes.filter(s => s.groupId === group.id);
+  const playing = members.filter(s => s.sourceId && map.show.sources.some(src => src.id === s.sourceId));
+  const runs = members.some(s => s.border.width > 0 && s.border.run);
+  const locked = group.locked;
+  const summary = [group.stagger ? `stagger ${group.stagger.toFixed(2)} s` : '', group.chase ? 'chase' : ''].filter(Boolean).join(' · ') || `${members.length} shapes`;
+  return <Section id="group" title={`Group · ${group.name}`} summary={summary}>
+    <SliderField key={`stagger-${group.id}`} label="Stagger" value={group.stagger ?? 0} min={0} max={STAGGER_MAX} step={0.05} disabled={locked} format={v => v ? `${v.toFixed(2)} s` : 'Off'}
+      onCommit={seconds => map.dispatch({ type: 'setGroupStagger', groupId: group.id, seconds })} />
+    <p className="muted-text">Each shape, in list order, shows what it plays a little later than the one before; the last is this far behind.</p>
+    <label className="map-check" title={runs ? 'Each shape\'s border run starts a step further round, so the light chases from shape to shape' : 'Give the shapes a border run (Edge) to chase'}>
+      <input type="checkbox" aria-label="Chase" checked={!!group.chase} disabled={locked} onChange={e => map.dispatch({ type: 'setGroupChase', groupId: group.id, on: e.target.checked })} />Chase<small className="muted-text">border runs follow on from shape to shape</small></label>
+    <div className="map-toggles">
+      <button className="text-button" disabled={locked || !playing.length} title="Give every shape in the group its own copy of what it plays, each varied differently"
+        onClick={() => map.dispatch({ type: 'varyEach', groupId: group.id, sourceIds: playing.map(() => newSourceId()), entropy: randomSeed() })}>Vary each</button>
+      <button className="text-button" disabled={locked || !playing.length} title="Give every shape its own copy, its colours turned one step further round than the shape before"
+        onClick={() => map.dispatch({ type: 'paletteShift', groupId: group.id, sourceIds: playing.map(() => newSourceId()) })}>Palette shift</button>
+    </div>
+  </Section>;
 }

@@ -12,9 +12,12 @@ import { fire, type TriggerAction } from '../react/links';
 import type { Signals } from '../react/signals';
 import { MeterStore } from '../react/meter';
 import { usesEmberSmokeAudio } from '../react/ember-smoke';
+import { autoAdvanceDue, nextAutoScene } from '../map/wild';
 
 /** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
-export const showReacts = (show: ShowDocument) => show.links.length > 0 || show.triggers.length > 0 || show.sources.some(s => s.tempoSync !== null || s.project.layers.some(usesEmberSmokeAudio));
+export const showReacts = (show: ShowDocument) => show.links.length > 0 || show.triggers.length > 0 || show.sources.some(s => s.tempoSync !== null || s.project.layers.some(usesEmberSmokeAudio))
+  // Stage 7: a border run with the tempo, or auto-advance by bars, follows the beat.
+  || show.shapes.some(s => !!s.border.run?.beats) || show.autoAdvance?.unit === 'bars';
 
 export type MapTool = 'select' | 'rectangle' | 'triangle' | 'ellipse' | 'pen';
 /** The shapes soloed, directly or through their group, that are still in the show. */
@@ -430,6 +433,32 @@ export function useMap(onError: (message: string) => void) {
       case 'tap': engine?.tap(); break;
     }
   };
+  // Scene auto-advance: counts only while neither Freeze nor Blackout is on; any scene change starts the count again.
+  // What it does is one undo step with the triggers, so it never pushes the operator's edits out.
+  const switchRef = useRef(switchScene);
+  switchRef.current = switchScene;
+  const engineRef = useRef(engine);
+  engineRef.current = engine;
+  const auto = show.autoAdvance, autoKey = auto ? `${auto.unit}:${auto.every}:${auto.order}` : '';
+  useEffect(() => {
+    if (!auto) return;
+    let elapsed = 0, bars = 0, last = performance.now(), lastBeat: number | null = null, sceneAt = stateRef.current.show.sceneId;
+    const id = setInterval(() => {
+      const t = performance.now(), s = stateRef.current.show, { freeze, blackout } = latest.current;
+      const signals = engineRef.current?.signals, beat = signals?.['tempo.beat'] !== undefined && signals?.['tempo.phase'] !== undefined ? signals['tempo.beat'] + signals['tempo.phase'] : null;
+      if (s.sceneId !== sceneAt) { sceneAt = s.sceneId; elapsed = 0; bars = 0; }
+      if (!freeze && !blackout) {
+        elapsed += (t - last) / 1000;
+        if (beat !== null && lastBeat !== null && beat > lastBeat) bars += (beat - lastBeat) / 4;
+      }
+      last = t; lastBeat = beat;
+      if (!autoAdvanceDue(auto, elapsed, bars)) return;
+      elapsed = 0; bars = 0;
+      const next = nextAutoScene(s, s.sceneId, Math.random);
+      if (next && switchRef.current(next, 'trigger')) sceneAt = next;
+    }, 100);
+    return () => clearInterval(id);
+  }, [autoKey]);
   const listening = useRef({ panelOpen, outputOpen, reacts });
   listening.current = { panelOpen, outputOpen, reacts };
   const active = !!engine && (reacts || panelOpen);

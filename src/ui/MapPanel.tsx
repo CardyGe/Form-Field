@@ -30,6 +30,7 @@ const REASONS: Record<string, string> = {
   'not-found': 'That shape is gone', 'too-many-shapes': 'Too many shapes', 'duplicate-id': 'That shape already exists',
   'name-too-long': `Names can be at most ${MAX_NAME_LENGTH} characters`,
   'too-many-sources': 'Too many instruments in this show',
+  'nothing-to-vary': 'No shape in this group plays an effect to vary',
   'image-too-large': 'That picture is over 8 MB: save it smaller (a JPEG of the size the projector shows is plenty)',
   'images-over-budget': 'The show already holds 32 MB of pictures: use smaller ones, or fewer',
   'bad-image': 'That file could not be read as a PNG or JPEG picture',

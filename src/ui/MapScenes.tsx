@@ -7,11 +7,17 @@ import type { useMap } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
 import { newItemId } from './mapActions';
 import { FADE_RANGE, MAX_SCENES } from '../map/scenes';
-import { MAX_NAME_LENGTH } from '../map/show';
+import { AUTO_BARS, AUTO_SECONDS, MAX_NAME_LENGTH, type AutoAdvance } from '../map/show';
 
 type Map = ReturnType<typeof useMap>;
 const FADES = [0, 0.5, 1, 2, 4, 8, 15, 30];
 const seconds = (s: number) => s === 0 ? 'Cut' : `${s} s`;
+/** Auto-advance choices: every so many seconds or bars of the tempo. */
+const AUTO_CHOICES: { label: string; every: number; unit: AutoAdvance['unit'] }[] = [
+  ...[10, 30, 60, 120, 300].map(n => ({ label: n < 60 ? `${n} s` : `${n / 60} min`, every: n, unit: 'seconds' as const })),
+  ...[4, 8, 16, 32].map(n => ({ label: `${n} bars`, every: n, unit: 'bars' as const })),
+];
+const autoKey = (a: { every: number; unit: string }) => `${a.unit}:${a.every}`;
 
 export default function MapScenes({ map }: { map: Map }) {
   const show = map.show;
@@ -51,6 +57,22 @@ export default function MapScenes({ map }: { map: Map }) {
     <button className="text-button" disabled={show.scenes.length >= MAX_SCENES} title={show.scenes.length ? 'Keep the stage as it is now as a new scene' : 'Keep the stage as it is now as scene 1; change it, then + again for scene 2'} onClick={add}>+ Scene</button>
     {show.scenes.length > 0 && <label className="map-inline-range">Fade<select aria-label="Scene fade" value={show.sceneFade} onChange={e => map.dispatch({ type: 'setSceneFade', sceneId: null, seconds: Math.min(FADE_RANGE.max, Number(e.target.value)) })}>
       {(FADES.includes(show.sceneFade) ? FADES : [...FADES, show.sceneFade].sort((a, b) => a - b)).map(f => <option key={f} value={f}>{seconds(f)}</option>)}</select></label>}
+    {show.scenes.length > 1 && <AutoAdvanceField map={map} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label="Scene" entries={entries(menu.id)} onClose={() => setMenu(null)} />}
   </div>;
+}
+
+/** Scene auto-advance: Off, or every so many seconds or bars, to the next scene or a random other one. Paused by Freeze and Blackout. */
+function AutoAdvanceField({ map }: { map: Map }) {
+  const auto = map.show.autoAdvance ?? null;
+  const set = (next: AutoAdvance | null) => { if (next?.unit === 'bars') map.startEngine(); map.dispatch({ type: 'setAutoAdvance', autoAdvance: next }); };
+  const inRange = (a: AutoAdvance) => a.unit === 'bars' ? a.every >= AUTO_BARS.min && a.every <= AUTO_BARS.max : a.every >= AUTO_SECONDS.min && a.every <= AUTO_SECONDS.max;
+  const choices = auto && !AUTO_CHOICES.some(c => autoKey(c) === autoKey(auto)) && inRange(auto) ? [...AUTO_CHOICES, { label: auto.unit === 'bars' ? `${auto.every} bars` : `${auto.every} s`, every: auto.every, unit: auto.unit }] : AUTO_CHOICES;
+  return <>
+    <label className="map-inline-range" title="Moves to another scene on its own; Freeze and Blackout pause it">Auto<select aria-label="Scene auto-advance" value={auto ? autoKey(auto) : ''}
+      onChange={e => { const c = choices.find(x => autoKey(x) === e.target.value); set(c ? { every: c.every, unit: c.unit, order: auto?.order ?? 'next' } : null); }}>
+      <option value="">Off</option>{choices.map(c => <option key={autoKey(c)} value={autoKey(c)}>Every {c.label}</option>)}</select></label>
+    {auto && <label className="map-inline-range">Order<select aria-label="Auto-advance order" value={auto.order} onChange={e => set({ ...auto, order: e.target.value as AutoAdvance['order'] })}>
+      <option value="next">In order</option><option value="random">Random</option></select></label>}
+  </>;
 }
