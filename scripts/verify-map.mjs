@@ -981,6 +981,128 @@ try {
     assert.match(await studio.locator('.map-video-name').textContent(), /test-loop-moved\.mp4/);
   });
 
+  // ---- Stage 7: wild options ----
+  const prepared = () => output.evaluate(() => Object.values(window.__mapStats?.prepares ?? {}).reduce((a, b) => a + b, 0));
+  const slide = async (label, value) => { const s = studio.getByLabel(label, { exact: true }); await s.fill(String(value)); await s.dispatchEvent('pointerup'); };
+
+  await check('a border run lights only part of the border, and the lit part goes round', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
+    await tool('Select'); await asColour();
+    await openSection(studio, 'edge');
+    await slide('Border', 16);
+    await studio.getByLabel('Border colour', { exact: true }).selectOption('fixed');
+    await studio.getByLabel('Border hex', { exact: true }).fill('#ffffff');
+    await studio.getByLabel('Border run', { exact: true }).selectOption('laps');
+    await slide('Run speed', 60);
+    // Sixteen places 6 px inside the outline, four on each side.
+    const ix = 6 / 1920, iy = 6 / 1080, along = [.25, .35, .45, .55];
+    const points = [...along.map(x => [x, .2 + iy]), ...along.map(y => [.6 - ix, y]), ...along.map(x => [x, .6 - iy]), ...along.map(y => [.2 + ix, y])];
+    const white = c => c[0] > 200 && c[1] > 200 && c[2] > 200;
+    const lit = new Set(); let most = 0;
+    for (let i = 0; i < 24; i++) {
+      const { colours } = await sample(output, points);
+      const now = colours.map((c, k) => white(c) ? k : -1).filter(k => k >= 0);
+      now.forEach(k => lit.add(k)); most = Math.max(most, now.length);
+      assert.ok(colours.every(coloured), 'a border run made part of the shape black');
+      await sleep(90);
+    }
+    assert.ok(most < 12, `most of the border was lit at once (${most} of 16)`);
+    assert.ok(lit.size >= 10, `the lit part did not go round: only ${lit.size} of 16 places were ever lit`);
+    await studio.getByLabel('Border run', { exact: true }).selectOption('');
+    await wallUntil(points, c => c.every(white), 'the whole border back when the run is off');
+  });
+
+  await check('stagger: the cells of a grid playing one picture show it at different moments, never black', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
+    await tool('Select');
+    await playLook(studio, 'preset:porcelain-shutters');
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
+    await openSection(studio, 'shape');
+    await studio.locator('.map-grid-tool summary').click();
+    await studio.getByLabel('Grid gap', { exact: true }).fill('0');
+    await studio.getByRole('button', { name: 'Make grid', exact: true }).click();
+    await studio.locator('.map-group-row').waitFor();
+    await sleep(800);
+    // Each cell shows the whole picture (Fit): the same places in every cell then match while nothing is staggered.
+    const cells = studio.locator('.map-shape-list li:not(.map-group-row)');
+    for (let i = 0; i < 4; i++) { await cells.nth(i).click(); await openSection(studio, 'placement'); await studio.getByLabel('Placement', { exact: true }).selectOption('fit'); }
+    await sleep(800);
+    const inCell = [[.04, .05], [.1, .15], [.15, .08], [.08, .12], [.13, .17], [.06, .16]];
+    const places = [[0, 0], [.2, 0], [0, .2], [.2, .2]].flatMap(([ox, oy]) => inCell.map(([x, y]) => [.2 + ox + x, .2 + oy + y]));
+    // The effect rests between moves, so the cells are watched for about four seconds.
+    const broken = async () => { let most = 0; for (let i = 0; i < 30; i++) { const { colours } = await sample(output, places); let n = 0; for (let k = 6; k < colours.length; k++) if (!near(colours[k], colours[k % 6], 40)) n++; most = Math.max(most, n); await sleep(120); } return most; };
+    const before = await broken();
+    await studio.locator('.map-group-row').click();
+    await openSection(studio, 'group');
+    await slide('Stagger', 1);
+    await output.waitForFunction(() => (window.__mapStats?.delayed ?? 0) === 3 && window.__mapStats.staggered === 1, null, { timeout: 5000 });
+    await sleep(1200);
+    const after = await broken();
+    assert.ok(before <= 3, `the cells did not match before Stagger: ${before} of 18 places differ`);
+    assert.ok(after >= before + 4, `the cells did not show different moments with Stagger on: ${before} → ${after} of 18 places differ`);
+    await wallUntil([[.3, .3], [.5, .3], [.3, .5], [.5, .5]], c => c.every(coloured), 'every cell shows its picture');
+    await slide('Stagger', 0);
+    await output.waitForFunction(() => (window.__mapStats?.delayed ?? 0) === 0 && window.__mapStats.staggered === 0, null, { timeout: 5000 });
+  });
+
+  await check('Vary each and Palette shift give each cell its own copy, each one undo step', async () => {
+    // The grid from the last check: four cells playing one instrument.
+    await openSection(studio, 'group');
+    await studio.getByRole('button', { name: 'Vary each', exact: true }).click();
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 4, null, { timeout: 15000 });
+    await studio.getByRole('button', { name: 'Undo', exact: true }).click();
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
+    await openSection(studio, 'group');
+    await studio.getByRole('button', { name: 'Palette shift', exact: true }).click();
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 4, null, { timeout: 15000 });
+    await wallUntil([[.3, .3], [.5, .3], [.3, .5], [.5, .5]], c => c.every(coloured), 'every cell shows its copy');
+    await studio.getByRole('button', { name: 'Undo', exact: true }).click();
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
+  });
+
+  await check('Follow the outline: switching it on, and moving a corner, gives the effect its new shape, never black', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
+    await tool('Select');
+    await playLook(studio, 'preset:porcelain-shutters');
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
+    await sleep(500);
+    const start = await prepared();
+    await openSection(studio, 'effect');
+    await studio.getByLabel("Follow the shape's outline", { exact: true }).selectOption('emitter');
+    await output.waitForFunction(n => Object.values(window.__mapStats.prepares).reduce((a, b) => a + b, 0) > n, start, { timeout: 10000 });
+    await wallUntil([[.4, .4]], c => c.every(coloured), 'the effect after following');
+    const followed = await prepared();
+    await dragOn([.6, .6], [.66, .64]);
+    await output.waitForFunction(n => Object.values(window.__mapStats.prepares).reduce((a, b) => a + b, 0) > n, followed, { timeout: 10000 });
+    for (let i = 0; i < 6; i++) { const { colours } = await sample(output, [[.4, .4]]); assert.ok(coloured(colours[0]), 'black while following a moved corner'); await sleep(100); }
+    await openSection(studio, 'effect');
+    await studio.getByLabel("Follow the shape's outline", { exact: true }).selectOption('');
+  });
+
+  await check('auto-advance moves to the other scene on its own with the test beat, and waits while Freeze is on', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.5, .5]);
+    await tool('Select'); await asColour();
+    const add = studio.getByRole('button', { name: '+ Scene' });
+    while (await sceneButtons().count() < 2) await add.click();
+    await reactReady();
+    await react('testBeat', true);
+    await studio.getByLabel('Scene auto-advance', { exact: true }).selectOption('bars:4');
+    const first = await currentScene();
+    await studio.waitForFunction(was => document.querySelector('.map-scenes .map-scene[aria-pressed="true"]')?.textContent !== was, first, { timeout: 25000 });
+    const freeze = studio.getByRole('button', { name: 'Freeze', exact: true });
+    await freeze.click();
+    const held = await currentScene();
+    await sleep(10000); // longer than four bars at 120 BPM
+    assert.equal(await currentScene(), held, 'auto-advance moved on while Freeze was on');
+    await freeze.click();
+    await studio.getByLabel('Scene auto-advance', { exact: true }).selectOption('');
+    await react('testBeat', false);
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
