@@ -68,22 +68,16 @@ test('rosettes are continuous for every n from 3 to 24', () => {
 });
 
 test('one turn moves the spiral by exactly (a, b)', () => {
+  // tau is principal-valued, so compare either side of the branch cut at the same radius:
+  // the angle differs by 2 pi - 2 eps, hence tau differs by (a, b) * (1 - eps / pi) exactly.
+  const eps = 1e-3, k = 1 - eps / Math.PI;
   for (const lambda of [2, 4, 16, 256]) {
     for (let a = -6; a <= 6; a++) for (let b = -6; b <= 6; b++) {
-      // walk once round a circle; atan2 wraps at the branch cut, so add (a, b) back there
-      const r = 0.2 + rnd() * 3, start = rnd() * 2 * Math.PI, steps = 720;
-      const at = (i: number) => { const ang = start + (i / steps) * 2 * Math.PI; return { x: r * Math.cos(ang), y: r * Math.sin(ang) }; };
-      const t0 = spiralTau(at(0), a, b, lambda);
-      let prev = t0, sx = 0, sy = 0;
-      for (let i = 1; i <= steps; i++) {
-        const t = spiralTau(at(i), a, b, lambda);
-        let dx = t.x - prev.x, dy = t.y - prev.y;
-        const wrapped = Math.atan2(at(i).y, at(i).x) - Math.atan2(at(i - 1).y, at(i - 1).x) < -Math.PI;
-        if (wrapped) { dx += a; dy += b; }
-        sx += dx; sy += dy; prev = t;
-      }
-      const t1 = { x: t0.x + sx, y: t0.y + sy };
-      assert.ok(Math.abs(t1.x - t0.x - a) < 1e-9 && Math.abs(t1.y - t0.y - b) < 1e-9, `${lambda} ${a} ${b}`);
+      if (a === 0 && b === 0) continue;
+      const r = 0.2 + rnd() * 3;
+      const hi = spiralTau({ x: r * Math.cos(Math.PI - eps), y: r * Math.sin(Math.PI - eps) }, a, b, lambda);
+      const lo = spiralTau({ x: r * Math.cos(-Math.PI + eps), y: r * Math.sin(-Math.PI + eps) }, a, b, lambda);
+      assert.ok(Math.abs(hi.x - lo.x - a * k) < 1e-9 && Math.abs(hi.y - lo.y - b * k) < 1e-9, `${lambda} ${a} ${b}`);
     }
   }
 });
