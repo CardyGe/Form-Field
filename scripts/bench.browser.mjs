@@ -57,6 +57,9 @@ async function measure(entry, config, modules) {
       renderer.render(project, (warmupFrames % frames) / frames * TAU, width, height); sync();
       if (warmupFrames % BATCH === BATCH - 1) { await tick(); timer.poll(); }
     }
+    // Let every warm-up query land, then start the GPU series clean.
+    for (let i = 0; i < 8; i++) { sync(); await tick(); timer.poll(); }
+    timer.reset();
     for (let i = 0; i < frames; i++) {
       const phase = i / frames * TAU;
       const start = ms();
@@ -68,9 +71,7 @@ async function measure(entry, config, modules) {
       cpu.push(submitted - start); full.push(done - start);
     }
     for (let i = 0; i < 6; i++) { sync(); await tick(); timer.poll(); }
-    const raw = timer.results();
-    // Warm-up frames were timed too; keep only the last `frames` samples of each pass.
-    const passes = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, v.length > frames ? v.slice(v.length - frames) : v]));
+    const passes = timer.results();
     return { id: entry.id, title: entry.title, prepareMs, compileMs, firstDrawMs,
       cpuFrameMs: summarise(cpu), fullOutputMs: summarise(full), gpuPassMs: summaries(passes, summarise) };
   } finally { renderer.setPassTimer(null); timer.dispose(); renderer.dispose(); canvas.remove(); }
@@ -95,7 +96,9 @@ async function run() {
     cases.push(await measure(entry, config, modules));
   }
   await window.bench.done({ renderer: rendererString, size: config.size, width: config.width, height: config.height,
-    frames: config.frames, warmupMs: WARMUP_MS, gpuTimerAvailable: timerAvailable, cases });
+    frames: config.frames, warmupMs: WARMUP_MS, gpuTimerAvailable: timerAvailable,
+    gpuPassMsNote: 'Ordered by draw, possibly CUMULATIVE within a frame on ANGLE/Metal (not confirmed isolated). A pass drawn several times per frame has several samples per frame, so count can exceed frames. Do not pick optimisation targets from it; use fullOutputMs for totals.',
+    cases });
 }
 
 run().catch(error => window.bench.fail(error && error.stack || error));

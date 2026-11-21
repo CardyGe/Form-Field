@@ -496,19 +496,38 @@ export class StudioRenderer {
     this.renderer.setRenderTarget(output);
     const timer = this.passTimer;
     if (timer === null) { this.renderer.render(this.quadScene, this.quadCamera); return; }
-    timer.begin(mat.name || 'pass');
+    // A material made after setPassTimer: look for it again once, then label it for good.
+    if (mat.name === '') { this.nameMaterials(); if (mat.name === '') mat.name = 'unnamed'; }
+    timer.begin(mat.name);
     this.renderer.render(this.quadScene, this.quadCamera);
     timer.end();
   }
 
-  /** Times every fullscreen pass by material name. Pass null to stop; with no timer draw pays one null check. */
+  /**
+   * Times every fullscreen pass by material name. Pass null to stop; with no timer draw pays one null check.
+   * Materials reachable from this object (fields, arrays, maps, helper objects, up to four levels deep)
+   * are named by their path. Any material that cannot be reached is labelled 'unnamed' and its passes
+   * are lumped together under that label.
+   */
   setPassTimer(timer: GpuTimer | null): void {
-    if (timer !== null) {
-      for (const [key, value] of Object.entries(this)) {
-        if (value instanceof THREE.ShaderMaterial && value.name === '') value.name = key;
-      }
-    }
+    if (timer !== null) this.nameMaterials();
     this.passTimer = timer;
+  }
+
+  private nameMaterials(): void {
+    const seen = new Set<object>();
+    const visit = (value: unknown, path: string, depth: number): void => {
+      if (typeof value !== 'object' || value === null || seen.has(value)) return;
+      seen.add(value);
+      if (value instanceof THREE.ShaderMaterial) { if (value.name === '') value.name = path; return; }
+      if (depth >= 4 || value instanceof THREE.WebGLRenderer || value instanceof THREE.Texture
+        || value instanceof THREE.WebGLRenderTarget || value instanceof THREE.Object3D || value instanceof THREE.BufferGeometry
+        || value instanceof HTMLElement) return;
+      if (value instanceof Map) { for (const [k, v] of value) visit(v, `${path}.${String(k)}`, depth + 1); return; }
+      if (Array.isArray(value)) { value.forEach((v, i) => visit(v, `${path}[${i}]`, depth + 1)); return; }
+      for (const [k, v] of Object.entries(value)) visit(v, path ? `${path}.${k}` : k, depth + 1);
+    };
+    visit(this, '', 0);
   }
 
   private releaseOilTargets(): void {

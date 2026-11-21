@@ -43,6 +43,11 @@ export class GpuTimer {
     this.pending = waiting;
   }
 
+  /** Forgets collected samples; queries still in flight are kept and will land afterwards. */
+  reset(): void {
+    for (const key of Object.keys(this.samples)) delete this.samples[key];
+  }
+
   /** Milliseconds per sample, keyed by pass label. */
   results(): Record<string, number[]> {
     return Object.fromEntries(Object.entries(this.samples).map(([k, v]) => [k, [...v]]));
