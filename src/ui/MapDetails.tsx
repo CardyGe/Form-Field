@@ -236,7 +236,7 @@ export default function MapDetails({ map, onEditInStudio, setNote, onOpenLooks, 
     </>}
     {tab === 'effect' && <>
       <ContentCard setNote={setNote} map={map} shape={shape} locked={locked} onOpenLooks={onOpenLooks} onEditInStudio={onEditInStudio} linked={linked} setLinked={setLinked} />
-      {!shape.blocker && !shape.sourceId && <p className="muted-text">Choose an effect first: Change… above. Its settings, and what can react to sound, show here.</p>}
+      {!shape.blocker && !shape.sourceId && <p className="muted-text">Pick an effect to see its settings here, and what can react to sound.</p>}
       {!shape.blocker && shape.sourceId === LIVE_SOURCE_ID && <MapLiveCard map={map} locked={locked} onError={text => setNote(text)} localStatus={liveStatus} />}
       {!shape.blocker && isVideoId(shape.sourceId) && <MapVideoPanel map={map} shape={shape} locked={locked} status={videoStatus[shape.sourceId] ?? null} />}
       {!shape.blocker && shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID && !isVideoId(shape.sourceId) && <MapEffectTab key={shape.id} map={map} shape={shape} locked={locked} linked={linked} setNote={setNote} />}
@@ -268,7 +268,7 @@ function ContentCard({ map, shape, locked, onOpenLooks, onEditInStudio, linked, 
           {sharers.length > 1 && <small>{isLive ? 'Live' : 'One instrument'} across {sharers.length} shapes</small>}</div>
       </div>
       <div className="map-toggles">
-        <button className="text-button" data-opens-looks disabled={locked || shape.blocker} aria-label="Change look" title="Choose what this shape plays" onClick={onOpenLooks}>Change…</button>
+        <button className={shape.sourceId || shape.blocker ? 'text-button' : 'secondary-button map-choose'} data-opens-looks disabled={locked || shape.blocker} aria-label="Change look" title="Choose what this shape plays" onClick={onOpenLooks}>{shape.sourceId || shape.blocker ? 'Change…' : 'Choose an effect…'}</button>
         {source && <button className="text-button" disabled={locked} title="A new variation of this instrument" onClick={() => map.dispatch({ type: 'varySource', sourceId: source.id, entropy: randomSeed() })}>Vary</button>}
         {source && onEditInStudio && <button className="text-button" disabled={locked} title="Every control, in Studio; changes show on the projector as you make them" onClick={() => onEditInStudio(source.id, shape.id)}>Edit in Studio</button>}
       </div>
