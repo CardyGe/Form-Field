@@ -957,6 +957,59 @@ Made 21 November 2026, when Greg asked for stage 7 after trying Map on the proje
   - It runs in the studio window, like triggers, and each change is the usual fade.
   - It pauses while Freeze or Blackout is on, and is not an undo step: the changes share one undo step, as triggers do.
 
+## Stage 7 results: wild options
+
+Built 21 November 2026, from [the stage 7 plan](superpowers/plans/2026-11-21-map-stage-7.md). Each option is off until switched on, and works on its own.
+
+**What it does:**
+- **Follow the shape's outline** (effect card: Off, Flow around, Grow from inside, Trace edges).
+  - The effect takes the outline of the first shape playing it as its own surface, through that shape's placement, so Across and Pin shapes follow where the picture lands.
+  - Only the effect as played changes; the saved composition and Studio's own are untouched.
+  - Moving a corner prepares the effect again (at most once a frame). Moving the whole shape does not, and an evolving effect is never sent back to its start by a drag.
+- **Stagger** (Group section, 0 to 1 s).
+  - Each shape, in list order, shows what it plays a little after the one before. It works for effects, videos and Live.
+  - The wall keeps the last second of each staggered source, 30 copies a second, at most 960 pixels a side (640 when several sources keep one). At most four sources keep a history.
+  - Until a second has built up, a shape shows the oldest copy kept, never black.
+- **Vary each** and **Palette shift** (Group section): every shape playing an effect gets its own copy, varied differently or with its colours one step further round. Each is one undo step; past the 64-effect limit it is refused with a note and nothing changes.
+- **Border run** (Edge section, once there is a border).
+  - The border shows only a travelling light, brightest at its head and fading behind it.
+  - Speed is 1 to 120 laps a minute, or one lap every 1 to 16 beats of the tempo. Length is 2 to 50 % of the outline.
+  - It goes round the outer outline at an even speed, curves included, the same way round however the shape was drawn. Holes keep their steady border.
+  - **Chase** (Group section): each later shape's light runs a step behind the one before, so the light passes along the group in list order. Every shape keeps its own light.
+- **Auto** in the scene bar (with two or more scenes): every 10 s to 5 min, or every 4 to 32 bars, in order or at random (never the same scene twice).
+  - It counts only while neither Freeze nor Blackout is on, and starts counting again after any scene change.
+  - Its changes share the triggers' undo step.
+- **In the show file:** version 8. Each option is saved only when it is on, so a show with none on reads exactly as before; version 7 files open with everything off.
+
+**Measured** (`measure-map --wild`: the eight-effect show, the first four shapes grouped with a 0.5 s Stagger, so three sources keep a history, and two border runs; 30 s): 120 fps throughout (the display's rate), median frame 8.3 ms, slowest 10.5 ms, no frame over 16.7 ms, governor at level 0, for both mixes.
+
+**Checked in the app** (`npm run test:map`, 5 new checks):
+- a border run lights only part of the border, and the lit part goes round; switched off, the whole border is back
+- Stagger: the cells of one picture show different moments, never black
+- Vary each and Palette shift give each cell its own copy, each one undo step
+- Follow the outline prepares the effect again when switched on and when a corner moves, never black
+- Auto moves scene with the test beat, and waits while Freeze is on
+
+**Reviewed:** an independent review of the show, the border runs and the drawing found three important problems, all fixed:
+- Chase ran backwards (from the last shape to the first).
+- Dragging an outline sent an evolving effect back to its start.
+- Stagger's memory had no cap: Vary each on a big staggered group could have filled the graphics card.
+
+Smaller fixes: a run's direction no longer depends on how the outline was drawn, holes keep their border, a hidden shape's run no longer redraws the wall every frame, and corners pressed together at the picture's edge are merged.
+
+**Known limits:**
+- **Follow the outline:**
+  - An outline that would cross itself once cut to 12 points plays the effect's own surface, with no note.
+  - It follows only the first shape playing the effect.
+- **Stagger:**
+  - Delayed shapes are drawn from smaller copies, so they can look a little softer than the first.
+  - Beyond four staggered sources, the others play without delay.
+- **Border runs:**
+  - On a shape thinner than about twice the border plus its glow, the run can show on both sides at once.
+  - A tempo run jumps when the tempo clock starts or stops.
+- **Auto by bars** needs the tempo; with no beat it waits.
+- **Not yet tried** on the projector.
+
 ## On the projector
 
 21 November 2026. Greg tried Map on his projector: "it's working well!" He reported no specific issues.
