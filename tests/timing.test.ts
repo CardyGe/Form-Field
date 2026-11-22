@@ -38,7 +38,8 @@ test('older Surface, Graphic and Relief layers open with timing off', () => {
 });
 
 test('every Surface, Graphic and Relief preset staggers its motion', () => {
-  for (const preset of PRESETS.filter(p => ['surface', 'graphic', 'relief'].includes(p.kind) && !['recursion-tunnel', 'time-terraces'].includes(p.id))) {
+  // The Copper Concertina staggers by construction: its crease travels across the facets on its own envelope, not through delay controls.
+  for (const preset of PRESETS.filter(p => ['surface', 'graphic', 'relief'].includes(p.kind) && !['recursion-tunnel', 'time-terraces', 'copper-concertina'].includes(p.id))) {
     const layer = applyPreset(createLayer(preset.kind), preset.id);
     assert.ok(layer.params.delaySpread > 0 || layer.params.pause > 0, preset.id);
   }

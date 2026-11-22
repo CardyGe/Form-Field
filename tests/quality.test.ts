@@ -4,9 +4,9 @@ import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions,
 const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
-test('the curated library keeps 90 distinct presets on saturated palettes with a dark or light ground', () => {
-  assert.equal(PRESETS.length,90);
-  assert.equal(new Set(PRESETS.map(p=>p.id)).size,90);
+test('the curated library keeps 91 distinct presets on saturated palettes with a dark or light ground', () => {
+  assert.equal(PRESETS.length,91);
+  assert.equal(new Set(PRESETS.map(p=>p.id)).size,91);
   for (const preset of PRESETS) {
     const layer=applyPreset(createLayer(preset.kind),preset.id);
     const project={...createProject(),layers:[layer]};
@@ -14,7 +14,7 @@ test('the curated library keeps 90 distinct presets on saturated palettes with a
     assert.equal(preset.palette.length,6,preset.id);
   }
   // Rule: no two presets of a family share both palette and structure.
-  const shape=(p:typeof PRESETS[number])=>JSON.stringify([p.kind,p.palette,p.params.style,p.params.variant,p.params.form,p.params.mode,p.params.inkMode,p.params.flowMode,p.params.reliefMode,p.params.echo,p.params.slitShift]);
+  const shape=(p:typeof PRESETS[number])=>JSON.stringify([p.kind,p.palette,p.params.style,p.params.variant,p.params.form,p.params.mode,p.params.inkMode,p.params.flowMode,p.params.reliefMode,p.params.concertina,p.params.echo,p.params.slitShift]);
   assert.equal(new Set(PRESETS.map(shape)).size,PRESETS.length,'Palette twins');
 });
 
