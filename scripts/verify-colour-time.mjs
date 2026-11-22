@@ -23,6 +23,12 @@ const SHAPES = ['Straight', 'Lens', 'Edges', 'Wave'];
 /** Fails a check that needs the older checkout, rather than letting it pass unseen. */
 const needsBaseline = () => baseline ? null : { ok: false, detail: 'needs --baseline=<checkout>' };
 
+/** Reads the result of the page helper `ct.loop`: the literal wrap and the seam. */
+const loopVerdict = (r, limit = .1) => ({
+  ok: r.literal && r.seam < limit,
+  detail: `phase 0 and TAU ${r.literal ? 'match byte for byte' : 'differ'}; seam (TAU - 1e-4 against 0) mean ${r.seam.toFixed(4)} (limit ${limit})`,
+});
+
 const CHECKS = [
   {
     name: 'neutral',
@@ -138,18 +144,20 @@ const CHECKS = [
         const q = window.ct, rows = [];
         const kinds = [...new Set(q.m.PRESETS.map(p => p.kind)), 'image'];
         const make = (kind, params) => kind === 'image' ? q.soft(params) : q.layer(kind, q.m.PRESETS.find(p => p.kind === kind).id, params);
-        for (const kind of kinds) for (const transparent of [false, true]) {
-          const a = await q.px(q.project([make(kind, {})], transparent)), b = await q.px(q.project([make(kind, { splitAmount: .001 })], transparent));
+        // The two kinds with the most over-range light are also held at other phases.
+        const jobs = kinds.flatMap(kind => (['sculpture', 'livingink'].includes(kind) ? [0, .9, 2.5, 5] : [.9]).map(phase => ({ kind, phase })));
+        for (const { kind, phase } of jobs) for (const transparent of [false, true]) {
+          const a = await q.px(q.project([make(kind, {})], transparent), phase), b = await q.px(q.project([make(kind, { splitAmount: .001 })], transparent), phase);
           let sum = 0, worst = 0, at = 0;
           for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); sum += d; if (d > worst) { worst = d; at = i; } }
           const i = at - at % 4;
-          rows.push({ kind, transparent, mean: sum / a.length, worst, x: (i / 4) % 960, y: Math.floor(i / 4 / 960), channel: 'RGBA'[at % 4], plain: [...a.subarray(i, i + 4)], split: [...b.subarray(i, i + 4)] });
+          rows.push({ kind, phase, transparent, mean: sum / a.length, worst, x: (i / 4) % 960, y: Math.floor(i / 4 / 960), channel: 'RGBA'[at % 4], plain: [...a.subarray(i, i + 4)], split: [...b.subarray(i, i + 4)] });
         }
         return rows;
       });
       const bad = rows.filter(r => r.mean >= 1 || r.worst >= 4);
       const top = rows.reduce((a, b) => b.worst > a.worst ? b : a), high = rows.reduce((a, b) => b.mean > a.mean ? b : a);
-      const name = r => `${r.kind}${r.transparent ? '/transparent' : ''}`;
+      const name = r => `${r.kind}@${r.phase}${r.transparent ? '/transparent' : ''}`;
       const cause = r => `${name(r)} mean ${r.mean.toFixed(3)} worst ${r.worst} at (${r.x},${r.y}) ${r.channel} plain ${r.plain} split ${r.split}`;
       return { ok: bad.length === 0, detail: bad.length ? `${bad.length}/${rows.length} over limit: ${bad.map(cause).join(' | ')}` : `${rows.length} renders; highest mean ${high.mean.toFixed(3)} (${name(high)}), worst ${top.worst} (${name(top)}) (limits 1 and 4)` };
     },
@@ -177,14 +185,51 @@ const CHECKS = [
   },
   {
     name: 'split-loop',
+    // Travel 1.5 is deliberately not whole: the renderer must round it, or the seam opens.
     run: async ({ page }) => {
-      const r = await page.evaluate(async TAU => {
-        const q = window.ct, p = q.project([q.soft({ splitAmount: 32, splitShape: 3, splitSamples: 9, splitTravel: 2 })], true);
-        const a = await q.shot(p, 0), b = await q.shot(p, TAU), plain = await q.shot(q.project([q.soft()], true), 0);
-        return { same: q.same(a, b), moved: !q.same(a, plain) };
-      }, TAU);
-      const none = r.moved ? '' : 'Split has no effect on the render. ';
-      return { ok: r.same && r.moved, detail: `${none}phase 0 and TAU ${r.same ? 'match byte for byte' : 'differ'}` };
+      const r = await page.evaluate(async () => {
+        const q = window.ct, p = q.project([q.soft({ splitAmount: 32, splitShape: 3, splitSamples: 9, splitTravel: 1.5 })], true);
+        const plain = await q.shot(q.project([q.soft()], true), 0);
+        return { ...await q.loop(p), moved: !q.same(await q.shot(p, 0), plain) };
+      });
+      const loop = loopVerdict(r);
+      return { ok: r.moved && loop.ok, detail: `${r.moved ? '' : 'Split has no effect on the render. '}${loop.detail}` };
+    },
+  },
+  {
+    name: 'split-order',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => q.project([q.layer('surface', null, params)]);
+        const plain = await q.px(scene({})), bgr = await q.px(scene({ splitOrder: 5 }));
+        let error = 0; for (let i = 0; i < plain.length; i += 4) error += Math.abs(bgr[i] - plain[i + 2]) + Math.abs(bgr[i + 2] - plain[i]);
+        return { error: error / (plain.length / 2), moved: q.difference(plain, bgr) };
+      });
+      return { ok: r.moved > 0 && r.error === 0, detail: `BGR swaps red and blue with mean error ${r.error.toFixed(3)} (must be 0), moved ${r.moved.toFixed(3)}` };
+    },
+  },
+  {
+    name: 'split-blocks',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => q.project([q.layer('surface', null, params)]), blocks = chance => scene({ splitOrder: 5, splitBlocks: 8, splitChance: chance });
+        const plain = await q.px(scene({})), bgr = await q.px(scene({ splitOrder: 5 }));
+        const none = await q.px(blocks(0)), all = await q.px(blocks(1)), half = await q.px(blocks(.5));
+        let kept = 0;
+        for (let i = 0; i < plain.length; i += 4) if (Math.abs(half[i] - plain[i]) + Math.abs(half[i + 2] - plain[i + 2]) <= Math.abs(half[i] - bgr[i]) + Math.abs(half[i + 2] - bgr[i + 2])) kept++;
+        return { chance0: q.difference(none, plain), chance1: q.difference(all, bgr), kept: kept / (plain.length / 4) };
+      });
+      return { ok: r.chance0 === 0 && r.chance1 === 0 && r.kept > .3 && r.kept < .7, detail: `chance 0 differs from plain by ${r.chance0.toFixed(3)}, chance 1 from full swap by ${r.chance1.toFixed(3)} (both must be 0); chance .5 keeps ${(r.kept * 100).toFixed(1)}% (limit 30-70%)` };
+    },
+  },
+  {
+    name: 'split-graphic',
+    run: async ({ page }) => {
+      const same = await page.evaluate(async () => {
+        const q = window.ct, id = q.m.PRESETS.find(p => p.kind === 'graphic').id;
+        return q.same(await q.shot(q.project([q.layer('graphic', id)])), await q.shot(q.project([q.layer('graphic', id, { splitAmount: 32, splitOrder: 3 })])));
+      });
+      return { ok: same, detail: same ? 'a graphic layer ignores Split and order byte for byte' : 'a graphic layer responds to Split' };
     },
   },
 ];
@@ -261,7 +306,13 @@ try {
     const px = async (...args) => pixels(await shot(...args));
     const difference = (a, b) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum / a.length; };
     const same = (a, b) => { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; };
-    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, project, pixels, shot, px, difference, same };
+    // The renderer wraps phase, so 0 against TAU alone proves nothing: the seam
+    // comparison is what catches motion that does not close. Read with loopVerdict.
+    const loop = async p => {
+      const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
+      return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
+    };
+    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, project, pixels, shot, px, difference, same, loop };
   }, !!baseline);
 
   for (const check of selected) {

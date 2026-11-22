@@ -2,9 +2,9 @@
  * Colour and Lens finish: Split (colour channels pulled apart) and Gradient Map
  * (tone mapped onto a palette).
  *
- * The passes themselves live in the renderer. This file holds the rules for
- * when they run and the maths they share, so they can be tested; the shaders
- * mirror these functions line for line.
+ * This file holds the rules for when the pass runs, the maths it shares, which
+ * can be tested directly, and its shader. The renderer owns the target and binds
+ * the uniforms (see StudioRenderer.lensSource).
  */
 import type { Layer } from '../shared/types';
 
