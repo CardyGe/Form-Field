@@ -113,5 +113,7 @@ export class InstrumentRenderer {
   if(layer.kind==='relief'&&layer.params.reliefMode>=1){this.relief??=new ReliefRenderer();this.relief.draw(renderer,layer,phase,width,height,target,surface);}
  }
  getStats(){return {materials:this.materials.size,patterns:this.patterns.size};}
+ /** After a lost GPU context: grown patterns and simulation state are gone and must be made again. */
+ resetGpuHistory(){for(const sim of this.simulations.values())sim.dispose();this.simulations.clear();for(const t of this.patterns.values())t.dispose();this.patterns.clear();}
  dispose(){this.relief?.dispose();for(const s of this.surfaces.values())s.texture.dispose();this.surfaces.clear();for(const sim of this.simulations.values())sim.dispose();this.simulations.clear();for(const m of this.materials.values())m.dispose();for(const t of this.patterns.values())t.dispose();this.materials.clear();this.patterns.clear();this.init.dispose();this.step.dispose();this.fallback.dispose();}
 }
