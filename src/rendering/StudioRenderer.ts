@@ -754,6 +754,8 @@ export class StudioRenderer {
       for (const [key, fallback] of Object.entries(FRACTAL_DEFAULTS)) {
         u[`u${key[0].toUpperCase()}${key.slice(1)}`].value = number(layer, key, fallback);
       }
+      // A whole number of palette trips per cycle, so the colour run closes with the loop.
+      u.uOffset.value = number(layer, 'offset', .2) + Math.round(number(layer, 'colorRun', 0)) * localPhase / TAU;
       if(number(layer,'colorMode',0)>0&&number(layer,'colorMix',1)>0)u.uExposure.value=1;
       // The live preview takes one fractal sample per pixel; Retina density
       // already oversamples it. Exports keep the chosen Render quality.
@@ -909,7 +911,7 @@ export class StudioRenderer {
       u.uExposure.value=layer.kind==='fractal'&&(number(layer,'colorMode',0)===0||number(layer,'colorMix',1)===0)?1:number(layer,'exposure',1);
       u.uColorMode.value=layer.kind==='fractal'&&number(layer,'colorMix',1)>0?number(layer,'colorMode',0):0;
       u.uColorSteps.value=number(layer,'colorSteps',6);u.uColorMix.value=number(layer,'colorMix',1);
-      u.uColorOffset.value=number(layer,'offset',0);
+      u.uColorOffset.value=number(layer,'offset',0)+(layer.kind==='fractal'?Math.round(number(layer,'colorRun',0))*Math.max(1,Math.round(number(layer,'cycles',1)))*wrapped/TAU:0);
       u.uLoopPhase.value=wrapped;
       const gradeColors=u.uGradePalette.value as THREE.Color[];
       for(let i=0;i<6;i++)gradeColors[i].set(layer.palette[i]??DEFAULT_PALETTE[i]);

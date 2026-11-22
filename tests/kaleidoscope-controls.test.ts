@@ -18,7 +18,9 @@ test('the on-screen choices match the stored values and the maths', () => {
 
 test('only the controls that do something for these settings are shown', () => {
   const plain = { input: 0, group: 0, spiral: 0 };
-  assert.deepEqual([...kaleidoscopeHidden(plain)].sort(), ['cell', 'spiralA', 'spiralB', 'spiralScale', 'zoomCycles']);
+  assert.deepEqual([...kaleidoscopeHidden(plain)].sort(), ['cell', 'morphs', 'spiralA', 'spiralB', 'spiralScale', 'zoomCycles']);
+  assert.ok(!kaleidoscopeHidden({ ...plain, morphTo: 5 }).has('morphs'), 'Morphs per loop shows once a morph is chosen');
+  for (const key of ['morphTo', 'morphs']) assert.ok(kaleidoscopeHidden({ ...plain, input: 1, morphTo: 5 }).has(key), `${key} needs a motif`);
   assert.ok(kaleidoscopeHidden({ ...plain, group: 3 }).has('sectors'));
   assert.ok(!kaleidoscopeHidden({ ...plain, group: 3 }).has('cell'));
   const spiral = kaleidoscopeHidden({ ...plain, spiral: 1 });

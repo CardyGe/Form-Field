@@ -10,6 +10,7 @@ vec2 juliaConstant() {
   float reference=mod(1729.,997.)*.0137;
   vec2 c=vec2(uJuliaReal,uJuliaImag);
   c+=.0009*(vec2(sin(seed),cos(seed))-vec2(sin(reference),cos(reference)));
+  c+=uDance*vec2(.17*(cos(uPhase)-1.),.23*sin(uPhase)+.06*sin(2.*uPhase));
   return c+uMorph*.014*vec2(cos(uPhase)-1.,sin(uPhase));
 }
 // Zoom flight dives toward a repelling period-2 point z1 of z²+c. Near it the
@@ -21,7 +22,7 @@ float juliaDiveMultiplier() { return length(4.*(juliaConstant()+vec2(1.,0.))); }
 bool juliaCanDive() { return uZoomFlight>0.&&juliaDiveMultiplier()>1.03; }
 
 vec2 juliaDomainPlane(vec2 pixelOffset) {
-  vec2 p=(sourceUV(vUv+pixelOffset/uResolution)-.5)*vec2(uAspect,1.);
+  vec2 p=fractalBend((sourceUV(vUv+pixelOffset/uResolution)-.5)*vec2(uAspect,1.));
   float denominator=1.+p.y*.18*tan(uCameraPitch);
   p/=(denominator<0.?-1.:1.)*max(abs(denominator),.08);
   p=turn(uCameraYaw+uTravel*.12*sin(uPhase))*p;

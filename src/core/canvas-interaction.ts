@@ -19,7 +19,7 @@ const preferred: Partial<Record<LayerKind, string[]>> = {
   resonance: ['modalBlend', 'radialMix'],
   texturecuts: ['scale', 'cuts'],
   glitchtunnel: ['tunnelZoom', 'glitch'],
-  kaleidoscope: ['cell', 'sourceTurn'],
+  kaleidoscope: ['twist', 'lens'],
 };
 
 /** Continuous, visible controls only; never rebuild a simulation during a drag. */

@@ -46,10 +46,12 @@ test('out-of-range, non-finite and missing controls are refused like other kinds
   assert.throws(() => validateProject(missing), /sectors/);
 });
 
-test('projects without the kind open unchanged, and there are no Kaleidoscope presets', () => {
+test('projects without the kind open unchanged, and the Kaleidoscope presets use every new motif', () => {
   const p = createProject();
   assert.equal(validateProject(structuredClone(p)).layers[0].kind, 'surface');
-  assert.equal(PRESETS.filter(x => (x.kind as string) === 'kaleidoscope').length, 0);
+  const looks = PRESETS.filter(x => x.kind === 'kaleidoscope');
+  assert.equal(looks.length, 20);
+  for (const motif of [3, 4, 5]) assert.ok(looks.some(x => x.params.motif === motif), `motif ${motif}`);
 });
 
 test('tile edges name a visible Kaleidoscope layer and ignore a hidden one', () => {
@@ -64,7 +66,7 @@ test('canvas drag axes come from the kind\'s own keys', () => {
   const lattice = createLayer('kaleidoscope');
   lattice.params.group = 3;
   const axes = canvasAxes(lattice, { structure: false, material: false } as never);
-  assert.deepEqual(axes.slice(0, 2).map(a => a.key), ['cell', 'sourceTurn']);
+  assert.deepEqual(axes.slice(0, 2).map(a => a.key), ['twist', 'lens']);
 });
 
 const kLayer = (params: Record<string, number> = {}) => { const l = createLayer('kaleidoscope'); Object.assign(l.params, params); return l; };

@@ -23,9 +23,13 @@ vec2 boxField(vec3 position) {
   float size=uScale/1.7;
   vec3 p=boxDomain(position),z=p,limits=boxLimits();
   float derivative=1.,orbit=0.,weight=1.,totalWeight=0.;
-  float scale=-(uBoxScale+uMorph*.12*sin(uPhase));
+  float magnitude=uBoxScale+uMorph*.12*sin(uPhase);
+  // Shape dance breathes the fold itself, kept above the scale where the surface stays solid.
+  if(uDance>0.)magnitude=max(magnitude+uDance*.4*sin(uPhase),1.35);
+  float scale=-magnitude;
   float outer=uVariant>.5&&uVariant<1.5?1.25:1.;
-  float minimum2=uBoxRadius*uBoxRadius,outer2=outer*outer;
+  float foldRadius=max(uBoxRadius+uDance*.08*cos(uPhase),.12);
+  float minimum2=foldRadius*foldRadius,outer2=outer*outer;
   // Detail changes the geometric recursion, never the render resolution.
   // Keep the estimator converged even when artistic Detail is low. Fewer
   // than twelve passes can turn smooth surfaces into hit/normal stippling at 4K.
@@ -79,7 +83,7 @@ vec4 traceBox(vec2 offset) {
   if(uApproach>0.)framing=mix(framing,radius*(.62-.12*uApproach)-uTravel*.35*radius*.3*cos(uPhase),uApproach);
   vec3 origin=framing*vec3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch));
   vec3 forward=normalize(-origin),right=normalize(cross(forward,vec3(0,1,0))),up=cross(right,forward);
-  vec2 uv=(sourceUV(vUv+offset/uResolution)-.5)*vec2(uAspect,1.);
+  vec2 uv=fractalBend((sourceUV(vUv+offset/uResolution)-.5)*vec2(uAspect,1.));
   vec3 ray=normalize(forward*1.65+right*uv.x+up*uv.y);
   // A negative-scale Mandelbox lies within [-2L,2L] on each fold axis.
   // Global rotations and the optional radial reflection preserve this radius.

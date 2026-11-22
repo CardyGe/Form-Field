@@ -40,8 +40,16 @@ export function kaleidoscopeUniforms(layer: Layer, loopFraction: number): Record
   const phase = (turns - Math.floor(turns)) * TAU;
   const motif = control(layer, 'motif', true);
   // The parity average is only read by that motif, so the other two do not pay for it.
-  const parity = motif === 2 ? parityAverage(phase) : { coverage: 0, ink: 0 };
+  const morphTo = control(layer, 'morphTo', true);
+  const parity = motif === 2 || morphTo === 3 ? parityAverage(phase) : { coverage: 0, ink: 0 };
+  // There and back within each morph, so the loop always closes on the first motif.
+  const morphWave = morphTo > 0 ? .5 - .5 * Math.cos(TAU * loop * control(layer, 'morphs', true)) : 0;
   return {
+    uKTwist: control(layer, 'twist'),
+    uKLens: control(layer, 'lens'),
+    uKMelt: control(layer, 'melt'),
+    uKMorphTo: morphTo - 1,
+    uKMorphWave: morphWave,
     uKInput: control(layer, 'input', true),
     uKGroup: control(layer, 'group', true),
     uKSectors: control(layer, 'sectors', true),
@@ -97,7 +105,9 @@ const vec3 K_WALLS[${walls.length}]=vec3[${walls.length}](${walls.join(',')});`;
  * spike in the filter footprint. Output is associated linear RGBA.
  */
 export const kaleidoscopeGLSL = /* glsl */`
-uniform int uKGroup, uKSpiral, uKSpiralA, uKSpiralB, uKMotif;
+uniform int uKGroup, uKSpiral, uKSpiralA, uKSpiralB, uKMotif, uKMorphTo;
+uniform float uKTwist, uKLens, uKMelt, uKMorphWave;
+float gKMorph = 0.;
 uniform float uKSectors, uKCell, uKSpiralScale, uKZoom, uKPhase;
 uniform float uKSourceX, uKSourceY, uKSourceScale, uKSourceTurn, uKSourceDrift;
 uniform float uKWarpIn, uKWarpOut, uKMotifScale, uKLineWidth, uKHasImage;
@@ -263,10 +273,128 @@ vec4 kCircleParity(vec2 q, vec2 dx, vec2 dy) {
   return mix(mix(ground, ink, parity), average, kFade(dx, dy));
 }
 
+// Colour travelling through the five inks. Period 1, so it closes around the spiral.
+vec3 kCycle(float t) {
+  t = fract(t) * 5.;
+  int a = int(floor(t)) % 5, b = (a + 1) % 5;
+  float f = fract(t);
+  return mix(uKPalette[a], uKPalette[b], f * f * (3. - 2. * f));
+}
+vec3 kInkMean() { return (uKPalette[0] + uKPalette[1] + uKPalette[2] + uKPalette[3] + uKPalette[4]) / 5.; }
+
+// One family of glowing curves: three per tile, each with a bright pulse running along it.
+void kNeonFamily(float h, vec2 slope, vec2 dx, vec2 dy, float along, inout vec3 light, inout float cover) {
+  float stretch = length(slope) / 3.;
+  float w = min(clamp(.018 * uKLineWidth, .006, .12) * stretch, .4);
+  float foot = abs(dot(slope, dx)) + abs(dot(slope, dy));
+  float core = kPulse(h, w, foot);
+  float off = abs(fract(h) - .5), reach = 3.5 * w;
+  float halo = exp(-off / max(reach, foot)) * min(1., reach / max(foot, 1e-5)) * smoothstep(.5, .34, off);
+  float lane = floor(h) / 3.;
+  vec3 ink = kCycle(lane + along - uKPhase / K_TAU);
+  float spark = pow(.5 + .5 * cos(K_TAU * (2. * along + lane) - 2. * uKPhase), 10.);
+  light += ink * (core * (1.1 + 1.4 * spark) + halo * (.34 + .5 * spark));
+  cover = max(cover, clamp(core + .7 * halo, 0., 1.));
+}
+
+vec4 kNeon(vec2 q, vec2 dx, vec2 dy) {
+  float t = K_TAU * q.x, s = K_TAU * q.y, ph = uKPhase;
+  float ha = 3. * q.y + .55 * sin(t + ph) + .22 * sin(2. * t - 2. * ph);
+  vec2 sa = vec2(K_TAU * (.55 * cos(t + ph) + .44 * cos(2. * t - 2. * ph)), 3.);
+  float hb = 3. * q.x + .55 * sin(s - ph) + .22 * sin(2. * s + 2. * ph);
+  vec2 sb = vec2(3., K_TAU * (.55 * cos(s - ph) + .44 * cos(2. * s + 2. * ph)));
+  vec3 light = vec3(0.);
+  float cover = 0.;
+  kNeonFamily(ha, sa, dx, dy, q.x, light, cover);
+  kNeonFamily(hb, sb, dx, dy, q.y + .5, light, cover);
+  vec4 ground = kGround();
+  vec4 color = vec4(ground.rgb + light, max(ground.a, cover));
+  vec4 average = vec4(ground.rgb + .42 * kInkMean(), max(ground.a, .5));
+  return mix(color, average, kFade(dx, dy));
+}
+
+// Over/under strands with a rounded profile and a contact shadow where one passes beneath another.
+vec4 kRibbons(vec2 q, vec2 dx, vec2 dy) {
+  float ph = uKPhase;
+  vec2 c = 2. * q + .16 * vec2(sin(K_TAU * q.y + ph), sin(K_TAU * q.x - ph));
+  float foot = max(2. * (length(dx) + length(dy)), 1e-5);
+  float r = clamp(.2 + .045 * uKLineWidth, .18, .46);
+  vec2 id = floor(c), f = c - id - .5;
+  float coverA = clamp((r - abs(f.y)) / foot + .5, 0., 1.), coverB = clamp((r - abs(f.x)) / foot + .5, 0., 1.);
+  vec2 n = clamp(f.yx / r, -1., 1.);
+  vec2 round_ = sqrt(max(1. - n * n, 0.));
+  vec3 inkA = kCycle(id.y / 2. + q.x - ph / K_TAU), inkB = kCycle(id.x / 2. + .5 + q.y + ph / K_TAU);
+  vec3 tubeA = inkA * (.28 + .85 * round_.x) + vec3(.45) * pow(round_.x, 10.);
+  vec3 tubeB = inkB * (.28 + .85 * round_.y) + vec3(.45) * pow(round_.y, 10.);
+  bool aOver = mod(id.x + id.y, 2.) < .5;
+  vec3 over = aOver ? tubeA : tubeB, under = aOver ? tubeB : tubeA;
+  float overCover = aOver ? coverA : coverB, underCover = aOver ? coverB : coverA;
+  under *= mix(.22, 1., smoothstep(r, r + .16, aOver ? abs(f.y) : abs(f.x)));
+  vec4 color = mix(mix(kGround(), vec4(under, 1.), underCover), vec4(over, 1.), overCover);
+  float area = 1. - (1. - 2. * r) * (1. - 2. * r);
+  vec4 average = mix(kGround(), vec4(.8 * kInkMean(), 1.), area);
+  return mix(color, average, kFade(dx, dy));
+}
+
+// A grid of glowing dots whose size and colour ripple diagonally through the pattern.
+vec4 kDots(vec2 q, vec2 dx, vec2 dy) {
+  vec2 g = q * 4., id = floor(g), f = g - id - .5;
+  float wave = sin(K_TAU * (id.x + id.y) / 4. - uKPhase) + .5 * sin(K_TAU * (id.x - id.y) / 4. + 2. * uKPhase);
+  float r = clamp(.25 + .024 * (uKLineWidth - 2.) + .1 * wave, .05, .46);
+  float foot = max(4. * (length(dx) + length(dy)), 1e-5), d = length(f);
+  float cover = clamp((r - d) / foot + .5, 0., 1.);
+  float halo = .38 * exp(-max(d - r, 0.) / max(.09, foot)) * smoothstep(.72, .42, d);
+  vec3 ink = kCycle((id.x + id.y) / 4. - uKPhase / K_TAU);
+  vec3 lit = ink * 1.05 + vec3(.5) * smoothstep(r * .55, 0., d);
+  vec4 ground = kGround();
+  vec4 color = vec4(ground.rgb + ink * halo, max(ground.a, halo));
+  color = mix(color, vec4(lit, 1.), cover);
+  vec4 average = mix(ground, vec4(kInkMean(), 1.), K_PI * .0625 + .14);
+  return mix(color, average, kFade(dx * 2., dy * 2.));
+}
+
+vec4 kMotifAt(int motif, vec2 q, vec2 dx, vec2 dy) {
+  if (motif == 3) return kNeon(q, dx, dy);
+  if (motif == 4) return kRibbons(q, dx, dy);
+  if (motif == 5) return kDots(q, dx, dy);
+  return motif == 0 ? kLineField(q, dx, dy) : motif == 1 ? kSquareTile(q, dx, dy) : kCircleParity(q, dx, dy);
+}
+
+// The second motif is only drawn inside the travelling morph front, so an idle morph costs nothing.
 vec4 kMotif(vec2 p, vec2 dx, vec2 dy) {
   vec2 q = p * uKMotifScale;
   dx *= uKMotifScale; dy *= uKMotifScale;
-  return uKMotif == 0 ? kLineField(q, dx, dy) : uKMotif == 1 ? kSquareTile(q, dx, dy) : kCircleParity(q, dx, dy);
+  if (uKMorphTo < 0 || gKMorph <= 0.) return kMotifAt(uKMotif, q, dx, dy);
+  if (gKMorph >= 1.) return kMotifAt(uKMorphTo, q, dx, dy);
+  return mix(kMotifAt(uKMotif, q, dx, dy), kMotifAt(uKMorphTo, q, dx, dy), gKMorph);
+}
+
+// Twist, a roaming lens and a melt, all before the fold so they stay seamless in every symmetry.
+vec2 kBendMap(vec2 p) {
+  float ph = uKPhase;
+  if (uKTwist > 0.) {
+    float angle = uKTwist * (1.8 + 1.2 * sin(ph)) * exp(-.9 * dot(p, p));
+    float c = cos(angle), s = sin(angle);
+    p = mat2(c, s, -s, c) * p;
+  }
+  if (uKLens > 0.) {
+    vec2 centre = .2 * vec2(cos(ph), sin(2. * ph));
+    vec2 d = p - centre;
+    p = centre + d * (1. - uKLens * .72 * (.68 + .32 * sin(ph)) * exp(-2.4 * dot(d, d)));
+  }
+  if (uKMelt > 0.) {
+    float sag = sin(3.1 * p.x + ph) + .5 * sin(7.3 * p.x - 2. * ph);
+    p += uKMelt * vec2(.055 * sin(5. * p.y + ph), .2 * sag * (.65 + .35 * sin(2. * p.y + ph)));
+  }
+  return p;
+}
+vec2 kBend(vec2 p, inout vec2 dx, inout vec2 dy) {
+  if (uKTwist <= 0. && uKLens <= 0. && uKMelt <= 0.) return p;
+  vec2 bent = kBendMap(p);
+  // The bend is smooth, so one-pixel differences give its filter footprint.
+  dx = kBendMap(p + dx) - bent;
+  dy = kBendMap(p + dy) - bent;
+  return bent;
 }
 
 // The picture's coordinate, read through a period-1 triangle wave so it closes around the spiral.
@@ -346,6 +474,10 @@ vec4 kFoldedColor(vec2 p, vec2 dx, vec2 dy) {
 
 vec4 kaleidoscopeColor(vec2 frame, vec2 dx, vec2 dy) {
   if (uKEmpty > .5) return vec4(0.);
+  // A soft ring that sweeps out from the centre, so a morph never changes the whole frame at once.
+  float front = uKMorphWave * 1.84 - .12;
+  gKMorph = uKMorphTo < 0 ? 0. : 1. - smoothstep(front - .12, front + .12, length(frame));
+  frame = kBend(frame, dx, dy);
   float c = cos(uKSourceTurn), s = sin(uKSourceTurn);
   mat2 turn = mat2(c, s, -s, c) / uKSourceScale;
   vec2 drift = .25 * uKSourceDrift * vec2(cos(uKPhase), sin(uKPhase));

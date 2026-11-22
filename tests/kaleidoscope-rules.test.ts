@@ -209,6 +209,6 @@ test('canvas axes never offer a control hidden for the current state', () => {
     assert.ok(axes.length > 0);
     for (const axis of axes) assert.ok(!hidden.has(axis.key), `${axis.key}: input ${input}, group ${group}, spiral ${spiral}`);
   }
-  assert.equal(canvasAxes(kLayer({ group: 0 }), locks)[0].key, 'sourceTurn');
-  assert.equal(canvasAxes(kLayer({ group: 3 }), locks)[0].key, 'cell');
+  assert.deepEqual(canvasAxes(kLayer({ group: 0 }), locks).map(axis => axis.key), ['twist', 'lens']);
+  assert.deepEqual(canvasAxes(kLayer({ group: 3 }), locks).map(axis => axis.key), ['twist', 'lens']);
 });
