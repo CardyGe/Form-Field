@@ -15,6 +15,7 @@ import { Tracking, FLOW_SIZE } from './Tracking';
 import { Paint } from './Paint';
 import { Signal } from './Signal';
 import { Smoke } from './Smoke';
+import { Kaleidoscope } from './Kaleidoscope';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
 
@@ -109,7 +110,7 @@ export class LiveRenderer {
     if (this.lookKind !== this.settings.look) {
       // Switching looks starts the new one fresh; each keeps its own settings.
       this.look?.dispose();
-      this.look = this.settings.look === 'signal' ? new Signal(this.passes, this.width, this.height) : this.settings.look === 'smoke' ? new Smoke(this.passes, this.width, this.height) : new Paint(this.passes, this.width, this.height);
+      this.look = this.settings.look === 'signal' ? new Signal(this.passes, this.width, this.height) : this.settings.look === 'smoke' ? new Smoke(this.passes, this.width, this.height) : this.settings.look === 'kaleidoscope' ? new Kaleidoscope(this.passes, this.width, this.height) : new Paint(this.passes, this.width, this.height);
       this.lookKind = this.settings.look;
     }
     if (!this.look) return;

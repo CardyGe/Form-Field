@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import type { Passes, Pair } from './passes';
 import type { FrameSource, TrackingFeed } from './look';
-import type { LiveSettings } from './settings';
+import { wantsPeople, type LiveSettings } from './settings';
 import { cameraFragment, flowFragment, lumaFragment, smoothFragment } from './tracking-shaders';
 import type { MaskProvider, PeopleStatus } from './MaskProvider';
 import { People } from './People';
@@ -78,7 +78,7 @@ export class Tracking implements TrackingFeed {
 
   /** One display frame: movement from new camera frames, and people when the look wants them. `step` is the capped time step. */
   update(source: FrameSource, settings: LiveSettings, step = 0): void {
-    const wants = (settings.look === 'smoke' || (settings.look === 'signal' && settings.signal.removeBackground)) && !!this.makeProvider;
+    const wants = wantsPeople(settings) && !!this.makeProvider;
     if (this.provider && this.providerElement !== source.element) {
       this.provider.dispose(); this.provider = null; this.peopleStage.reset();
     }

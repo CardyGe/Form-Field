@@ -1,11 +1,13 @@
 import { useRef, type ReactNode } from 'react';
 import { useLive } from './useLive';
-import { IGNORE_STILL, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SIGNAL_STARTS, SMOKE_CONTROLS, SMOKE_STARTS, type Box, type LiveSettings, type SignalKey } from '../live/settings';
+import { IGNORE_STILL, KALEIDOSCOPE_LIVE, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SIGNAL_STARTS, SMOKE_CONTROLS, SMOKE_STARTS, wantsPeople, type Box, type LiveSettings, type SignalKey } from '../live/settings';
 import { rampHex } from '../live/colour';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, SOLAR } from '../core/palettes';
 
 const POSE_CONTROLS: SignalKey[] = ['poseEcho', 'poseCount', 'poseSpacing', 'poseFill'];
+/** In SYMMETRY_GROUPS order. */
+const SYMMETRY_NAMES = ['Rosette', 'Mirror', 'Triangle', 'Square', 'Hexagon'];
 
 const PALETTES: [string, string[]][] = [['Hot Signal', HOT_SIGNAL], ['Neon Strata', NEON_STRATA], ['Acid Drip', ACID_DRIP], ['Pop Portal', POP_PORTAL],
   ['Lime Violet', LIME_VIOLET], ['Electric', ELECTRIC], ['Candy', CANDY], ['Solar', SOLAR], ['Cyan Yellow', CYAN_YELLOW]];
@@ -47,9 +49,10 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
   const paletteName = PALETTES.find(([, colours]) => colours.join() === s.palette.join())?.[0] ?? '';
   const signalPaletteName = PALETTES.find(([, colours]) => colours.join() === s.signal.palette.join())?.[0] ?? '';
   const smokePaletteName = PALETTES.find(([, colours]) => colours.join() === s.smoke.palette.join())?.[0] ?? '';
-  const signal = s.look === 'signal', smoke = s.look === 'smoke', people = live.people;
+  const signal = s.look === 'signal', smoke = s.look === 'smoke', kaleidoscope = s.look === 'kaleidoscope', people = live.people;
   const peopleStatus = peopleLine(people.status);
-  const findingPeople = smoke || (signal && s.signal.removeBackground);
+  const findingPeople = wantsPeople(s);
+  const setKaleidoscope = (change: Partial<LiveSettings['kaleidoscope']>) => live.update(v => ({ ...v, kaleidoscope: { ...v.kaleidoscope, ...change } }));
   const roomMissing = findingPeople && s.people.useEmptyRoom && !people.roomCaptured;
   const setSmoke = (change: Partial<LiveSettings['smoke']>) => live.update(v => ({ ...v, smoke: { ...v.smoke, ...change } }));
   const setSignal = (change: Partial<LiveSettings['signal']>) => live.update(v => ({ ...v, signal: { ...v.signal, ...change } }));
@@ -111,8 +114,8 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
         {live.outputOpen ? (live.preview ? <img alt="Output preview" src={live.preview} /> : <p className="live-status">Waiting for the output…</p>)
           : <canvas aria-label="Live preview" ref={live.setCanvas} />}
       </div>
-      <aside className="live-column" aria-label={signal ? 'Signal Melt' : smoke ? 'Smoke' : 'Paint'}>
-        <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value === 'signal' ? 'signal' : e.target.value === 'smoke' ? 'smoke' : 'paint' }); }}><option value="paint">Paint</option><option value="smoke">Smoke</option><option value="signal">Signal Melt</option></select></label>
+      <aside className="live-column" aria-label={signal ? 'Signal Melt' : smoke ? 'Smoke' : kaleidoscope ? 'Kaleidoscope' : 'Paint'}>
+        <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { live.setView('art'); set({ look: e.target.value === 'signal' ? 'signal' : e.target.value === 'smoke' ? 'smoke' : e.target.value === 'kaleidoscope' ? 'kaleidoscope' : 'paint' }); }}><option value="paint">Paint</option><option value="smoke">Smoke</option><option value="signal">Signal Melt</option><option value="kaleidoscope">Kaleidoscope</option></select></label>
         {signal ? <>
           <p className="live-note">Sweep an arm to leave coloured outlines of earlier poses. Hold still to build light, then move to release it.</p>
           <div className="live-starts" role="group" aria-label="Start from">{SIGNAL_STARTS.map(start =>
@@ -148,6 +151,18 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
           <label className="stacked-label">Palette<select aria-label="Palette" value={smokePaletteName} onChange={e => { const found = PALETTES.find(([name]) => name === e.target.value); if (found) setSmoke({ palette: [...found[1]] }); }}>
             {!smokePaletteName && <option value="">Custom</option>}{PALETTES.map(([name]) => <option key={name}>{name}</option>)}</select></label>
           <div className="live-swatches" title="Darkest to brightest, as people are coloured">{rampHex(s.smoke.palette).map((c, i) => <i key={i} style={{ background: c }} />)}</div>
+        </> : kaleidoscope ? <>
+          <p className="live-note">Folds the camera or video into a turning pattern. If the source stops, the last picture holds.</p>
+          <label className="live-check"><input aria-label="Spiral" type="checkbox" checked={s.kaleidoscope.spiral} onChange={e => setKaleidoscope({ spiral: e.target.checked })} />Spiral<small>Wraps the picture into an endless spiral instead of folding it.</small></label>
+          {!s.kaleidoscope.spiral && <>
+            <label className="stacked-label">Symmetry<select aria-label="Symmetry" value={s.kaleidoscope.group} onChange={e => setKaleidoscope({ group: Number(e.target.value) })}>
+              {SYMMETRY_NAMES.map((name, i) => <option key={name} value={i}>{name}</option>)}</select></label>
+            {s.kaleidoscope.group === 0
+              ? <Slider label="Mirrors" value={s.kaleidoscope.sectors} min={KALEIDOSCOPE_LIVE.sectors.min} max={KALEIDOSCOPE_LIVE.sectors.max} step={1} onChange={sectors => setKaleidoscope({ sectors })} />
+              : <Slider label="Repeat size" value={s.kaleidoscope.cell} min={KALEIDOSCOPE_LIVE.cell.min} max={KALEIDOSCOPE_LIVE.cell.max} step={.01} onChange={cell => setKaleidoscope({ cell })} />}
+          </>}
+          <Slider label="Spin" value={s.kaleidoscope.spin} min={KALEIDOSCOPE_LIVE.spin.min} max={KALEIDOSCOPE_LIVE.spin.max} step={.01} onChange={spin => setKaleidoscope({ spin })} />
+          {s.kaleidoscope.spiral && <Slider label="Zoom" value={s.kaleidoscope.zoom} min={KALEIDOSCOPE_LIVE.zoom.min} max={KALEIDOSCOPE_LIVE.zoom.max} step={.05} onChange={zoom => setKaleidoscope({ zoom })} />}
         </> : <>
           <p className="live-note">Movement lays down paint. Standing still lets it fade.</p>
           {PAINT_CONTROLS.filter(c => c.key !== 'ground').map(c => <Slider key={c.key} label={c.label} value={s.paint[c.key]} min={c.min} max={c.max} step={c.step} unit={c.key === 'fadeSeconds' ? ' s' : ''}

@@ -177,3 +177,111 @@ test('Still poses participate in Signal without changing Smoke still-object sett
   assert.equal(validateLiveSettings({signal:{chargeSeconds:99}}).signal.chargeSeconds,8);
   assert.equal(validateLiveSettings({signal:{halo:-1}}).signal.halo,0);
 });
+
+import * as THREE from 'three';
+import { KALEIDOSCOPE_LIVE, wantsPeople } from '../src/live/settings';
+import { Kaleidoscope, advancePhase, liveKaleidoscopeUniforms } from '../src/live/Kaleidoscope';
+import type { Passes } from '../src/live/passes';
+import type { TrackingFeed } from '../src/live/look';
+
+test('old settings keep their look and gain the kaleidoscope defaults', () => {
+  const { kaleidoscope: _dropped, ...old } = { ...defaultLiveSettings(), look: 'smoke' as const };
+  const s = validateLiveSettings(old);
+  assert.equal(s.look, 'smoke');
+  assert.deepEqual(s.kaleidoscope, { group: 0, sectors: 6, cell: 1, spiral: false, spin: .1, zoom: 1 });
+});
+test('the kaleidoscope look survives sanitising', () => {
+  const s = validateLiveSettings({ ...defaultLiveSettings(), look: 'kaleidoscope', kaleidoscope: { group: 3, sectors: 12, cell: 2.5, spiral: true, spin: -.5, zoom: -2 } });
+  assert.equal(s.look, 'kaleidoscope');
+  assert.deepEqual(s.kaleidoscope, { group: 3, sectors: 12, cell: 2.5, spiral: true, spin: -.5, zoom: -2 });
+});
+test('kaleidoscope settings clamp, round and repair', () => {
+  const high = validateLiveSettings({ kaleidoscope: { group: 9, sectors: 99, cell: 9, spiral: 'yes', spin: 5, zoom: 50 } }).kaleidoscope;
+  assert.deepEqual(high, { group: 4, sectors: 24, cell: 4, spiral: false, spin: 1, zoom: 4 });
+  const low = validateLiveSettings({ kaleidoscope: { group: -3, sectors: 1, cell: 0, spin: -5, zoom: -50 } }).kaleidoscope;
+  assert.deepEqual(low, { group: 0, sectors: 3, cell: .1, spiral: false, spin: -1, zoom: -4 });
+  assert.equal(validateLiveSettings({ kaleidoscope: { group: 2.6, sectors: 7.4 } }).kaleidoscope.group, 3);
+  assert.equal(validateLiveSettings({ kaleidoscope: { group: 2.6, sectors: 7.4 } }).kaleidoscope.sectors, 7);
+  const broken = validateLiveSettings({ kaleidoscope: { group: NaN, sectors: Infinity, cell: -Infinity, spin: NaN, zoom: '2' } }).kaleidoscope;
+  assert.deepEqual(broken, { group: KALEIDOSCOPE_LIVE.group.default, sectors: KALEIDOSCOPE_LIVE.sectors.default, cell: KALEIDOSCOPE_LIVE.cell.default, spiral: false, spin: KALEIDOSCOPE_LIVE.spin.default, zoom: KALEIDOSCOPE_LIVE.zoom.default });
+});
+test('settings with the kaleidoscope stay under the 16 KB message cap', () => {
+  const s = validateLiveSettings({ ...defaultLiveSettings(), look: 'kaleidoscope' });
+  assert.ok(Buffer.byteLength(JSON.stringify({ type: 'settings', settings: s })) < 16 * 1024);
+});
+test('only smoke and background removal ask for people', () => {
+  const d = defaultLiveSettings();
+  assert.equal(wantsPeople({ ...d, look: 'kaleidoscope' }), false);
+  assert.equal(wantsPeople({ ...d, look: 'paint' }), false);
+  assert.equal(wantsPeople({ ...d, look: 'smoke' }), true);
+  assert.equal(wantsPeople({ ...d, look: 'signal' }), true);
+  assert.equal(wantsPeople({ ...d, look: 'signal', signal: { ...d.signal, removeBackground: false } }), false);
+});
+test('phase advances by frame time, whatever the frame rate', () => {
+  let fast = 0, slow = 0;
+  for (let i = 0; i < 240; i++) fast = advancePhase(fast, .1, 1 / 120);
+  for (let i = 0; i < 60; i++) slow = advancePhase(slow, .1, 1 / 30);
+  assert.ok(Math.abs(fast - .025) < 1e-9); assert.ok(Math.abs(slow - .025) < 1e-9);
+});
+test('phase stays wrapped over a very long run and ignores bad input', () => {
+  let phase = 0;
+  for (let i = 0; i < 200000; i++) { phase = advancePhase(phase, -1, .05); assert.ok(phase >= 0 && phase < 1); }
+  assert.equal(advancePhase(.25, NaN, 1), .25);
+  assert.equal(advancePhase(.25, 1, Infinity), .25);
+  assert.ok(advancePhase(0, -1e-30, 1) < 1);
+});
+test('live uniforms use the shared shader controls with no drift', () => {
+  const u = liveKaleidoscopeUniforms({ group: 2, sectors: 9, cell: 1.5, spiral: true, spin: .1, zoom: 1 }, .25, .5);
+  assert.equal(u.uKGroup, 2); assert.equal(u.uKSectors, 9); assert.equal(u.uKCell, 1.5); assert.equal(u.uKSpiral, 1);
+  assert.equal(u.uKSourceDrift, 0); assert.equal(u.uKZoom, .5);
+  assert.ok(Math.abs((u.uKSourceTurn as number) - Math.PI / 2) < 1e-12);
+});
+
+/** Passes with no GPU: records what each draw read and wrote. */
+function fakeLook() {
+  const draws: { output: THREE.WebGLRenderTarget | null; read: unknown[]; empty: unknown }[] = [];
+  const passes = {
+    target: (w: number, h: number) => new THREE.WebGLRenderTarget(w, h),
+    material: (fragmentShader: string, uniforms: Record<string, THREE.IUniform>) => new THREE.ShaderMaterial({ fragmentShader, uniforms }),
+    draw: (material: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget | null) => {
+      const read = Object.values(material.uniforms).map(u => u.value).filter(v => (v as THREE.Texture)?.isTexture);
+      draws.push({ output, read, empty: material.uniforms.uKEmpty?.value });
+    },
+  } as unknown as Passes;
+  const look = new Kaleidoscope(passes, 1920, 1080);
+  const camera = new THREE.WebGLRenderTarget(1280, 720).texture;
+  const feed = (fresh: boolean, texture: THREE.Texture = camera) => ({ camera: texture, fresh }) as unknown as TrackingFeed;
+  const settings = { ...defaultLiveSettings(), look: 'kaleidoscope' as const };
+  return { look, draws, feed, settings, camera };
+}
+test('the look is dark until a frame arrives, and copies only on fresh frames', () => {
+  const { look, draws, feed, settings } = fakeLook();
+  look.step(.016, 0, feed(false), settings);
+  assert.equal(draws.length, 1); assert.equal(draws[0].empty, 1); assert.equal(draws[0].read.length, 0);
+  look.step(.016, 0, feed(true), settings);
+  assert.equal(draws.length, 3, 'one copy and one picture'); assert.equal(draws[2].empty, 0);
+  look.step(.016, 0, feed(false), settings);
+  assert.equal(draws.length, 4, 'a held frame is not copied again'); assert.equal(draws[3].empty, 0);
+});
+test('no draw samples the target it writes', () => {
+  const { look, draws, feed, settings } = fakeLook();
+  for (const fresh of [false, true, true, false, true]) look.step(.016, 0, feed(fresh), settings);
+  for (const d of draws) assert.ok(!d.read.includes(d.output?.texture), 'feedback loop');
+});
+test('clear drops the held frame until a new one arrives', () => {
+  const { look, draws, feed, settings } = fakeLook();
+  look.step(.016, 0, feed(true), settings);
+  look.clear();
+  look.step(.016, 0, feed(false), settings);
+  assert.equal(draws.at(-1)!.empty, 1); assert.equal(draws.at(-1)!.read.length, 0);
+  look.step(.016, 0, feed(true), settings);
+  assert.equal(draws.at(-1)!.empty, 0);
+});
+test('a camera texture of a new size is followed without losing the look', () => {
+  const { look, draws, feed, settings } = fakeLook();
+  look.step(.016, 0, feed(true), settings);
+  const other = new THREE.WebGLRenderTarget(640, 480).texture;
+  look.step(.016, 0, feed(true, other), settings);
+  assert.ok(draws.at(-2)!.read.includes(other)); assert.equal(draws.at(-1)!.empty, 0);
+  look.dispose();
+});

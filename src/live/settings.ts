@@ -9,7 +9,7 @@ import { HOT_SIGNAL, NEON_STRATA } from '../core/palettes';
 export interface Box { left: number; right: number; bottom: number; top: number }
 export type PaintKey = 'response' | 'strokeLength' | 'bristle' | 'spread' | 'fadeSeconds' | 'colourChange' | 'ground';
 export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number }
-export type LookKind = 'paint' | 'smoke' | 'signal';
+export type LookKind = 'paint' | 'smoke' | 'signal' | 'kaleidoscope';
 export type SignalKey = 'poseCount' | 'poseFill' | 'poseEcho' | 'poseSpacing' | 'chargeSeconds' | 'release' | 'halo' | 'vividness' | 'contours' | 'echoSpread' | 'colourChange' | 'maskThreshold' | 'maskSoftness' | 'shift' | 'relief' | 'focus' | 'chroma' | 'memorySeconds' | 'blockSize' | 'tear' | 'response' | 'mix';
 export type SmokeKey = 'density' | 'emit' | 'smoulder' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange' | 'vividness';
 /** Where people are found. ignoreStillSeconds null means Off. */
@@ -31,8 +31,18 @@ export interface LiveSettings {
   /** forever: smoke never fades, and stays in the picture. */
   smoke: Record<SmokeKey, number> & { palette: string[]; forever: boolean };
   signal: Record<SignalKey, number> & { hold: boolean; removeBackground: boolean; keepStill: boolean; palette: string[] };
+  /** group indexes SYMMETRY_GROUPS. spin is turns, and zoom is steps, per 8 seconds. */
+  kaleidoscope: { group: number; sectors: number; cell: number; spiral: boolean; spin: number; zoom: number };
   people: PeopleSettings;
 }
+
+export const KALEIDOSCOPE_LIVE = {
+  group: { min: 0, max: 4, default: 0 },
+  sectors: { min: 3, max: 24, default: 6 },
+  cell: { min: .1, max: 4, default: 1 },
+  spin: { min: -1, max: 1, default: .1 },
+  zoom: { min: -4, max: 4, default: 1 },
+};
 
 export const PAINT_CONTROLS: LiveControl[] = [
   { key: 'response', label: 'Movement response', min: 0, max: 3, step: .01, default: 1 },
@@ -113,6 +123,7 @@ export function defaultLiveSettings(): LiveSettings {
     look: 'paint',
     signal: { ...Object.fromEntries(SIGNAL_CONTROLS.map(c => [c.key, c.default])) as Record<SignalKey, number>, hold: false, removeBackground: true, keepStill: true, palette: [...NEON_STRATA] },
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
+    kaleidoscope: { group: KALEIDOSCOPE_LIVE.group.default, sectors: KALEIDOSCOPE_LIVE.sectors.default, cell: KALEIDOSCOPE_LIVE.cell.default, spiral: false, spin: KALEIDOSCOPE_LIVE.spin.default, zoom: KALEIDOSCOPE_LIVE.zoom.default },
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
   };
 }
@@ -127,7 +138,8 @@ export function validateLiveSettings(value: unknown): LiveSettings {
   const b: Box = { left: ranged(box.left, 0, 1, 0), right: ranged(box.right, 0, 1, 1), bottom: ranged(box.bottom, 0, 1, 0), top: ranged(box.top, 0, 1, 1) };
   const isPalette = (p: unknown): p is string[] => Array.isArray(p) && p.length === 6 && p.every(c => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c));
   const palette = isPalette(v.palette) ? v.palette : d.palette;
-  const signal = record(v.signal), smoke = record(v.smoke), people = record(v.people);
+  const signal = record(v.signal), smoke = record(v.smoke), people = record(v.people), kaleidoscope = record(v.kaleidoscope);
+  const fold = (key: keyof typeof KALEIDOSCOPE_LIVE) => ranged(kaleidoscope[key], KALEIDOSCOPE_LIVE[key].min, KALEIDOSCOPE_LIVE[key].max, KALEIDOSCOPE_LIVE[key].default);
   const still = people.ignoreStillSeconds === null ? null : ranged(people.ignoreStillSeconds, IGNORE_STILL.min, IGNORE_STILL.max, IGNORE_STILL.default);
   return {
     version: 1,
@@ -140,10 +152,11 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     quality: v.quality === 720 ? 720 : 1080,
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, ranged(paint[c.key], c.min, c.max, c.default)])) as Record<PaintKey, number>,
     palette: [...palette],
-    look: v.look === 'signal' ? 'signal' : v.look === 'smoke' ? 'smoke' : 'paint',
+    look: v.look === 'signal' ? 'signal' : v.look === 'smoke' ? 'smoke' : v.look === 'kaleidoscope' ? 'kaleidoscope' : 'paint',
     signal: { ...Object.fromEntries(SIGNAL_CONTROLS.map(c => [c.key, c.key === 'poseCount' ? Math.round(ranged(signal[c.key], c.min, c.max, c.default)) : ranged(signal[c.key], c.min, c.max, c.default)])) as Record<SignalKey, number>, hold: signal.hold === true, removeBackground: signal.removeBackground !== false, keepStill: signal.keepStill !== false, palette: [...(isPalette(signal.palette) ? signal.palette : d.signal.palette)] },
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, ranged(smoke[c.key], c.min, c.max, c.default)])) as Record<SmokeKey, number>,
       palette: [...(isPalette(smoke.palette) ? smoke.palette : d.smoke.palette)], forever: smoke.forever === true },
+    kaleidoscope: { group: Math.round(fold('group')), sectors: Math.round(fold('sectors')), cell: fold('cell'), spiral: kaleidoscope.spiral === true, spin: fold('spin'), zoom: fold('zoom') },
     people: { ignoreStillSeconds: still, useEmptyRoom: typeof people.useEmptyRoom === 'boolean' ? people.useEmptyRoom : false },
   };
 }
@@ -152,6 +165,11 @@ export function validateLiveSettings(value: unknown): LiveSettings {
 export function chooseDisplay(displays: { id: number; primary: boolean }[], current: number | null): number | null {
   if (displays.some(d => d.id === current)) return current;
   return (displays.find(d => !d.primary) ?? displays[0])?.id ?? null;
+}
+
+/** Whether this look needs person finding. Paint and Kaleidoscope never start it. */
+export function wantsPeople(settings: LiveSettings): boolean {
+  return settings.look === 'smoke' || (settings.look === 'signal' && settings.signal.removeBackground);
 }
 
 /** Signal treats stillness as participation unless the operator explicitly opts out. */

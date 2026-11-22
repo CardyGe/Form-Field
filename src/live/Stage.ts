@@ -7,7 +7,7 @@ import { LiveRenderer } from './LiveRenderer';
 import { LiveSource, type SourceState } from './source';
 import { TestSource, TestMaskProvider } from './test-source';
 import type { FrameSource } from './look';
-import type { LiveSettings } from './settings';
+import { wantsPeople, type LiveSettings } from './settings';
 import type { PeopleStatus } from './MaskProvider';
 import { WorkerMaskProvider } from './WorkerMaskProvider';
 
@@ -77,7 +77,7 @@ export class Stage {
   /** Person finding as the operator sees it: status and whether the empty room is captured. */
   peopleReport(): { people: PeopleStatus | null; roomCaptured: boolean } {
     const d = this.renderer.peopleDiagnostics();
-    return { people: (this.renderer.settings.look === 'smoke' || (this.renderer.settings.look === 'signal' && this.renderer.settings.signal.removeBackground)) ? d.status as PeopleStatus : null, roomCaptured: this.renderer.roomCaptured };
+    return { people: wantsPeople(this.renderer.settings) ? d.status as PeopleStatus : null, roomCaptured: this.renderer.roomCaptured };
   }
 
   dispose(): void {
