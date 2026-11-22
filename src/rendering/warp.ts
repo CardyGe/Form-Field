@@ -177,20 +177,20 @@ vec3 liquidNoise(vec2 p) {
   return sum / total;
 }
 
-/** A quarter turn of a slope follows the noise's contour lines, so the current neither gathers nor thins the picture. */
+/** A quarter turn of a slope follows the noise's contour lines, so the current neither gathers nor thins the picture,
+ * except where the speed limit in liquidCurrent engages. */
 vec2 turned(vec2 slope) { return vec2(-slope.y, slope.x) * .5; }
 
 vec2 swirlCurrent(vec2 p) { return turned(liquidNoise(p).yz); }
 
 /** Ridge reshapes the noise as 1 - abs(2n - 1). With n in 0..1, 2n - 1 is the signed noise. The crease is
  * rounded very slightly, because a current that flips instantly would tear the picture along it. */
-vec2 ridgeCurrent(vec2 p) {
-  vec3 n = liquidNoise(p);
-  return turned(-n.x / sqrt(n.x * n.x + .0025) * n.yz);
-}
+vec2 ridgeFrom(vec3 n) { return turned(-n.x / sqrt(n.x * n.x + .0025) * n.yz); }
+
+vec2 ridgeCurrent(vec2 p) { return ridgeFrom(liquidNoise(p)); }
 
 /** Turns about the frame centre, with bands of faster and slower rotation travelling outward. Speed depends only on
- * the radius, so this too neither gathers nor thins the picture. */
+ * the radius, so alone this neither gathers nor thins the picture. Added to another current, the speed limit can. */
 vec2 spiralCurrent(vec2 p) {
   float r = length(p);
   return vec2(-p.y, p.x) / sqrt(r * r + .01) * (.5 + .25 * cos(TAU * uLiquidScale * r - uLiquidTurn));
@@ -202,8 +202,12 @@ vec2 liquidCurrent(vec2 p) {
   else if (uLiquidStyle == 1) v = swirlCurrent(p) + uLiquidDrift * .6;
   else if (uLiquidStyle == 2) v = ridgeCurrent(p);
   else if (uLiquidStyle == 3) v = swirlCurrent(p) + spiralCurrent(p);
-  // Chaos reads the ridges at a position the ridges themselves have already moved, once.
-  else v = ridgeCurrent(p + ridgeCurrent(p) * .35 / uLiquidScale) + spiralCurrent(p);
+  else {
+    // Chaos is Ridge plus Vortex. The ridges are read at a position they have already moved, once,
+    // and Swirl shares the first noise read.
+    vec3 n = liquidNoise(p);
+    v = ridgeCurrent(p + ridgeFrom(n) * .35 / uLiquidScale) + turned(n.yz) + spiralCurrent(p);
+  }
   // Speed is at most 1, so a step never travels further than its share of the amount.
   float speed = length(v);
   return speed > 1. ? v / speed : v;
@@ -280,8 +284,7 @@ vec2 tapReach(vec2 footprint) {
 }
 
 vec2 tapPosition(int i) {
-  int k = i - 4 * (i / 4);
-  return k == 0 ? vec2(.125, .375) : k == 1 ? vec2(-.375, .125) : k == 2 ? vec2(-.125, -.375) : vec2(.375, -.125);
+  return i == 0 ? vec2(.125, .375) : i == 1 ? vec2(-.375, .125) : i == 2 ? vec2(-.125, -.375) : vec2(.375, -.125);
 }
 
 /** One tap while a pixel covers at most one source texel. Past that, a rotated grid of four whose
@@ -295,29 +298,31 @@ Gathered readAt(vec2 uv, vec2 footprint, float weight, inout float peak) {
   return g;
 }
 
-/** A tail sample: one tap, or three of the grid where the picture is squeezed. Each sample starts one place further
- * round the grid, so the tail as a whole stays centred on its path. */
-void readTail(vec2 uv, vec2 reach, int place, float weight, inout Gathered g, inout float peak) {
-  if (reach == vec2(0.)) { gather(uv, weight, g, peak); return; }
-  for (int k = 0; k < 3; k++) gather(uv + reach * tapPosition(place + k), weight / 3., g, peak);
+/** A tail sample takes the same filtered read as the head and adds to its running total. */
+void addTail(vec2 uv, vec2 footprint, float weight, inout Gathered sum, inout float peak) {
+  Gathered t = readAt(uv, footprint, weight, peak);
+  sum.covered += t.covered; sum.light += t.light; sum.alpha += t.alpha;
 }
 
 void main() {
   vec2 warped = warpedUv(vUv);
   vec2 footprint = fwidth(warped) * uResolution;
   float peak = 0.;
-  // The head of a trail takes the full filtered read and each tail sample at most three taps, so the most a squeezed,
-  // fringed pixel can read is 3 * (4 + 7 * 3) = 75. An unsqueezed pixel reads once per sample: 8, or 24 with fringe.
+  // Every trail sample takes the same filtered read, so the most a squeezed, fringed pixel can read is
+  // 3 * 8 * 4 = 96. An unsqueezed pixel reads once per sample: 8, or 24 with fringe.
   bool fringed = warpFringe != vec2(0.);
   float head = trailCount > 1 ? trailWeight[0] : 1.;
   Gathered g = readAt(warped, footprint, head, peak);
   Gathered r = g, b = g;
   if (fringed) { r = readAt(warped + warpFringe, footprint, head, peak); b = readAt(warped - warpFringe, footprint, head, peak); }
+  float tailPeak = 0.;
   for (int i = 1; i < trailCount; i++) {
-    vec2 at = warped + trailOffset[i], reach = tapReach(fwidth(at) * uResolution);
-    readTail(at, reach, i, trailWeight[i], g, peak);
-    if (fringed) { readTail(at + warpFringe, reach, i, trailWeight[i], r, peak); readTail(at - warpFringe, reach, i, trailWeight[i], b, peak); }
+    vec2 at = warped + trailOffset[i], spread = fwidth(at) * uResolution;
+    addTail(at, spread, trailWeight[i], g, tailPeak);
+    if (fringed) { addTail(at + warpFringe, spread, trailWeight[i], r, tailPeak); addTail(at - warpFringe, spread, trailWeight[i], b, tailPeak); }
   }
+  // The tail loosens the fringe bound only as far as the trail is turned up, so a faint trail cannot jump it.
+  if (trailCount > 1) peak = mix(peak, max(peak, tailPeak), uLiquidTrail);
   vec3 covered = g.covered, light = g.light;
   if (fringed) {
     // Red and blue read other pixels than the alpha, so at a soft edge colour can outrun coverage.

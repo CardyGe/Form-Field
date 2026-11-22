@@ -351,27 +351,33 @@ const CHECKS = [
   },
   {
     name: 'liquid-trail',
-    // Seven steps put a trail sample on every step. A shorter run with the same step size stops exactly at
-    // that point of the path, so the trail must equal those renders averaged with falling weights.
+    // A shorter run with the same step size stops exactly at a point of the path, so the trail must equal those
+    // renders averaged with falling weights. Seven steps use every step; sixteen use eight spaced along the path.
     run: async ({ page }) => {
-      const r = await page.evaluate(async () => {
-        const q = window.wq, W = 960, H = 540, amount = .5, steps = 7, falloff = .8;
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, amount = .5, falloff = .8, rows = [];
         const read = async params => { await q.shot(q.project([q.smooth({ liquidStyle: 1, ...params })]), .9, W, H); return q.linear(W, H); };
-        const stops = [];
-        for (let k = 0; k <= steps; k++) stops.push(await read({ liquidAmount: k ? amount * k / steps : 1e-9, liquidSteps: Math.max(1, k) }));
-        const expected = new Float32Array(stops[0].length);
-        let total = 0;
-        stops.forEach((stop, k) => { const w = falloff ** (steps - k); total += w; for (let i = 0; i < stop.length; i++) expected[i] += stop[i] * w; });
-        for (let i = 0; i < expected.length; i++) expected[i] /= total;
-        const trail = await read({ liquidAmount: amount, liquidSteps: steps, liquidTrail: 1 });
         const gap = (a, b) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum / a.length; };
+        for (const steps of [7, 16]) {
+          const stops = [], stride = steps / 7;
+          for (let slot = 0; slot < 8; slot++) {
+            const k = Math.floor(slot * stride + .5);
+            stops.push(await read({ liquidAmount: k ? amount * k / steps : 1e-9, liquidSteps: Math.max(1, k) }));
+          }
+          const expected = new Float32Array(stops[0].length);
+          let total = 0;
+          stops.forEach((stop, slot) => { const w = falloff ** (7 - slot); total += w; for (let i = 0; i < stop.length; i++) expected[i] += stop[i] * w; });
+          for (let i = 0; i < expected.length; i++) expected[i] /= total;
+          const trail = await read({ liquidAmount: amount, liquidSteps: steps, liquidTrail: 1 });
+          rows.push({ steps, error: gap(trail, expected), moved: gap(trail, stops[7]) });
+        }
         // Trail belongs to Flow: on another style the control is hidden, so it must not change the picture.
-        const other = await read({ liquidStyle: 0, liquidAmount: amount, liquidSteps: steps, liquidTrail: 1 });
-        const otherPlain = await read({ liquidStyle: 0, liquidAmount: amount, liquidSteps: steps });
-        return { error: gap(trail, expected), moved: gap(trail, stops[steps]), hidden: gap(other, otherPlain) };
+        const other = await read({ liquidStyle: 0, liquidAmount: amount, liquidSteps: 7, liquidTrail: 1 });
+        const otherPlain = await read({ liquidStyle: 0, liquidAmount: amount, liquidSteps: 7 });
+        return { rows, hidden: gap(other, otherPlain) };
       });
-      const ok = r.moved > .005 && r.error < r.moved / 10 && r.hidden === 0;
-      return { ok, detail: `${r.moved <= .005 ? 'Trail has no effect. ' : ''}against the weighted path ${r.error.toFixed(5)}, trail moved ${r.moved.toFixed(5)} (limit a tenth of that); on Swirl ${r.hidden.toFixed(5)} (must be 0)` };
+      const ok = r => r.moved > .005 && r.error < r.moved / 10;
+      return { ok: rows.rows.every(ok) && rows.hidden === 0, detail: `${rows.rows.some(r => r.moved <= .005) ? 'Trail has no effect. ' : ''}${rows.rows.map(r => `${r.steps} steps: against the weighted path ${r.error.toFixed(5)}, trail moved ${r.moved.toFixed(5)}`).join('; ')} (limit a tenth of that); on Swirl ${rows.hidden.toFixed(5)} (must be 0)` };
     },
   },
   {
@@ -448,6 +454,51 @@ const CHECKS = [
       });
       const names = ['Swirl', 'Flow with trail'];
       return { ok: rows.every(r => r.moved && r.filtered < r.tap / 2), detail: rows.map((r, i) => r.moved ? `${names[i]} ${r.filtered.toFixed(3)} against single tap ${r.tap.toFixed(3)}, ratio ${(r.filtered / r.tap).toFixed(3)}` : `${names[i]}: ${NO_LIQUID}`).join('; ') + ' (limit .5)' };
+    },
+  },
+  {
+    name: 'liquid-chaos',
+    // Reads the current itself: Chaos must be the fed-back Ridge plus Vortex's Swirl and spiral, under the speed limit.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, mat = q.renderer.warp, source = mat.fragmentShader;
+        const probe = source.replace('gl_FragColor = vec4(covered + light, g.alpha);', `vec2 P = (vUv - .5) * vec2(uAspect, 1.);
+  vec2 want = ridgeCurrent(P + ridgeCurrent(P) * .35 / uLiquidScale) + swirlCurrent(P) + spiralCurrent(P);
+  if (length(want) > 1.) want = normalize(want);
+  gl_FragColor = vec4(length(liquidCurrent(P) - want), length(want), 0., 1.);`);
+        if (probe === source) throw new Error('warp output not found');
+        mat.fragmentShader = probe; mat.needsUpdate = true;
+        let d;
+        try { await q.shot(q.project([q.smooth({ liquidAmount: .5, liquidStyle: 4 })]), .9, W, H); d = q.linear(W, H); }
+        finally { mat.fragmentShader = source; mat.needsUpdate = true; }
+        let worst = 0, speed = 0;
+        for (let i = 0; i < d.length; i += 4) { worst = Math.max(worst, d[i]); speed += d[i + 1]; }
+        return { worst, speed: speed / (W * H) };
+      });
+      return { ok: r.worst < .002 && r.speed > .1, detail: `largest gap from Ridge + Swirl + spiral ${r.worst.toFixed(5)} (limit .002), mean speed ${r.speed.toFixed(3)}` };
+    },
+  },
+  {
+    name: 'liquid-soft-trail',
+    // Two straight colours, 1 and 40, in wide bands under fine steep alpha stripes, fringe on. A barely-there trail
+    // must not let the bright band on its path loosen the fringe bound for the whole pixel. The trail's own honest
+    // share at .001 is about .001 * 40, so the limit is .1.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540;
+        const data = new Float32Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+          const u = x / W, v = y / H, a = Math.min(1, Math.max(.02, .5 + 3 * Math.sin(u * 200) * Math.cos(v * 90))), c = Math.floor(u * 5) % 2 ? 40 : 1;
+          data.set([c * a, c * a, c * a, a], (y * W + x) * 4);
+        }
+        const texture = new q.m.DataTexture(data, W, H, q.m.RGBAFormat, q.m.FloatType); texture.needsUpdate = true;
+        const pass = trail => { const l = q.rich({ liquidAmount: .35, liquidStyle: 1, liquidChroma: 1, liquidSteps: 8, liquidTrail: trail }); q.renderer.warpSource(l, l, texture, texture, .9, W, H); return q.linear(W, H); };
+        const off = pass(0), tiny = pass(.001), full = pass(1);
+        texture.dispose();
+        const worst = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+        return { jump: worst(off, tiny), full: worst(off, full) };
+      });
+      return { ok: r.jump < .1 && r.full > 1, detail: `largest change from Trail 0 to .001: ${r.jump.toFixed(4)} (limit .1); to Trail 1: ${r.full.toFixed(2)} (over 1)` };
     },
   },
 ];
