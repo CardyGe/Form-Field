@@ -292,7 +292,7 @@ const CHECKS = [
       const r = await page.evaluate(async () => {
         const q = window.ct, total = Math.round(q.m.createProject().duration * q.m.createProject().fps.num / q.m.createProject().fps.den);
         const phase = frame => frame * Math.PI * 2 / total;
-        const scene = mix => { const p = q.project([q.soft({ echo: .9, gradMix: mix, gradPalette: 1 })], true); p.highlights = 'exact'; return p; };
+        const scene = mix => { const p = q.project([q.ramp({ echo: .9, echoZoom: .96, echoDriftX: .01, gradMix: mix, gradPalette: 1 })], true); p.highlights = 'exact'; return p; };
         const first = await q.px(scene(1), phase(60));
         await q.px(scene(1), phase(90)); await q.px(scene(1), phase(10));
         const second = await q.px(scene(1), phase(60));
