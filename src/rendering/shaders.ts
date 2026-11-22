@@ -48,9 +48,10 @@ uniform float uColorMode,uColorSteps,uColorMix,uColorOffset;
 uniform vec3 uGradePalette[6];
 uniform float uToonMix,uToonBands,uToonOffset,uToonCycles,uToonSoftness,uToonOutline,uToonOutlineColor,uLoopPhase;
 uniform sampler2D uGlowLevel0,uGlowLevel1,uGlowLevel2,uGlowLevel3,uGlowLevel4;
-uniform float uGlowWeights[5];
+uniform vec3 uGlowChannels[5];
+uniform sampler2D uGlowStreakMap;
 uniform vec3 uGlowColour;
-uniform float uGlowOn,uGlowTint;
+uniform float uGlowOn,uGlowTint,uGlowStreak;
 uniform float uPrintOn,uPrintCells,uPrintOffset;
 uniform float uPrintAngles[4];
 uniform float uPrintMix,uPrintType,uPrintDot,uPrintMatrix,uPrintFloor,uPrintCeiling,uPrintMax,uPrintGain,uPrintSoft,uPrintInvert;
@@ -496,9 +497,10 @@ void main() {
   vec3 glow=vec3(0.);
   if(uGlowOn>.5) {
     vec2 g=(uSourceViewInverse*vec3(uv,1.)).xy;
-    glow=uGlowWeights[0]*texture2D(uGlowLevel0,g).rgb+uGlowWeights[1]*texture2D(uGlowLevel1,g).rgb
-      +uGlowWeights[2]*texture2D(uGlowLevel2,g).rgb+uGlowWeights[3]*texture2D(uGlowLevel3,g).rgb
-      +uGlowWeights[4]*texture2D(uGlowLevel4,g).rgb;
+    glow=uGlowChannels[0]*texture2D(uGlowLevel0,g).rgb+uGlowChannels[1]*texture2D(uGlowLevel1,g).rgb
+      +uGlowChannels[2]*texture2D(uGlowLevel2,g).rgb+uGlowChannels[3]*texture2D(uGlowLevel3,g).rgb
+      +uGlowChannels[4]*texture2D(uGlowLevel4,g).rgb;
+    if(uGlowStreak>.0001)glow+=uGlowStreak*texture2D(uGlowStreakMap,g).rgb;
     if(uGlowTint>.5)glow=uGlowColour*max(glow.r,max(glow.g,glow.b));
     // Saturation, Hue and Exposure act on the glow as they do on the layer.
     if(abs(uSaturation-1.)>.000001 || abs(uHue)>.000001 || abs(uExposure-1.)>.000001)glow=grade(glow);

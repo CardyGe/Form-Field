@@ -317,6 +317,71 @@ const CHECKS = [
       return { ok: r.identical && r.moved > 0 && r.judged > 1000 && r.worst <= 4, detail: `${r.moved > 0 ? '' : 'Gradient Map has no effect on the render. '}two seek orders ${r.identical ? 'byte-identical' : 'differ'}; against a CPU map of the unmapped layer: worst ${r.worst}, mean ${r.mean.toFixed(3)} over ${r.judged} pixels at least half covered (limit 4)` };
     },
   },
+  {
+    name: 'glow-neutral',
+    // The existing Glow, spread and streak at zero, must match the older checkout byte for byte.
+    // Spread must also change a render, so the check cannot pass on a Glow that ignores it.
+    run: async ({ page }) => {
+      const missing = needsBaseline(); if (missing) return missing;
+      const r = await page.evaluate(async () => {
+        const q = window.ct, before = new q.old.StudioRenderer(document.querySelector('#b')), changed = [];
+        const glow = { glowMix: .8, glowThreshold: .1, glowSize: .6 };
+        const jobs = [['soft', () => q.project([q.soft(glow)], true)], ['surface', () => q.project([q.layer('surface', null, glow)])],
+          ['sculpture', () => q.project([q.layer('sculpture', q.m.PRESETS.find(p => p.kind === 'sculpture').id, glow)])]];
+        for (const [name, make] of jobs) {
+          const now = make(), then = JSON.parse(JSON.stringify(now));
+          await q.renderer.prepare(now); await before.prepare(then);
+          if (!q.same(await q.renderer.exportPNG(now, .9, 960, 540), await before.exportPNG(then, .9, 960, 540))) changed.push(name);
+        }
+        before.dispose();
+        const plain = await q.px(q.project([q.soft(glow)], true)), spread = await q.px(q.project([q.soft({ ...glow, glowSpread: 1 })], true));
+        return { jobs: jobs.length, changed, spread: q.difference(plain, spread) };
+      });
+      return { ok: r.changed.length === 0 && r.spread > 0, detail: `${r.spread > 0 ? '' : 'Colour spread has no effect on the render. '}${r.changed.length ? `changed: ${r.changed.join(', ')}` : `${r.jobs} glows byte-identical`}; spread 1 moves the render by ${r.spread.toFixed(3)}` };
+    },
+  },
+  {
+    name: 'streak-scale',
+    // Both shapes, along and across the frame, at 960 and 1920 wide.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, glow = { glowMix: .6, glowThreshold: .1, glowSize: .3 }, rows = [];
+        const scene = params => q.project([q.soft({ ...glow, ...params })], true);
+        const plain = await q.px(scene({}));
+        for (const [name, params] of [['soft', { glowStreak: 1.5 }], ['flare 30deg', { glowStreak: 1.5, glowStreakShape: 1, glowStreakAngle: 30 }]]) {
+          const small = await q.px(scene(params)), big = await q.px(scene(params), .9, 1920, 1080);
+          const reduced = new Uint8ClampedArray(small.length);
+          for (let y = 0; y < 540; y++) for (let x = 0; x < 960; x++) for (let c = 0; c < 4; c++) {
+            const at = (X, Y) => big[(Y * 1920 + X) * 4 + c];
+            reduced[(y * 960 + x) * 4 + c] = (at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1)) / 4;
+          }
+          rows.push({ name, difference: q.difference(small, reduced), moved: q.difference(plain, small) });
+        }
+        return rows;
+      });
+      const none = r.some(row => row.moved < .05) ? 'Streak has no visible effect on the render. ' : '';
+      return { ok: r.every(row => row.moved >= .05 && row.difference < 2), detail: `${none}${r.map(row => `${row.name} scale difference ${row.difference.toFixed(3)} moved ${row.moved.toFixed(3)}`).join('; ')} (limit 2, moved at least 0.05)` };
+    },
+  },
+  {
+    name: 'streak-tile',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, W = 960, H = 540, rows = [];
+        const tiled = params => { const p = q.project([q.layer('surface', null, { glowMix: .6, glowThreshold: .02, glowSize: .3, ...params })]); p.tileEdges = true; return p; };
+        const plain = await q.px(tiled({}));
+        for (const [name, params] of [['soft', { glowStreak: 1.5 }], ['flare', { glowStreak: 1.5, glowStreakShape: 1, glowStreakAngle: 20 }]]) {
+          const px = await q.px(tiled(params));
+          const columns = (a, b) => { let sum = 0; for (let y = 0; y < H; y++) for (let c = 0; c < 3; c++) sum += Math.abs(px[(y * W + a) * 4 + c] - px[(y * W + b) * 4 + c]); return sum / (H * 3); };
+          let interior = 0; for (let k = 1; k <= 8; k++) { const x = Math.round(k * W / 9); interior += columns(x, x + 1); }
+          rows.push({ name, seam: columns(W - 1, 0), interior: interior / 8, moved: q.difference(plain, px) });
+        }
+        return rows;
+      });
+      const none = r.some(row => row.moved < .05) ? 'Streak has no visible effect on the render. ' : '';
+      return { ok: r.every(row => row.moved >= .05 && row.seam <= row.interior * 1.25), detail: `${none}${r.map(row => `${row.name} seam ${row.seam.toFixed(3)} interior ${row.interior.toFixed(3)} moved ${row.moved.toFixed(3)}`).join('; ')} (limit 1.25x, moved at least 0.05)` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;

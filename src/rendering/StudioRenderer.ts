@@ -21,7 +21,7 @@ import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { printActive, printUniforms } from './print-screen';
-import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
+import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, spectralWeights } from './colour-lens';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
@@ -190,7 +190,7 @@ export class StudioRenderer {
   private slitTargets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null = null;
   private readonly glowBright: THREE.ShaderMaterial;
   /** Glow finish: one bright-pass target and blur pyramid, shared by all layers. */
-  private glow: { bright: THREE.WebGLRenderTarget; pyramid: BloomPyramid } | null = null;
+  private glow: { bright: THREE.WebGLRenderTarget; pyramid: BloomPyramid; streak: StreakBlur } | null = null;
   /** Colour and Lens finish: one target shared by all layers, built on first use. */
   private lensTarget: THREE.WebGLRenderTarget | null = null;
   private readonly lens = material(lensFragment, {
@@ -314,7 +314,7 @@ export class StudioRenderer {
       uPatternRing: { value: new THREE.Vector4() }, uPatternBackground: { value: new THREE.Color() },
       uMaskInvert: { value: 0 }, uGlow: { value: 0 },
       ...Object.fromEntries(BLOOM_HEIGHTS.map((_, i) => [`uGlowLevel${i}`, { value: this.fallback }])),
-      uGlowWeights: { value: [0, 0, 0, 0, 0] }, uGlowColour: { value: new THREE.Color() }, uGlowOn: { value: 0 },
+      uGlowChannels: { value: [0, 1, 2, 3, 4].map(() => new THREE.Vector3()) }, uGlowStreakMap: { value: this.fallback }, uGlowColour: { value: new THREE.Color() }, uGlowOn: { value: 0 },
       uPrintOn: { value: 0 }, uPrintCells: { value: 135 }, uPrintOffset: { value: 0 }, uPrintAngles: { value: [0, 0, 0, 0] },
       ...Object.fromEntries(FINISH_PARAMETERS.map(d=>['u'+d.key[0].toUpperCase()+d.key.slice(1),{value:d.default}])),
       uSaturation: {value:1}, uHue: {value:0}, uExposure:{value:1},
@@ -909,16 +909,21 @@ export class StudioRenderer {
     const u = this.composite.uniforms, amount = number(layer, 'glowMix', 0);
     const on = glowActive(original) && amount > 0;
     u.uGlowOn.value = Number(on);
-    if (!on) { BLOOM_HEIGHTS.forEach((_, i) => { u[`uGlowLevel${i}`].value = this.fallback; }); return; }
-    this.glow ??= { bright: lightTarget(true), pyramid: new BloomPyramid() };
-    const { bright, pyramid } = this.glow, w = Math.ceil(width / 2), h = Math.ceil(height / 2);
+    if (!on) { BLOOM_HEIGHTS.forEach((_, i) => { u[`uGlowLevel${i}`].value = this.fallback; }); u.uGlowStreakMap.value = this.fallback; return; }
+    this.glow ??= { bright: lightTarget(true), pyramid: new BloomPyramid(), streak: new StreakBlur() };
+    const { bright, pyramid, streak } = this.glow, w = Math.ceil(width / 2), h = Math.ceil(height / 2);
     if (bright.width !== w || bright.height !== h) bright.setSize(w, h);
     setWrap(bright, this.tiling);
     this.glowBright.uniforms.uSource.value = source;
     this.glowBright.uniforms.uThreshold.value = number(layer, 'glowThreshold', .5);
     this.draw(this.glowBright, bright);
     pyramid.render(bright.texture, width, height, (m, t) => this.draw(m, t), this.tiling).forEach((level, i) => { u[`uGlowLevel${i}`].value = level; });
-    u.uGlowWeights.value = bloomWeights(amount, number(layer, 'glowSize', .5));
+    bloomChannelWeights(amount, number(layer, 'glowSize', .5), number(layer, 'glowSpread', 0)).forEach((c, i) => (u.uGlowChannels.value[i] as THREE.Vector3).set(c[0], c[1], c[2]));
+    // Streaks stretch the same bright light; the thin flare also runs across, at right angles.
+    if (number(layer, 'glowStreak', 0) > 0) {
+      const flare = Math.round(number(layer, 'glowStreakShape', 0)) >= 1;
+      u.uGlowStreakMap.value = streak.render(bright.texture, width, height, number(layer, 'glowStreakAngle', 0), flare, (m, t) => this.draw(m, t), this.tiling, flare);
+    } else u.uGlowStreakMap.value = this.fallback;
     const tint = Math.round(number(layer, 'glowTint', 0));
     if (tint >= 1) (u.uGlowColour.value as THREE.Color).set(layer.palette[tint - 1] ?? DEFAULT_PALETTE[tint - 1]);
   }
@@ -1236,7 +1241,7 @@ export class StudioRenderer {
     for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
     this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
     this.feedbackStates.clear();
-    this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow = null; this.glowBright.dispose();
+    this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow?.streak.dispose(); this.glow = null; this.glowBright.dispose();
     this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.graphics.dispose(); this.instruments.dispose();

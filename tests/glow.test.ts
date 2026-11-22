@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PRESETS, applyFinish, applyPreset, createLayer, createProject, finishSupported, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { GLOW_KEYS } from '../src/core/finishing';
-import { bloomLevelSize, bloomWeights, glowActive, supportsGlow } from '../src/rendering/bloom';
+import { bloomChannelWeights, bloomLevelSize, bloomWeights, glowActive, supportsGlow } from '../src/rendering/bloom';
 
 test('glow is off by default and older projects migrate without it', () => {
   const project = createProject();
@@ -89,4 +89,12 @@ test('variations never switch glow on, and keep an authored glow near where it w
     assert.ok(Math.abs(varied.params.glowThreshold - .8) <= .1201, `threshold ${varied.params.glowThreshold}`);
     assert.ok(Math.abs(varied.params.glowSize - .2) <= .1201, `size ${varied.params.glowSize}`);
   }
+});
+
+test('colour spread is neutral at zero and moves red tighter and blue wider', () => {
+  const plain = bloomWeights(1, .5);
+  bloomChannelWeights(1, .5, 0).forEach((level, i) => assert.deepEqual(level, [plain[i], plain[i], plain[i]]));
+  const spread = bloomChannelWeights(1, .5, 1);
+  assert.ok(spread[0][0] > spread[0][2], 'red favours the tight level');
+  assert.ok(spread[4][2] > spread[4][0], 'blue favours the wide level');
 });
