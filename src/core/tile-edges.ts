@@ -2,6 +2,7 @@ import type { Layer, Project } from '../shared/types';
 import { feedbackActive } from '../rendering/feedback';
 import { printActive } from '../rendering/print-screen';
 import { slitActive } from '../rendering/slitscan';
+import { warpActive } from '../rendering/warp';
 import { parameterDefinitions } from './project';
 import { sourceViewMatrix } from '../rendering/source-view';
 
@@ -26,6 +27,7 @@ export function layerTileBlocker(layer: Layer): string | null {
   if (feedbackActive(layer)) return `${n}: Feedback can't tile.`;
   if (slitActive(layer)) return `${n}: Time displacement can't tile.`;
   if (printActive(layer)) return `${n}: Print screen can't tile.`;
+  if (warpActive(layer)) return `${n}: Warp can't tile.`;
   return null;
 }
 

@@ -2,15 +2,16 @@
  * The Finish list: which effects a layer can take, whether each is doing anything, what its row says, and how its
  * switch turns it off and back on without losing the settings. Pure, so the rules are tested apart from the panel.
  */
-import { FEEDBACK_KEYS, GLOW_KEYS, GRADE_KEYS, GRADIENT_KEYS, KEY_KEYS, PRINT_KEYS, SLIT_KEYS, SPLIT_KEYS, TOON_KEYS } from '../core/finishing';
+import { FEEDBACK_KEYS, GLOW_KEYS, GRADE_KEYS, GRADIENT_KEYS, KEY_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, PRINT_KEYS, SLIT_KEYS, SPLIT_KEYS, TOON_KEYS, WARP_KEYS } from '../core/finishing';
 import { supportsGlow } from '../rendering/bloom';
 import { GRADIENT_PALETTES, supportsLens } from '../rendering/colour-lens';
 import { supportsFeedback } from '../rendering/feedback';
 import { supportsPrint } from '../rendering/print-screen';
 import { SLIT_MODES, supportsSlitScan } from '../rendering/slitscan';
+import { LIQUID_STYLES, LUMA_SOURCES, MIRROR_MODES, POLAR_MODES, WARP_FIELDS, supportsWarp } from '../rendering/warp';
 import type { Layer, ParameterDefinition } from '../shared/types';
 
-export const FINISH_GROUPS = ['Colour', 'Light', 'Surface', 'Time'] as const;
+export const FINISH_GROUPS = ['Colour', 'Light', 'Warp', 'Surface', 'Time'] as const;
 export type FinishGroup = typeof FINISH_GROUPS[number];
 
 export interface FinishEffect {
@@ -37,6 +38,11 @@ export const FINISH_EFFECTS: FinishEffect[] = [
   { id: 'key', label: 'Key', group: 'Colour', description: 'Cuts the layer out by brightness or colour.', keys: KEY_KEYS, power: { keyMix: 1 }, supported: supportsLens, summary: p => Math.round(p.keyMode ?? 0) === 1 ? 'Hue' : 'Brightness' },
   { id: 'glow', label: 'Glow', group: 'Light', description: 'Bright areas spill soft light. Loops close exactly; adds a few blur passes per glowing layer.', keys: GLOW_KEYS, power: { glowMix: .8 }, supported: supportsGlow, summary: p => percent(p.glowMix ?? 0) },
   { id: 'split', label: 'Colour split', group: 'Light', description: 'Pulls colour apart along edges, lenses or waves. Loops close exactly.', keys: SPLIT_KEYS, power: { splitAmount: 8, splitOrder: 0 }, supported: supportsLens, summary: p => (p.splitAmount ?? 0) > 0 ? `${Number((p.splitAmount ?? 0).toFixed(1))} px` : 'Channels' },
+  { id: 'warp', label: 'Warp', group: 'Warp', description: 'Bends the picture with waves, noise, ripples, magnets or plasma.', keys: WARP_KEYS, power: { bendAmount: .15 }, supported: supportsWarp, summary: p => WARP_FIELDS[Math.round(p.bendField ?? 0)] ?? '' },
+  { id: 'liquid', label: 'Liquid', group: 'Warp', description: 'Swirls and melts the picture along flowing currents.', keys: LIQUID_KEYS, power: { liquidAmount: .25 }, supported: supportsWarp, summary: p => LIQUID_STYLES[Math.round(p.liquidStyle ?? 0)] ?? '' },
+  { id: 'lumaWarp', label: 'Luma Warp', group: 'Warp', description: 'Melts the picture along its own light, or along the layer below.', keys: LUMA_WARP_KEYS, power: { lumaWarpAmount: .15 }, supported: supportsWarp, summary: p => LUMA_SOURCES[Math.round(p.lumaWarpSource ?? 0)] ?? '' },
+  { id: 'polar', label: 'Polar', group: 'Warp', description: 'Wraps the picture into a circle, or unrolls a circle into a strip.', keys: POLAR_KEYS, power: { polarAmount: 1 }, supported: supportsWarp, summary: p => POLAR_MODES[Math.round(p.polarMode ?? 0)] ?? '' },
+  { id: 'mirror', label: 'Mirror', group: 'Warp', description: 'Reflects the picture into symmetrical halves, quarters or wedges.', keys: MIRROR_KEYS, power: { mirrorAmount: 1 }, supported: supportsWarp, summary: p => MIRROR_MODES[Math.round(p.mirrorMode ?? 0)] ?? '' },
   { id: 'print', label: 'Print screen', group: 'Surface', description: 'Halftone dots, line screens and ordered dither, sized in pixels of a 1080-line frame. Loops close exactly.', keys: PRINT_KEYS, power: { printMix: 1 }, supported: supportsPrint, summary: p => ['Dots', 'Lines', 'Dither'][Math.round(p.printType ?? 0)] ?? '' },
   { id: 'flat', label: 'Flat colour & outlines', group: 'Surface', description: "Hard palette bands and contour lines. For the cleanest edges, lower the source's Relief and Softness.", keys: TOON_KEYS, power: { toonMix: 1 }, supported: always, summary: p => `${Math.round(p.toonBands ?? 5)} bands` },
   { id: 'time', label: 'Time displacement', group: 'Time', description: 'Parts of the frame show other moments of the loop. Loops close exactly; each slice renders the source once more.', keys: SLIT_KEYS, power: { slitShift: 1 }, supported: supportsSlitScan, summary: p => SLIT_MODES[Math.round(p.slitMode ?? 0)] ?? '' },

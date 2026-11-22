@@ -174,6 +174,66 @@ export const KEY_PARAMETERS:ParameterDefinition[]=[
  {key:'keyHueRange',label:'Hue range',min:1,max:180,step:1,default:40,section:'Material',description:'How far either side of the key hue is kept, in degrees.'},
  {key:'keyInvert',label:'Invert key',min:0,max:1,step:1,default:0,section:'Material',description:'Off keeps the range; on removes it instead.'},
 ];
+/**
+ * Warp: waves, noise, ripples, magnets or plasma bend the picture. Off by default (Warp amount 0).
+ */
+export const WARP_PARAMETERS:ParameterDefinition[]=[
+ {key:'bendAmount',label:'Warp amount',min:0,max:1,step:0.005,default:0,section:'Material',description:'How far the picture is bent, as a share of the frame height. 0 is off.'},
+ {key:'bendField',label:'Warp type',min:0,max:4,step:1,default:0,section:'Shape',description:'Waves, Noise, Ripple, Magnetic or Plasma.'},
+ {key:'bendScale',label:'Warp scale',min:0.25,max:12,step:0.01,default:3,section:'Shape',description:'How many bends fit across the frame.'},
+ {key:'bendAngle',label:'Warp angle',min:-180,max:180,step:1,default:0,section:'Shape',description:'Direction of the bends, in degrees.'},
+ {key:'bendCycles',label:'Warp cycles per loop',min:-8,max:8,step:1,default:1,section:'Motion',description:'Whole cycles the bends travel per loop; the loop closes exactly.'},
+ {key:'bendDetail',label:'Warp detail',min:1,max:5,step:1,default:3,section:'Shape',description:'Layers of finer bends added on top.'},
+ {key:'bendPoints',label:'Warp points',min:1,max:8,step:1,default:3,section:'Shape',description:'How many magnets pull and push in Magnetic.'},
+ {key:'bendFalloff',label:'Warp falloff',min:0,max:1,step:0.01,default:0.5,section:'Shape',description:'How quickly a magnet fades with distance.'},
+ {key:'bendChroma',label:'Warp colour fringe',min:0,max:1,step:0.01,default:0,section:'Material',description:'Bends red and blue by different amounts, so edges grow colour fringes.'},
+];
+/**
+ * Liquid: the picture is swirled and melted along flowing currents. Off by default (Liquid amount 0).
+ */
+export const LIQUID_PARAMETERS:ParameterDefinition[]=[
+ {key:'liquidAmount',label:'Liquid amount',min:0,max:1,step:0.005,default:0,section:'Material',description:'How far the picture is pushed along the currents. 0 is off.'},
+ {key:'liquidStyle',label:'Liquid style',min:0,max:4,step:1,default:0,section:'Shape',description:'Swirl, Flow, Ridge, Vortex or Chaos.'},
+ {key:'liquidScale',label:'Liquid scale',min:0.25,max:8,step:0.01,default:2,section:'Shape',description:'Size of the currents.'},
+ {key:'liquidSteps',label:'Flow steps',min:1,max:16,step:1,default:6,section:'Shape',description:'How many steps the picture follows the currents. More is smoother and slower.'},
+ {key:'liquidDetail',label:'Liquid detail',min:1,max:5,step:1,default:3,section:'Shape',description:'Layers of finer currents added on top.'},
+ {key:'liquidCycles',label:'Liquid cycles per loop',min:-4,max:4,step:1,default:1,section:'Motion',description:'Whole cycles the currents turn per loop; the loop closes exactly.'},
+ {key:'liquidTrail',label:'Liquid trail',min:0,max:1,step:0.01,default:0,section:'Material',description:'Leaves a faint smear behind the flow.'},
+ {key:'liquidChroma',label:'Liquid colour fringe',min:0,max:1,step:0.01,default:0,section:'Material',description:'Flows red and blue by different amounts, so edges grow colour fringes.'},
+];
+/**
+ * Luma Warp: the picture is pushed along its own light, or the layer below. Off by default (Luma warp amount 0).
+ */
+export const LUMA_WARP_PARAMETERS:ParameterDefinition[]=[
+ {key:'lumaWarpAmount',label:'Luma warp amount',min:0,max:1,step:0.005,default:0,section:'Material',description:'How far the picture is pushed by light and dark. 0 is off.'},
+ {key:'lumaWarpSource',label:'Driven by',min:0,max:1,step:1,default:0,section:'Shape',description:'This layer, or the layer below it.'},
+ {key:'lumaWarpChannel',label:'Read from',min:0,max:4,step:1,default:0,section:'Shape',description:'Brightness, red, green, blue or saturation.'},
+ {key:'lumaWarpMode',label:'Luma direction',min:0,max:2,step:1,default:0,section:'Shape',description:'Push along an angle, along edges or along contours.'},
+ {key:'lumaWarpAngle',label:'Luma angle',min:-180,max:180,step:1,default:90,section:'Shape',description:'Direction of the push, in degrees.'},
+ {key:'lumaWarpThreshold',label:'Luma threshold',min:0,max:1,step:0.01,default:0,section:'Material',description:'Tones below this are left alone.'},
+ {key:'lumaWarpSoft',label:'Luma softness',min:0,max:1,step:0.01,default:0.2,section:'Material',description:'Softens the start of the push.'},
+ {key:'lumaWarpChroma',label:'Luma colour fringe',min:0,max:1,step:0.01,default:0,section:'Material',description:'Pushes red and blue by different amounts, so edges grow colour fringes.'},
+];
+/**
+ * Polar: wraps the picture into a circle or unrolls a circle. Off by default (Polar amount 0).
+ */
+export const POLAR_PARAMETERS:ParameterDefinition[]=[
+ {key:'polarAmount',label:'Polar amount',min:0,max:1,step:0.005,default:0,section:'Material',description:'How far the picture is wrapped. 0 is off.'},
+ {key:'polarMode',label:'Polar type',min:0,max:1,step:1,default:0,section:'Shape',description:'Wraps the picture into a circle, or unrolls a circle into a strip.'},
+ {key:'polarCentreX',label:'Polar centre X',min:-0.5,max:0.5,step:0.005,default:0,section:'Shape',description:'Horizontal position of the centre, as a share of the frame height.'},
+ {key:'polarCentreY',label:'Polar centre Y',min:-0.5,max:0.5,step:0.005,default:0,section:'Shape',description:'Vertical position of the centre.'},
+ {key:'polarTwist',label:'Polar twist',min:-4,max:4,step:0.01,default:0,section:'Shape',description:'Turns the picture further around the centre the further out it is.'},
+];
+/**
+ * Mirror: reflects the picture into halves, quarters or wedges. Off by default (Mirror amount 0).
+ */
+export const MIRROR_PARAMETERS:ParameterDefinition[]=[
+ {key:'mirrorAmount',label:'Mirror amount',min:0,max:1,step:0.01,default:0,section:'Material',description:'How much of the mirrored picture shows. 0 is off.'},
+ {key:'mirrorMode',label:'Mirror type',min:0,max:3,step:1,default:0,section:'Shape',description:'Left-right, top-bottom, four-way or kaleidoscope.'},
+ {key:'mirrorSegments',label:'Mirror segments',min:2,max:16,step:1,default:6,section:'Shape',description:'Wedges in the kaleidoscope.'},
+ {key:'mirrorAngle',label:'Mirror angle',min:-180,max:180,step:1,default:0,section:'Shape',description:'Turns the mirror lines, in degrees.'},
+ {key:'mirrorTurns',label:'Mirror turns per loop',min:-8,max:8,step:1,default:0,section:'Motion',description:'Whole turns the mirror makes per loop; the loop closes exactly.'},
+];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[
  {key:'toneContrast',label:'Tonal contrast',min:.5,max:2,step:.01,default:1,section:'Material',description:'Luminance contrast around the pivot, preserving colour ratios.'},
  {key:'tonePivot',label:'Contrast pivot',min:.05,max:.75,step:.01,default:.18,section:'Material',description:'Anchor for Tonal contrast. Neutral contrast leaves the pivot inactive.'},
@@ -190,6 +250,11 @@ export const FINISH_PARAMETERS:ParameterDefinition[]=[
  ...GRADIENT_PARAMETERS,
  ...GRADE_PARAMETERS,
  ...KEY_PARAMETERS,
+ ...WARP_PARAMETERS,
+ ...LIQUID_PARAMETERS,
+ ...LUMA_WARP_PARAMETERS,
+ ...POLAR_PARAMETERS,
+ ...MIRROR_PARAMETERS,
 ];
 export const FINISH_KEYS=FINISH_PARAMETERS.map(p=>p.key);
 export const TOON_KEYS=TOON_PARAMETERS.map(p=>p.key);
@@ -201,3 +266,8 @@ export const SPLIT_KEYS=SPLIT_PARAMETERS.map(p=>p.key);
 export const GRADIENT_KEYS=GRADIENT_PARAMETERS.map(p=>p.key);
 export const GRADE_KEYS=GRADE_PARAMETERS.map(p=>p.key);
 export const KEY_KEYS=KEY_PARAMETERS.map(p=>p.key);
+export const WARP_KEYS=WARP_PARAMETERS.map(p=>p.key);
+export const LIQUID_KEYS=LIQUID_PARAMETERS.map(p=>p.key);
+export const LUMA_WARP_KEYS=LUMA_WARP_PARAMETERS.map(p=>p.key);
+export const POLAR_KEYS=POLAR_PARAMETERS.map(p=>p.key);
+export const MIRROR_KEYS=MIRROR_PARAMETERS.map(p=>p.key);
