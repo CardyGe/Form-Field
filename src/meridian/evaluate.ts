@@ -59,6 +59,8 @@ const COLLAPSE_FOLD = COLLAPSE_STYLES.indexOf('fold');
 const COLLAPSE_IMPLODE = COLLAPSE_STYLES.indexOf('implode');
 const COLLAPSE_VORTEX = COLLAPSE_STYLES.indexOf('vortex');
 const COLLAPSE_IRIS = COLLAPSE_STYLES.indexOf('iris');
+const BEAT_EPSILON = 1e-9; // Keeps a clock sitting on a whole beat from reading as the end of the one before.
+const LIFE_FADE = 0.35; // Share of Collapse over which the pings and the arm die away.
 const RATCHET_NOTCHES = 6; // Clicks to turn one symmetric sector.
 const RATCHET_EASE = 0.28; // Share of a beat each click takes.
 const CHARGE_SQUEEZE = 2.6; // How much harder a composed form contracts in Charge.
@@ -84,7 +86,7 @@ const frame = {
   heroPlace: 0.5, heroContract: 0, heroKick: 0, heroHalo: 1, heroFill: 0, heroPulse: 0, heroSplit: 0,
   accent: ACCENT_AS_COMPOSED, byAge: 0,
   alive: false, axis: AXIS, outer: 0.46, square: 0, negative: 0.5, travel: 0, centreX: 0, centreY: 0, twinX: 0, twinY: 0,
-  ratchet: 0, collapse: 0, foldCos: 1, foldSin: 0, bandLight: BAND_REST, bandSnap: 0, wave: 0, wavePlace: 0, life: 0,
+  ratchet: 0, rotation: 1, hasSpokes: false, collapse: 0, foldCos: 1, foldSin: 0, bandLight: BAND_REST, bandSnap: 0, wave: 0, wavePlace: 0, life: 0,
 };
 
 /** Maps a phrase clock in beats to its state. A bad clock reads as the start of the phrase. */
@@ -194,7 +196,8 @@ function prepareFrame(score: Score, position: PhrasePosition, perf: PerformanceS
   frame.alive = score.form !== undefined;
   frame.axis = AXIS + form.turn;
   frame.outer = form.outer;
-  frame.square = clamp(form.square + setting(params.structureSquareMix, 0, 0, 1), 0, 1);
+  // The slider travels from the composed shape to its opposite, so it has its full range on a square composition too.
+  frame.square = form.square + setting(params.structureSquareMix, 0, 0, 1) * ((form.square >= 0.5 ? 0 : 1) - form.square);
   frame.negative = setting(params.structureNegativeSpace, 0.5, 0, 1);
   // The system leaves the opening point for its place in the frame, and is back on it by the end of Collapse.
   frame.travel = smooth(within(progress, frame.seedEnd, drawEnd)) * (1 - smooth(within(progress, peakEnd, collapseEnd)));
@@ -203,8 +206,18 @@ function prepareFrame(score: Score, position: PhrasePosition, perf: PerformanceS
   frame.twinX = form.twinX;
   frame.twinY = form.twinY;
   // From the end of Draw the machine clicks round one notch a beat, each zone against its neighbour.
-  const clicks = Math.max(0, (Math.min(progress, peakEnd) - drawEnd) * score.bars * DEFAULT_BEATS_PER_BAR);
-  frame.ratchet = frame.alive ? (Math.floor(clicks) + smooth((clicks - Math.floor(clicks)) / RATCHET_EASE)) * TAU / (Math.max(1, score.symmetry) * RATCHET_NOTCHES) : 0;
+  frame.rotation = setting(params.ringRotationSpeed, 1, -4, 4);
+  const phraseBeats = setting(position.progress, 0, 0, 1) > 0 && beat > 0 ? Math.round(beat / position.progress) : score.bars * DEFAULT_BEATS_PER_BAR;
+  // Held or forced, the phrase clock stands where the performer put it rather than where the beat has run on to.
+  const clock = perf.forcedState === null && !perf.hold ? beat : progress * phraseBeats;
+  const machine = Math.min(clock, peakEnd * phraseBeats) + BEAT_EPSILON;
+  const wholeBeat = Math.floor(machine);
+  const firstClick = Math.ceil(drawEnd * phraseBeats - BEAT_EPSILON);
+  const clicks = wholeBeat >= firstClick ? wholeBeat - firstClick + smooth((machine - wholeBeat) / RATCHET_EASE) : 0;
+  frame.ratchet = frame.alive ? frame.rotation * clicks * TAU / (Math.max(1, score.symmetry) * RATCHET_NOTCHES) : 0;
+  // The bands step on each whole beat of the Peak, and keep the last step while they fall.
+  const firstStep = Math.ceil(chargeEnd * phraseBeats - BEAT_EPSILON);
+  frame.bandSnap = wholeBeat >= firstStep ? frame.rotation * (wholeBeat - firstStep + 1) * Math.PI / Math.max(1, score.symmetry) : 0;
   frame.collapse = COLLAPSE_STYLES.indexOf(form.collapse);
   frame.foldCos = Math.cos(form.collapseAngle);
   frame.foldSin = Math.sin(form.collapseAngle);
@@ -274,8 +287,6 @@ function prepareFrame(score: Score, position: PhrasePosition, perf: PerformanceS
   const beatPart = beat - Math.floor(beat);
   const peakLit = peakShare > 0 ? 1 - within(progress, peakEnd, collapseEnd) : 0;
   frame.bandLight = BAND_REST + (BAND_CHARGE - BAND_REST) * chargeShare + (1 - BAND_CHARGE) * frame.ignite * 2 * (0.82 + 0.18 * frame.pulse * frame.pulse) * peakLit;
-  // In the Peak the bands step round by half a sector on every beat.
-  frame.bandSnap = peakShare > 0 && peakShare < 1 ? Math.floor(beat) * Math.PI / frame.symmetry : 0;
   frame.wave = peakLit * WAVE_DEPTH;
   frame.wavePlace = beatPart * 1.3;
   frame.life = clamp(0.3 * smooth(within(progress, frame.seedEnd, drawEnd)) + 0.3 * buildShare + 0.4 * peakLit, 0, 1);
@@ -385,12 +396,14 @@ function drawCurve(out: DisplayList, radius: number, start: number, sweep: numbe
     return;
   }
   const steps = Math.max(2, Math.ceil(((width < 0 ? BAND_STEPS : CURVE_STEPS) * shown) / TAU));
-  mapPoint(Math.cos(start) * radius, Math.sin(start) * radius);
+  const from = radius + wobble * Math.sin(start * WOBBLE_LOBES + seed * TAU);
+  mapPoint(Math.cos(start) * from, Math.sin(start) * from);
   let x = point.x;
   let y = point.y;
   for (let step = 1; step <= steps; step++) {
     const angle = start + (shown * step) / steps;
-    mapPoint(Math.cos(angle) * radius, Math.sin(angle) * radius);
+    const at = radius + wobble * Math.sin(angle * WOBBLE_LOBES + seed * TAU);
+    mapPoint(Math.cos(angle) * at, Math.sin(angle) * at);
     // p2 = 1 marks a link in a chain: it has no end caps, so joints do not add up into beads.
     out.push(PRIMITIVE.segment, x, y, point.x, point.y, 1, width, glow, colour, alpha, tear, seed);
     x = point.x;
@@ -417,7 +430,7 @@ function drawHero(out: DisplayList, element: ScoreElement, radius: number, grow:
   const beat = 1 + 0.45 * frame.heroPulse;
   const width = -element.weight * frame.heroWeight * (1 + 0.5 * frame.ignite) * beat / REFERENCE_HEIGHT;
   const glow = frame.heroGlow * frame.heroHalo * (0.25 + 1.75 * frame.ignite) * beat;
-  if (frame.heroFill > 0 && fold.plain && frame.square <= 0) out.push(PRIMITIVE.fill, origin.x, origin.y, at * fold.scale, 0, 0, 0, glow * 0.3, element.colour, fade * frame.heroFill * HERO_FILL * (0.3 + frame.ignite), 0, seed);
+  if (frame.heroFill > 0 && fold.plain) out.push(PRIMITIVE.fill, origin.x, origin.y, at * fold.scale, 0, 0, 0, glow * 0.3, element.colour, fade * frame.heroFill * HERO_FILL * (0.3 + frame.ignite), 0, seed);
   if (frame.heroSplit > 0) {
     const apart = frame.heroSplit * (0.25 + 0.75 * frame.ignite);
     drawCurve(out, at * (1 + apart), element.angle, TAU * grow, width * 0.62, glow * 0.6, element.colour, fade, tear, seed);
@@ -474,7 +487,7 @@ function drawHub(out: DisplayList, element: ScoreElement, index: number): void {
   setOrigin(false);
   out.push(PRIMITIVE.dot, origin.x, origin.y, POINT_RADIUS, 0, 0, 0, POINT_GLOW, element.colour, alpha, 0, seed);
   const open = smooth(within(progress, frame.seedEnd, frame.drawEnd)) * (1 - within(progress, frame.peakEnd, frame.collapseEnd));
-  if (open > 0) out.push(PRIMITIVE.ring, origin.x, origin.y, element.radius * open * frame.breath, 0, 0, element.weight * frame.ringWeight, LINE_GLOW, element.colour, open, frame.tear, seed);
+  if (open > 0) out.push(PRIMITIVE.ring, origin.x, origin.y, element.radius * open * frame.breath, 0, 0, element.weight * frame.ringWeight, LINE_GLOW, element.colour, open * frame.ringAlpha, frame.tear, seed);
 }
 
 /** Negative space: below the middle the reserve marks come in; above it, symmetric wedges of the design clear. */
@@ -591,8 +604,9 @@ function drawElement(out: DisplayList, element: ScoreElement, index: number): vo
 
 /** What keeps a composed form moving between its hits: rings leaving the centre and an arm sweeping the structure. */
 function drawLife(out: DisplayList): void {
-  const life = frame.life;
-  if (!frame.alive || life <= 0 || frame.progress <= frame.seedEnd || frame.progress >= frame.peakEnd) return;
+  const dying = 1 - smooth(within(frame.progress, frame.peakEnd, frame.peakEnd + (frame.collapseEnd - frame.peakEnd) * LIFE_FADE));
+  const life = frame.life * dying;
+  if (!frame.alive || life <= 0 || frame.progress <= frame.seedEnd) return;
   setFold(0, 0);
   setOrigin(false);
   const reach = frame.outer * 1.2;
@@ -600,17 +614,18 @@ function drawLife(out: DisplayList): void {
   for (let k = 0; k < PINGS; k++) {
     const part = beats + k / PINGS;
     const age = part - Math.floor(part);
-    const alpha = (1 - age) * (1 - age) * life * 0.7;
-    if (alpha > 0.01) drawCurve(out, reach * Math.sqrt(age), frame.axis, TAU, 1.6, 0.28, 1, alpha, frame.tear, 0);
+    const alpha = (1 - age) * (1 - age) * life * 0.7 * frame.ringAlpha;
+    if (frame.rings > 0 && alpha > 0.01) drawCurve(out, reach * Math.sqrt(age), frame.axis, TAU, 1.6, 0.28, 1, alpha, frame.tear, 0);
   }
-  const arm = frame.axis + frame.beat * TAU / 8;
+  if (!frame.hasSpokes || frame.spokeAlpha <= 0) return;
+  const arm = frame.axis + frame.rotation * frame.beat * TAU / 8;
   for (let k = 0; k < ARM_TRAIL; k++) {
     const angle = arm - k * ARM_STEP;
     mapPoint(Math.cos(angle) * HUB_REACH, Math.sin(angle) * HUB_REACH);
     const x = point.x;
     const y = point.y;
     mapPoint(Math.cos(angle) * reach, Math.sin(angle) * reach);
-    out.push(PRIMITIVE.segment, x, y, point.x, point.y, 0, k === 0 ? 2 : 1, k === 0 ? 0.5 : 0.1, 2, life * (1 - k / ARM_TRAIL) * (1 - k / ARM_TRAIL) * 0.85, frame.tear, 0);
+    out.push(PRIMITIVE.segment, x, y, point.x, point.y, 0, k === 0 ? 2 : 1, k === 0 ? 0.5 : 0.1, 2, life * frame.spokeAlpha * (1 - k / ARM_TRAIL) * (1 - k / ARM_TRAIL) * 0.85, frame.tear, 0);
   }
 }
 
@@ -624,8 +639,10 @@ export function evaluate(score: Score, position: PhrasePosition, perf: Performan
   prepareFrame(score, position, perf, params);
   const elements = score.elements;
   frame.rings = 0;
-  for (let i = 0; i < elements.length && frame.rings < MAX_RINGS; i++) {
-    if (elements[i].group === 'ring') ringRadii[frame.rings++] = elements[i].radius;
+  frame.hasSpokes = false;
+  for (let i = 0; i < elements.length; i++) {
+    if (elements[i].group === 'spoke') frame.hasSpokes = true;
+    else if (elements[i].group === 'ring' && frame.rings < MAX_RINGS) ringRadii[frame.rings++] = elements[i].radius;
   }
   for (let pass = 0; pass < 3; pass++) {
     for (let i = 0; i < elements.length; i++) {

@@ -173,6 +173,8 @@ export class StudioRenderer {
   private scope: ScopeRenderer | null = null;
   private meridian: MeridianRenderer | null = null;
   private readonly meridianRuntime: MeridianRuntime = {};
+  /** One Mark record, rewritten in place, so a Mark costs no allocation per frame. */
+  private meridianMark: NonNullable<MeridianRuntime['mark']> | null = null;
   private readonly drawPass = (material: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget) => this.draw(material, output);
   /** Reduced-size stand-ins for `source` while the preview draws time slices. */
   private sliceSource: THREE.WebGLRenderTarget | null = null;
@@ -738,7 +740,11 @@ export class StudioRenderer {
       this.meridian ??= new MeridianRenderer();
       this.meridianRuntime.structure = original.params;
       const mark = layer.meridian?.mark, markAsset = mark ? this.assets.get(this.assetKey(mark.dataUrl, false)) : undefined;
-      this.meridianRuntime.mark = mark && markAsset?.texture.image ? { texture: markAsset.texture, width: mark.width, height: mark.height } : null;
+      if (mark && markAsset?.texture.image) {
+        const held = this.meridianMark ??= { texture: markAsset.texture, width: mark.width, height: mark.height };
+        held.texture = markAsset.texture; held.width = mark.width; held.height = mark.height;
+        this.meridianRuntime.mark = held;
+      } else this.meridianRuntime.mark = null;
       this.meridian.draw(this.renderer, layer, phase, this.width, this.height, this.source, this.drawPass, this.meridianRuntime);
     } else {
       const u = this.sculptureUniforms;

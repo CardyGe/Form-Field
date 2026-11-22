@@ -52,7 +52,7 @@ const STRUCTURE: Row[] = [
   ['structureRotation', 'Rotation', -180, 180, 0.1, 0, 'Turns the whole design, in degrees.'],
   ['structureZoom', 'Zoom', 0.5, 2, 0.01, 1, 'Makes the whole design larger or smaller in the frame.'],
   ['structureTilt', 'Perspective tilt', 0, 1, 0.01, 0, 'Leans the design away from you as if it were a disc seen at an angle.'],
-  ['structureSquareMix', 'Polar / square mix', 0, 1, 0.01, 0, 'Bends the rings and everything on them from circles towards squares.'],
+  ['structureSquareMix', 'Polar / square mix', 0, 1, 0.01, 0, 'Bends circles towards squares. On a design composed square, it bends them back towards circles.'],
   ['structureNegativeSpace', 'Negative space', 0, 1, 0.01, 0.5, 'Below the middle, quiet bands fill with marks. Above it, empty wedges open through the design.'],
 ];
 const RINGS: Row[] = [

@@ -330,8 +330,8 @@ try {
       return profile(lineWidth).total / solid.peak;
     };
     // Whether moving a parameter from its default to either end changes any pixel, at the moments it can act.
-    const sweep = (groups, needs, skips) => {
-      const w = 320, h = 180, target = floatTarget(w, h), seed = 4, score = m.compose(seed, m.MERIDIAN_DEFAULTS);
+    const sweep = (groups, needs, skips, seed = 4) => {
+      const w = 320, h = 180, target = floatTarget(w, h), score = m.compose(seed, m.MERIDIAN_DEFAULTS);
       const firstRing = score.elements.filter(e => e.group === 'ring').reduce((a, b) => (b.enter < a ? b.enter : a), 1);
       const phases = [Math.PI * 2 * (firstRing + .016), phaseOf(seed, 1, .75), phaseOf(seed, 2, .85), phaseOf(seed, 4, .06), phaseOf(seed, 4, .4), phaseOf(seed, 5, .5)];
       const shot = (params, phase) => {
@@ -490,6 +490,21 @@ try {
   const report = { luma: {}, widths: {}, errors };
   // Collected so a failing run still saves the pictures that show why.
   const failures = [];
+  // Before anything else has drawn, because a driver warmed by earlier frames hides this: the first time each frame is
+  // drawn in a fresh GL context must match the same frame drawn later, byte for byte.
+  report.firstFrame = await page.evaluate(async () => {
+    const { m, layerFor, phaseOf } = window.meridianQA, mismatches = [];
+    for (const seed of [4, 7, 1729]) {
+      const engine = new m.StudioRenderer(document.createElement('canvas')), shots = [[6, .6], [4, .4], [2, .9], [5, .3]].map(([i, s]) => phaseOf(seed, i, s));
+      const shot = phase => { const project = m.createProject(); project.layers = [layerFor(seed)]; project.background = '#000000'; return engine.exportPNG(project, phase, 320, 180); };
+      const first = []; for (const phase of shots) first.push(await shot(phase));
+      for (let i = 0; i < shots.length; i++) { const later = await shot(shots[i]); if (later.length !== first[i].length || later.some((v, k) => v !== first[i][k])) mismatches.push(`${seed}:${i}`); }
+      engine.dispose();
+    }
+    return mismatches;
+  });
+  // Reported, not failed: identical WebGL input gives run-to-run differences here, so the cause is below the app (see the Task 8 report).
+  if (report.firstFrame.length) console.log(`first frames that differ from a later render: ${report.firstFrame.join(', ')}`);
   await page.evaluate(([seed, index, share]) => window.meridianQA.measure(seed, index, share), [1, ...STATES.peak]);
   assert.deepEqual(errors, [], 'the shaders must compile');
   const STILL = [640, 360];
@@ -543,6 +558,10 @@ try {
   const total = await page.evaluate(() => window.meridianQA.m.MERIDIAN_PARAMETERS.length);
   if (swept.swept + Object.keys(SWEEP_SKIPS).length !== total) failures.push(`the dead-parameter check covers ${swept.swept + Object.keys(SWEEP_SKIPS).length} of ${total} parameters`);
   if (swept.dead.length) failures.push(`parameters that change no pixels: ${swept.dead.join(', ')}`);
+  // Seed 15 is a cathedral: a composed-square form, which seeds 1 to 6 never reach. It has dot nodes and room for its ratio to move.
+  const sweptSquare = await page.evaluate(([groups, needs, skips]) => window.meridianQA.sweep(groups, needs, skips, 15), [SWEPT_GROUPS, SWEEP_NEEDS, SWEEP_SKIPS]);
+  report.sweep.squareDead = sweptSquare.dead;
+  if (sweptSquare.dead.length) failures.push(`on a square composition, parameters that change no pixels: ${sweptSquare.dead.join(', ')}`);
 
   const tear = await page.evaluate(() => window.meridianQA.tearChecks());
   report.tear = { peakMin: +Math.min(...tear.peak).toFixed(3), restMax: Math.max(...tear.rest), repeat37: tear.repeat37, repeatPeak: tear.repeatPeak, loops: tear.loops };
@@ -621,13 +640,33 @@ try {
     };
     const apart = (a, b) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum / a.length; };
     const rest = phaseOf(4, 6, .6), peak = phaseOf(4, 4, .4);
-    return { rest: apart(await frame(true, rest), await frame(false, rest)), peak: apart(await frame(true, peak), await frame(false, peak)) };
+    // The Mark sits on the point however the layer and the design are placed.
+    const placements = [{ x: .2, y: -.15, scale: .6, rotation: .7 }, { x: -.25, y: .1, scale: 1.3, rotation: -.4 }];
+    const offCentre = [];
+    for (const transform of placements) {
+      const shot = async withMark => {
+        const project = m.createProject(), layer = layerFor(4);
+        layer.transform = { ...transform };
+        Object.assign(layer.params, { structureZoom: 1.3, structureRotation: 25, structureCentreX: .08, structureCentreY: -.05 });
+        if (withMark) layer.meridian = { locks: [], mark };
+        project.layers = [layer]; project.background = '#000000';
+        const bitmap = await createImageBitmap(new Blob([await studio.exportPNG(project, rest, 640, 360)], { type: 'image/png' }));
+        const c = new OffscreenCanvas(640, 360), context = c.getContext('2d'); context.drawImage(bitmap, 0, 0);
+        return context.getImageData(0, 0, 640, 360).data;
+      };
+      const plain = await shot(false), marked = await shot(true);
+      const centroid = weight => { let sum = 0, x = 0, y = 0; for (let i = 0; i < plain.length; i += 4) { const v = weight(i); if (v > 0) { sum += v; x += v * (i / 4 % 640); y += v * Math.floor(i / 4 / 640); } } return [x / sum, y / sum]; };
+      const point = centroid(i => plain[i + 1] > 40 ? plain[i + 1] : 0), shown = centroid(i => Math.abs(marked[i] - plain[i]) > 40 ? 1 : 0);
+      offCentre.push(+Math.hypot(point[0] - shown[0], point[1] - shown[1]).toFixed(2));
+    }
+    return { rest: apart(await frame(true, rest), await frame(false, rest)), peak: apart(await frame(true, peak), await frame(false, peak)), offCentre };
   });
+  if (report.mark.offCentre.some(gap => !(gap < 2.5))) failures.push(`the Mark sits away from the point on a moved layer (${report.mark.offCentre.join(', ')} px)`);
   if (!(report.mark.rest > 1)) failures.push(`the Mark does not appear in Rest (${report.mark.rest.toFixed(3)})`);
   if (!(report.mark.peak < .05)) failures.push(`the Mark changes the Peak (${report.mark.peak.toFixed(3)})`);
 
   report.ui = await verifyInApp(page, failures);
-  console.log(JSON.stringify({ mark: report.mark, structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
+  console.log(JSON.stringify({ firstFrame: report.firstFrame, mark: report.mark, structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));
   assert.deepEqual(errors, []);
   assert.deepEqual(failures, []);

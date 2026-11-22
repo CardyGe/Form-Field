@@ -186,3 +186,64 @@ test('square mix bends a ring and negative space clears marks, both from the par
   assert.ok(draw(score, position, PERF, { structureNegativeSpace: 1 }).count < plain.count);
   assert.ok(draw(score, position, PERF, { structureNegativeSpace: 0 }).count > plain.count);
 });
+
+test('Polar / square mix has its full range on a composed-square form', () => {
+  const seed = FORM_KINDS.length - 1, score = compose(seed, {});
+  assert.equal(score.form!.kind, 'cathedral');
+  const position = at(score, 'build', 0.9);
+  const shot = (mix: number) => draw(score, position, PERF, { structureSquareMix: mix });
+  assert.notDeepEqual(shot(0.1).data, shot(1).data);
+  assert.notDeepEqual(shot(0.5).data, shot(1).data);
+  assert.deepEqual(shot(0).data, draw(score, position).data, 'zero is the composition as designed');
+  assert.ok(kinds(shot(1)).includes(PRIMITIVE.ring), 'at the far end the square is round again');
+});
+
+/** One scale tick on a centred form, so its angle shows exactly how far the machine has turned. */
+const oneTick = (seed: number): Score => {
+  const score = compose(seed, {});
+  const tick = element('tick', 0.3, { slot: 1, enter: 0, exit: 0.99, length: 0.05 });
+  return { ...score, elements: [tick], form: { ...score.form!, centreX: 0, centreY: 0, twinX: 0, twinY: 0, square: 0 } };
+};
+const tickAngle = (score: Score, beat: number, beatsPerBar: number, params: Record<string, number>) => {
+  const list = draw(score, positionAt(score, beat, beatsPerBar), PERF, { ringTickLength: 0.5, ringTicks: 0.5, ...params });
+  return Math.atan2(field(list, 0, 'y'), field(list, 0, 'x'));
+};
+const turned = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
+
+test('the ratchet clicks on whole beats, in any metre, and stops at Rotation speed 0', () => {
+  for (let seed = 0; seed < 40; seed++) for (const beatsPerBar of [3, 4]) {
+    const score = oneTick(seed), beats = score.bars * beatsPerBar;
+    const first = Math.ceil(score.stateEnds[1] * beats), last = Math.floor(score.stateEnds[4] * beats) - 1;
+    const notch = (Math.PI * 2) / (score.symmetry * 6);
+    for (let beat = first; beat < last; beat++) {
+      const angle = (at: number) => tickAngle(score, at, beatsPerBar, {});
+      const click = turned(angle(beat), angle(beat + 0.3)), settled = turned(angle(beat + 0.4), angle(beat + 0.95));
+      // The steady drift also turns the tick, so a click is what stands out above it.
+      assert.ok(click > notch * 0.8, `seed ${seed} in ${beatsPerBar}: beat ${beat} turned ${click}, a notch is ${notch}`);
+      assert.ok(settled < click, `seed ${seed} in ${beatsPerBar}: still clicking after beat ${beat} (${settled} after ${click})`);
+    }
+    const stopped = (at: number) => tickAngle(score, at, beatsPerBar, { ringRotationSpeed: 0 });
+    assert.ok(turned(stopped(first), stopped(last)) < 1e-6, `seed ${seed} turned at speed 0`);
+  }
+});
+
+test('the life marks answer their opacity controls and fade through the start of Collapse', () => {
+  const score = compose(1, {}), peak = at(score, 'peak', 0.5);
+  const off = { ringOpacity: 0, spokeOpacity: 0, nodeOpacity: 0 };
+  const list = draw(score, peak, PERF, off);
+  for (let i = 0; i < list.count; i++) {
+    if (field(list, i, 'alpha') <= 0.001) continue;
+    const hero = field(list, i, 'width') < 0, point = field(list, i, 'kind') === PRIMITIVE.dot && field(list, i, 'p0') > 0.0055;
+    assert.ok(hero || point, `instance ${i} of kind ${field(list, i, 'kind')} stayed lit`);
+  }
+  const armLight = (position: PhrasePosition) => {
+    const shown = draw(score, position);
+    let most = 0;
+    for (let i = 0; i < shown.count; i++) if (field(shown, i, 'width') === 2 && field(shown, i, 'colour') === 2) most = Math.max(most, field(shown, i, 'alpha'));
+    return most;
+  };
+  const end = at(score, 'peak', 0.999), into = at(score, 'collapse', 0.05), gone = at(score, 'collapse', 0.5);
+  assert.ok(armLight(end) > 0, 'the arm is lit at the end of Peak');
+  assert.ok(armLight(into) > armLight(end) * 0.4, 'it does not cut out at the boundary');
+  assert.equal(armLight(gone), 0, 'it has gone by the middle of Collapse');
+});

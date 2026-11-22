@@ -116,7 +116,10 @@ export const dataUrlBytes = (dataUrl: string) => { const i = dataUrl.indexOf(','
 export function imageBytes(show: Pick<ShowDocument, 'sources'>): number {
   // Every stored copy counts: a picture made separate is stored, saved and sent again.
   let bytes = 0;
-  for (const s of show.sources) for (const l of s.project.layers) if (l.image?.dataUrl) bytes += dataUrlBytes(l.image.dataUrl);
+  for (const s of show.sources) for (const l of s.project.layers) {
+    if (l.image?.dataUrl) bytes += dataUrlBytes(l.image.dataUrl);
+    if (l.meridian?.mark?.dataUrl) bytes += dataUrlBytes(l.meridian.mark.dataUrl);
+  }
   return bytes;
 }
 

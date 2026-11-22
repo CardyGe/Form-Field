@@ -5,7 +5,9 @@ import { applyPreset, assertImportableImage, createLayer, createProject, MAX_ASS
 import { canLinkParameter, targetRange } from '../src/map/targets';
 import { compose, scoreQuality } from '../src/meridian/composer';
 import { applyMacros } from '../src/meridian/macros';
+import { markFromOutput } from '../src/meridian/mark-placement';
 import { MACRO_KEYS, MERIDIAN_DEFAULTS, MERIDIAN_GROUPS, MERIDIAN_MOVES, MERIDIAN_PARAMETERS } from '../src/meridian/parameters';
+import { sourceViewMatrix } from '../src/rendering/source-view';
 import type { Layer, Project } from '../src/shared/types';
 
 const byKey = new Map(MERIDIAN_PARAMETERS.map((d) => [d.key, d]));
@@ -251,4 +253,23 @@ test('Mark takes a valid PNG and refuses anything over the image limits', () => 
   assert.throws(() => assertImportableImage({ type: 'image/png', size: MAX_IMPORT_BYTES + 1 }), /12 MB/);
   assert.throws(() => assertImportableImage({ type: 'image/gif', size: 10 }), /PNG or JPEG/);
   assert.doesNotThrow(() => assertImportableImage({ type: 'image/png', size: MAX_IMPORT_BYTES }));
+});
+
+test('the Mark sits on the design origin, and takes the layer and design placement', () => {
+  const transform = { x: 0.2, y: -0.15, scale: 0.6, rotation: 0.7 }, aspect = 16 / 9;
+  const view = sourceViewMatrix(transform, aspect).invert();
+  const e = view.elements, centreX = 0.08, centreY = -0.05, zoom = 1.3, rotation = 0.4, width = 0.6, height = 0.3;
+  const out = new Float64Array(9);
+  markFromOutput({ view: e, aspect, zoom, rotation, centreX, centreY, width, height }, out);
+  const toMark = (u: number, v: number) => [out[0] * u + out[3] * v + out[6], out[1] * u + out[4] * v + out[7]];
+  // Where the renderer's vertex shader puts the design's origin and a point one unit along it.
+  const toOutput = (x: number, y: number) => {
+    const qx = Math.cos(rotation) * zoom * x - Math.sin(rotation) * zoom * y, qy = Math.sin(rotation) * zoom * x + Math.cos(rotation) * zoom * y;
+    const u = (qx + centreX * aspect) / aspect + 0.5, v = qy + centreY + 0.5;
+    return [e[0] * u + e[3] * v + e[6], e[1] * u + e[4] * v + e[7]];
+  };
+  const near = (a: number[], b: number[]) => a.forEach((value, i) => assert.ok(Math.abs(value - b[i]) < 1e-9, `${a} against ${b}`));
+  near(toMark(toOutput(0, 0)[0], toOutput(0, 0)[1]), [0.5, 0.5]);
+  near(toMark(toOutput(width / 2, 0)[0], toOutput(width / 2, 0)[1]), [1, 0.5]);
+  near(toMark(toOutput(0, height / 2)[0], toOutput(0, height / 2)[1]), [0.5, 1]);
 });

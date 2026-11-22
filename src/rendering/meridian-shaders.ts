@@ -24,7 +24,7 @@ const placement = /* glsl */`
   }
   // Half a line in this pass's pixels, and how far its quad must reach in frame units.
   // A negative width is a band, measured in frame heights.
-  float halfLine() { float w=aTail.z<0.?-aTail.z/uPixel:max(aTail.z,uMinWidth); return max(w*.5*uRes,uRes<1.?.8:0.); }
+  float halfLine() { float w=max(aTail.z<0.?-aTail.z/uPixel:aTail.z,uMinWidth); return max(w*.5*uRes,uRes<1.?.8:0.); }
   float reach(float hw) { return (hw/uRes+uEdge+uHaloReach+1.)*uPixel; }
 `;
 
@@ -295,11 +295,11 @@ export const tearFragment = /* glsl */`
 export const markFragment = /* glsl */`
   precision highp float; varying vec2 vUv;
   uniform sampler2D uImage, uMark;
-  uniform vec2 uCentre, uBox;
+  uniform mat3 uMarkFrom;
   uniform float uAlpha;
   void main() {
     vec4 base=texture2D(uImage,vUv);
-    vec2 at=(vUv-uCentre)/uBox+.5;
+    vec2 at=(uMarkFrom*vec3(vUv,1.)).xy;
     if (at.x<0.||at.x>1.||at.y<0.||at.y>1.) { gl_FragColor=base; return; }
     vec4 mark=texture2D(uMark,at);
     float a=mark.a*uAlpha;

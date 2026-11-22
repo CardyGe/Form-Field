@@ -4,6 +4,7 @@ import { compose } from '../meridian/composer';
 import { DisplayList, STRIDE } from '../meridian/display-list';
 import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate';
 import { applyMacros } from '../meridian/macros';
+import { markFromOutput, type MarkPlacement } from '../meridian/mark-placement';
 import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
 import { MERIDIAN_SCHEMES, SEED_SCHEME } from '../meridian/schemes';
 import { PRIMITIVE, type PerformanceState, type Score, type ScoreForm } from '../meridian/types';
@@ -140,10 +141,12 @@ export class MeridianRenderer {
   });
   private readonly markPass = new THREE.ShaderMaterial({
     vertexShader: fullscreenVertex, fragmentShader: markFragment,
-    uniforms: { uImage: { value: null }, uMark: { value: null }, uCentre: { value: new THREE.Vector2(.5, .5) }, uBox: { value: new THREE.Vector2(1, 1) }, uAlpha: { value: 0 } },
+    uniforms: { uImage: { value: null }, uMark: { value: null }, uMarkFrom: { value: new THREE.Matrix3() }, uAlpha: { value: 0 } },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
   private markAlpha = 0;
+  private readonly markMatrix = new Float64Array(9);
+  private readonly markPlacement: MarkPlacement = { view: this.view.elements, aspect: 1, zoom: 1, rotation: 0, centreX: 0, centreY: 0, width: 1, height: 1 };
   private form: ScoreForm | undefined;
 
   constructor() {
@@ -216,9 +219,10 @@ export class MeridianRenderer {
     const frame = Math.min(loopFrames - 1, Math.floor(along / repeat * loopFrames + 1e-6));
     this.tearAmount = this.prepareTear(score, position.progress, frame, loopFrames / repeat, phrase, live);
     this.form = score.form;
-    this.prepareMark(runtime?.mark, position.progress, ends[5], live, width / height);
     sourceViewMatrix(layer.transform, width / height, this.view);
-    this.renderList(renderer, list, live, layer.palette, this.view.invert(), layer.transform.scale, position.progress, peak, width, height, target, draw);
+    this.view.invert();
+    this.prepareMark(runtime?.mark, position.progress, ends[5], live, width / height);
+    this.renderList(renderer, list, live, layer.palette, this.view, layer.transform.scale, position.progress, peak, width, height, target, draw);
   }
 
   /**
@@ -263,11 +267,18 @@ export class MeridianRenderer {
     const rest = Math.max(1 - restStart, 1e-6), into = (progress - restStart) / rest;
     this.markAlpha = mark && into > 0 ? smoothRange(into, 0, MARK_IN) * (1 - smoothRange(into, 1 - MARK_OUT, 1)) : 0;
     if (!mark || this.markAlpha <= 0) return;
-    const u = this.markPass.uniforms, grow = .86 + .14 * smoothRange(into, 0, MARK_IN);
+    const u = this.markPass.uniforms, grow = .86 + .14 * smoothRange(into, 0, MARK_IN), place = this.markPlacement;
     u.uMark.value = mark.texture;
     u.uAlpha.value = this.markAlpha;
-    (u.uCentre.value as THREE.Vector2).set(.5 + read(p, 'structureCentreX'), .5 + read(p, 'structureCentreY'));
-    (u.uBox.value as THREE.Vector2).set(MARK_HEIGHT * grow * (mark.width / mark.height) / aspect, MARK_HEIGHT * grow);
+    place.aspect = aspect;
+    place.zoom = read(p, 'structureZoom') * (1 - 2 * read(p, 'outputSafeMargin'));
+    place.rotation = read(p, 'structureRotation') * Math.PI / 180;
+    place.centreX = read(p, 'structureCentreX');
+    place.centreY = read(p, 'structureCentreY');
+    place.height = MARK_HEIGHT * grow;
+    place.width = place.height * (mark.width / mark.height);
+    markFromOutput(place, this.markMatrix);
+    (u.uMarkFrom.value as THREE.Matrix3).fromArray(this.markMatrix);
   }
 
   /** Afterglow: earlier moments of the phrase, drawn fainter into the same frame. Exact at any frame, in any order. */
