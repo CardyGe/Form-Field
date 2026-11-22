@@ -1005,7 +1005,8 @@ try {
       const now = colours.map((c, k) => white(c) ? k : -1).filter(k => k >= 0);
       now.forEach(k => lit.add(k)); most = Math.max(most, now.length);
       assert.ok(colours.every(coloured), 'a border run made part of the shape black');
-      await sleep(90);
+      // Uneven gaps: with a fixed gap, a busy machine can make every sample land at the same point of the lap.
+      await sleep(40 + Math.random() * 160);
     }
     assert.ok(most < 12, `most of the border was lit at once (${most} of 16)`);
     assert.ok(lit.size >= 10, `the lit part did not go round: only ${lit.size} of 16 places were ever lit`);

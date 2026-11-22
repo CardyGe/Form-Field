@@ -9,7 +9,7 @@ export interface Scene { id: string; name: string; fadeSeconds: number | null; s
 export const MAX_SCENES = 32;
 export const FADE_RANGE = { min: 0, max: 30 };
 
-export function stateOf(shape: Shape): SceneState {
+function stateOf(shape: Shape): SceneState {
   return structuredClone({ sourceId: shape.sourceId, fill: shape.fill, placement: shape.placement, brightness: shape.brightness, tint: shape.tint, softEdge: shape.softEdge, border: shape.border, visible: shape.visible, blocker: shape.blocker });
 }
 /** Every shape's state, as a scene keeps it. */

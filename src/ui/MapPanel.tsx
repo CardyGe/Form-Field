@@ -321,7 +321,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       corners.forEach((q, i) => {
         ctx.beginPath(); ctx.arc(q.x, q.y, CORNER_PX * k, 0, Math.PI * 2);
         ctx.fillStyle = i === d.cornerIndex ? '#00e0ff' : 'rgba(0,224,255,0.35)'; ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2 * k; ctx.stroke();
-        ctx.fillStyle = '#000000'; ctx.font = `600 ${14 * k}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i + 1), q.x, q.y);
+        ctx.fillStyle = i === d.cornerIndex ? '#000000' : '#ffffff'; ctx.font = `600 ${14 * k}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i + 1), q.x, q.y);
       });
     }
     }

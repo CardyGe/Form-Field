@@ -286,3 +286,6 @@ fieldset.layer-controls:disabled { opacity: .55; }
 .map-tools .map-bar-gap { flex: 0 0 4px; }
 /* With a room photo loaded there are more controls than fit on one row, so the strip may wrap. */
 .map-tools:has(.map-inline-range) { flex-wrap: wrap; }
+/* The effect card's actions look like buttons, as Live's do. */
+.map-content-card .map-toggles .text-button { border: 1px solid #3a3a3a; }
+.map-content-card .map-toggles .text-button:hover:not(:disabled) { border-color: #484848; }

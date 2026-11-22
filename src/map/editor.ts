@@ -183,7 +183,7 @@ const groupLocked = (show: ShowDocument, groupId: string) => show.groups.some(g 
 const isPictureSource = (show: ShowDocument, id: string) => { const p = show.sources.find(s => s.id === id)?.project; return !!p && p.layers.length === 1 && p.layers[0].kind === 'image'; };
 
 /** A one-layer composition of a picture (Studio's image layer, cover fit), as a file would load it; null if it is not valid. */
-export function imageComposition(image: { name: string; dataUrl: string; width: number; height: number }): Project | null {
+function imageComposition(image: { name: string; dataUrl: string; width: number; height: number }): Project | null {
   const project = createProject();
   const layer = { ...createLayer('image'), name: cleanName(image.name).slice(0, 60) || 'Image', image: { name: cleanName(image.name).slice(0, 120) || 'image', dataUrl: image.dataUrl, width: image.width, height: image.height, fit: 'cover' as const } };
   try { return validateProject({ ...project, name: layer.name, background: '#000000', layers: [layer] }); } catch { return null; }

@@ -9,12 +9,12 @@ type Map = ReturnType<typeof useMap>;
 const stamp = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 export const newId = () => `shape-${stamp()}`;
 export const newSourceId = () => `source-${stamp()}`;
-export const newGroupId = () => `group-${stamp()}`;
+const newGroupId = () => `group-${stamp()}`;
 export const newItemId = (kind: 'link' | 'trigger' | 'scene') => `${kind}-${stamp()}`;
 export const randomSeed = () => Math.floor(Math.random() * 1e6);
 
 /** Stage 6: a PNG or JPEG picked by Greg, read as a data URL with its size; null when cancelled or unreadable. */
-export function pickImage(): Promise<{ name: string; dataUrl: string; width: number; height: number } | null> {
+function pickImage(): Promise<{ name: string; dataUrl: string; width: number; height: number } | null> {
   return new Promise(resolve => {
     const input = document.createElement('input');
     input.type = 'file'; input.accept = 'image/png,image/jpeg';
