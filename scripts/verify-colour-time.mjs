@@ -19,6 +19,7 @@ const only = option('only')?.split(',').map(s => s.trim()).filter(Boolean);
 const out = path.join(root, 'work/colour-time');
 const TAU = Math.PI * 2;
 const SHAPES = ['Straight', 'Lens', 'Edges', 'Wave'];
+const STAT_MODES = [['Echo', 1], ['Median', 2], ['Darkest', 3], ['Brightest', 4]];
 
 /** Fails a check that needs the older checkout, rather than letting it pass unseen. */
 const needsBaseline = () => baseline ? null : { ok: false, detail: 'needs --baseline=<checkout>' };
@@ -722,6 +723,240 @@ const CHECKS = [
       return { ok: r.moved > 0 && r.judged > 1000 && !r.over && !r.leaked, detail: `Colour lag moves the layer by ${r.moved.toFixed(3)}; ${r.over} values over the layer colour, worst +${r.worst} (limit 3) across ${r.judged} covered pixels; ${r.leaked} colour pixels without coverage` };
     },
   },
+  {
+    name: 'stats-order',
+    // Three frames of hard colour bars moving across the frame. Each mode must match the same
+    // three exported frames combined on the CPU: Median, Darkest and Brightest commute with the
+    // output curve, and Echo is compared after decoding to linear light.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async MODES => {
+        const q = window.ct, P = .7, span = 60, first = q.project([q.bars()]);
+        const total = Math.round(first.duration * first.fps.num / first.fps.den);
+        // Scaled up so the bars cover the frame at every slice: full coverage needs no colour bound.
+        const scene = params => { const l = q.bars(params); l.transform.scale = 1.8; l.modulations['transform.x'] = q.slide(.2); const p = q.project([l]); p.highlights = 'exact'; return p; };
+        const frames = []; for (let i = 0; i < 3; i++) frames.push(await q.px(scene({}), P - Math.PI * 2 * (span * i / 2) / total));
+        const decode = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+        const encode = v => 255 * (v <= .0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - .055);
+        const weights = [1, .5, .25].map(v => v / 1.75);
+        const expected = {
+          1: v => encode(v.reduce((sum, x, i) => sum + decode(x) * weights[i], 0)),
+          2: v => q.m.medianOf(v), 3: v => Math.min(...v), 4: v => Math.max(...v),
+        };
+        let distinct = 0;
+        for (let i = 0; i < frames[0].length; i++) if (i % 4 !== 3 && new Set(frames.map(f => f[i])).size === 3) distinct++;
+        const rows = [];
+        for (const [name, mode] of MODES) {
+          const out = await q.px(scene({ slitShift: 1, slitSpan: span, slitSlices: 3, slitMode: mode, slitDecay: .5 }), P);
+          let worst = 0, over = 0;
+          for (let i = 0; i < out.length; i++) {
+            if (i % 4 === 3) continue;
+            const d = Math.abs(out[i] - expected[mode]([frames[0][i], frames[1][i], frames[2][i]]));
+            worst = Math.max(worst, d); if (d > 2) over++;
+          }
+          // Colour reach .4 of three slices: red remembers one, green two, blue all three.
+          const reached = await q.px(scene({ slitShift: 1, slitSpan: span, slitSlices: 3, slitMode: mode, slitDecay: .5, slitReach: .4 }), P);
+          const partial = (v, n) => {
+            const kept = v.slice(0, n);
+            if (mode === 1) { const w = [1, .5, .25].slice(0, n), sum = w.reduce((a, b) => a + b); return encode(kept.reduce((t, x, i) => t + decode(x) * w[i] / sum, 0)); }
+            if (mode === 2) return n === 2 ? encode((decode(kept[0]) + decode(kept[1])) / 2) : q.m.medianOf(kept);
+            return mode === 3 ? Math.min(...kept) : Math.max(...kept);
+          };
+          let reachWorst = 0, reachOver = 0;
+          for (let i = 0; i < reached.length; i++) {
+            if (i % 4 === 3) continue;
+            const d = Math.abs(reached[i] - partial([frames[0][i], frames[1][i], frames[2][i]], i % 4 + 1));
+            reachWorst = Math.max(reachWorst, d); if (d > 2) reachOver++;
+          }
+          rows.push({ name, worst, over, reachWorst, reachOver, moved: q.difference(frames[0], out) });
+        }
+        return { distinct, rows };
+      }, STAT_MODES);
+      const ok = r.distinct > 1000 && r.rows.every(row => row.over === 0 && row.reachOver === 0 && row.moved > 0);
+      return { ok, detail: `${r.distinct} values differ across all three frames; ${r.rows.map(row => `${row.name} worst ${row.worst.toFixed(2)}, ${row.over} over, reach .4 worst ${row.reachWorst.toFixed(2)}, ${row.reachOver} over, moved ${row.moved.toFixed(3)}`).join('; ')} (limit 2/255 against the CPU)` };
+    },
+  },
+  {
+    name: 'stats-alpha',
+    // A soft moving layer with channels that remember different spans. Coverage and colour are
+    // judged against the plain frames of every slice, so a fringe has nowhere to hide.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async MODES => {
+        const q = window.ct, P = 1.3, span = 75, slices = 9, first = q.project([q.soft()], true);
+        const total = Math.round(first.duration * first.fps.num / first.fps.den);
+        // No frame mask: the mask follows the current moment, so a plain frame of an older slice
+        // would not show the coverage that slice brings to this one.
+        const scene = params => { const l = q.soft(params); l.mask = { ...l.mask, kind: 'none' }; l.modulations['transform.x'] = q.slide(.2); const p = q.project([l], true); p.highlights = 'exact'; return p; };
+        const covered = new Uint8Array(960 * 540), faint = new Uint8Array(960 * 540), brightest = [0, 0, 0], R = q.renderer, alphas = [];
+        const half = v => { const e = (v >> 10) & 31, f = v & 1023; return e === 0 ? f / 1024 / 16384 : (1 + f / 1024) * 2 ** (e - 15); };
+        let alphaMismatch = 0;
+        for (let k = 0; k < slices; k++) {
+          const at = P - Math.PI * 2 * (span * k / (slices - 1)) / total, frame = scene({}), px = await q.px(frame, at);
+          alphas.push(Uint8Array.from({ length: 960 * 540 }, (_, n) => px[n * 4 + 3]));
+          for (let i = 0; i < px.length; i += 4) if (px[i + 3] > 0) { covered[i / 4] = 1; for (let c = 0; c < 3; c++) brightest[c] = Math.max(brightest[c], px[i + c]); }
+          // The exact alpha of this slice. A sample at or below .001 is light with no coverage,
+          // which the HDR ruling lets through unbounded, so its pixels are counted separately.
+          const rt = R.renderOutput(frame, at, 960, 540), exact = new Uint16Array(960 * 540 * 4);
+          R.renderer.readRenderTargetPixels(rt, 0, 0, 960, 540, exact); R.renderer.setRenderTarget(null);
+          // The float target's rows run the opposite way to the exported PNG's.
+          for (let n = 0; n < faint.length; n++) {
+            const a = half(exact[((539 - Math.floor(n / 960)) * 960 + n % 960) * 4 + 3]);
+            if (Math.abs(a * 255 - px[n * 4 + 3]) > 1) alphaMismatch++;
+            if (a > 0 && a <= .001) faint[n] = 1;
+          }
+        }
+        const plain = await q.px(scene({}), P), rows = [];
+        for (const [name, mode] of MODES) {
+          const out = await q.px(scene({ slitShift: 1, slitSpan: span, slitSlices: slices, slitMode: mode, slitReach: .4, slitDecay: .7 }), P);
+          // Alpha always combines every slice, whatever each colour remembers.
+          const echo = Array.from({ length: slices }, (_, k) => .7 ** k), echoSum = echo.reduce((a, b) => a + b);
+          let alphaWorst = 0;
+          for (let n = 0; n < alphas[0].length; n++) {
+            const v = alphas.map(a => a[n]);
+            const want = mode === 1 ? v.reduce((t, x, k) => t + x * echo[k] / echoSum, 0) : mode === 2 ? q.m.medianOf(v) : mode === 3 ? Math.min(...v) : Math.max(...v);
+            alphaWorst = Math.max(alphaWorst, Math.abs(out[n * 4 + 3] - want));
+          }
+          let leaked = 0, over = 0, worst = -255, judged = 0, faintOver = 0, faintWorst = 0;
+          for (let i = 0; i < out.length; i += 4) {
+            if (!covered[i / 4] && (out[i + 3] || out[i] || out[i + 1] || out[i + 2])) leaked++;
+            if (!out[i + 3]) continue;
+            const light = faint[i / 4];
+            if (!light) judged++;
+            for (let c = 0; c < 3; c++) {
+              const excess = out[i + c] - brightest[c];
+              if (light) { faintWorst = Math.max(faintWorst, excess); if (excess > 2) faintOver++; }
+              else { worst = Math.max(worst, excess); if (excess > 2) over++; }
+            }
+          }
+          rows.push({ name, leaked, over, worst, judged, faintOver, faintWorst, alphaWorst, moved: q.difference(plain, out) });
+        }
+        return { brightest, rows, alphaMismatch, faint: faint.reduce((a, b) => a + b, 0) };
+      }, STAT_MODES);
+      const ok = r.alphaMismatch === 0 && r.rows.every(row => row.moved > 0 && row.judged > 1000 && !row.leaked && !row.over && row.alphaWorst <= 2);
+      return { ok, detail: `brightest source ${r.brightest}; ${r.rows.map(row => `${row.name} leaked ${row.leaked}, over ${row.over}, worst +${row.worst}, alpha off the CPU by ${row.alphaWorst.toFixed(2)}, moved ${row.moved.toFixed(3)}`).join('; ')} (limits +2 and 2); exempt by the HDR ruling: ${r.faint} pixels with a slice at alpha .001 or below, over limit ${r.rows.map(row => `${row.name} ${row.faintOver} (worst +${row.faintWorst})`).join(', ')}; exact alpha mismatches ${r.alphaMismatch}` };
+    },
+  },
+  {
+    name: 'stats-loop',
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async MODES => {
+        const q = window.ct, rows = [], plain = await q.shot(q.project([q.layer('surface')]), 0);
+        for (const [name, mode] of MODES) {
+          const p = q.project([q.layer('surface', null, { slitShift: 1, slitSpan: 60, slitSlices: 7, slitMode: mode, slitReach: .5 })]);
+          rows.push({ name, moved: !q.same(await q.shot(p, 0), plain), ...await q.loop(p) });
+        }
+        return rows;
+      }, STAT_MODES);
+      const ok = rows.every(row => row.moved && loopVerdict(row).ok);
+      return { ok, detail: rows.map(row => `${row.name}${row.moved ? '' : ' has no effect'}: ${loopVerdict(row).detail}`).join('; ') };
+    },
+  },
+  {
+    name: 'stats-zero',
+    // Shift is animated through exactly 0 at phase 0, where every slice is the current moment.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async MODES => {
+        const q = window.ct, rows = [], sweep = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: -1, max: 1 } };
+        const sources = [['surface', false, params => q.layer('surface', null, params)],
+          ['soft', true, params => { const l = q.soft(params); l.modulations['transform.x'] = q.slide(.2); return l; }]];
+        for (const [source, transparent, make] of sources) {
+          const plain = await q.px(q.project([make({})], transparent), 0), later = await q.px(q.project([make({})], transparent), 1.2);
+          for (const [name, mode] of MODES) {
+            const scene = () => { const l = make({ slitShift: 0, slitSpan: 60, slitSlices: 7, slitMode: mode, slitReach: .4 }); l.modulations.slitShift = structuredClone(sweep); return q.project([l], transparent); };
+            const at = await q.px(scene(), 0), away = await q.px(scene(), 1.2);
+            let worst = 0; for (let i = 0; i < at.length; i++) worst = Math.max(worst, Math.abs(at[i] - plain[i]));
+            rows.push({ source, name, worst, moved: q.difference(later, away) });
+          }
+        }
+        return rows;
+      }, STAT_MODES);
+      const ok = rows.every(row => row.worst <= 1 && row.moved > 0);
+      return { ok, detail: rows.map(row => `${row.source} ${row.name} worst ${row.worst}, moved ${row.moved.toFixed(3)}`).join('; ') + ' (limit 1/255 at shift 0)' };
+    },
+  },
+  {
+    name: 'stats-4k',
+    // A full 4K Median, then a render whose nine slices exceed the 768 MiB budget, in a fresh renderer.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, canvas = document.createElement('canvas'), R = new q.m.StudioRenderer(canvas), gl = R.renderer.getContext();
+        const p = q.project([q.layer('surface', null, { slitShift: 1, slitSpan: 30, slitSlices: 9, slitMode: 2 })]);
+        const bytes = t => t.width * t.height * t.depth * 8;
+        try {
+          await R.prepare(p); while (gl.getError());
+          const png = await R.exportPNG(p, .9, 3840, 2160), error = gl.getError();
+          const view = new DataView(png.buffer, png.byteOffset), size = [view.getUint32(16), view.getUint32(20)];
+          const image = await q.pixels(png); let sum = 0; for (let i = 0; i < image.length; i += 4) sum += image[i] + image[i + 1] + image[i + 2];
+          const full = { width: R.medianTarget.width, height: R.medianTarget.height, depth: R.medianTarget.depth, bytes: bytes(R.medianTarget) };
+          const W = 5120, H = 2880, limit = R.maxTargetSize;
+          if (W > limit || H > limit) return { error, size, mean: sum / image.length, full, limit, over: null };
+          await R.exportPNG(p, .9, W, H);
+          const over = { width: R.medianTarget.width, height: R.medianTarget.height, depth: R.medianTarget.depth, bytes: bytes(R.medianTarget), asked: W * H * 9 * 8, want: q.m.medianTargetSize(W, H, 9), error: gl.getError() };
+          return { error, size, mean: sum / image.length, full, limit, over };
+        } finally { R.dispose(); }
+      });
+      const MiB = v => `${(v / 1024 / 1024).toFixed(1)} MiB`, budget = 768 * 1024 * 1024;
+      const base = r.error === 0 && r.size[0] === 3840 && r.size[1] === 2160 && r.mean > 1 && r.full.bytes <= budget && r.full.width === 3840 && r.full.depth === 9;
+      if (!r.over) return { ok: false, detail: `4K Median ${base ? 'ok' : 'failed'} at ${MiB(r.full.bytes)}; the over-budget render needs 5120x2880 and this GPU allows ${r.limit}, so scaling was not proven` };
+      const scaled = r.over.error === 0 && r.over.asked > budget && r.over.bytes <= budget && r.over.width === r.over.want.width && r.over.height === r.over.want.height && r.over.width < 5120;
+      return { ok: base && scaled, detail: `4K PNG ${r.size.join('x')}, GL error ${r.error}, Median target ${r.full.width}x${r.full.height}x${r.full.depth} = ${MiB(r.full.bytes)}; 5120x2880 would need ${MiB(r.over.asked)}, allocated ${r.over.width}x${r.over.height}x${r.over.depth} = ${MiB(r.over.bytes)} (budget 768 MiB), GL error ${r.over.error}` };
+    },
+  },
+  {
+    name: 'stats-supersampled',
+    // 2x supersampled 4K Median. A GPU that cannot hold that size reports SKIP, never PASS.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, canvas = document.createElement('canvas'), R = new q.m.StudioRenderer(canvas), gl = R.renderer.getContext();
+        const p = q.project([q.layer('surface', null, { slitShift: 1, slitSpan: 30, slitSlices: 9, slitMode: 2 })]);
+        try {
+          if (7680 > R.maxTargetSize || 4320 > R.maxTargetSize) return { skipped: true, limit: R.maxTargetSize };
+          await R.prepare(p); while (gl.getError());
+          const png = await R.exportPNG(p, .9, 3840, 2160, 2), error = gl.getError(), view = new DataView(png.buffer, png.byteOffset);
+          const t = R.medianTarget;
+          return { error, size: [view.getUint32(16), view.getUint32(20)], target: [t.width, t.height, t.depth], bytes: t.width * t.height * t.depth * 8, limit: R.maxTargetSize };
+        } finally { R.dispose(); }
+      });
+      if (r.skipped) return { ok: true, skipped: true, detail: `2x 4K needs 7680x4320 and this GPU allows ${r.limit}` };
+      const ok = r.error === 0 && r.size[0] === 3840 && r.size[1] === 2160 && r.bytes <= 768 * 1024 * 1024;
+      return { ok, detail: `PNG ${r.size.join('x')}, GL error ${r.error}, Median target ${r.target.join('x')} = ${(r.bytes / 1024 / 1024).toFixed(1)} MiB (budget 768), GPU limit ${r.limit}` };
+    },
+  },
+  {
+    name: 'stats-memory',
+    // Statistical modes allocate no Brightness or Colour lag targets, and every optional target
+    // is released on the first frame no visible layer needs it, and by dispose().
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, canvas = document.createElement('canvas'), R = new q.m.StudioRenderer(canvas);
+        const frame = async (...layers) => { const p = q.project(layers); await R.prepare(p); await R.exportPNG(p, .9, 320, 180); };
+        const slit = params => q.layer('surface', null, { slitShift: 1, slitSpan: 30, slitSlices: 5, ...params });
+        const keys = ['medianTarget', 'statBoundTarget', 'statLightTarget', 'lensTarget', 'slitBoundTarget', 'slitLagTarget', 'slitDriverTarget'];
+        const held = () => keys.filter(k => R[k]);
+        const watch = () => { const seen = new Set(); for (const k of keys) if (R[k]) { const name = k; R[k].addEventListener('dispose', () => seen.add(name)); } return seen; };
+        const out = {}, gl = R.renderer.getContext();
+        // The live preview draws smaller slices through the same path.
+        const preview = [];
+        for (const mode of [1, 2, 3, 4]) { const p = q.project([slit({ slitMode: mode, slitReach: .4 })]); await R.prepare(p); while (gl.getError()); R.render(p, .9, 960, 540); preview.push(gl.getError()); }
+        out.preview = preview;
+        await frame(q.layer('surface'));
+        await frame(slit({ slitMode: 1, slitShape: 5, slitChroma: 1 })); out.echo = held();
+        await frame(slit({ slitMode: 3, slitShape: 5, slitChroma: 1, slitReach: .4 })); out.reach = held();
+        await frame(slit({ slitMode: 2, slitShape: 5, slitChroma: 1, slitReach: .4 })); out.median = held();
+        await frame(slit({ slitShape: 5, slitChroma: 1, gradMix: 1, gradPalette: 1 })); out.delay = held();
+        const hidden = slit({ slitMode: 2 }); hidden.visible = false;
+        await frame(slit({ slitMode: 2, slitReach: .4 }), slit({ slitMode: 1, slitReach: .4 }), slit({ slitShape: 5, slitChroma: 1, gradMix: 1, gradPalette: 1 })); out.all = held();
+        const released = watch();
+        await frame(q.layer('surface'), hidden); out.after = held(); out.released = [...released];
+        await frame(slit({ slitMode: 2, slitReach: .4 }), slit({ slitMode: 1, slitReach: .4 }), slit({ slitShape: 5, slitChroma: 1, gradMix: 1, gradPalette: 1 }));
+        const closed = watch(); R.dispose(); out.closed = [...closed]; out.left = held();
+        return { ...out, keys };
+      });
+      const same = (a, b) => [...a].sort().join() === [...b].sort().join();
+      const ok = r.preview.every(e => e === 0) && same(r.echo, []) && same(r.reach, ['statBoundTarget', 'statLightTarget']) && same(r.median, ['medianTarget']) &&
+        same(r.delay, ['lensTarget', 'slitBoundTarget', 'slitLagTarget', 'slitDriverTarget']) && same(r.all, r.keys) && !r.after.length && same(r.released, r.keys) && same(r.closed, r.keys) && !r.left.length;
+      return { ok, detail: `preview GL errors ${r.preview}; Echo holds [${r.echo}]; Darkest with reach [${r.reach}]; Median [${r.median}]; delay map [${r.delay}]; all in use ${r.all.length}/${r.keys.length}; after they stop [${r.after}], released ${r.released.length}; dispose released ${r.closed.length}, left [${r.left}]` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -735,7 +970,7 @@ export {encodePNG} from './src/rendering/png';${extra}`, resolveDir: dir, loader
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
-await bundle(root, 'renderer.js', `\nexport {gradientTone,gradientStops} from './src/rendering/colour-lens';\nexport {supportsSlitScan} from './src/rendering/slitscan';\nexport {feedbackActive} from './src/rendering/feedback';`);
+await bundle(root, 'renderer.js', `\nexport {gradientTone,gradientStops} from './src/rendering/colour-lens';\nexport {supportsSlitScan,medianOf,medianTargetSize} from './src/rendering/slitscan';\nexport {feedbackActive} from './src/rendering/feedback';`);
 if (baseline) await bundle(path.resolve(baseline), 'baseline.js');
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
@@ -805,6 +1040,7 @@ try {
       l.modulations['transform.x'] = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: -.125, max: .125 } };
       return l;
     };
+    const slide = reach => ({ kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: -reach, max: reach } });
     const layer = (kind, preset, params = {}) => { const l = preset ? m.applyPreset(m.createLayer(kind), preset) : m.createLayer(kind); Object.assign(l.params, params); l.id = `${kind}-proof`; return l; };
     const project = (layers, transparent = false) => { const p = m.createProject(); p.id = 'colour-proof'; p.layers = layers; p.background = '#000000'; p.transparent = transparent; return p; };
     const pixels = async bytes => {
@@ -830,7 +1066,7 @@ try {
       const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
       return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
     };
-    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, bars, stripes, wave, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
+    window.ct = { m, old, tinyUrl, renderer, slide, layer, soft, grey, bars, stripes, wave, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
   }, !!baseline);
 
   for (const check of selected) {
@@ -840,12 +1076,13 @@ try {
     catch (error) { result = { ok: false, detail: String(error?.message ?? error).split('\n')[0] }; }
     if (errors.length) result = { ok: false, detail: `${result.detail}; page error: ${errors[0].slice(0, 300)}` };
     results.push({ name: check.name, ...result });
-    console.log(`${result.ok ? 'PASS' : 'FAIL'} ${check.name}: ${result.detail}`);
+    console.log(`${!result.ok ? 'FAIL' : result.skipped ? 'SKIP' : 'PASS'} ${check.name}: ${result.detail}`);
   }
 } finally {
   await fs.writeFile(path.join(out, 'report.json'), JSON.stringify(results, null, 2));
   await app.close();
 }
 const failed = results.filter(r => !r.ok).length;
-console.log(`${results.length - failed} passed, ${failed} failed`);
+const skipped = results.filter(r => r.ok && r.skipped).length;
+console.log(`${results.length - failed - skipped} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`);
 if (failed || results.length !== selected.length) process.exitCode = 1;

@@ -10,7 +10,8 @@ import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
-import { slicePhase, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
+import { channelSliceCounts, echoWeights, medianTargetSize, slicePhase, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
+import { MEDIAN_DEPTH, TIME_ECHO, TIME_MEDIAN, timeGatherFragment, timeMedianFragment, timeMode, timeTargetNeeds } from './time-stats';
 import { parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
@@ -197,6 +198,18 @@ export class StudioRenderer {
   /** Slice size, for Colour lag. Allocated on first use. */
   private slitBoundTarget: THREE.WebGLRenderTarget | null = null;
   private slitLagTarget: THREE.WebGLRenderTarget | null = null;
+  /** Echo, Darkest and Brightest: combines the slices over the slit targets. */
+  private readonly timeGather: THREE.ShaderMaterial;
+  /** The gather shader in its MAX-blended form: the brightest straight colour each channel combined. */
+  private readonly timeBound: THREE.ShaderMaterial;
+  /** The gather shader's light with no coverage: added for Echo, MAX-blended otherwise. */
+  private readonly timeLight: THREE.ShaderMaterial;
+  private readonly timeMedian: THREE.ShaderMaterial;
+  /** Allocated only while channels remember different numbers of slices. */
+  private statBoundTarget: THREE.WebGLRenderTarget | null = null;
+  private statLightTarget: THREE.WebGLRenderTarget | null = null;
+  /** The Median slices. Allocated on first use, within the memory budget. */
+  private medianTarget: THREE.WebGLArrayRenderTarget | null = null;
   private readonly glowBright: THREE.ShaderMaterial;
   /** Glow finish: one bright-pass target and blur pyramid, shared by all layers. */
   private glow: { bright: THREE.WebGLRenderTarget; pyramid: BloomPyramid; streak: StreakBlur } | null = null;
@@ -357,6 +370,22 @@ export class StudioRenderer {
     this.slitLag.blending = THREE.CustomBlending;
     this.slitLag.blendEquation = THREE.AddEquation;
     this.slitLag.blendSrc = THREE.OneFactor; this.slitLag.blendDst = THREE.OneFactor;
+    this.timeGather = material(timeGatherFragment, {
+      uAccum: { value: this.fallback }, uSource: { value: this.fallback }, uBoundMap: { value: this.fallback }, uLightMap: { value: this.fallback },
+      uMode: { value: 1 }, uFirst: { value: 0 }, uLast: { value: 0 }, uBounded: { value: 0 }, uAlphaWeight: { value: 1 },
+      uKeep: { value: new THREE.Vector3(1, 1, 1) }, uWeights: { value: new THREE.Vector3(1, 1, 1) },
+    });
+    this.timeBound = material(timeGatherFragment, this.timeGather.uniforms);
+    this.timeBound.defines = { GATHER_BOUND: '' };
+    this.timeLight = material(timeGatherFragment, this.timeGather.uniforms);
+    this.timeLight.defines = { GATHER_LIGHT: '' };
+    for (const mat of [this.timeBound, this.timeLight]) {
+      mat.blending = THREE.CustomBlending; mat.blendEquation = THREE.MaxEquation;
+      mat.blendSrc = THREE.OneFactor; mat.blendDst = THREE.OneFactor;
+    }
+    this.timeMedian = material(timeMedianFragment, {
+      uLayers: { value: null }, uCount: { value: 3 }, uBounded: { value: 0 }, uChannels: { value: new THREE.Vector3(3, 3, 3) },
+    });
     this.feedback = material(feedbackFragment, {
       uSource: { value: null }, uPrevious: { value: null }, uAspect: { value: 1 }, uZoom: { value: 1 }, uRotate: { value: 0 },
       uFade: { value: 0 }, uHue: { value: 0 }, uWarp: { value: 0 }, uMode: { value: 0 }, uHole: { value: 0 }, uWindow: { value: 0 }, uDrift: { value: new THREE.Vector2() },
@@ -822,6 +851,7 @@ export class StudioRenderer {
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
     this.releaseFeedback(project);
+    this.releaseTimeTargets(project);
     for (const original of project.layers) {
       if (!original.visible) continue;
       // Feedback layers advance in whole loop frames: every frame of the
@@ -1027,6 +1057,7 @@ export class StudioRenderer {
     const layer = evaluateLayer(original, phase), p = layer.params;
     if (!this.slitTargets) this.slitTargets = [target(), target()];
     for (const rt of this.slitTargets) if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
+    if (timeMode(p.slitMode) > 0) return this.statSlices(original, phase, total, duration);
     let [accum, next] = this.slitTargets;
     this.clearTarget(accum);
     const delays = sliceDelays(layer), u = this.slit.uniforms;
@@ -1058,6 +1089,74 @@ export class StudioRenderer {
         this.drawOnto(this.slitLag, lagTargets.lag);
       }
       this.draw(this.slit, next);
+      [accum, next] = [next, accum];
+    });
+    this.slitTargets = [accum, next];
+    return accum.texture;
+  }
+
+  /**
+   * Echo, Median, Darkest and Brightest: the slices combined per channel. These
+   * modes ignore the delay map, Twist, Zoom and Colour lag.
+   */
+  private statSlices(original: Layer, phase: number, total: number, duration: number): THREE.Texture {
+    const evaluated = evaluateLayer(original, phase), mode = timeMode(evaluated.params.slitMode);
+    const p: Record<string, number> = { ...evaluated.params, slitMode: mode };
+    const delays = sliceDelays({ params: p }), count = delays.length, direction = p.slitDirection ?? 0;
+    const channels = channelSliceCounts(count, p.slitReach ?? 1);
+    const bounded = channels[0] !== count || channels[1] !== count;
+    const sliceAt = (delay: number) => this.plainSource(original, slicePhase(phase, delay, total, direction), duration);
+    if (mode === TIME_MEDIAN) {
+      const size = medianTargetSize(this.width, this.height, MEDIAN_DEPTH);
+      let layers = this.medianTarget;
+      if (!layers) {
+        layers = new THREE.WebGLArrayRenderTarget(size.width, size.height, MEDIAN_DEPTH, {
+          type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false,
+          minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false,
+        });
+        layers.texture.colorSpace = THREE.LinearSRGBColorSpace;
+        this.medianTarget = layers;
+      } else if (layers.width !== size.width || layers.height !== size.height) layers.setSize(size.width, size.height, MEDIAN_DEPTH);
+      setWrap(layers, this.tiling);
+      delays.forEach((delay, index) => {
+        this.copy.uniforms.uImage.value = sliceAt(delay);
+        this.quad.material = this.copy;
+        this.renderer.setRenderTarget(layers, index);
+        this.renderer.render(this.quadScene, this.quadCamera);
+      });
+      const u = this.timeMedian.uniforms;
+      u.uLayers.value = layers.texture; u.uCount.value = count; u.uBounded.value = Number(bounded);
+      (u.uChannels.value as THREE.Vector3).fromArray(channels);
+      const output = this.slitTargets![0];
+      this.draw(this.timeMedian, output);
+      return output.texture;
+    }
+    let [accum, next] = this.slitTargets!;
+    this.clearTarget(accum);
+    const u = this.timeGather.uniforms, decay = p.slitDecay ?? .7;
+    const alphaWeights = echoWeights(count, decay), weights = channels.map(n => echoWeights(n, decay));
+    u.uMode.value = mode; u.uBounded.value = Number(bounded);
+    let extra: { bound: THREE.WebGLRenderTarget; light: THREE.WebGLRenderTarget } | null = null;
+    if (bounded) {
+      extra = { bound: this.statBoundTarget ??= target(), light: this.statLightTarget ??= target() };
+      for (const rt of [extra.bound, extra.light]) {
+        if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
+        this.clearTarget(rt);
+      }
+      u.uBoundMap.value = extra.bound.texture; u.uLightMap.value = extra.light.texture;
+      this.timeLight.blendEquation = mode === TIME_ECHO ? THREE.AddEquation : THREE.MaxEquation;
+    }
+    delays.forEach((delay, index) => {
+      u.uSource.value = sliceAt(delay); u.uAccum.value = accum.texture;
+      u.uFirst.value = Number(index === 0); u.uLast.value = Number(index === count - 1);
+      u.uAlphaWeight.value = alphaWeights[index];
+      (u.uKeep.value as THREE.Vector3).set(Number(index < channels[0]), Number(index < channels[1]), Number(index < channels[2]));
+      (u.uWeights.value as THREE.Vector3).set(weights[0][index] ?? 0, weights[1][index] ?? 0, weights[2][index] ?? 0);
+      if (extra) {
+        this.drawOnto(this.timeBound, extra.bound);
+        this.drawOnto(this.timeLight, extra.light);
+      }
+      this.draw(this.timeGather, next);
       [accum, next] = [next, accum];
     });
     this.slitTargets = [accum, next];
@@ -1226,6 +1325,22 @@ export class StudioRenderer {
     }
   }
 
+  /** Frees the optional finish targets as soon as no visible layer can use them. */
+  private releaseTimeTargets(project: Project): void {
+    const needs = timeTargetNeeds(project.layers), slit = this.slit.uniforms, gather = this.timeGather.uniforms;
+    if (!needs.median && this.medianTarget) { this.medianTarget.dispose(); this.medianTarget = null; this.timeMedian.uniforms.uLayers.value = null; }
+    if (!needs.statBound && this.statBoundTarget) {
+      this.statBoundTarget.dispose(); this.statBoundTarget = null; gather.uBoundMap.value = this.fallback;
+      this.statLightTarget?.dispose(); this.statLightTarget = null; gather.uLightMap.value = this.fallback;
+    }
+    if (!needs.colourLag && this.slitBoundTarget) {
+      this.slitBoundTarget.dispose(); this.slitBoundTarget = null; slit.uBound.value = this.fallback;
+      this.slitLagTarget?.dispose(); this.slitLagTarget = null; slit.uLag.value = this.fallback;
+    }
+    if (!needs.driver && this.slitDriverTarget) { this.slitDriverTarget.dispose(); this.slitDriverTarget = null; slit.uDriver.value = this.fallback; }
+    if (this.lensTarget && !project.layers.some(layer => layer.visible && lensActive(layer))) { this.lensTarget.dispose(); this.lensTarget = null; }
+  }
+
   render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }): void {
     if (this.exporting) return;
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
@@ -1315,12 +1430,15 @@ export class StudioRenderer {
     this.slitDriverTarget?.dispose(); this.slitDriverTarget = null;
     this.slitBoundTarget?.dispose(); this.slitBoundTarget = null;
     this.slitLagTarget?.dispose(); this.slitLagTarget = null;
+    this.statBoundTarget?.dispose(); this.statBoundTarget = null;
+    this.statLightTarget?.dispose(); this.statLightTarget = null;
+    this.medianTarget?.dispose(); this.medianTarget = null;
     this.feedbackStates.clear();
     this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow?.streak.dispose(); this.glow = null; this.glowBright.dispose();
     this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.graphics.dispose(); this.instruments.dispose();
-    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
+    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;
     this.sliceSource?.dispose(); this.sliceSource = null;
