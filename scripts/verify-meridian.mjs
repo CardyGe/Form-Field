@@ -15,6 +15,7 @@ await build({ stdin: { contents: `export * as THREE from 'three';
 export {StudioRenderer} from './src/rendering/StudioRenderer';
 export {MeridianRenderer} from './src/rendering/MeridianRenderer';
 export {createProject,createLayer} from './src/core/project';
+export {frameCount,phaseAtFrame} from './src/core/timeline';
 export {compose} from './src/meridian/composer';
 export {DisplayList} from './src/meridian/display-list';
 export {MERIDIAN_DEFAULTS,MERIDIAN_PARAMETERS} from './src/meridian/parameters';
@@ -29,7 +30,7 @@ const SEEDS = [1, 2, 3, 4, 5, 6];
 const STATES = { seed: [0, .6], draw: [1, .75], build: [2, .85], charge: [3, .6], peak: [4, .4], collapse: [5, .5], rest: [6, .5] };
 const SHEET = ['draw', 'build', 'peak', 'collapse'];
 const CHECKED = ['seed', 'build', 'peak', 'rest'];
-const SWEPT_GROUPS = ['Rings', 'Spokes', 'Nodes', 'Hero', 'Light', 'Colour', 'Output'];
+const SWEPT_GROUPS = ['Rings', 'Spokes', 'Nodes', 'Hero', 'Glitch', 'Light', 'Colour', 'Output'];
 // These act only on top of another setting, so the sweep turns that setting on first rather than skipping them.
 const SWEEP_NEEDS = {
   ringDashGap: { ringDashCount: 24 },       // There is no gap until a ring is cut into dashes.
@@ -37,6 +38,7 @@ const SWEEP_NEEDS = {
   nodeChasePattern: { nodeChaseSpeed: 2 },  // A pattern only shows while the chase is moving.
   lightTrailLength: { lightAfterglow: 1 },  // Trails are drawn by the afterglow.
   lightAfterglow: { lightTrailLength: 1 },
+  glitchPosterise: { glitchAmount: 2 },     // Bands of flat colour need a tear strong enough to cover lit structure.
 };
 // Parameters that cannot be shown to change pixels in this sweep. Each needs a reason.
 const SWEEP_SKIPS = {};
@@ -202,7 +204,40 @@ try {
       for (let i = 0; i < 12; i++) await studio.exportPNG(project, phase + i * .03, 64, 36);
       return { same, composed: studio.meridian.scores.length };
     };
-    window.meridianQA = { m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold };
+    // The tear: what it changes at Peak and Rest, and whether a frame is the same however it is reached.
+    const tearChecks = async () => {
+      const w = 480, h = 270, target = floatTarget(w, h);
+      const shot = (seed, phase, amount) => {
+        const layer = layerFor(seed); layer.params.glitchAmount = amount;
+        meridian.draw(gl, layer, phase, w, h, target, draw);
+        return read(target, w, h);
+      };
+      const share = (a, b) => {
+        let moved = 0;
+        for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) > .008 || Math.abs(a[i + 1] - b[i + 1]) > .008 || Math.abs(a[i + 2] - b[i + 2]) > .008) moved++;
+        return moved / (a.length / 4);
+      };
+      const peak = [], rest = [];
+      for (const seed of [1, 2, 3, 4, 5, 6]) {
+        const atPeak = phaseOf(seed, 4, .4), atRest = phaseOf(seed, 6, .5);
+        peak.push(share(shot(seed, atPeak, 1), shot(seed, atPeak, 0)));
+        rest.push(share(shot(seed, atRest, 1), shot(seed, atRest, 0)));
+      }
+      target.dispose();
+      const project = m.createProject(), layer = layerFor(4);
+      project.layers = [layer]; project.background = '#000000'; project.duration = 4;
+      const total = m.frameCount(project), frame = index => studio.exportPNG(project, m.phaseAtFrame(index, total), 320, 180);
+      const same = (a, b) => a.length === b.length && a.every((value, i) => value === b[i]);
+      const peakFrame = Math.round(phaseOf(4, 4, .4) / (Math.PI * 2) * total);
+      const first37 = await frame(37), firstPeak = await frame(peakFrame);
+      for (const between of [3, 80, peakFrame + 1, 11]) await frame(between);
+      return {
+        peak, rest, total, peakFrame,
+        repeat37: same(first37, await frame(37)), repeatPeak: same(firstPeak, await frame(peakFrame)),
+        loops: same(await frame(0), await studio.exportPNG(project, Math.PI * 2, 320, 180)),
+      };
+    };
+    window.meridianQA = { m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold, tearChecks };
   });
 
   const report = { luma: {}, widths: {}, errors };
@@ -260,6 +295,14 @@ try {
   report.sweep = { ...swept, skipped: Object.keys(SWEEP_SKIPS) };
   if (swept.dead.length) failures.push(`parameters that change no pixels: ${swept.dead.join(', ')}`);
 
+  const tear = await page.evaluate(() => window.meridianQA.tearChecks());
+  report.tear = { peakMin: +Math.min(...tear.peak).toFixed(3), restMax: Math.max(...tear.rest), repeat37: tear.repeat37, repeatPeak: tear.repeatPeak, loops: tear.loops };
+  tear.peak.forEach((value, i) => { if (!(value > .1)) failures.push(`seed ${SEEDS[i]}: Glitch changes only ${(value * 100).toFixed(1)}% of the Peak`); });
+  tear.rest.forEach((value, i) => { if (value !== 0) failures.push(`seed ${SEEDS[i]}: Glitch changes ${(value * 100).toFixed(2)}% of Rest`); });
+  if (!tear.repeat37) failures.push('frame 37 differs when rendered again after other frames');
+  if (!tear.repeatPeak) failures.push(`Peak frame ${tear.peakFrame} differs when rendered again after other frames`);
+  if (!tear.loops) failures.push('frame N of the loop does not equal frame 0');
+
   // Stills go through the whole Studio path, so masks, blend and transform stay in the proof.
   const tiles = [];
   for (const name of SHEET) for (const seed of SEEDS) {
@@ -293,7 +336,7 @@ try {
   await fs.writeFile(path.join(out, 'first-look.png'), Buffer.from(sheet));
 
   report.ui = await verifyInApp(page, failures);
-  console.log(JSON.stringify({ structuralHold: report.structuralHold, sweep: report.sweep, ui: report.ui }));
+  console.log(JSON.stringify({ structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));
   assert.deepEqual(errors, []);
   assert.deepEqual(failures, []);

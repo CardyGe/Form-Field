@@ -20,7 +20,7 @@ const placement = /* glsl */`
     c=mix(c,uInks[int(next)],uByRadius*clamp(radius/.46,0.,1.));
     // At the peak, colour tears through part of the structure; which part follows each mark's seed.
     float torn=1.-smoothstep(.52,.66,aInk.w);
-    return mix(c,aInk.w<.26?uInks[2]:uInks[1],uPeak*torn*.9);
+    return mix(c,aInk.w<.26?uInks[2]:uInks[1],uPeak*torn*.9*clamp(aInk.z*4.,0.,1.));
   }
   // Half a line in this pass's pixels, and how far its quad must reach in frame units.
   float halfLine() { return max(max(aTail.z,uMinWidth)*.5*uRes,uRes<1.?.8:0.); }
@@ -159,4 +159,111 @@ export const resolveFragment = /* glsl */`
     c+=ground*(1.-cover);
     c=uBlack+c*(1.-uBlack);
     gl_FragColor=vec4(c,1.);
+  }`;
+
+/**
+ * The tear. Reads the finished picture and breaks it along hard edges: rows of uneven blocks slide and smear,
+ * wedges of the disc rotate out of true, channels part, and torn areas take flat palette colour.
+ * Everything is chosen per cell from uNoise, which holds for several frames, so the picture jumps rather than flickers.
+ */
+export const tearFragment = /* glsl */`
+  precision highp float; varying vec2 vUv;
+  uniform sampler2D uImage;
+  uniform vec3 uInks[3];
+  uniform vec4 uNoise;
+  uniform vec2 uGrid, uSlip, uCentre;
+  uniform float uTear, uDrive, uAspect, uSplit, uBands, uPosterise, uRadial, uSpread, uShred;
+  const float TAU=6.28318530718;
+  float hash(vec2 p, float salt) {
+    vec3 q=fract(vec3(p.xyx)*vec3(.1031,.1030,.0973)+salt*.137);
+    q+=dot(q,q.yzx+33.33);
+    return fract((q.x+q.y)*q.z);
+  }
+  float faultDistance(float y, float at) { float d=abs(y-at); return min(d,1.-d); }
+  void main() {
+    // Slabs: the frame is cut into strata of uneven height, so whole slices of the disc move as one.
+    float strata=uGrid.y*.5, course=floor(vUv.y*strata), courseKey=hash(vec2(course,3.),uNoise.x);
+    float parts=courseKey<.35?1.:courseKey<.7?2.:courseKey<.88?4.:8.;
+    float row=course*8.+floor(fract(vUv.y*strata)*parts)*8./parts;
+    // Faults: two zones of the frame give way; Spread widens them until they meet.
+    float rowMiddle=(course+.5)/strata;
+    float first=hash(uNoise.xy,1.), second=fract(first+.38+.24*hash(uNoise.xy,2.));
+    float reach=mix(.1,.62,uSpread)*(.4+.6*uTear);
+    float fault=step(min(faultDistance(rowMiddle,first),faultDistance(rowMiddle,second)),reach);
+    float rowKey=hash(vec2(row,22.),uNoise.x);
+    vec2 shift=vec2(0.);
+    if (fault>.5 && hash(vec2(row,23.),uNoise.y)<.3+.6*uTear) {
+      shift.x=(hash(vec2(row,24.),uNoise.y)-.5)*.62*uSlip.x*uDrive*uTear;
+      shift.y=(hash(vec2(row,25.),uNoise.y)-.5)*.3*uSlip.y*uDrive*uTear;
+    }
+
+    // Blocks: long runs inside a slab, each cut to its own length so the breaks never line up into a grid.
+    float across=uGrid.x*.5*(.3+.9*rowKey);
+    vec2 cell=vec2(floor(vUv.x*across+rowKey*7.),row);
+    vec2 key=cell+uNoise.xy;
+    float torn=fault*step(hash(key,4.),uTear*(.2+.5*uSpread));
+    float ribbon=0.;
+    if (torn>.5) {
+      shift.x+=floor((hash(key,5.)-.5)*9.)/across*uSlip.x*1.4*uDrive;
+      shift.y+=floor((hash(key,6.)-.5)*5.)/uGrid.y*uSlip.y*1.4*uDrive;
+      // Some blocks drag one column of the disc along their whole length, so colour runs out of the structure.
+      if (hash(key,7.)<.42) {
+        float column=uCentre.x+(hash(key,8.)-.5)*.62/uAspect;
+        ribbon=exp(-abs(vUv.x-column)*uAspect*(2.6+5.*hash(key,26.)));
+        shift.x=column-vUv.x;
+      }
+    }
+
+    // Scanline slip: thin runs of rows pulled sideways, changing faster than the blocks.
+    float line=floor(vUv.y*180.), lineKey=hash(vec2(floor(line/3.),9.),uNoise.z);
+    if (lineKey>.8-.3*uTear) {
+      float pull=hash(vec2(line,10.),uNoise.w)-.5;
+      shift.x+=pull*pull*pull*2.6*uSlip.x*uTear*uDrive*(.3+.7*fault);
+    }
+
+    // Radial tear: wedges of the disc turn and slide along their own radius.
+    vec2 from=(vUv-uCentre)*vec2(uAspect,1.);
+    float radius=length(from), angle=atan(from.y,from.x);
+    float wedges=6.+2.*floor(hash(uNoise.xy,11.)*5.);
+    vec2 wedge=vec2(floor((angle/TAU+.5)*wedges),floor(radius*7.));
+    vec2 wedgeKey=wedge+uNoise.yx;
+    float turned=step(hash(wedgeKey,12.),uRadial*uTear*.72);
+    if (turned>.5) {
+      float a=angle+(hash(wedgeKey,13.)-.5)*2.6/wedges*TAU*uDrive;
+      float r=radius*(1.+(hash(wedgeKey,14.)-.5)*.5*uDrive);
+      shift+=(r*vec2(cos(a),sin(a)))/vec2(uAspect,1.)+uCentre-vUv;
+    }
+    float broken=max(torn,turned);
+
+    // Channels part further inside a break, each block along its own line.
+    float lean=hash(broken>.5?key:vec2(row,15.),16.);
+    vec2 part=vec2(cos(lean*TAU*.25),sin(lean*TAU*.25)*.35)*uSplit*.04*uDrive*(.22+.78*broken)*uTear;
+    vec2 at=fract(vUv+shift);
+    vec4 middle=texture2D(uImage,at);
+    vec3 c=vec3(texture2D(uImage,fract(at+part)).r,middle.g,texture2D(uImage,fract(at-part)).b);
+
+    // Colour shred: only light is recoloured, so the black stays black and the rip has edges to read against.
+    if (broken>.5) {
+      vec3 ink=uInks[int(floor(hash(key,17.)*2.999))];
+      float light=max(c.r,max(c.g,c.b));
+      if (ribbon>0.) {
+        // A ribbon takes an accent colour and burns out as it leaves the structure it was pulled from.
+        vec3 accent=uInks[1+int(step(.5,hash(key,27.)))];
+        c=mix(c,accent*pow(max(light-.04,0.),.7)*1.4,step(.02,uShred))*ribbon;
+        c*=.55+.45*step(.4,fract(vUv.y*uGrid.y*9.));
+      } else if (hash(key,18.)<uShred*1.3) c=ink*pow(light,.62)*1.25;
+    }
+
+    // Posterise: glow falls into contour steps, hardest inside the breaks.
+    if (uPosterise>0.) {
+      float steps=mix(9.,2.,uPosterise);
+      c=mix(c,floor(c*steps+.5)/steps,uPosterise*(.45+.55*broken));
+    }
+
+    // Scan bands: wide dim bars with a fine ruling, like a screen losing lock.
+    float band=floor(vUv.y*34.);
+    if (hash(vec2(band,21.),uNoise.y)<uBands*.8*uTear) c*=.26+.5*step(.5,fract(vUv.y*270.));
+
+    float cover=clamp(max(middle.a,max(c.r,max(c.g,c.b))),0.,1.);
+    gl_FragColor=vec4(c,cover);
   }`;

@@ -7,7 +7,7 @@ import { applyMacros } from '../meridian/macros';
 import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
 import { PRIMITIVE, type PerformanceState, type Score } from '../meridian/types';
 import { BLOOM_HEIGHTS, BloomPyramid, lightTarget } from './bloom';
-import { CURVE_SIDES, curveVertex, lightFragment, markVertex, resolveFragment } from './meridian-shaders';
+import { CURVE_SIDES, curveVertex, lightFragment, markVertex, resolveFragment, tearFragment } from './meridian-shaders';
 import { fullscreenVertex } from './shaders';
 import { sourceViewMatrix } from './source-view';
 
@@ -24,6 +24,9 @@ const BEATS_PER_BAR = 4;
 const GHOSTS = 5;
 const GHOST_BEATS = 0.09; // How far back the last echo reaches at Trail length 1.
 const SCORE_CACHE = 16;
+/** A tear holds for whole steps of the phrase. One step is one frame of the default 10 second, 30 fps loop. */
+const TEAR_STEPS = 300;
+const TEAR_COARSE = 3;      // The blocks change this many times more slowly than the scanlines.
 const FALLBACK_PALETTE = ['#e8f1ff', '#ff6a2a', '#35d0ff', '#ffffff', '#ff9a5a', '#04050a'];
 /** Colour schemes: base, accent, second accent, hero core, halo, ground. Palette 0 is the layer's own swatches. */
 const SCHEMES: readonly (readonly string[])[] = [
@@ -82,6 +85,7 @@ class Instances {
  * 2. Glow. The same instances, weighted by each mark's own glow, go into a smaller target and through the bloom
  *    pyramid. The hero carries almost all of it, so thin lines stay razor sharp beside a burning ring.
  * 3. Resolve. Roll-off per channel, fringe, grade, ground. Output is premultiplied.
+ * 4. Tear. Only while one is under way: the resolved picture is broken up, from the Score and the position alone.
  */
 export class MeridianRenderer {
   private readonly curves = new Instances(strip(CURVE_SIDES));
@@ -92,6 +96,7 @@ export class MeridianRenderer {
   private readonly camera = new THREE.Camera();
   private readonly light = lightTarget();
   private readonly glow = lightTarget();
+  private readonly untorn = lightTarget();
   private readonly bloom = new BloomPyramid();
   private readonly view = new THREE.Matrix3();
   private readonly identity = new THREE.Matrix3();
@@ -108,6 +113,7 @@ export class MeridianRenderer {
   private readonly hsl = { h: 0, s: 0, l: 0 };
   private readonly mixed = new THREE.Color();
   private clock = 0;
+  private tearAmount = 0;
   private readonly shared = {
     uInverse: { value: new THREE.Matrix3() }, uShape: { value: new THREE.Matrix2() }, uField: { value: new THREE.Vector2(1, 1) }, uCentre: { value: new THREE.Vector2() },
     uTilt: { value: 0 }, uPixel: { value: 1 / 1080 }, uMinWidth: { value: 1.5 }, uEdge: { value: 1 }, uHaloReach: { value: 8 }, uRes: { value: 1 }, uByRadius: { value: 0 }, uPeak: { value: 0 },
@@ -123,6 +129,15 @@ export class MeridianRenderer {
       uWeights: { value: [0, 0, 0, 0, 0] }, uGround: { value: new THREE.Color() }, uCentre: { value: new THREE.Vector2(.5, .5) },
       uAspect: { value: 1 }, uFringe: { value: 0 }, uExposure: { value: 1 }, uContrast: { value: 1 }, uSaturation: { value: 1 },
       uVignette: { value: 0 }, uLift: { value: 0 }, uBlack: { value: 0 }, uTransparent: { value: 0 },
+    },
+    depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
+  });
+  private readonly tear = new THREE.ShaderMaterial({
+    vertexShader: fullscreenVertex, fragmentShader: tearFragment,
+    uniforms: {
+      uImage: { value: null }, uInks: this.shared.uInks, uNoise: { value: new THREE.Vector4() }, uGrid: { value: new THREE.Vector2(1, 1) },
+      uSlip: { value: new THREE.Vector2() }, uCentre: { value: new THREE.Vector2(.5, .5) }, uTear: { value: 0 }, uDrive: { value: 1 }, uAspect: { value: 1 },
+      uSplit: { value: 0 }, uBands: { value: 0 }, uPosterise: { value: 0 }, uRadial: { value: 0 }, uSpread: { value: 0 }, uShred: { value: 0 },
     },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
@@ -193,8 +208,36 @@ export class MeridianRenderer {
       this.appendGhosts(score, live, position.beat, list);
     }
     const ends = score.stateEnds, peak = smoothRange(position.progress, ends[3], ends[3] + (ends[4] - ends[3]) * .2) * (1 - smoothRange(position.progress, ends[4], ends[5]));
+    this.tearAmount = this.prepareTear(score, position.progress, live);
     sourceViewMatrix(layer.transform, width / height, this.view);
     this.renderList(renderer, list, live, layer.palette, this.view.invert(), layer.transform.scale, position.progress, peak, width, height, target, draw);
+  }
+
+  /**
+   * How torn this moment is, 0 to 1, and the pattern it shows. It cuts in at the start of Peak, holds, and Recovery
+   * sets how far it trails into Collapse. Depends only on the Score, the position and the Glitch values.
+   */
+  private prepareTear(score: Score, progress: number, p: Readonly<Record<string, number>>): number {
+    const glitch = read(p, 'glitchAmount'), ends = score.stateEnds, peakLength = ends[4] - ends[3];
+    if (glitch <= 0 || progress < ends[3]) return 0;
+    const recovery = read(p, 'glitchRecovery');
+    const settled = ends[4] + (ends[5] - ends[4]) * .7 * (1 - recovery);
+    const shape = smoothRange(progress, ends[3], ends[3] + peakLength * .1) * (1 - smoothRange(progress, ends[4] - peakLength * .45, settled));
+    const amount = Math.min(1, glitch * shape);
+    if (amount <= 0) return 0;
+    const u = this.tear.uniforms, seed = (score.seed ^ Math.imul(Math.round(read(p, 'glitchSeed')), 0x9e3779b1)) >>> 0;
+    const step = Math.floor(progress * TEAR_STEPS / (Math.max(0, Math.round(read(p, 'glitchHoldFrames'))) + 1));
+    const coarse = Math.floor(step / TEAR_COARSE);
+    (u.uNoise.value as THREE.Vector4).set(tearNoise(seed, coarse, 1), tearNoise(seed, coarse, 2), tearNoise(seed, step, 3), tearNoise(seed, step, 4));
+    u.uDrive.value = 1 + .6 * Math.max(0, glitch - 1);
+    (u.uSlip.value as THREE.Vector2).set(read(p, 'glitchSlipH'), read(p, 'glitchSlipV'));
+    u.uSplit.value = read(p, 'glitchRgbSplit');
+    u.uBands.value = read(p, 'glitchScanBands');
+    u.uPosterise.value = read(p, 'glitchPosterise');
+    u.uRadial.value = read(p, 'glitchRadialTear');
+    u.uSpread.value = read(p, 'glitchSpread');
+    u.uShred.value = read(p, 'glitchColourShred');
+    return amount;
   }
 
   /** Afterglow: earlier moments of the phrase, drawn fainter into the same frame. Exact at any frame, in any order. */
@@ -219,6 +262,7 @@ export class MeridianRenderer {
 
   /** Draws a ready-made list with no phrase behind it. Live input and the checks use this. */
   drawList(renderer: THREE.WebGLRenderer, list: DisplayList, params: Readonly<Record<string, number>>, palette: readonly string[], width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw): void {
+    this.tearAmount = 0;
     this.renderList(renderer, list, params, palette, this.identity, 1, 0, 0, width, height, target, draw);
   }
 
@@ -284,7 +328,16 @@ export class MeridianRenderer {
     r.uLift.value = read(p, 'lightBackgroundLift');
     r.uBlack.value = read(p, 'outputBlackLevel');
     r.uTransparent.value = read(p, 'outputTransparent') >= .5 ? 1 : 0;
-    draw(this.resolve, target);
+    if (this.tearAmount <= 0) { draw(this.resolve, target); return; }
+    if (this.untorn.width !== width || this.untorn.height !== height) this.untorn.setSize(width, height);
+    draw(this.resolve, this.untorn);
+    const t = this.tear.uniforms, rows = 1 / (.018 + .2 * read(p, 'glitchBlockSize') ** 1.5);
+    t.uImage.value = this.untorn.texture;
+    t.uTear.value = this.tearAmount;
+    t.uAspect.value = aspect;
+    (t.uGrid.value as THREE.Vector2).set(rows * aspect / read(p, 'glitchBlockAspect'), rows);
+    (t.uCentre.value as THREE.Vector2).copy(r.uCentre.value as THREE.Vector2);
+    draw(this.tear, target);
   }
 
   /** Splits the list between the ring strip and the plain quad, so a dot never pays for a ring's geometry. */
@@ -334,8 +387,8 @@ export class MeridianRenderer {
 
   dispose(): void {
     this.curves.dispose(); this.marks.dispose();
-    this.curveMaterial.dispose(); this.markMaterial.dispose(); this.resolve.dispose();
-    this.light.dispose(); this.glow.dispose(); this.bloom.dispose();
+    this.curveMaterial.dispose(); this.markMaterial.dispose(); this.resolve.dispose(); this.tear.dispose();
+    this.light.dispose(); this.glow.dispose(); this.untorn.dispose(); this.bloom.dispose();
   }
 }
 
@@ -346,6 +399,13 @@ function read(p: Readonly<Record<string, number>>, key: string): number {
 
 function clampIndex(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.min(5, Math.round(value as number))) : fallback;
+}
+
+/** A repeatable value in 0 to 97 for one step of one tear. */
+function tearNoise(seed: number, step: number, salt: number): number {
+  let hash = Math.imul(seed ^ Math.imul(step + 1, 0x85ebca6b), 0xc2b2ae35) ^ Math.imul(salt, 0x27d4eb2f);
+  hash = Math.imul(hash ^ (hash >>> 15), 0x2c1b3c6d);
+  return (((hash ^ (hash >>> 13)) >>> 0) / 4294967296) * 97;
 }
 
 function smoothRange(value: number, start: number, end: number): number {
