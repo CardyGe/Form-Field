@@ -13,8 +13,7 @@ const draw = (c: PulseClock, params: Record<string, number> = {}, seed = 1729) =
 const bytes = (list: DisplayList) => Array.from(list.data.subarray(0, list.count * STRIDE));
 const ringRadii = (list: DisplayList) => { const radii: number[] = []; for (let i = 0; i < list.count; i++) if (list.data[i * STRIDE] === PRIMITIVE.ring) radii.push(list.data[i * STRIDE + 3]); return radii; };
 
-test('Pulse is the default, and a project saved before it keeps the Dense look', () => {
-  assert.equal(createLayer('meridian').params.scoreStyle, SCORE_STYLE_PULSE);
+test('a project saved before Pulse keeps the Dense look', () => {
   const old = createLayer('meridian');
   delete old.params.scoreStyle;
   assert.equal(validateProject({ ...createProject(), layers: [old] }).layers[0].params.scoreStyle, SCORE_STYLE_DENSE);

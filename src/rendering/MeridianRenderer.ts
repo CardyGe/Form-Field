@@ -3,6 +3,8 @@ import type { Layer } from '../shared/types';
 import { compose } from '../meridian/composer';
 import { DisplayList, STRIDE } from '../meridian/display-list';
 import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate';
+import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveScheme, exactEvolveClock, SCORE_STYLE_EVOLVE, type EvolveTransport } from '../meridian/evolve';
+import { heldMoves } from '../meridian/held-moves';
 import { applyMacros } from '../meridian/macros';
 import { markFromOutput, type MarkPlacement } from '../meridian/mark-placement';
 import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
@@ -157,6 +159,11 @@ export class MeridianRenderer {
   private pulseSeededScheme: number | undefined;
   private readonly transports = new Map<string, PulseTransport>();
   private readonly pulseClock: PulseClock = { phrase: 0, tick: 0, frac: 0, ticks: 128, tickSeconds: .06 };
+  private readonly evolveTransports = new Map<string, EvolveTransport>();
+  private readonly evolveExact = createEvolveClock();
+  private readonly evolveMoves = { next: false, hold: false, drop: false, collapse: false, burst: false };
+  private readonly evolveView: Record<string, number> = {};
+  private readonly evolveWalls = new Map<string, number>();
 
   constructor() {
     for (const [instances, material] of [[this.curves, this.curveMaterial], [this.marks, this.markMaterial]] as const) {
@@ -205,6 +212,7 @@ export class MeridianRenderer {
       const value = structure[STRUCTURAL[i]];
       live[STRUCTURAL[i]] = Number.isFinite(value) ? value : MERIDIAN_DEFAULTS[STRUCTURAL[i]];
     }
+    if (Math.round(live.scoreStyle) === SCORE_STYLE_EVOLVE) { this.drawEvolve(renderer, layer, phase, width, height, target, draw, runtime); return; }
     if (isPulse(live)) { this.drawPulse(renderer, layer, phase, width, height, target, draw, runtime); return; }
     this.pulseSeededScheme = undefined;
     this.shared.uOwnGlow.value = 0;
@@ -235,6 +243,42 @@ export class MeridianRenderer {
     this.view.invert();
     this.prepareMark(runtime?.mark, position.progress, ends[5], live, width / height);
     this.renderList(renderer, list, live, layer.palette, this.view, layer.transform.scale, position.progress, peak, width, height, target, draw);
+  }
+
+  /** Evolve: free-running and eased in the preview, an exact closed path in an export. It has no Rest, so the Mark stays off. */
+  private drawEvolve(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, runtime?: MeridianRuntime): void {
+    const live = this.live, seed = live.seed >>> 0, duration = runtime?.duration ?? DEFAULT_LOOP_FRAMES / 30;
+    const view = Object.assign(this.evolveView, live);
+    let list = runtime?.list, scheme = seed;
+    if (runtime?.live) {
+      let transport = this.evolveTransports.get(layer.id);
+      if (!transport) { transport = createEvolveTransport(); this.evolveTransports.set(layer.id, transport); }
+      const now = performance.now(), last = this.evolveWalls.get(layer.id), wall = last === undefined ? 0 : (now - last) / 1000;
+      this.evolveWalls.set(layer.id, now);
+      if (wall > .25) transport.lastPhase = null; // Back after a gap, such as another style: carry on from here rather than leaping.
+      const moves = this.evolveMoves;
+      moves.next = heldMoves.get(layer.id, 'moveNext') > 0; moves.hold = heldMoves.get(layer.id, 'moveHold') > 0; moves.drop = heldMoves.get(layer.id, 'moveDrop') > 0;
+      moves.collapse = heldMoves.get(layer.id, 'moveCollapse') > 0; moves.burst = heldMoves.get(layer.id, 'moveBurst') > 0;
+      const clock = advanceEvolve(transport, phase, duration, wall, seed, live, moves);
+      Object.assign(view, transport.values);
+      if (!list) { list = this.list; evaluateEvolve(seed, clock, view, list); }
+      scheme = clock.schemeSeed;
+    } else {
+      // An animated Speed or Evolution would change how many turns the closed path makes, so the saved values set it.
+      view.macroSpeed = runtime?.structure?.macroSpeed ?? live.macroSpeed;
+      view.scoreEvolution = runtime?.structure?.scoreEvolution ?? live.scoreEvolution;
+      const clock = exactEvolveClock(phase, duration, view, this.evolveExact);
+      if (!list) { list = this.list; evaluateEvolve(seed, clock, view, list); }
+    }
+    applyEvolveLight(view, live);
+    this.tearAmount = 0;
+    this.markAlpha = 0;
+    this.form = undefined;
+    this.pulseSeededScheme = evolveScheme(scheme);
+    this.shared.uOwnGlow.value = 1;
+    sourceViewMatrix(layer.transform, width / height, this.view);
+    this.view.invert();
+    this.renderList(renderer, list, live, layer.palette, this.view, layer.transform.scale, 0, 0, width, height, target, draw);
   }
 
   /** Pulse: the sequencer draws the picture and carries its own brief, local tears, so the full-frame tear stays off. */

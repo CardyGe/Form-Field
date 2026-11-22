@@ -75,3 +75,6 @@
 .m-pulse-field { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
 .m-pulse-field input { width: 48px; height: 26px; padding: 0 4px; border: 1px solid var(--line, #33332f); border-radius: 4px; background: transparent; color: #e8e8e2; font-size: 11px; font-variant-numeric: tabular-nums; }
 .m-pulse-loop { margin-left: auto; }
+.m-evolution { display: flex; flex: 1 1 120px; min-width: 110px; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.m-evolution input { flex: 1; min-width: 50px; accent-color: #e8e8e2; }
+.m-evolution input:disabled { opacity: .4; }

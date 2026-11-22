@@ -18,7 +18,8 @@ const SWATCHES = ['Swatch 1', 'Swatch 2', 'Swatch 3', 'Swatch 4', 'Swatch 5', 'S
 const SCHEMES = MERIDIAN_SCHEMES.map((scheme) => scheme.name);
 /** Stepped parameters that are named choices, so they show as dropdowns. */
 export const MERIDIAN_CHOICES: Readonly<Record<string, readonly string[]>> = {
-  scoreStyle: ['Pulse', 'Dense'],
+  scoreStyle: ['Pulse', 'Dense', 'Evolve'],
+  scoreHoldShape: OFF_ON,
   scoreLoopPhrase: OFF_ON,
   scoreQuantise: ['At once', 'Beat', 'Bar', 'Phrase'],
   scoreAutopilot: OFF_ON,

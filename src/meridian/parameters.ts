@@ -10,7 +10,7 @@ export const MACRO_KEYS = ['macroDensity', 'macroTension', 'macroOrder', 'macroS
 /** The seed and the seed bank only change what the next phrase is, so they are never link targets. */
 export const MERIDIAN_UNLINKED: readonly string[] = ['seed', ...Array.from({ length: 8 }, (_, i) => `seedSlot${i}`)];
 /** Never varied by the Variation tool: identity, show safety, output flags, the performer's macro positions and one-shot actions. */
-export const MERIDIAN_FIXED: readonly string[] = [...MERIDIAN_UNLINKED, 'scoreStyle', 'scoreBpm', 'scorePulseBars', 'scoreLoopPhrase', 'moveRecall', 'glitchSeed', 'safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField', 'outputMono', 'outputTransparent', ...MACRO_KEYS];
+export const MERIDIAN_FIXED: readonly string[] = [...MERIDIAN_UNLINKED, 'scoreStyle', 'scoreEvolution', 'scoreHoldShape', 'scoreBpm', 'scorePulseBars', 'scoreLoopPhrase', 'moveRecall', 'glitchSeed', 'safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField', 'outputMono', 'outputTransparent', ...MACRO_KEYS];
 
 
 type Section = ParameterDefinition['section'];
@@ -30,8 +30,10 @@ const build = (group: string, rows: readonly Row[], structural: readonly string[
 
 const SCORE: Row[] = [
   ['seed', 'Seed', 0, 4294967295, 1, 1729, 'Picks the composition. The same seed always draws the same design.'],
-  ['scoreStyle', 'Style', 0, 1, 1, 0, 'Pulse is a sparse step sequencer of rings and spokes. Dense is the full phrase machine.'],
-  ['scoreBpm', 'Tempo', 40, 220, 1, 124, 'Beats per minute of the Pulse sequencer.'],
+  ['scoreStyle', 'Style', 0, 2, 1, 2, 'Evolve is one slow living structure that keeps changing form. Pulse is a sparse step sequencer. Dense is the full phrase machine.'],
+  ['scoreEvolution', 'Evolution', 0, 1, 0.01, 0.5, 'How quickly Evolve changes form, from frozen at 0 to restless at full.'],
+  ['scoreHoldShape', 'Hold shape', 0, 1, 1, 0, 'On, Evolve stays on its current form while it keeps turning and breathing.'],
+  ['scoreBpm', 'Tempo', 40, 220, 1, 124, 'Beats per minute of the Pulse sequencer, and of the soft pulse of light in Evolve.'],
   ['scorePulseBars', 'Pulse phrase', 1, 16, 1, 4, 'How many bars one Pulse composition lasts before it collapses and the next begins.'],
   ['scoreLoopPhrase', 'Loop this phrase', 0, 1, 1, 0, 'On, Pulse keeps repeating the current composition. Off, every phrase is new.'],
   ['scoreBars', 'Phrase length', 1, 32, 1, 8, 'How many bars one phrase lasts, from the first point to the rest.'],

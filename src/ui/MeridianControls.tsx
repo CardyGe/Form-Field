@@ -125,9 +125,14 @@ function MacroFader({ d, value, onChange, onStart, onEnd }: { d: ParameterDefini
   </div>;
 }
 
-function MovePad({ action, label, hint, connected, performance }: { action: MoveKey; label: string; hint?: string; connected?: boolean; performance: MeridianPerformance }) {
+const EVOLVE_MOVES: Partial<Record<MoveKey, string>> = {
+  moveNext: 'Glides to the next form.', moveHold: 'Holds the current form for as long as it is held.', moveDrop: 'Swells the hero and the light.',
+  moveCollapse: 'Gathers the structure inward while held, then lets it open again.', moveMutate: 'Varies the drawing, gliding to the new values.', moveReseed: 'Glides to a new composition.', moveBurst: 'Sends a ripple of light outward.',
+};
+
+function MovePad({ action, label, hint, connected, evolve, performance }: { action: MoveKey; label: string; hint?: string; connected?: boolean; evolve: boolean; performance: MeridianPerformance }) {
   const d = definition(action), down = performance.pressed.has(action);
-  const title = `${label}${hint ? ` · ${hint}` : ''}\n${connected ? d.description : 'Playback does not follow this move yet.'}`;
+  const title = `${label}${hint ? ` · ${hint}` : ''}\n${evolve ? EVOLVE_MOVES[action] : connected ? d.description : 'Playback does not follow this move yet.'}`;
   return <button className={`m-pad ${down ? 'is-down' : ''}`} aria-pressed={down} title={title}
     onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); performance.press(action); }}
     onPointerUp={() => performance.release(action)} onPointerCancel={() => performance.release(action)} onLostPointerCapture={() => performance.release(action)}
@@ -215,20 +220,30 @@ function MarkControl({ layer, edit, notify }: { layer: Layer; edit: (change: (l:
   </>;
 }
 
-/** The sequencer's clock: which engine, how fast, how long, and whether this phrase repeats. */
-function PulseStrip({ layer, setParam }: { layer: Layer; setParam: (key: string, value: number) => void }) {
-  const style = Math.round(layer.params.scoreStyle ?? 0), looping = (layer.params.scoreLoopPhrase ?? 0) >= .5;
-  const number = (key: string, label: string) => {
+/** Which engine, and the controls that belong to it. */
+function PulseStrip({ layer, setParam, onStart, onEnd }: { layer: Layer; setParam: (key: string, value: number) => void; onStart: () => void; onEnd: () => void }) {
+  const style = Math.round(layer.params.scoreStyle ?? 2), looping = (layer.params.scoreLoopPhrase ?? 0) >= .5, holding = (layer.params.scoreHoldShape ?? 0) >= .5;
+  const evolution = layer.params.scoreEvolution ?? .5;
+  const number = (key: string, label: string, enabled: boolean) => {
     const d = definition(key);
-    return <label className="m-pulse-field" title={d.description}><span>{label}</span><input type="number" aria-label={d.label} min={d.min} max={d.max} step={1} disabled={style !== 0} value={layer.params[key] ?? d.default}
+    return <label className="m-pulse-field" title={d.description}><span>{label}</span><input type="number" aria-label={d.label} min={d.min} max={d.max} step={1} disabled={!enabled} value={layer.params[key] ?? d.default}
       onChange={e => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n)) setParam(key, clamp(Math.round(n), d.min, d.max)); }} /></label>;
   };
-  return <section className="m-block m-pulse" aria-label="Sequencer">
+  return <section className="m-block m-pulse" aria-label="Engine">
     <div className="m-pulse-style" role="group" aria-label="Style">
-      {['Pulse', 'Dense'].map((name, i) => <button key={name} className={style === i ? 'is-on' : ''} aria-pressed={style === i} title={definition('scoreStyle').description} onClick={() => setParam('scoreStyle', i)}>{name}</button>)}
+      {([[2, 'Evolve'], [0, 'Pulse'], [1, 'Dense']] as const).map(([value, name]) => <button key={name} className={style === value ? 'is-on' : ''} aria-pressed={style === value} title={definition('scoreStyle').description} onClick={() => setParam('scoreStyle', value)}>{name}</button>)}
     </div>
-    {number('scoreBpm', 'BPM')}{number('scorePulseBars', 'Bars')}
-    <button className={`m-pulse-loop ${looping ? 'is-on' : ''}`} aria-pressed={looping} disabled={style !== 0} title={definition('scoreLoopPhrase').description} onClick={() => setParam('scoreLoopPhrase', looping ? 0 : 1)}>Loop phrase</button>
+    {number('scoreBpm', 'BPM', style !== 1)}
+    {style === 2 ? <>
+      <label className="m-evolution" title={definition('scoreEvolution').description}><span>Evolution</span>
+        <input type="range" aria-label="Evolution" min={0} max={1} step={.01} value={evolution} disabled={holding} style={{ '--fill': `${evolution * 100}%` } as CSSProperties}
+          onPointerDown={onStart} onPointerUp={onEnd} onPointerCancel={onEnd} onKeyDown={e => { if (e.key.startsWith('Arrow')) onStart(); }} onKeyUp={onEnd} onChange={e => setParam('scoreEvolution', Number(e.target.value))} />
+      </label>
+      <button className={`m-pulse-loop ${holding ? 'is-on' : ''}`} aria-pressed={holding} title={definition('scoreHoldShape').description} onClick={() => setParam('scoreHoldShape', holding ? 0 : 1)}>Hold shape</button>
+    </> : <>
+      {number('scorePulseBars', 'Bars', style === 0)}
+      <button className={`m-pulse-loop ${looping ? 'is-on' : ''}`} aria-pressed={looping} disabled={style !== 0} title={definition('scoreLoopPhrase').description} onClick={() => setParam('scoreLoopPhrase', looping ? 0 : 1)}>Loop phrase</button>
+    </>}
   </section>;
 }
 
@@ -253,8 +268,8 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
   };
   return <div className="meridian-controls">
     <section className="m-block" aria-label="Macros"><div className="m-macros">{MACROS.map(d => <MacroFader key={d.key} d={d} value={layer.params[d.key] ?? d.default} onChange={n => setParam(d.key, n)} onStart={onStart} onEnd={onEnd} />)}</div></section>
-    <PulseStrip layer={layer} setParam={setParam} />
-    <section className="m-block" aria-label="Moves"><div className="m-pads">{PADS.map(pad => <MovePad key={pad.action} {...pad} performance={performance} />)}</div></section>
+    <PulseStrip layer={layer} setParam={setParam} onStart={onStart} onEnd={onEnd} />
+    <section className="m-block" aria-label="Moves"><div className="m-pads">{PADS.map(pad => <MovePad key={pad.action} {...pad} evolve={Math.round(layer.params.scoreStyle ?? 2) === 2} performance={performance} />)}</div></section>
     <section className="m-block" aria-label="Seeds and morph">
       <div className="m-heading"><span>Seeds</span><small>{layer.params.seed}</small></div>
       <SeedBank layer={layer} edit={edit} performance={performance} notify={notify} />
