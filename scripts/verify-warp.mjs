@@ -551,6 +551,27 @@ const CHECKS = [
     },
   },
   {
+    name: 'luma-moved',
+    // The top layer is moved, scaled and turned, on an image and on a generated source. Its source is already in frame
+    // coordinates, so the bend must stay on the shape's place on screen. The shape sits off-centre so any misread shows.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, rows = [], transform = { x: .12, y: -.08, scale: 1.6, rotation: .5 };
+        const place = l => { l.transform = { ...transform }; return l; };
+        for (const [name, make] of [['image', q.rich], ['generated', q.moving]]) {
+          const drive = () => { const l = place(make()); Object.assign(l.params, { lumaWarpAmount: .3, lumaWarpSource: 1 }); return l; };
+          const still = await q.px(q.project([q.disc(.45), make()]));
+          const plain = await q.px(q.project([q.disc(.45), place(make())]));
+          const bent = await q.px(q.project([q.disc(.45), drive()]));
+          rows.push({ name, placed: q.difference(still, plain), ...q.discZones(plain, bent, W, H, .45) });
+        }
+        return rows;
+      });
+      const ok = rows.every(r => r.placed > 1 && r.inside > .5 && r.outside < .001);
+      return { ok, detail: rows.map(r => `${r.name}: transform moved the layer ${r.placed.toFixed(2)} (over 1), changed inside the shape ${(r.inside * 100).toFixed(1)}% (over 50%), outside ${(r.outside * 100).toFixed(3)}% (limit .1%)`).join('; ') };
+    },
+  },
+  {
     name: 'luma-bottom',
     // A hidden layer draws nothing, so a layer above it is still the bottom of the picture.
     run: async ({ page }) => {
