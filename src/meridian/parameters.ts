@@ -8,8 +8,9 @@ export const MERIDIAN_MOVES = ['moveNext', 'moveHold', 'moveDrop', 'moveCollapse
 export const MACRO_KEYS = ['macroDensity', 'macroTension', 'macroOrder', 'macroSpeed', 'macroWeight', 'macroGlitch', 'macroHeat', 'macroScale'] as const;
 /** The seed and the seed bank only change what the next phrase is, so they are never link targets. */
 export const MERIDIAN_UNLINKED: readonly string[] = ['seed', ...Array.from({ length: 8 }, (_, i) => `seedSlot${i}`)];
-/** Never varied by the Variation tool: they are identity, safety or one-shot actions, not looks. */
-export const MERIDIAN_FIXED: readonly string[] = [...MERIDIAN_UNLINKED, 'moveRecall', 'glitchSeed'];
+/** Never varied by the Variation tool: identity, show safety, output flags, the performer's macro positions and one-shot actions. */
+export const MERIDIAN_FIXED: readonly string[] = [...MERIDIAN_UNLINKED, 'moveRecall', 'glitchSeed', 'safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField', 'outputMono', 'outputTransparent', ...MACRO_KEYS];
+
 
 type Section = ParameterDefinition['section'];
 const SECTION: Record<string, Section> = {

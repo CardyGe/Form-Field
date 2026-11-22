@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { INSTRUMENT_KINDS } from '../src/core/instruments';
-import { createLayer, createProject, parameterDefinitions, validateProject } from '../src/core/project';
+import { createLayer, createProject, parameterDefinitions, validateProject, varyLayer } from '../src/core/project';
 import { canLinkParameter, targetRange } from '../src/map/targets';
 import { compose, scoreQuality } from '../src/meridian/composer';
 import { applyMacros } from '../src/meridian/macros';
@@ -197,4 +197,22 @@ test('every continuous parameter and move can be linked; the seeds cannot', () =
   const free = MERIDIAN_PARAMETERS.filter((d) => d.step !== 1).map((d) => d.key);
   project.layers[0].modulations = Object.fromEntries(free.map((key) => [key, { kind: 'sine', cycles: 1, phase: 0, amount: 0.5, points: [] }])) as never;
   assert.equal(Object.keys(validateProject(project).layers[0].modulations).length, free.length);
+});
+
+test('Variation never touches safety, output flags, macros, moves or seeds, and keeps integers whole', () => {
+  const layer = createLayer('meridian');
+  const frozen = MERIDIAN_PARAMETERS.filter((d) => d.group === 'Safety' || d.group === 'Performance' || d.key.startsWith('output') && d.step === 1 || d.key.startsWith('seedSlot') || d.key === 'glitchSeed').map((d) => d.key);
+  assert.ok(frozen.length >= 4 + 8 + 8 + 2);
+  const unlocked = { palette: false, structure: false, motion: false, material: false };
+  let moved = 0;
+  for (let entropy = 1; entropy <= 200; entropy++) {
+    const next = varyLayer(layer, 1, unlocked, entropy * 7919);
+    for (const key of frozen) assert.equal(next.params[key], layer.params[key], `${key} at entropy ${entropy}`);
+    for (const d of MERIDIAN_PARAMETERS) {
+      if (d.step === 1) assert.ok(Number.isInteger(next.params[d.key]), d.key);
+      assert.ok(next.params[d.key] >= d.min && next.params[d.key] <= d.max, d.key);
+      if (next.params[d.key] !== layer.params[d.key]) moved++;
+    }
+  }
+  assert.ok(moved > 0, 'variation should still change drawing parameters');
 });
