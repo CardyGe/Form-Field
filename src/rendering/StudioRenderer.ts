@@ -24,6 +24,7 @@ import { ScopeRenderer } from './ScopeRenderer';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
+import { warpActive, warpFragment, warpPoints } from './warp';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -230,6 +231,14 @@ export class StudioRenderer {
     uShadowTint: { value: 0 }, uHighlightTint: { value: 0 },
     uKeyMix: { value: 0 }, uKeyMode: { value: 0 }, uKeyLow: { value: .25 }, uKeyHigh: { value: 1 }, uKeySoft: { value: .1 },
     uKeyHue: { value: 120 }, uKeyHueRange: { value: 40 }, uKeyInvert: { value: 0 },
+  });
+  /** Warp finish: one target shared by all layers, built on first use. */
+  private warpTarget: THREE.WebGLRenderTarget | null = null;
+  private readonly warp = material(warpFragment, {
+    uSource: { value: null }, uResolution: { value: new THREE.Vector2(1, 1) }, uAspect: { value: 1 }, uSeed: { value: 0 },
+    uBendAmount: { value: 0 }, uBendField: { value: 0 }, uBendScale: { value: 3 }, uBendDirection: { value: new THREE.Vector2(1, 0) },
+    uBendTurn: { value: 0 }, uBendDetail: { value: 3 }, uBendFalloff: { value: .5 }, uBendChroma: { value: 0 }, uBendCount: { value: 1 },
+    uBendPoints: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
   });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
@@ -878,7 +887,8 @@ export class StudioRenderer {
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
-      const finished = lensActive(original) ? this.lensSource(original, layer, sourceTexture, wrapped, width, height) : sourceTexture;
+      const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
+      const finished = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
       const u = this.composite.uniforms;
       u.uBelow.value = below.texture; u.uSource.value = finished;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
@@ -929,6 +939,37 @@ export class StudioRenderer {
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
     this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
     this.draw(this.finish, this.linearOutput);
+  }
+
+  /**
+   * Warp finish: moves the layer's pixels after Feedback and Time and before
+   * Colour and Lens, in its own target, so it never enters the echo history.
+   * `below` is the picture under this layer, read by Luma Warp.
+   */
+  warpSource(original: Layer, layer: Layer, source: THREE.Texture, _below: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
+    if (!warpActive(original)) return source;
+    // A modulated amount can rest at zero, where there is nothing to do.
+    const amount = number(layer, 'bendAmount', 0);
+    if (amount <= 0) return source;
+    this.warpTarget ??= target();
+    const output = this.warpTarget;
+    if (output.width !== width || output.height !== height) output.setSize(width, height);
+    setWrap(output, this.tiling);
+    const u = this.warp.uniforms, angle = number(layer, 'bendAngle', 0) * Math.PI / 180, seed = number(layer, 'seed', 0) % 1000;
+    const points = warpPoints(Math.min(8, Math.round(number(layer, 'bendPoints', 3))), seed);
+    u.uSource.value = source; u.uAspect.value = width / height; u.uSeed.value = seed;
+    (u.uResolution.value as THREE.Vector2).set(width, height);
+    u.uBendAmount.value = amount; u.uBendField.value = Math.round(number(layer, 'bendField', 0));
+    u.uBendScale.value = number(layer, 'bendScale', 3);
+    (u.uBendDirection.value as THREE.Vector2).set(Math.cos(angle), Math.sin(angle));
+    // Whole cycles only, so the loop closes.
+    u.uBendTurn.value = Math.round(number(layer, 'bendCycles', 1)) * phase;
+    u.uBendDetail.value = Math.round(number(layer, 'bendDetail', 3));
+    u.uBendFalloff.value = number(layer, 'bendFalloff', .5); u.uBendChroma.value = number(layer, 'bendChroma', 0);
+    u.uBendCount.value = points.length;
+    points.forEach((point, i) => (u.uBendPoints.value as THREE.Vector3[])[i].set(point.x, point.y, point.polarity));
+    this.draw(this.warp, output);
+    return output.texture;
   }
 
   /**
@@ -1364,6 +1405,7 @@ export class StudioRenderer {
     }
     if (!needs.driver && this.slitDriverTarget) { this.slitDriverTarget.dispose(); this.slitDriverTarget = null; slit.uDriver.value = this.fallback; }
     if (this.lensTarget && !project.layers.some(layer => layer.visible && lensActive(layer))) { this.lensTarget.dispose(); this.lensTarget = null; }
+    if (this.warpTarget && !project.layers.some(layer => layer.visible && warpActive(layer))) { this.warpTarget.dispose(); this.warpTarget = null; }
   }
 
   render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }): void {
@@ -1463,6 +1505,7 @@ export class StudioRenderer {
     this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow?.streak.dispose(); this.glow = null; this.glowBright.dispose();
     this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
+    this.warpTarget?.dispose(); this.warpTarget = null; this.warp.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
