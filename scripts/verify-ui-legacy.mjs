@@ -263,7 +263,7 @@ try {
     }
     await page.getByTitle('Return to start', { exact: true }).click();
     const familyImages = new Set();
-    for (const [style, name] of ['Kaleidoscope', 'Julia Bloom', 'Mandelbox'].entries()) {
+    for (const [style, name] of ['Folded Lace', 'Julia Bloom', 'Mandelbox'].entries()) {
       const family = page.getByRole('button', { name, exact: true });
       await family.click();
       await saved(project => project.layers[1].params.style === style);
@@ -316,7 +316,7 @@ try {
       }
     }
     assert.equal(familyImages.size, 3, 'Each family must render its own actual paused image.');
-    await page.getByRole('button', { name: 'Kaleidoscope', exact: true }).click();
+    await page.getByRole('button', { name: 'Folded Lace', exact: true }).click();
     await saved(project => project.layers[1].params.style === 0);
     await page.getByLabel('Fractal variant', { exact: true }).selectOption('0');
     await page.getByLabel('Fractal render quality', { exact: true }).selectOption('1');
@@ -584,7 +584,7 @@ try {
           for (const label of ['Thickness', 'Curl', 'Fold frequency', 'Asymmetry', 'Ridge scale', 'Metal finish', 'Clear coat', 'Sheen', 'Film thickness', 'Light power', 'Shadow strength', 'Shadow softness']) assert.equal(await page.getByLabel(`${label} value`, { exact: true }).count(), 1);
           assert.equal(await page.getByTitle('Animate Lobes', { exact: true }).count(), 0);
         } else if (kind === 'fractal') {
-          for (const name of ['Kaleidoscope', 'Julia Bloom', 'Mandelbox']) {
+          for (const name of ['Folded Lace', 'Julia Bloom', 'Mandelbox']) {
             await page.getByRole('button', { name, exact: true }).click();
             const images = new Set();
             for (const mode of ['0', '1', '2']) {

@@ -492,3 +492,8 @@ a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .live-starts .text-button { justify-content: flex-start; border: 1px solid #3a3a3a; }
 .live-starts .text-button.on { border-color: var(--accent); color: var(--ink); }
 .live-control input[type="range"]:disabled { opacity: .35; }
+.kaleidoscope-options { display: flex; flex-direction: column; gap: 10px; }
+.kaleidoscope-image { display: flex; flex-direction: column; gap: 8px; }
+.kaleidoscope-image > img { margin: 0 auto; }
+.kaleidoscope-image > p, .kaleidoscope-image > label { margin-bottom: 0; }
+.kaleidoscope-options .button-row { display: flex; gap: 8px; flex-wrap: wrap; }
