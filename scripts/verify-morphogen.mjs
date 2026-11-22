@@ -13,6 +13,7 @@ await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {MorphSolver} from './src/morphogen/solver';
 export {MorphEngine} from './src/morphogen/engine';
 export {defaultMorphParams} from './src/morphogen/params';
+export {MORPH_LOOKS} from './src/morphogen/looks';
 export {Passes} from './src/live/passes';
 export {Gpu} from './src/map/gpu';
 export {LiveRenderer} from './src/live/LiveRenderer';
@@ -267,6 +268,30 @@ try {
     console.log('recovery', JSON.stringify(r));
     assert.ok(r.before > 40, `no picture before: ${r.before}`);
     assert.ok(r.after >= 40 && r.ms < 3000, `picture did not return: ${r.after} after ${r.ms} ms`);
+  });
+  await check('the six party looks render as distinct pictures', async () => {
+    await fs.mkdir(path.join(out, 'looks'), { recursive: true });
+    const means = [];
+    for (let n = 0; n < 6; n++) {
+      const r = await page.evaluate(index => {
+        const { m, renderer, passes } = window.t, look = m.MORPH_LOOKS[index], engine = new m.MorphEngine(passes, 1920, 1080), params = { ...m.defaultMorphParams(), ...look.params };
+        const input = { flow: null, people: null, impulse: 0, seedBurst: 0 };
+        for (let i = 0; i < 720; i++) engine.step(1 / 60, i / 60, params, input);
+        const copy = passes.material('uniform sampler2D uImage;void main(){vec3 c=clamp(texture2D(uImage,vUv).rgb,0.,1.);gl_FragColor=vec4(mix(c*12.92,1.055*pow(c,vec3(1./2.4))-.055,step(.0031308,c)),1.);}', { uImage: { value: engine.output } });
+        passes.draw(copy, null);
+        const gl = renderer.getContext(), data = new Uint8Array(1920 * 1080 * 4); gl.readPixels(0, 0, 1920, 1080, gl.RGBA, gl.UNSIGNED_BYTE, data);
+        let red = 0, green = 0, blue = 0, clipped = 0, black = 0;
+        for (let i = 0; i < data.length; i += 4) { red += data[i]; green += data[i + 1]; blue += data[i + 2]; if (data[i] > 252 && data[i + 1] > 252 && data[i + 2] > 252) clipped++; if (data[i] + data[i + 1] + data[i + 2] < 12) black++; }
+        const count = data.length / 4, image = renderer.domElement.toDataURL('image/jpeg', .9).split(',')[1];
+        copy.dispose(); engine.dispose();
+        return { name: look.id, mean: [red / count, green / count, blue / count], clipped: clipped / count, black: black / count, image };
+      }, n);
+      await fs.writeFile(path.join(out, 'looks', `${r.name}.jpg`), Buffer.from(r.image, 'base64'));
+      console.log('look', r.name, r.mean.map(v => v.toFixed(0)).join(','), 'clipped', r.clipped.toFixed(3), 'black', r.black.toFixed(3));
+      assert.ok(r.clipped < .15, `${r.name} clips ${r.clipped}`); assert.ok(r.black < .25, `${r.name} is black over ${r.black}`);
+      for (const other of means) assert.ok(Math.hypot(r.mean[0] - other[0], r.mean[1] - other[1], r.mean[2] - other[2]) > 8, `${r.name} is too close to another look`);
+      means.push(r.mean);
+    }
   });
   await check('camera movement pushes the stripes', async () => {
     const r = await page.evaluate(() => {

@@ -2,12 +2,20 @@
  * Morphogen's parameters: one table that the solver, shading, panel, validation and sound links all read.
  * Values are plain numbers so a whole look fits in the Live settings message.
  */
-export type MorphSection = 'Pattern' | 'Flow' | 'Forms' | 'Motion' | 'Relief' | 'Material' | 'Iridescence' | 'Colour' | 'Camera' | 'Finish' | 'Reaction' | 'System';
+export type MorphSection = 'Macros' | 'Pattern' | 'Flow' | 'Forms' | 'Motion' | 'Relief' | 'Material' | 'Iridescence' | 'Colour' | 'Camera' | 'Finish' | 'Reaction' | 'System';
 
 const c = <K extends string>(key: K, label: string, section: MorphSection, min: number, max: number, value: number, description: string, step = .01) =>
   ({ key, label, section, min, max, step, default: value, description });
 
 const TABLE = [
+  c('growth', 'Growth', 'Macros', 0, 1, .5, 'How hard and fast the pattern grows.'),
+  c('chaos', 'Chaos', 'Macros', 0, 1, .5, 'From ordered flow to tangled, forking disorder.'),
+  c('density', 'Density', 'Macros', 0, 1, .5, 'From broad stripes to fine ones.'),
+  c('liquid', 'Liquid', 'Macros', 0, 1, .5, 'From still and satin to streaming and glassy.'),
+  c('heat', 'Heat', 'Macros', 0, 1, .5, 'Moves colour and intensity.'),
+  c('prism', 'Prism', 'Macros', 0, 1, .5, 'How strongly the surface splits into rainbow film.'),
+  c('warp', 'Warp', 'Macros', 0, 1, .5, 'Twists the flow and strengthens the surge rings.'),
+  c('impact', 'Impact', 'Macros', 0, 1, .5, 'Deeper relief, sharper lines and more glow.'),
   c('wavelength', 'Stripe width', 'Pattern', 7, 32, 12, 'Distance between stripes, in simulation pixels.', .1),
   c('drive', 'Drive', 'Pattern', .05, .7, .28, 'How strongly the pattern grows. Higher is bolder and quicker to reform.'),
   c('asymmetry', 'Fingers', 'Pattern', 0, .7, .12, 'Moves even stripes toward fat fingers and cells.'),
@@ -46,7 +54,7 @@ const TABLE = [
   c('lightAngle', 'Light angle', 'Material', -3.14, 3.14, -.7, 'Direction of the main light.'),
   c('envRotate', 'Reflection angle', 'Material', -3.14, 3.14, 0, 'Rotates the studio reflected in the surface.'),
   c('irid', 'Iridescence', 'Iridescence', 0, 1, .6, 'Strength of the oil-film rainbow.'),
-  c('filmNm', 'Film thickness', 'Iridescence', 100, 900, 420, 'Thickness of the film in nanometres. Changes the rainbow colours.', 1),
+  c('filmNm', 'Film thickness', 'Iridescence', 100, 900, 420, 'Thickness of the film in nanometres. Changes the rainbow colours.', .5),
   c('filmVary', 'Film variation', 'Iridescence', 0, 1, .5, 'How much film thickness follows the stripe height.'),
   c('filmIor', 'Film index', 'Iridescence', 1.1, 2.4, 1.45, 'Optical density of the film. Higher gives stronger colour bands.'),
   c('palette', 'Palette', 'Colour', 0, 11, 0, 'The colour family.', 1),
