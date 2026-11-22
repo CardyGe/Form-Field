@@ -80,7 +80,8 @@ export class Kaleidoscope implements Look {
     this.spin = advancePhase(this.spin, k.spin, seconds);
     this.zoom = advancePhase(this.zoom, k.zoom, seconds);
     // Not `fresh`: that needs two close frames to compare, so a slow source would never appear.
-    if (feed.newImage) this.capture(feed.camera);
+    // A new or cleared look starts from the frame Tracking holds, so a stopped source is not left dark.
+    if (feed.newImage || (!this.hasFrame && feed.hasImage)) this.capture(feed.camera);
     const u = this.material.uniforms;
     for (const [key, value] of Object.entries(liveKaleidoscopeUniforms(k, this.spin, this.zoom))) u[key].value = value;
     u.uAspect.value = this.picture.width / this.picture.height;
@@ -103,7 +104,10 @@ export class Kaleidoscope implements Look {
 
   resize(width: number, height: number): void { this.picture.setSize(width, height); }
 
-  /** Drops the held frame: the look is dark until the next new one. Motion carries on. */
+  /**
+   * Drops the held frame. The next step takes the frame Tracking still holds, so a stopped source keeps
+   * its last picture; with no source at all the look is dark until one arrives. Motion carries on.
+   */
   clear(): void { this.hasFrame = false; }
 
   dispose(): void {

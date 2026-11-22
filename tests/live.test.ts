@@ -250,7 +250,7 @@ function fakeLook() {
   } as unknown as Passes;
   const look = new Kaleidoscope(passes, 1920, 1080);
   const camera = new THREE.WebGLRenderTarget(1280, 720).texture;
-  const feed = (newImage: boolean, texture: THREE.Texture = camera, fresh = false) => ({ camera: texture, newImage, fresh }) as unknown as TrackingFeed;
+  const feed = (newImage: boolean, texture: THREE.Texture = camera, fresh = false, hasImage = newImage) => ({ camera: texture, newImage, fresh, hasImage }) as unknown as TrackingFeed;
   const settings = { ...defaultLiveSettings(), look: 'kaleidoscope' as const };
   return { look, draws, feed, settings, camera };
 }
@@ -283,6 +283,42 @@ test('clear drops the held frame until a new one arrives', () => {
   assert.equal(draws.at(-1)!.empty, 1); assert.equal(draws.at(-1)!.read.length, 0);
   look.step(.016, 0, feed(true), settings);
   assert.equal(draws.at(-1)!.empty, 0);
+});
+test('a new look on a frozen source shows the frame Tracking still holds', () => {
+  const { look, draws, feed, settings, camera } = fakeLook();
+  look.step(.016, 0, feed(false, camera, false, true), settings);
+  assert.equal(draws.length, 2, 'one seed and one picture');
+  assert.ok(draws[0].read.includes(camera)); assert.equal(draws[1].empty, 0);
+  look.step(.016, 0, feed(false, camera, false, true), settings);
+  assert.equal(draws.length, 3, 'seeded once, not every frame');
+});
+test('Clear on a frozen source returns to the frame Tracking holds', () => {
+  const { look, draws, feed, settings, camera } = fakeLook();
+  look.step(.016, 0, feed(true), settings);
+  look.clear();
+  look.step(.016, 0, feed(false, camera, false, true), settings);
+  assert.ok(draws.at(-2)!.read.includes(camera)); assert.equal(draws.at(-1)!.empty, 0);
+});
+test('Clear with no source stays calmly dark and reads no texture', () => {
+  const { look, draws, feed, settings, camera } = fakeLook();
+  look.step(.016, 0, feed(true), settings);
+  look.clear();
+  for (let i = 0; i < 3; i++) look.step(.016, 0, feed(false, camera, false, false), settings);
+  assert.equal(draws.at(-1)!.empty, 1); assert.equal(draws.at(-1)!.read.length, 0);
+});
+test('a closed source keeps the held picture until Clear, then stays dark', () => {
+  const { look, draws, feed, settings, camera } = fakeLook();
+  look.step(.016, 0, feed(true), settings);
+  look.step(.016, 0, feed(false, camera, false, false), settings);
+  assert.equal(draws.at(-1)!.empty, 0, 'the last picture holds');
+  look.clear();
+  look.step(.016, 0, feed(false, camera, false, false), settings);
+  assert.equal(draws.at(-1)!.empty, 1);
+});
+test('a new look with no source never reads the feed', () => {
+  const { look, draws, feed, settings, camera } = fakeLook();
+  look.step(.016, 0, feed(false, camera, false, false), settings);
+  assert.equal(draws.length, 1); assert.equal(draws[0].empty, 1); assert.equal(draws[0].read.length, 0);
 });
 test('a camera texture of a new size is followed without losing the look', () => {
   const { look, draws, feed, settings } = fakeLook();

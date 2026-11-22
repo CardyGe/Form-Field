@@ -72,6 +72,7 @@ export class Tracking implements TrackingFeed {
   captureRoom(): void { this.peopleStage.captureRoom(); }
 
   get camera(): THREE.Texture { return this.frames.read.texture; }
+  get hasImage(): boolean { return this.frameId >= 0; }
   get flow(): THREE.Texture { return this.flows.read.texture; }
   get flowTarget(): THREE.WebGLRenderTarget { return this.flows.read; }
   /** How the source is cropped to 16:9, so a mask made from the raw source lines up with `camera`. */
