@@ -4,6 +4,8 @@
  * projector at once and are saved for the Live screen; they are not part of Map's undo.
  */
 import { useEffect, useState } from 'react';
+import { MORPH_LOOKS } from '../morphogen/looks';
+import { MIDIMIX_MAP } from '../morphogen/midimix-map';
 import type { useMap } from './useMap';
 import { LiveLookControls, LiveReactSection, Slider, liveLinks } from './LiveLookControls';
 import { SENSITIVITY, type LiveSettings } from '../live/settings';
@@ -14,7 +16,7 @@ const CAMERA_OFF = 'Camera access is off. Allow Form & Field in System Settings 
 const FILE_NOTE = 'Video files play on the Live screen only. Choose a camera or the test pattern to show Live here.';
 
 /** localStatus: this screen's own Live, while the output is closed (with it open, the wall's is used). */
-export default function MapLiveCard({ map, locked, onError, localStatus = null }: { map: Map; locked: boolean; onError: (message: string) => void; localStatus?: { running: boolean; state: string } | null }) {
+export default function MapLiveCard({ map, locked, onError, localStatus = null }: { map: Map; locked: boolean; onError: (message: string) => void; localStatus?: { running: boolean; state: string; midimix?: { active: boolean; look: number | null; queued: number | null } | null } | null }) {
   const s = map.live;
   const [cameras, setCameras] = useState<{ deviceId: string; label: string }[]>([]);
   const [access, setAccess] = useState<'granted' | 'refused' | null>(null);
@@ -46,7 +48,9 @@ export default function MapLiveCard({ map, locked, onError, localStatus = null }
       <option value={TEST}>Test pattern</option>
       {s.source.kind === 'file' && <option value="__file">Video file</option>}
     </select></label>
-    {refused && <p className="react-status warn" role="status">{CAMERA_OFF}</p>}
+    {s.look === 'morphogen' && <p className="react-status" role="status">{live?.midimix?.active ? `MIDImix: Morphogen mode on${live.midimix.queued !== null ? ` · ${MORPH_LOOKS[live.midimix.queued]?.name} on the next beat` : live.midimix.look !== null ? ` · ${MORPH_LOOKS[live.midimix.look]?.name}` : ''}` : 'MIDImix: normal. Solo + Send All enters Morphogen mode.'}</p>}
+    {s.look === 'morphogen' && !MIDIMIX_MAP.confirmed && <p className="react-status warn" role="status">MIDImix controls are not captured from the real device yet.</p>}
+    {refused && s.look !== 'morphogen' && <p className="react-status warn" role="status">{CAMERA_OFF}</p>}
     {s.source.kind === 'file' && <p className="react-status warn" role="status">{FILE_NOTE}</p>}
     {live && !live.running && s.source.kind !== 'file' && <p className="react-status" role="status">{live.state === 'starting' ? 'The camera is starting…' : live.state === 'lost' ? 'The camera was disconnected. Reconnect it, or choose another.' : live.state === 'refused' ? CAMERA_OFF : 'Live is not running yet.'}</p>}
     <label className="map-check"><input type="checkbox" aria-label="Live mirror" checked={s.mirror} disabled={locked} onChange={e => update(v => ({ ...v, mirror: e.target.checked }))} />Mirror<small className="muted-text">on when the camera faces the people</small></label>

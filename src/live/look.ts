@@ -32,6 +32,10 @@ export interface Look {
   readonly output: THREE.Texture;
   /** False while a look is still forming its first picture. Looks without this are ready at once. */
   readonly ready?: boolean;
+  /** This frame's sound, tempo and MIDI, for a look that is played directly. */
+  setSignals?(signals: Record<string, number>): void;
+  /** What the operator should see about how the look is being played. */
+  readonly midimix?: { active: boolean; look: number | null; queued: number | null };
   resize(width: number, height: number): void;
   clear(): void;
   dispose(): void;

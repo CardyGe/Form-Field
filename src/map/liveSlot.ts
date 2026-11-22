@@ -61,6 +61,9 @@ export class LiveSlot {
   captureRoom(): void { this.stage.renderer.captureRoom(); }
   retry(settings: LiveSettings): void { this.stage.retry(settings.source.kind === 'file' ? { ...settings, source: { kind: 'test', deviceId: settings.source.deviceId } } : settings); }
 
+  /** Morphogen mode on the MIDImix, for the operator's screen. */
+  get midimix(): { active: boolean; look: number | null; queued: number | null } | null { return this.stage.renderer.midimix; }
+
   get readiness(): LiveReadiness {
     const settings = this.stage.renderer.settings, people = this.stage.renderer.peopleDiagnostics();
     return liveReadiness(this.state, { file: this.fileChosen, needsCamera: usesCamera(settings), warming: !this.stage.renderer.lookReady, needsPeople: usesPeople(settings), peopleLoading: people.status === 'loading' || (people.status as { state?: string } | null)?.state === 'loading',

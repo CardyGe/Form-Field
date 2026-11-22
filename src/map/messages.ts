@@ -1,4 +1,5 @@
 import type { Project } from '../shared/types';
+import { MIDIMIX_MAP, midimixInputs } from '../morphogen/midimix-map';
 import { usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow } from './show';
 import { shapeValidity } from './outline';
 import { EMBER_SMOKE_INPUTS } from '../react/ember-smoke';
@@ -129,6 +130,7 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
 export function wallInputs(show: ShowDocument, live: LiveSettings | null): Set<string> {
   const inputs = new Set<string>(['tempo.beat', 'tempo.phase', ...show.links.map(l => l.input)]);
   if (live && usesLive(show)) for (const l of live.links) inputs.add(l.input);
+  if (live?.look === 'morphogen' && usesLive(show)) for (const input of midimixInputs(MIDIMIX_MAP)) inputs.add(input);
   if (show.sources.some(s => s.project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1))) for (const input of EMBER_SMOKE_INPUTS) inputs.add(input);
   return inputs;
 }

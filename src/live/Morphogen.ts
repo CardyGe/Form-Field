@@ -6,20 +6,32 @@ import type { LiveSettings } from './settings';
 import { MorphEngine } from '../morphogen/engine';
 import { macrosFrom } from '../morphogen/macros';
 import { MorphPerformer } from '../morphogen/performer';
+import { MIDIMIX_MAP } from '../morphogen/midimix-map';
+import { MidimixMode, type MidimixView } from '../morphogen/midimix-mode';
 
 export class Morphogen implements Look {
   private readonly engine: MorphEngine;
   private readonly performer = new MorphPerformer();
   private cue: LiveSettings['morphogenCue'] | null = null;
+  private readonly mode = new MidimixMode(MIDIMIX_MAP, this.performer);
+  private signals: Record<string, number> = {};
+  private view: MidimixView | null = null;
 
   constructor(passes: Passes, width: number, height: number) { this.engine = new MorphEngine(passes, width, height); }
 
   get output(): THREE.Texture { return this.engine.output; }
   get ready(): boolean { return this.engine.ready; }
+  get midimix(): { active: boolean; look: number | null; queued: number | null } {
+    const lights = this.view?.lights;
+    return { active: this.view?.active ?? false, look: lights && lights.amber.includes(true) ? lights.amber.indexOf(true) : null, queued: lights?.queued ?? null };
+  }
+
+  setSignals(signals: Record<string, number>): void { this.signals = signals; }
 
   step(seconds: number, time: number, feed: TrackingFeed, settings: LiveSettings): void {
     this.followCue(settings.morphogenCue);
-    const played = this.performer.frame(seconds, settings.morphogen, macrosFrom(settings.morphogen));
+    this.view = this.mode.update(this.signals, seconds, macrosFrom(settings.morphogen));
+    const played = this.performer.frame(seconds, settings.morphogen, this.view.macros);
     this.engine.step(seconds, time, played.params, { flow: feed.flow, people: feed.peopleReady ? feed.people : null, ...played.input });
   }
 
@@ -27,8 +39,8 @@ export class Morphogen implements Look {
   private followCue(next: LiveSettings['morphogenCue']): void {
     const last = this.cue;
     this.cue = next;
-    this.performer.hold(next.hold);
-    if (!last) return;
+    if (!last) { this.performer.hold(next.hold); return; }
+    if (next.hold !== last.hold) this.performer.hold(next.hold);
     if (next.cue !== last.cue) this.performer.morphTo(next.look, next.seconds);
     if (next.mutate !== last.mutate) this.performer.mutate(next.mutate);
     if (next.undo !== last.undo) this.performer.undo();

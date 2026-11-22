@@ -105,6 +105,8 @@ export class LiveRenderer {
 
   /** False while the look is still forming its first picture. */
   get lookReady(): boolean { return this.look?.ready ?? true; }
+  /** Morphogen mode on the MIDImix, when the look on screen has one. */
+  get midimix(): { active: boolean; look: number | null; queued: number | null } | null { return this.look?.midimix ?? null; }
 
   start(): void {
     if (this.running || this.disposed) return;
@@ -139,6 +141,7 @@ export class LiveRenderer {
     if (!this.look) return;
     if (this.settings.look === 'signal' && this.signalSource !== this.source.element) this.look.clear();
     this.signalSource = this.source.element;
+    this.look.setSignals?.(this.signals);
     this.look.step(step, this.time, this.tracking, settings);
     let image: THREE.Texture = this.look.output, encode = 1;
     if (this.view === 'tracking') {

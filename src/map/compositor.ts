@@ -94,7 +94,7 @@ export interface CompositorStats {
   /** The stage's own graphics context was lost and is waiting to come back: the wall is black meanwhile. */
   contextLost: boolean;
   /** Live in Map: whether the show's Live runs (null: none, camera off). */
-  live?: { running: boolean; state: string } | null;
+  live?: { running: boolean; state: string; midimix?: { active: boolean; look: number | null; queued: number | null } | null } | null;
   /** Stage 6: each video playing, by id: its state, and the beats a tempo loop plays as. */
   videos?: Record<string, { state: string; playsAs: number | null }>;
   linked?: Record<string, number>;
@@ -394,7 +394,7 @@ export class MapCompositor {
       prepares: Object.fromEntries([...this.slots].map(([id, s]) => [id, s.prepares])),
       edgeBuilds: this.edgeBuilds,
       contextLost: this.lost,
-      live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status } : null,
+      live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status, midimix: this.live.midimix } : null,
       videos: Object.fromEntries([...this.videoSlots].map(([id, v]) => [id, { state: v.state, playsAs: v.playsAs }])),
       // For the scripted checks: the effect settings links are moving now, as drawn (source:layer:key → value).
       adjusted: this.adjusted,
