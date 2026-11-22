@@ -739,6 +739,8 @@ export class StudioRenderer {
     } else if (layer.kind === 'meridian') {
       this.meridian ??= new MeridianRenderer();
       this.meridianRuntime.structure = original.params;
+      this.meridianRuntime.live = !this.exporting && !slitActive(original);
+      this.meridianRuntime.duration = duration;
       const mark = layer.meridian?.mark, markAsset = mark ? this.assets.get(this.assetKey(mark.dataUrl, false)) : undefined;
       if (mark && markAsset?.texture.image) {
         const held = this.meridianMark ??= { texture: markAsset.texture, width: mark.width, height: mark.height };

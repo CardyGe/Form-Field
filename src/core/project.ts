@@ -9,6 +9,7 @@ import { supportsPrint } from '../rendering/print-screen';
 import { SCOPE_FIGURES } from '../rendering/scope-curve';
 import { MERIDIAN_LOOKS } from '../meridian/presets';
 import { MERIDIAN_FIXED, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
+import { SCORE_STYLE_DENSE } from '../meridian/pulse';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import type { Layer, LayerKind, MeridianLayerState, ParameterDefinition, Preset, Project } from '../shared/types';
 import { GRAPHIC_LOOKS, GRAPHIC_PARAMETERS, GRAPHIC_VARIANTS, graphicVisibleKeys } from './graphics';
@@ -46,7 +47,7 @@ const SCOPE_PALETTE = ['#ff2a8a', '#ff1e6e', '#c81050', '#ffffff', '#ff7ad0', '#
 // Liquid Light: 0 rim, 1 body, 2 mid, 3 hot, 4 wash, 5 ground.
 const LIQUID_PALETTE = ['#7a0006', '#ff1414', '#ff7a00', '#ffe81a', '#1a1aff', '#050002'];
 // Meridian: 0 base line, 1 primary accent, 2 secondary accent, 3 hero core, 4 halo, 5 ground.
-const MERIDIAN_PALETTE = ['#e8f1ff', '#ff6a2a', '#35d0ff', '#ffffff', '#ff9a5a', '#04050a'];
+const MERIDIAN_PALETTE = ['#ffffff', '#ff3fd0', '#35d0ff', '#ffffff', '#ffffff', '#08070b'];
 const OIL_PALETTE = ['#eeff00', '#a7de12', '#060710', '#25b8ed', '#071275', '#e2a51c'];
 
 const parameter = (key: string, label: string, min: number, max: number, step: number, value: number, section: ParameterDefinition['section']): ParameterDefinition =>
@@ -967,6 +968,8 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
   if (mask.kind === 'image') imageAsset(mask.dataUrl, `${path}.mask.dataUrl`);
   else if (own(mask, 'dataUrl')) fail(`${path}.mask.dataUrl`, 'is only allowed for an image mask.');
   const params = structuredClone(object(layer.params, `${path}.params`));
+  // A Meridian saved before Pulse existed keeps the look it was made with.
+  if (kind === 'meridian' && !own(params, 'scoreStyle')) params.scoreStyle = SCORE_STYLE_DENSE;
   // These additive schema-1 controls postdate the original instrument formats.
   // Normalize only absent fields; explicit invalid values and unknown keys still fail.
   for (const key of [...(ADDED_FIELDS[kind] ?? []),...FINISH_KEYS,...(isInstrument(kind)?INSTRUMENT_UPGRADE_KEYS[kind]:[])]) {

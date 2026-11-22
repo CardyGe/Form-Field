@@ -79,7 +79,7 @@ export const markVertex = /* glsl */`
 
 export const lightFragment = /* glsl */`
   precision highp float;
-  uniform float uEdge, uCore, uLineGlow, uGlowPass, uRes;
+  uniform float uEdge, uCore, uLineGlow, uGlowPass, uRes, uOwnGlow;
   uniform vec3 uHot, uHalo;
   varying vec2 vLocal; varying vec3 vColour; varying vec4 vLine; varying vec4 vMark;
   varying float vWobblePhase;
@@ -126,7 +126,7 @@ export const lightFragment = /* glsl */`
     }
     float cover=clamp(.5-signedPx/uEdge,0.,1.);
     if (uGlowPass>.5) {
-      vec3 tint=mix(vColour,uHalo,smoothstep(.2,.8,glow));
+      vec3 tint=mix(mix(vColour,uHalo,smoothstep(.2,.8,glow)),vColour,uOwnGlow);
       // Squared at the low end, so fine marks stay crisp and only heavy light spills.
       gl_FragColor=vec4(tint*glow*smoothstep(.04,.7,glow)*alpha*cover,1.);
       return;

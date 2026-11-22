@@ -6,6 +6,7 @@ import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate'
 import { applyMacros } from '../meridian/macros';
 import { markFromOutput, type MarkPlacement } from '../meridian/mark-placement';
 import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
+import { advanceTransport, applyPulseLight, createTransport, evaluatePulse, exactClock, isPulse, pulseRestStart, pulseScheme, type PulseClock, type PulseTransport } from '../meridian/pulse';
 import { MERIDIAN_SCHEMES, SEED_SCHEME } from '../meridian/schemes';
 import { PRIMITIVE, type PerformanceState, type Score, type ScoreForm } from '../meridian/types';
 import { BLOOM_HEIGHTS, BloomPyramid, lightTarget } from './bloom';
@@ -22,6 +23,10 @@ export interface MeridianRuntime {
   loopFrames?: number;
   /** The layer's imported Mark, once it has loaded. */
   mark?: { texture: THREE.Texture; width: number; height: number } | null;
+  /** True in the interactive preview: Pulse then runs from real tempo instead of the project's loop. */
+  live?: boolean;
+  /** The project's length in seconds. */
+  duration?: number;
 }
 
 const TAU = Math.PI * 2;
@@ -32,6 +37,7 @@ const GHOST_BEATS = 0.09; // How far back the last echo reaches at Trail length 
 const SCORE_CACHE = 16;
 const DEFAULT_LOOP_FRAMES = 300; // The default 10 second, 30 fps loop, for a draw with no project behind it.
 const FALLBACK_PALETTE = ['#e8f1ff', '#ff6a2a', '#35d0ff', '#ffffff', '#ff9a5a', '#04050a'];
+const PULSE_GROUND = '#08070b'; // Accents change with the phrase; the black does not.
 const TEAR_BURST_HOLDS = 3; // Holds in one burst of the tear.
 const MARK_HEIGHT = .3; // The Mark's height as a share of the frame.
 const MARK_IN = .4;    // Share of Rest over which the point opens into the Mark.
@@ -115,7 +121,7 @@ export class MeridianRenderer {
     uInverse: { value: new THREE.Matrix3() }, uShape: { value: new THREE.Matrix2() }, uField: { value: new THREE.Vector2(1, 1) }, uCentre: { value: new THREE.Vector2() },
     uTilt: { value: 0 }, uPixel: { value: 1 / 1080 }, uMinWidth: { value: 1.5 }, uEdge: { value: 1 }, uHaloReach: { value: 8 }, uRes: { value: 1 }, uByRadius: { value: 0 }, uPeak: { value: 0 },
     uInks: { value: [new THREE.Color(), new THREE.Color(), new THREE.Color()] },
-    uCore: { value: 1 }, uLineGlow: { value: .5 }, uGlowPass: { value: 0 }, uHot: { value: new THREE.Color() }, uHalo: { value: new THREE.Color() },
+    uCore: { value: 1 }, uLineGlow: { value: .5 }, uGlowPass: { value: 0 }, uOwnGlow: { value: 0 }, uHot: { value: new THREE.Color() }, uHalo: { value: new THREE.Color() },
   };
   private readonly curveMaterial = this.lightMaterial(curveVertex);
   private readonly markMaterial = this.lightMaterial(markVertex);
@@ -148,6 +154,9 @@ export class MeridianRenderer {
   private readonly markMatrix = new Float64Array(9);
   private readonly markPlacement: MarkPlacement = { view: this.view.elements, aspect: 1, zoom: 1, rotation: 0, centreX: 0, centreY: 0, width: 1, height: 1 };
   private form: ScoreForm | undefined;
+  private pulseSeededScheme: number | undefined;
+  private readonly transports = new Map<string, PulseTransport>();
+  private readonly pulseClock: PulseClock = { phrase: 0, tick: 0, frac: 0, ticks: 128, tickSeconds: .06 };
 
   constructor() {
     for (const [instances, material] of [[this.curves, this.curveMaterial], [this.marks, this.markMaterial]] as const) {
@@ -196,6 +205,9 @@ export class MeridianRenderer {
       const value = structure[STRUCTURAL[i]];
       live[STRUCTURAL[i]] = Number.isFinite(value) ? value : MERIDIAN_DEFAULTS[STRUCTURAL[i]];
     }
+    if (isPulse(live)) { this.drawPulse(renderer, layer, phase, width, height, target, draw, runtime); return; }
+    this.pulseSeededScheme = undefined;
+    this.shared.uOwnGlow.value = 0;
     applyMacros(source, live);
 
     // The loop holds whole phrases; each takes the next seed, and its point becomes the next one's Seed.
@@ -223,6 +235,29 @@ export class MeridianRenderer {
     this.view.invert();
     this.prepareMark(runtime?.mark, position.progress, ends[5], live, width / height);
     this.renderList(renderer, list, live, layer.palette, this.view, layer.transform.scale, position.progress, peak, width, height, target, draw);
+  }
+
+  /** Pulse: the sequencer draws the picture and carries its own brief, local tears, so the full-frame tear stays off. */
+  private drawPulse(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, runtime?: MeridianRuntime): void {
+    const live = this.live, seed = live.seed >>> 0, duration = runtime?.duration ?? DEFAULT_LOOP_FRAMES / 30;
+    applyPulseLight(layer.params, live);
+    let clock: PulseClock;
+    if (runtime?.live) {
+      let transport = this.transports.get(layer.id);
+      if (!transport) { transport = createTransport(); this.transports.set(layer.id, transport); }
+      clock = advanceTransport(transport, phase, duration, live, this.pulseClock);
+    } else clock = exactClock(Number.isFinite(phase) ? phase / TAU : 0, duration, live, this.pulseClock);
+    let list = runtime?.list;
+    if (!list) { list = this.list; evaluatePulse(seed, clock, live, list); }
+    this.tearAmount = 0;
+    this.form = undefined;
+    this.pulseSeededScheme = pulseScheme(seed, clock);
+    this.shared.uOwnGlow.value = 1;
+    const progress = (clock.tick + clock.frac) / clock.ticks;
+    sourceViewMatrix(layer.transform, width / height, this.view);
+    this.view.invert();
+    this.prepareMark(runtime?.mark, progress, pulseRestStart(seed, clock), live, width / height);
+    this.renderList(renderer, list, live, layer.palette, this.view, layer.transform.scale, progress, 0, width, height, target, draw);
   }
 
   /**
@@ -307,6 +342,8 @@ export class MeridianRenderer {
     this.tearAmount = 0;
     this.markAlpha = 0;
     this.form = undefined;
+    this.pulseSeededScheme = undefined;
+    this.shared.uOwnGlow.value = 0;
     this.renderList(renderer, list, params, palette, this.identity, 1, 0, 0, width, height, target, draw);
   }
 
@@ -405,13 +442,14 @@ export class MeridianRenderer {
   }
 
   private setColours(p: Readonly<Record<string, number>>, palette: readonly string[], progress: number, peak: number): void {
-    const scheme = this.schemeIndex(p.colourPalette, this.form?.scheme);
+    const seeded = this.form?.scheme ?? this.pulseSeededScheme;
+    const scheme = this.schemeIndex(p.colourPalette, seeded);
     const main = scheme > 0 ? MERIDIAN_SCHEMES[scheme - 1].swatches : palette;
     for (let i = 0; i < 6; i++) {
       const hex = main[i] ?? FALLBACK_PALETTE[i];
       if (this.parsed[i] !== hex) { this.swatches[i].set(hex); this.parsed[i] = hex; }
     }
-    const peakScheme = this.schemeIndex(p.colourPeakPalette, this.form?.peakScheme);
+    const peakScheme = this.pulseSeededScheme !== undefined ? 0 : this.schemeIndex(p.colourPeakPalette, this.form?.peakScheme);
     if (peakScheme !== this.parsedPeak) {
       this.parsedPeak = peakScheme;
       if (peakScheme > 0) for (let i = 0; i < 6; i++) this.peakSwatches[i].set(MERIDIAN_SCHEMES[peakScheme - 1].swatches[i]);
@@ -424,7 +462,10 @@ export class MeridianRenderer {
     this.ink(inks[2], mono ? base : second, peakScheme, peak, p, progress);
     this.ink(u.uHot.value, 3, peakScheme, peak, p, progress);
     this.ink(u.uHalo.value, mono ? base : 4, peakScheme, peak, p, progress);
+    // A seeded Pulse phrase borrows only its accents: the lines stay white.
+    if (this.pulseSeededScheme !== undefined && Math.round(p.colourPalette ?? 0) === SEED_SCHEME) { inks[0].setRGB(1, 1, 1); if (mono) { inks[1].setRGB(1, 1, 1); inks[2].setRGB(1, 1, 1); } (u.uHot.value as THREE.Color).setRGB(1, 1, 1); (u.uHalo.value as THREE.Color).setRGB(1, 1, 1); }
     (this.resolve.uniforms.uGround.value as THREE.Color).copy(this.swatches[5]);
+    if (this.pulseSeededScheme !== undefined && Math.round(p.colourPalette ?? 0) === SEED_SCHEME) (this.resolve.uniforms.uGround.value as THREE.Color).set(PULSE_GROUND);
   }
 
   /** A Palette value as a scheme number. Seed chooses takes the composition's own; with no composition it means none. */

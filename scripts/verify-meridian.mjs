@@ -40,7 +40,7 @@ const PENDING = {
 };
 const AWAITING_CONDUCTOR = ['moveNext', 'moveHold', 'moveDrop', 'moveCollapse', 'moveMutate', 'moveReseed', 'moveBurst', 'moveRecall', 'scoreQuantise', 'scoreAutopilot'];
 // These act on the layer rather than the frame; tests/meridian-panel.test.ts proves what they do.
-const PROVEN_BY_PANEL_TESTS = ['scoreVariation', ...Array.from({ length: 8 }, (_, i) => `seedSlot${i}`)];
+const PROVEN_BY_PANEL_TESTS = ['scoreStyle', 'scoreBpm', 'scorePulseBars', 'scoreLoopPhrase', 'scoreVariation', ...Array.from({ length: 8 }, (_, i) => `seedSlot${i}`)];
 // These act only on top of another setting, so the sweep turns that setting on first rather than skipping them.
 const SWEEP_NEEDS = {
   ringDashGap: { ringDashCount: 24 },       // There is no gap until a ring is cut into dashes.
@@ -295,7 +295,7 @@ try {
     quad.frustumCulled = false; scene.add(quad);
     const draw = (material, target) => { quad.material = material; gl.setRenderTarget(target); gl.render(scene, camera); };
     const floatTarget = (w, h) => new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType, format: THREE.RGBAFormat, depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
-    const layerFor = seed => { const layer = m.createLayer('meridian'); layer.id = `meridian-${seed}`; layer.params.seed = seed; return layer; };
+    const layerFor = seed => { const layer = m.createLayer('meridian'); layer.id = `meridian-${seed}`; layer.params.seed = seed; layer.params.scoreStyle = 1; return layer; }; // These checks describe the Dense engine; Pulse has its own below.
     const phaseOf = (seed, index, share) => {
       const ends = m.compose(seed, m.MERIDIAN_DEFAULTS).stateEnds, start = index ? ends[index - 1] : 0;
       return Math.PI * 2 * (start + (ends[index] - start) * share);
@@ -664,6 +664,29 @@ try {
   if (report.mark.offCentre.some(gap => !(gap < 2.5))) failures.push(`the Mark sits away from the point on a moved layer (${report.mark.offCentre.join(', ')} px)`);
   if (!(report.mark.rest > 1)) failures.push(`the Mark does not appear in Rest (${report.mark.rest.toFixed(3)})`);
   if (!(report.mark.peak < .05)) failures.push(`the Mark changes the Peak (${report.mark.peak.toFixed(3)})`);
+
+  // Pulse: every macro, 0 against 1, must visibly change the picture at each of several moments of the default look.
+  report.pulse = await page.evaluate(async () => {
+    const { m, studio } = window.meridianQA, w = 480, h = 270, duration = 60 / 124 * 16 * 4;
+    const shot = async (key, value, t) => {
+      const project = m.createProject(), layer = m.createLayer('meridian');
+      if (key) layer.params[key] = value;
+      project.layers = [layer]; project.background = '#000000'; project.duration = duration;
+      const bitmap = await createImageBitmap(new Blob([await studio.exportPNG(project, t / duration * Math.PI * 2, w, h)], { type: 'image/png' }));
+      const canvas = new OffscreenCanvas(w, h), paint = canvas.getContext('2d', { willReadFrequently: true }); paint.drawImage(bitmap, 0, 0);
+      return paint.getImageData(0, 0, w, h).data;
+    };
+    const share = (a, b) => { let n = 0; for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 48) n++; return n / (a.length / 4); };
+    const times = [1.1, 2.6, 3.9, 5.2, 9.3, 11.8], result = {};
+    for (const key of ['macroDensity', 'macroTension', 'macroOrder', 'macroSpeed', 'macroWeight', 'macroGlitch', 'macroHeat', 'macroScale']) {
+      const each = [];
+      for (const t of times) each.push(share(await shot(key, 0, t), await shot(key, 1, t)));
+      result[key] = { each: each.map(v => +(v * 100).toFixed(2)), moments: each.filter(v => v > .004).length, best: +(Math.max(...each) * 100).toFixed(2) };
+    }
+    return result;
+  });
+  for (const [key, r] of Object.entries(report.pulse)) if (r.moments < 3 || r.best < 1) failures.push(`Pulse ${key}: 0 against 1 changes too little (${r.each.join(', ')} % of pixels)`);
+  console.log('pulse macros', JSON.stringify(report.pulse));
 
   report.ui = await verifyInApp(page, failures);
   console.log(JSON.stringify({ firstFrame: report.firstFrame, mark: report.mark, structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));

@@ -215,6 +215,23 @@ function MarkControl({ layer, edit, notify }: { layer: Layer; edit: (change: (l:
   </>;
 }
 
+/** The sequencer's clock: which engine, how fast, how long, and whether this phrase repeats. */
+function PulseStrip({ layer, setParam }: { layer: Layer; setParam: (key: string, value: number) => void }) {
+  const style = Math.round(layer.params.scoreStyle ?? 0), looping = (layer.params.scoreLoopPhrase ?? 0) >= .5;
+  const number = (key: string, label: string) => {
+    const d = definition(key);
+    return <label className="m-pulse-field" title={d.description}><span>{label}</span><input type="number" aria-label={d.label} min={d.min} max={d.max} step={1} disabled={style !== 0} value={layer.params[key] ?? d.default}
+      onChange={e => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n)) setParam(key, clamp(Math.round(n), d.min, d.max)); }} /></label>;
+  };
+  return <section className="m-block m-pulse" aria-label="Sequencer">
+    <div className="m-pulse-style" role="group" aria-label="Style">
+      {['Pulse', 'Dense'].map((name, i) => <button key={name} className={style === i ? 'is-on' : ''} aria-pressed={style === i} title={definition('scoreStyle').description} onClick={() => setParam('scoreStyle', i)}>{name}</button>)}
+    </div>
+    {number('scoreBpm', 'BPM')}{number('scorePulseBars', 'Bars')}
+    <button className={`m-pulse-loop ${looping ? 'is-on' : ''}`} aria-pressed={looping} disabled={style !== 0} title={definition('scoreLoopPhrase').description} onClick={() => setParam('scoreLoopPhrase', looping ? 0 : 1)}>Loop phrase</button>
+  </section>;
+}
+
 export function MeridianControls({ layer, edit, performance, notify, onAnimateKey, onStart, onEnd, queued }: {
   layer: Layer; edit: (change: (l: Layer) => Layer) => void; performance: MeridianPerformance; notify: (message: string) => void;
   onAnimateKey?: (key: string) => void; onStart: () => void; onEnd: () => void;
@@ -236,6 +253,7 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
   };
   return <div className="meridian-controls">
     <section className="m-block" aria-label="Macros"><div className="m-macros">{MACROS.map(d => <MacroFader key={d.key} d={d} value={layer.params[d.key] ?? d.default} onChange={n => setParam(d.key, n)} onStart={onStart} onEnd={onEnd} />)}</div></section>
+    <PulseStrip layer={layer} setParam={setParam} />
     <section className="m-block" aria-label="Moves"><div className="m-pads">{PADS.map(pad => <MovePad key={pad.action} {...pad} performance={performance} />)}</div></section>
     <section className="m-block" aria-label="Seeds and morph">
       <div className="m-heading"><span>Seeds</span><small>{layer.params.seed}</small></div>

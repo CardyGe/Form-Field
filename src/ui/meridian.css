@@ -66,3 +66,12 @@
 .m-seed input { width: 100%; height: 26px; padding: 3px 5px; border: 1px solid #414141; border-radius: 4px; background: #242424; color: var(--ink); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
 .m-empty { padding: 12px 2px; color: var(--muted); font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { .m-pad { transition: none; } .m-pad.is-down { transform: none; } }
+
+.m-pulse { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px; }
+.m-pulse button { height: 26px; padding: 0 8px; border: 1px solid var(--line, #33332f); border-radius: 4px; background: transparent; color: #cececa; font-size: 11px; cursor: pointer; }
+.m-pulse button.is-on { background: #e8e8e2; border-color: #e8e8e2; color: #111; }
+.m-pulse button:disabled, .m-pulse input:disabled { opacity: .4; cursor: default; }
+.m-pulse-style { display: flex; gap: 2px; }
+.m-pulse-field { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
+.m-pulse-field input { width: 48px; height: 26px; padding: 0 4px; border: 1px solid var(--line, #33332f); border-radius: 4px; background: transparent; color: #e8e8e2; font-size: 11px; font-variant-numeric: tabular-nums; }
+.m-pulse-loop { margin-left: auto; }
