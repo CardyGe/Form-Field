@@ -77,6 +77,10 @@ export const GLOW_PARAMETERS:ParameterDefinition[]=[
  {key:'glowThreshold',label:'Glow threshold',min:0,max:1,step:.01,default:.5,section:'Material',description:'Brightness above which light glows. 0 makes the whole layer glow.'},
  {key:'glowSize',label:'Glow size',min:0,max:1,step:.01,default:.5,section:'Material',description:'Tight halo at 0, wide haze at 1. The width is a share of the frame, so exports match the preview.'},
  {key:'glowTint',label:'Glow colour',min:0,max:6,step:1,default:0,section:'Material',description:'0 keeps the layer\'s own colour; 1–6 use the matching palette swatch.'},
+ {key:'glowSpread',label:'Glow colour spread',min:0,max:1,step:.01,default:0,section:'Material',description:'Lets the wide part of the glow fan out into colour. 0 keeps one colour.'},
+ {key:'glowStreak',label:'Glow streak',min:0,max:2,step:.01,default:0,section:'Material',description:'Stretches bright points into streaks of light. 0 is off.'},
+ {key:'glowStreakAngle',label:'Streak angle',min:-90,max:90,step:1,default:0,section:'Material',description:'Direction of the streaks, in degrees from horizontal.'},
+ {key:'glowStreakShape',label:'Streak shape',min:0,max:1,step:1,default:0,section:'Material',description:'Soft streaks or a thin, sharp-edged flare.'},
 ];
 /**
  * Print screen: the layer's tone is redrawn as halftone dots, a line screen or
@@ -107,6 +111,36 @@ export const PRINT_PARAMETERS:ParameterDefinition[]=[
  {key:'printEdgeSense',label:'Edge sensitivity',min:0,max:1,step:.01,default:.5,section:'Material',description:'How small a tone step counts as an edge. Higher finds fainter edges.'},
  {key:'printEdgeFeather',label:'Edge feather',min:0,max:1,step:.01,default:.25,section:'Material',description:'Softness of the boundary between screened and plain.'},
 ];
+/**
+ * Split: the layer's colour channels are pulled apart along a direction, so
+ * edges grow coloured fringes. Distances are in pixels of a 1080-line frame.
+ * Stateless and exactly looping; it never enters the Feedback history. Off by
+ * default (Split amount 0 and Channel order RGB).
+ */
+export const SPLIT_PARAMETERS:ParameterDefinition[]=[
+ {key:'splitAmount',label:'Split amount',min:0,max:64,step:.25,default:0,section:'Material',description:'How far the colour channels are pulled apart, in pixels at 1080 lines. 0 is off.'},
+ {key:'splitShape',label:'Split shape',min:0,max:3,step:1,default:0,section:'Material',description:'Straight pulls one way, Lens pulls from the centre, Edges only where tone changes, Wave in rippling bands.'},
+ {key:'splitAngle',label:'Split angle',min:-180,max:180,step:1,default:0,section:'Material',description:'Direction of a Straight, Edges or Wave split, in degrees.'},
+ {key:'splitSamples',label:'Colour smoothness',min:3,max:15,step:1,default:3,section:'Material',description:'How many steps the split is drawn in. 3 gives pure red, green and blue; more is a smooth rainbow.'},
+ {key:'splitThreshold',label:'Edge threshold',min:0,max:1,step:.01,default:.15,section:'Material',description:'How strong an edge must be before Edges splits it.'},
+ {key:'splitWaves',label:'Waves',min:1,max:24,step:1,default:4,section:'Material',description:'Number of ripples across the frame for the Wave shape.'},
+ {key:'splitTravel',label:'Wave travel per loop',min:-8,max:8,step:1,default:1,section:'Motion',description:'Whole ripples the Wave shape slides per loop; the loop closes exactly.'},
+ {key:'splitOrder',label:'Channel order',min:0,max:5,step:1,default:0,section:'Material',description:'Which colour channel goes where: RGB leaves them alone, the others swap them.'},
+ {key:'splitBlocks',label:'Order blocks',min:0,max:64,step:1,default:0,section:'Material',description:'Breaks the frame into this many blocks across, each of which may swap its channel order. 0 swaps the whole frame.'},
+ {key:'splitChance',label:'Block chance',min:0,max:1,step:.01,default:.5,section:'Material',description:'Share of blocks that swap their channel order.'},
+];
+/**
+ * Gradient map: the layer's brightness is mapped onto a gradient of colours,
+ * dark to bright. Off by default (Gradient map 0).
+ */
+export const GRADIENT_PARAMETERS:ParameterDefinition[]=[
+ {key:'gradMix',label:'Gradient map',min:0,max:1,step:.01,default:0,section:'Material',description:'Blends from the layer\'s colour to its brightness mapped onto a gradient. 0 is off.'},
+ {key:'gradPalette',label:'Gradient colours',min:0,max:9,step:1,default:0,section:'Material',description:'0 uses the layer palette, sorted dark to bright; the others are ready-made gradients.'},
+ {key:'gradMidpoint',label:'Gradient midpoint',min:.05,max:.95,step:.01,default:.5,section:'Material',description:'The brightness that lands halfway along the gradient. Lower brightens the result; higher darkens it.'},
+ {key:'gradOffset',label:'Gradient offset',min:0,max:1,step:.01,default:0,section:'Material',description:'Slides the gradient round; a full turn returns to the start.'},
+ {key:'gradCycles',label:'Gradient cycles per loop',min:-8,max:8,step:1,default:0,section:'Motion',description:'Whole turns the gradient makes per loop; the loop closes exactly.'},
+ {key:'gradKeep',label:'Keep brightness',min:0,max:1,step:1,default:0,section:'Material',description:'Off: the gradient sets the brightness. On: the layer keeps its own brightness and takes only the gradient\'s colour.'},
+];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[
  {key:'toneContrast',label:'Tonal contrast',min:.5,max:2,step:.01,default:1,section:'Material',description:'Luminance contrast around the pivot, preserving colour ratios.'},
  {key:'tonePivot',label:'Contrast pivot',min:.05,max:.75,step:.01,default:.18,section:'Material',description:'Anchor for Tonal contrast. Neutral contrast leaves the pivot inactive.'},
@@ -119,6 +153,8 @@ export const FINISH_PARAMETERS:ParameterDefinition[]=[
  ...SLIT_PARAMETERS,
  ...GLOW_PARAMETERS,
  ...PRINT_PARAMETERS,
+ ...SPLIT_PARAMETERS,
+ ...GRADIENT_PARAMETERS,
 ];
 export const FINISH_KEYS=FINISH_PARAMETERS.map(p=>p.key);
 export const TOON_KEYS=TOON_PARAMETERS.map(p=>p.key);
@@ -126,3 +162,5 @@ export const FEEDBACK_KEYS=FEEDBACK_PARAMETERS.map(p=>p.key);
 export const SLIT_KEYS=SLIT_PARAMETERS.map(p=>p.key);
 export const GLOW_KEYS=GLOW_PARAMETERS.map(p=>p.key);
 export const PRINT_KEYS=PRINT_PARAMETERS.map(p=>p.key);
+export const SPLIT_KEYS=SPLIT_PARAMETERS.map(p=>p.key);
+export const GRADIENT_KEYS=GRADIENT_PARAMETERS.map(p=>p.key);

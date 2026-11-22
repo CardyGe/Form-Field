@@ -12,11 +12,11 @@ test('glow is off by default and older projects migrate without it', () => {
     for (const key of GLOW_KEYS) delete layer.params[key];
   }
   const migrated = validateProject(JSON.parse(JSON.stringify(project)));
-  assert.deepEqual(GLOW_KEYS.map(k => migrated.layers[0].params[k]), [0, .5, .5, 0]);
+  assert.deepEqual(GLOW_KEYS.map(k => migrated.layers[0].params[k]), [0, .5, .5, 0, 0, 0, 0, 0]);
 });
 
 test('glow keys never collide with the Fractal halo', () => {
-  assert.deepEqual(GLOW_KEYS, ['glowMix', 'glowThreshold', 'glowSize', 'glowTint']);
+  assert.deepEqual(GLOW_KEYS, ['glowMix','glowThreshold','glowSize','glowTint','glowSpread','glowStreak','glowStreakAngle','glowStreakShape']);
 });
 
 test('glow runs when the amount is animated from zero', () => {
