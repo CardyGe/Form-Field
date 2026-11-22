@@ -31,9 +31,9 @@ const CHOICES: Record<string, { options: string[]; base?: number }> = {
   gradeHighlightColour: { options: SWATCHES, base: 1 },
 };
 
-function Section({ title, copy, keys, visible, layer, definitions, edit, animate, onStart, onEnd, extra, readOnly }: SectionProps & { title: string; copy: string; keys: string[]; visible: (layer: Layer, key: string) => boolean }) {
+function Section({ keys, visible, layer, definitions, edit, animate, onStart, onEnd, extra, readOnly }: SectionProps & { keys: string[]; visible: (layer: Layer, key: string) => boolean }) {
   const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
-  return <section className="control-section"><h3>{title}</h3><p className="muted-text">{copy}</p>
+  return <>
     {keys.filter(key => visible(layer, key)).map(key => {
       const d = definitions.find(item => item.key === key);
       if (!d) return null;
@@ -44,18 +44,18 @@ function Section({ title, copy, keys, visible, layer, definitions, edit, animate
       }
       return <Parameter key={key} definition={d} value={value} animated={!!layer.modulations[key]} readOnly={readOnly?.(d) ?? false} onChange={n => set(key, n)} onAnimate={animate && d.step !== 1 ? () => animate(key) : undefined} extra={extra?.(d)} onStart={onStart} onEnd={onEnd} />;
     })}
-  </section>;
+  </>;
 }
 
 export function ColourSplitSection(props: SectionProps) {
-  return <Section {...props} title="Colour split" copy="Pulls colour apart along edges, lenses or waves. Loops close exactly." keys={SPLIT_KEYS} visible={splitControlVisible} />;
+  return <Section {...props} keys={SPLIT_KEYS} visible={splitControlVisible} />;
 }
 export function GradientMapSection(props: SectionProps) {
-  return <Section {...props} title="Gradient map" copy="Recolours the layer by brightness using a palette." keys={GRADIENT_KEYS} visible={gradientControlVisible} />;
+  return <Section {...props} keys={GRADIENT_KEYS} visible={gradientControlVisible} />;
 }
 export function ColourBalanceSection(props: SectionProps) {
-  return <Section {...props} title="Colour balance" copy="Warms, cools and tints the layer, with separate shadow and highlight colour." keys={GRADE_KEYS} visible={balanceControlVisible} />;
+  return <Section {...props} keys={GRADE_KEYS} visible={balanceControlVisible} />;
 }
 export function KeySection(props: SectionProps) {
-  return <Section {...props} title="Key" copy="Cuts the layer out by brightness or colour." keys={KEY_KEYS} visible={keyControlVisible} />;
+  return <Section {...props} keys={KEY_KEYS} visible={keyControlVisible} />;
 }

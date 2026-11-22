@@ -1,3 +1,4 @@
+import { openFinish } from './finish-ui.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -141,7 +142,7 @@ try {
   await saved(p=>p.layers[0].modulations.warp?.points[0].value===.05);
   await page.getByRole('button',{name:'Remove animation',exact:true}).click();
   await saved(p=>!p.layers[0].modulations.warp);
-  await page.getByRole('button',{name:'Finish',exact:true}).click();
+  await page.getByRole('button',{name:'Finish',exact:true}).click();await openFinish(page,'Tonal finishing');
   const gamma=page.getByLabel('Midtone gamma value',{exact:true});
   const before=await state();await gamma.fill('1.17');await gamma.press('Enter');
   await saved(p=>p.layers[0].params.toneGamma===1.17);
@@ -154,14 +155,26 @@ try {
    const p={...model.createProject(),layers:[model.createLayer(kind)]};
    await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===p.id);
    await page.getByRole('button',{name:'Finish',exact:true}).click();
-   for(const title of titles)assert.equal(await page.locator('.inspector-content h3',{hasText:new RegExp('^'+title+'$')}).count(),expected?1:0,kind+': '+title);
+   await openFinish(page);
+   for(const title of titles)assert.equal(await page.getByRole('button',{name:title+' settings',exact:true}).count(),expected?1:0,kind+': '+title);
    if(expected){
+    await snapshot('finish-list');
+    const panel=page.locator('.inspector-content');
+    assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'The Finish list fits one screen.');
+    await openFinish(page,'Colour split');
     assert.equal(await page.getByLabel('Split angle value',{exact:true}).count(),0);
-    assert.equal(await page.getByLabel('Gradient colours',{exact:true}).count(),0);
-    assert.equal(await page.getByLabel('Key by',{exact:true}).count(),0);
     assert.equal(await page.getByLabel('Split shape',{exact:true}).count(),0);
     assert.equal(await page.getByLabel('Channel order',{exact:true}).count(),1);
-    await snapshot('colour-sections');
+    await openFinish(page,'Gradient map');assert.equal(await page.getByLabel('Gradient colours',{exact:true}).count(),0);
+    await openFinish(page,'Key');assert.equal(await page.getByLabel('Key by',{exact:true}).count(),0);
+    await openFinish(page);
+    const glow=page.getByRole('switch',{name:'Glow on',exact:true});await glow.click();await saved(x=>x.layers[0].params.glowMix===.8);
+    await openFinish(page,'Glow');const amount=page.getByLabel('Glow amount value',{exact:true});await amount.fill('1.37');await amount.press('Enter');await saved(x=>x.layers[0].params.glowMix===1.37);
+    await glow.click();await saved(x=>x.layers[0].params.glowMix===0);await glow.click();await saved(x=>x.layers[0].params.glowMix===1.37);
+    await openFinish(page,'Feedback');await page.getByRole('switch',{name:'Feedback on',exact:true}).click();await saved(x=>x.layers[0].params.echo===.8);
+    assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Feedback fits one screen.');
+    await page.getByRole('button',{name:'Damage',exact:true}).click();assert.equal(await page.getByLabel('Echo melt value',{exact:true}).count(),1);
+    await openFinish(page);
    }
    await page.getByRole('button',{name:'Shape',exact:true}).click();
   }

@@ -133,6 +133,8 @@ try {
     await page.getByRole('button', {name: 'Shape', exact: true}).click();
     await field('Source').selectOption({label: 'Motif'});
     await page.getByRole('button', {name: 'Finish', exact: true}).click();
+    // Finish is now a list: open the Feedback effect to reach its controls.
+    if (!await count('Echo zoom value')) await page.locator('.finish-row-open', {hasText: 'Feedback'}).click();
     assert.equal(await count('Echo zoom value'), 1, 'Motif with echo: generic Feedback finish works as for any layer');
     await shot('finish-motif-echo');
     await page.getByRole('button', {name: 'Shape', exact: true}).click();

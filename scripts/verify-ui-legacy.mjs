@@ -1,3 +1,4 @@
+import { openFinish } from './finish-ui.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -423,6 +424,7 @@ try {
     await saved(project => project.layers.length === 2 && project.layers[1].image?.name === 'alpha-artwork.png');
     assert.equal(await page.locator('.layer-row').count(), 2);
     await page.getByRole('button', { name: 'Finish', exact: true }).click();
+    await openFinish(page, 'Mask');
     const maskChooser = page.waitForEvent('filechooser');
     await select('MASK SHAPE').selectOption('image');
     await (await maskChooser).setFiles(maskFile);
@@ -446,13 +448,16 @@ try {
     assert.equal((await page.locator('.layer-name strong').allTextContents())[0], 'Pearl Sculpture');
     await sculpture.click();
     await page.getByRole('button', { name: 'Finish', exact: true }).click();
+    await openFinish(page);
     const before = await canvasDigest();
     await select('BLENDING').selectOption('screen');
     await saved(project => project.layers.at(-1).kind === 'sculpture' && project.layers.at(-1).blend === 'screen');
     assert.notEqual(await canvasDigest(), before);
     // Keep transparent regions in the complete four-layer movie below.
     await page.locator('.layer-row').filter({ hasText: 'Prismatic Fractal' }).click();
+    await openFinish(page, 'Mask');
     await select('MASK SHAPE').selectOption('circle');
+    await openFinish(page, 'Background');
     await page.getByLabel('Transparent background', { exact: true }).check();
   });
 
@@ -611,6 +616,7 @@ try {
           assert.equal(await page.getByTitle('Animate Repeat', { exact: true }).count(), 0);
         }
         await page.getByRole('button', { name: 'Finish', exact: true }).click();
+        await openFinish(page, 'Color finish');
         for (const [key, label, next] of [['saturation', 'Saturation', 0.15], ['hue', 'Hue shift', 0.73], ['exposure', 'Exposure', 0.41]]) {
           const input = page.getByLabel(`${label} value`, { exact: true });
           const previous = (await page.evaluate(() => window.studio.loadAutosave())).layers.find(layer => layer.kind === kind).params[key];
