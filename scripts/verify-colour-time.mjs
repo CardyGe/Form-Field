@@ -232,20 +232,105 @@ const CHECKS = [
       return { ok: same, detail: same ? 'a graphic layer ignores Split and order byte for byte' : 'a graphic layer responds to Split' };
     },
   },
+  {
+    name: 'gradient-map',
+    // A black-to-white ramp through Neon: the dark end is the first stop, the bright end the last.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, p = q.project([q.ramp({ gradMix: 1, gradPalette: 1 })]); p.highlights = 'exact';
+        const px = await q.px(p), at = (x, y) => [...px.subarray((y * 960 + x) * 4, (y * 960 + x) * 4 + 3)];
+        return { dark: at(0, 270), bright: at(959, 270) };
+      });
+      const dark = [13, 0, 51], bright = [255, 230, 77];
+      const miss = (a, b) => Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+      const a = miss(r.dark, dark), b = miss(r.bright, bright);
+      return { ok: a <= 3 && b <= 3, detail: `dark end ${r.dark} (want #0d0033, off by ${a}), bright end ${r.bright} (want #ffe64d, off by ${b}) (limit 3)` };
+    },
+  },
+  {
+    name: 'gradient-alpha',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => q.project([q.soft(params)], true);
+        const plain = await q.px(scene({})), mapped = await q.px(scene({ gradMix: 1, gradPalette: 1 }));
+        let worst = 0; for (let i = 3; i < plain.length; i += 4) worst = Math.max(worst, Math.abs(plain[i] - mapped[i]));
+        return { worst, moved: q.difference(plain, mapped) };
+      });
+      return { ok: r.moved > 0 && r.worst <= 1, detail: `${r.moved > 0 ? '' : 'Gradient Map has no effect on the render. '}alpha differs from the unmapped layer by at most ${r.worst} (limit 1)` };
+    },
+  },
+  {
+    name: 'gradient-loop',
+    // Cycles 1.5 is deliberately not whole: the renderer must round it, or the seam opens.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = cycles => q.project([q.ramp({ gradMix: 1, gradPalette: 1, gradCycles: cycles, gradOffset: .2 })], true);
+        const plain = await q.shot(q.project([q.ramp()], true), 0);
+        return { whole: await q.loop(scene(3)), rounded: await q.loop(scene(1.5)), moved: !q.same(await q.shot(scene(3), 0), plain) };
+      });
+      const whole = loopVerdict(r.whole), rounded = loopVerdict(r.rounded);
+      return { ok: r.moved && whole.ok && rounded.ok, detail: `${r.moved ? '' : 'Gradient Map has no effect on the render. '}cycles 3: ${whole.detail}; cycles 1.5: ${rounded.detail}` };
+    },
+  },
+  {
+    name: 'gradient-engage',
+    // A barely-on map must look like the plain layer.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => q.project([q.soft(params)]);
+        const a = await q.px(scene({})), b = await q.px(scene({ gradMix: .001, gradPalette: 1 })), full = await q.px(scene({ gradMix: 1, gradPalette: 1 }));
+        let sum = 0, worst = 0; for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); sum += d; worst = Math.max(worst, d); }
+        return { mean: sum / a.length, worst, moved: q.difference(a, full) };
+      });
+      return { ok: r.moved > 0 && r.mean < 1 && r.worst < 4, detail: `${r.moved > 0 ? '' : 'Gradient Map has no effect on the render. '}mean ${r.mean.toFixed(3)}, worst ${r.worst} (limits 1 and 4)` };
+    },
+  },
+  {
+    name: 'gradient-echo',
+    // The map colours the output once. If it entered the echo history it would compound.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, total = Math.round(q.m.createProject().duration * q.m.createProject().fps.num / q.m.createProject().fps.den);
+        const phase = frame => frame * Math.PI * 2 / total;
+        const scene = mix => { const p = q.project([q.soft({ echo: .9, gradMix: mix, gradPalette: 1 })], true); p.highlights = 'exact'; return p; };
+        const first = await q.px(scene(1), phase(60));
+        await q.px(scene(1), phase(90)); await q.px(scene(1), phase(10));
+        const second = await q.px(scene(1), phase(60));
+        const plain = await q.px(scene(0), phase(60));
+        const decode = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+        const encode = v => 255 * (v <= .0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - .055);
+        const stops = q.gradientStops(1, []).map(h => [1, 3, 5].map(i => decode(parseInt(h.slice(i, i + 2), 16))));
+        const copy = new Uint8ClampedArray(plain.length);
+        let judged = 0;
+        for (let i = 0; i < plain.length; i += 4) {
+          copy[i + 3] = plain[i + 3];
+          // Pixels at least half covered, where straight colour is well resolved in 8 bits.
+          if (plain[i + 3] < 128) { copy.set(first.subarray(i, i + 3), i); continue; }
+          judged++;
+          const c = [0, 1, 2].map(k => decode(plain[i + k])), luma = .2126 * c[0] + .7152 * c[1] + .0722 * c[2];
+          const t = q.gradientTone(luma, .5) * (stops.length - 1), seg = Math.min(stops.length - 2, Math.floor(t)), f = t - seg, s = f * f * (3 - 2 * f);
+          for (let k = 0; k < 3; k++) copy[i + k] = Math.round(encode((stops[seg][k] * (1 - s) + stops[seg + 1][k] * s) * Math.max(luma, 1)));
+        }
+        let worst = 0, sum = 0; for (let i = 0; i < copy.length; i++) { const d = Math.abs(copy[i] - first[i]); worst = Math.max(worst, d); sum += d; }
+        return { judged, identical: q.same(first, second), worst, mean: sum / copy.length, moved: q.difference(plain, first) };
+      });
+      return { ok: r.identical && r.moved > 0 && r.judged > 1000 && r.worst <= 4, detail: `${r.moved > 0 ? '' : 'Gradient Map has no effect on the render. '}two seek orders ${r.identical ? 'byte-identical' : 'differ'}; against a CPU map of the unmapped layer: worst ${r.worst}, mean ${r.mean.toFixed(3)} over ${r.judged} pixels at least half covered (limit 4)` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
 if (!selected.length) { console.error(`No check matches --only=${only.join(',')}. Checks: ${CHECKS.map(c => c.name).join(', ')}`); process.exit(2); }
 
 await fs.mkdir(out, { recursive: true });
-const bundle = (dir, file) => build({
+const bundle = (dir, file, extra = '') => build({
   stdin: { contents: `export {StudioRenderer} from './src/rendering/StudioRenderer';
 export {createProject,createLayer,applyPreset,PRESETS} from './src/core/project';
-export {encodePNG} from './src/rendering/png';`, resolveDir: dir, loader: 'ts' },
+export {encodePNG} from './src/rendering/png';${extra}`, resolveDir: dir, loader: 'ts' },
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
-await bundle(root, 'renderer.js');
+await bundle(root, 'renderer.js', `\nexport {gradientTone,gradientStops} from './src/rendering/colour-lens';`);
 if (baseline) await bundle(path.resolve(baseline), 'baseline.js');
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
@@ -286,6 +371,8 @@ try {
       return l;
     };
     const soft = (params = {}) => { const l = image(softUrl, params, 'soft'); l.mask = { ...l.mask, kind: 'circle', size: .9, softness: .2 }; return l; };
+    const rampUrl = await dataUrl(960, 540, x => { const v = Math.round(255 * (x + 960 / 540 / 2) / (960 / 540)); return [v, v, v, 255]; });
+    const rampLayer = (params = {}) => image(rampUrl, params, 'ramp');
     const grey = (params = {}) => image(greyUrl, params, 'grey');
     const layer = (kind, preset, params = {}) => { const l = preset ? m.applyPreset(m.createLayer(kind), preset) : m.createLayer(kind); Object.assign(l.params, params); l.id = `${kind}-proof`; return l; };
     const project = (layers, transparent = false) => { const p = m.createProject(); p.id = 'colour-proof'; p.layers = layers; p.background = '#000000'; p.transparent = transparent; return p; };
@@ -312,7 +399,7 @@ try {
       const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
       return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
     };
-    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, project, pixels, shot, px, difference, same, loop };
+    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
   }, !!baseline);
 
   for (const check of selected) {

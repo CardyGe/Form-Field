@@ -22,7 +22,7 @@ import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
-import { lensActive, lensFragment, spectralWeights } from './colour-lens';
+import { gradientStops, lensActive, lensFragment, spectralWeights } from './colour-lens';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -200,6 +200,8 @@ export class StudioRenderer {
     uSplitDirection: { value: new THREE.Vector2(1, 0) }, uSplitCount: { value: 3 },
     uSplitOffsets: { value: new Array<number>(15).fill(0) },
     uSplitWeights: { value: Array.from({ length: 15 }, () => new THREE.Vector3()) },
+    uGradMix: { value: 0 }, uGradMidpoint: { value: .5 }, uGradShift: { value: 0 }, uGradKeep: { value: 0 }, uGradCount: { value: 0 },
+    uGradStops: { value: Array.from({ length: 6 }, () => new THREE.Color()) },
   });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
@@ -863,7 +865,8 @@ export class StudioRenderer {
     if (!lensActive(original)) return source;
     const amount = number(layer, 'splitAmount', 0), order = Math.round(number(layer, 'splitOrder', 0));
     // A modulated amount can rest at zero, where there is nothing to do.
-    if (amount <= 0 && order === 0) return source;
+    const mix = number(layer, 'gradMix', 0);
+    if (amount <= 0 && order === 0 && mix <= 0) return source;
     this.lensTarget ??= target();
     const output = this.lensTarget;
     if (output.width !== width || output.height !== height) output.setSize(width, height);
@@ -885,6 +888,14 @@ export class StudioRenderer {
       (u.uSplitOffsets.value as number[])[i] = sample.offset;
       (u.uSplitWeights.value as THREE.Vector3[])[i].fromArray(sample.weight);
     });
+    // Gradient Map: a whole number of cycles, so the loop closes. The shift is
+    // in half periods of the fold (see foldTone), so offset 1 is a full turn.
+    u.uGradMix.value = mix; u.uGradMidpoint.value = number(layer, 'gradMidpoint', .5);
+    u.uGradShift.value = 2 * (number(layer, 'gradOffset', 0) + Math.round(number(layer, 'gradCycles', 0)) * phase / TAU);
+    u.uGradKeep.value = number(layer, 'gradKeep', 0);
+    const stops = gradientStops(Math.round(number(layer, 'gradPalette', 0)), layer.palette), colours = u.uGradStops.value as THREE.Color[];
+    u.uGradCount.value = Math.min(6, stops.length);
+    for (let i = 0; i < 6; i++) colours[i].set(stops[Math.min(i, stops.length - 1)] ?? '#000000');
     this.draw(this.lens, output);
     return output.texture;
   }

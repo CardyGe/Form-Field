@@ -64,6 +64,9 @@ uniform vec2 uSplitDirection;
 uniform int uSplitCount;
 uniform float uSplitOffsets[15];
 uniform vec3 uSplitWeights[15];
+uniform float uGradMix, uGradMidpoint, uGradShift, uGradKeep;
+uniform int uGradCount;
+uniform vec3 uGradStops[6];
 const float TAU = 6.28318530718;
 
 vec4 tap(vec2 uv) { return texture2D(uSource, uTile > .5 ? fract(uv) : clamp(uv, 0., 1.)); }
@@ -135,10 +138,41 @@ vec3 orderStage(vec3 c, vec2 uv) {
   return permute(c);
 }
 
+/** Position along the gradient, in [0, 1]. The shift runs in units of two, so a
+ * whole turn (offset 1, or a whole cycle) is a full period of the triangle fold
+ * and returns to the start. With no shift the fold is the identity. */
+float foldTone(float t) {
+  float f = fract(.5 * t) * 2.;
+  return 1. - abs(f - 1.);
+}
+
+/** Even stops, smoothstep between neighbours. */
+vec3 gradientColour(float t) {
+  float x = t * float(uGradCount - 1);
+  vec3 a = uGradStops[0], b = uGradStops[0];
+  for (int i = 0; i < 5; i++) {
+    if (i + 1 < uGradCount && x >= float(i)) { a = uGradStops[i]; b = uGradStops[i + 1]; }
+  }
+  float seg = min(floor(x), float(uGradCount - 2));
+  return mix(a, b, smoothstep(0., 1., x - seg));
+}
+
+/** Gradient Map on unpremultiplied colour. Over-range light keeps its extra
+ * brightness; with Keep brightness the mapped colour takes the input's luma. */
+vec4 gradientStage(vec4 c) {
+  if (uGradMix <= 0. || uGradCount < 2 || c.a <= .0001) return c;
+  vec3 straight = c.rgb / c.a;
+  float l = luma(straight);
+  float tone = pow(pow(clamp(l, 0., 1.), 1. / 2.2), log(.5) / log(uGradMidpoint));
+  vec3 mapped = gradientColour(foldTone(tone + uGradShift));
+  mapped *= uGradKeep > .5 ? l / max(luma(mapped), .0001) : max(l, 1.);
+  return vec4(mix(straight, mapped, uGradMix) * c.a, c.a);
+}
+
 void main() {
   vec4 c = uSplitOn > .5 ? splitStage(vUv) : tap(vUv);
   c.rgb = orderStage(c.rgb, vUv);
-  gl_FragColor = c;
+  gl_FragColor = gradientStage(c);
 }
 `;
 
