@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { zoneShapes, overlayShow, linkedZones, type ZonePicture } from '../src/perform/resolve';
 import type { Zone } from '../src/perform/types';
-import type { Group, Shape } from '../src/map/show';
+import { isShapeShown, type Group, type Shape } from '../src/map/show';
 
 const shape = (id: string, over: Partial<Shape> = {}): Shape => ({
   id, name: id, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }], colour: '#ff8800', visible: true, locked: false, sourceId: null,
@@ -61,6 +61,23 @@ test('overlayShow does not mutate its input', () => {
   assert.deepEqual(show, before);
   assert.notEqual(out, show);
   assert.equal(show.shapes[0].border.width, 4);
+});
+
+test('a launched member of a hidden group is effectively visible; an unassigned one stays hidden', () => {
+  const show = { shapes: [shape('a', { groupId: 'g' }), shape('loose', { groupId: 'g' })], groups: [{ ...group('g'), visible: false }] };
+  const out = overlayShow(show, [pic(['a'], 'inst-1')]);
+  assert.equal(isShapeShown(out, byId(out.shapes, 'a')), true);
+  assert.equal(isShapeShown(out, byId(out.shapes, 'loose')), false);
+});
+
+test('a blocker keeps its Map visibility: hidden itself or by its group stays hidden, and the input is untouched', () => {
+  const show = { shapes: [shape('b1', { blocker: true, groupId: 'g' }), shape('b2', { blocker: true, visible: false }), shape('b3', { blocker: true })], groups: [{ ...group('g'), visible: false }] };
+  const before = JSON.parse(JSON.stringify(show));
+  const out = overlayShow(show, []);
+  assert.equal(isShapeShown(out, byId(out.shapes, 'b1')), false);
+  assert.equal(isShapeShown(out, byId(out.shapes, 'b2')), false);
+  assert.equal(isShapeShown(out, byId(out.shapes, 'b3')), true);
+  assert.deepEqual(show, before);
 });
 
 test('linkedZones reports zones sharing a source', () => {

@@ -1,5 +1,5 @@
 /** Perform: which shapes each zone owns, and the overlay a running show puts over the Map show. Never edits the saved show. */
-import type { Group, Shape } from '../map/show';
+import { isShapeShown, type Group, type Shape } from '../map/show';
 import type { Zone } from './types';
 
 /** The shape ids each zone owns. A shape belongs to the first zone claiming it; a deleted or empty target owns nothing. */
@@ -24,13 +24,14 @@ export function overlayShow<T extends { shapes: Shape[]; groups: Group[] }>(show
   const owner = new Map<string, ZonePicture>();
   for (const z of zones) for (const id of z.shapeIds) if (!owner.has(id)) owner.set(id, z);
   const shapes = show.shapes.map((s): Shape => {
-    if (s.blocker) return s;
+    if (s.blocker) return isShapeShown(show, s) === s.visible ? s : { ...s, visible: isShapeShown(show, s) };
     const z = owner.get(s.id);
     if (!z || !z.launched) return { ...s, visible: false };
     if (z.sourceId === null) return { ...s, visible: true, sourceId: null, colour: '#000000', fill: 'colour', border: { ...s.border, width: 0, run: null } };
     return { ...s, visible: true, sourceId: z.sourceId };
   });
-  return { ...show, shapes };
+  // Groups are forced visible so a group hidden in Map cannot darken a launched zone; blockers above already carry their own effective visibility.
+  return { ...show, shapes, groups: show.groups.map(g => ({ ...g, visible: true })) };
 }
 
 /** Sources that more than one launched zone plays: source id to the zone indexes sharing it. */
