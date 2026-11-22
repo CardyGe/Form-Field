@@ -33,7 +33,7 @@ void main(){
  * Outside the form the flow streams outward in pulses; inside it the form slowly turns.
  */
 export const advectFragment = header + /* glsl */`
-uniform sampler2D uState,uDirector;uniform vec2 uCentre,uForm;uniform float uAmount,uTime,uAspect,uFormRadius;
+uniform sampler2D uState,uDirector,uFlow;uniform vec2 uCentre,uForm;uniform float uHasFlow,uAmount,uTime,uAspect,uFormRadius;
 float potential(vec2 p){float t=uTime*.16;return sin(p.x*1.7+1.1*sin(p.y*1.3+t)+t*.7)*cos(p.y*1.9-.9*sin(p.x*1.2-t*.8))+.45*sin(p.x*3.1-p.y*2.3+t*1.3);}
 vec2 eddy(vec2 p){const float e=.01;return vec2(potential(p+vec2(0.,e))-potential(p-vec2(0.,e)),-(potential(p+vec2(e,0.))-potential(p-vec2(e,0.))))/(2.*e);}
 vec4 weights(float f){float g=f*f,h=g*f;return .5*vec4(-h+2.*g-f,3.*h-5.*g+2.,-3.*h+4.*g+f,h-g);}
@@ -54,7 +54,9 @@ void main(){
  vec2 dir=texture2D(uDirector,vUv).rg;
  ground=mix(ground,.5*(ground+vec2(dir.x*ground.x+dir.y*ground.y,dir.y*ground.x-dir.x*ground.y)),.86);
  body=mix(body,.5*(body+vec2(dir.x*body.x+dir.y*body.y,dir.y*body.x-dir.x*body.y)),.7);
- vec2 a=gl_FragCoord.xy-ground*uAmount,b=gl_FragCoord.xy-body*uAmount;
+ // Movement in the room pushes the pattern directly, across the stripes as well as along them.
+ vec2 push=uHasFlow>.5?clamp(texture2D(uFlow,vUv).rg*size*.7,vec2(-10.),vec2(10.)):vec2(0.);
+ vec2 a=gl_FragCoord.xy-ground*uAmount-push,b=gl_FragCoord.xy-body*uAmount-push;
  gl_FragColor=vec4(clamp(sampleField(clamp(a,vec2(.5),size-.5),0),-1.5,1.5),clamp(sampleField(clamp(b,vec2(.5),size-.5),1),-1.5,1.5),0.,1.);
 }`;
 

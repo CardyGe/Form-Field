@@ -16,6 +16,7 @@ export interface MorphInput { flow: THREE.Texture | null; people: THREE.Texture 
 /** Simulation time per second of real time at Speed 1. */
 const SIM_RATE = 60;
 const MAX_STEPS = 12;
+const WARMUP_FRAMES = 100;
 /** How far Streaming at 1 carries the pattern, in simulation pixels per second. */
 const FLOW_TEXELS = 42;
 
@@ -26,6 +27,7 @@ export class MorphSolver {
   private readonly stepMaterial: THREE.ShaderMaterial;
   private readonly advectMaterial: THREE.ShaderMaterial;
   private carry = 0;
+  private warmup = 0;
   private frame = 0;
   private seed: number | null = null;
 
@@ -38,15 +40,17 @@ export class MorphSolver {
       uAlign: { value: 0 }, uTravel: { value: 0 }, uSurge: { value: 0 }, uCentre: { value: new THREE.Vector2() }, uTime: { value: 0 }, uNoise: { value: 0 }, uFrame: { value: 0 }, uAspect: { value: width / height },
     });
     this.advectMaterial = passes.material(advectFragment, {
-      uState: { value: null }, uDirector: { value: null }, uCentre: { value: new THREE.Vector2() }, uForm: { value: new THREE.Vector2() }, uAmount: { value: 0 }, uTime: { value: 0 }, uAspect: { value: width / height }, uFormRadius: { value: .4 },
+      uState: { value: null }, uDirector: { value: null }, uFlow: { value: null }, uHasFlow: { value: 0 }, uCentre: { value: new THREE.Vector2() }, uForm: { value: new THREE.Vector2() }, uAmount: { value: 0 }, uTime: { value: 0 }, uAspect: { value: width / height }, uFormRadius: { value: .4 },
     });
   }
 
   /** Moves the pattern along the flow, once a frame. Holds when Speed or Streaming is zero. */
-  private advect(seconds: number, time: number, params: MorphParams): void {
+  private advect(seconds: number, time: number, params: MorphParams, flow: THREE.Texture | null): void {
     const amount = params.flowSpeed * params.speed * Math.min(seconds, 1 / 20) * FLOW_TEXELS;
-    if (amount <= 0) return;
+    if (amount <= 0 && !flow) return;
+    if (params.speed <= 0) return;
     const u = this.advectMaterial.uniforms, form = formAt(params, time);
+    u.uFlow.value = flow; u.uHasFlow.value = flow ? 1 : 0;
     u.uState.value = this.state.read.texture; u.uDirector.value = this.director.texture; u.uAmount.value = amount; u.uTime.value = time; u.uAspect.value = this.width / this.height; u.uFormRadius.value = form.radius;
     (u.uCentre.value as THREE.Vector2).set(params.centreX, params.centreY); (u.uForm.value as THREE.Vector2).set(form.x, form.y);
     this.passes.draw(this.advectMaterial, this.state.write);
@@ -62,12 +66,13 @@ export class MorphSolver {
     this.seedMaterial.uniforms.uSeed.value = seed;
     this.passes.draw(this.seedMaterial, this.state.read);
     this.carry = 0;
+    this.warmup = WARMUP_FRAMES;
   }
 
   step(seconds: number, time: number, params: MorphParams, input: MorphInput, driftBoost = 0): void {
     if (this.seed !== params.seed) this.reseed(params.seed);
     this.director.update(seconds, params, this.width / this.height, driftBoost);
-    this.advect(seconds, time, params);
+    this.advect(seconds, time, params, input.flow);
     const breath = 1 + params.breathing * .12 * Math.sin(time * .37), outer = params.wavelength * breath, inner = outer * params.formWavelength;
     // A surge ring moves K by up to ±22%, so the step must be safe at both ends of that swing for both fields.
     const swing = params.surge * .22, ends = [outer, inner].flatMap(width => [width / Math.sqrt(1 + swing), width / Math.sqrt(1 - swing)]);
@@ -81,7 +86,10 @@ export class MorphSolver {
     u.uDt.value = dt; u.uDrive.value = Math.min(.9, params.drive + input.impulse * .25); u.uAsym.value = params.asymmetry; u.uAlign.value = params.alignment;
     u.uTravel.value = params.travel; u.uSurge.value = params.surge; (u.uCentre.value as THREE.Vector2).set(params.centreX, params.centreY); u.uTime.value = time; u.uAspect.value = this.width / this.height; u.uDirector.value = this.director.texture;
     u.uNoise.value = params.forkRate * .012 + input.seedBurst * .08;
-    for (let i = 0; i < owed.steps; i++) {
+    // A fresh pattern runs flat out with extra drive, so a launch shows stripes rather than noise.
+    const warming = this.warmup > 0, steps = warming ? MAX_STEPS : owed.steps;
+    if (warming) { this.warmup--; u.uDrive.value = Math.max(u.uDrive.value, .65); }
+    for (let i = 0; i < steps; i++) {
       u.uState.value = this.state.read.texture;
       u.uFrame.value = this.frame = (this.frame + 1) % 65536;
       this.passes.draw(this.stepMaterial, this.state.write);

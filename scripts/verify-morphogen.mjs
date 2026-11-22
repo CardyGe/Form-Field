@@ -14,6 +14,8 @@ await build({ stdin: { contents: `export {MorphSolver} from './src/morphogen/sol
 export {MorphEngine} from './src/morphogen/engine';
 export {defaultMorphParams} from './src/morphogen/params';
 export {Passes} from './src/live/passes';
+export {LiveRenderer} from './src/live/LiveRenderer';
+export {defaultLiveSettings} from './src/live/settings';
 export * as THREE from 'three';`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'morphogen.js'), logLevel: 'error' });
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><body style="margin:0;background:#000"><canvas id="a" width="1920" height="1080" style="width:100vw;height:100vh;display:block"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
@@ -173,6 +175,41 @@ try {
     await page.evaluate(() => { const c = window.t.clip; c.copy.dispose(); c.engine.dispose(); });
     console.log(`mean change per clip frame: ${(change / 149).toFixed(2)} of 255`);
     assert.ok(change / 149 > 4, `the picture is too still: ${(change / 149).toFixed(2)}`);
+  });
+  await check('a fresh start forms stripes within two seconds', async () => {
+    const variance = await page.evaluate(() => {
+      const { m, passes, field } = window.t, W = 1024, H = 576, solver = new m.MorphSolver(passes, W, H), params = m.defaultMorphParams();
+      for (let i = 0; i < 120; i++) solver.step(1 / 60, i / 60, params, { flow: null, people: null, impulse: 0, seedBurst: 0 });
+      const u = field(solver, W, H); solver.dispose();
+      let sum = 0, square = 0; for (const v of u) { sum += v; square += v * v; }
+      return square / u.length - (sum / u.length) ** 2;
+    });
+    console.log('variance after 2 s', variance.toFixed(4));
+    assert.ok(variance > .08, `stripes have not formed: ${variance}`);
+  });
+  await check('camera movement pushes the stripes', async () => {
+    const r = await page.evaluate(() => {
+      const { m, passes, field } = window.t, W = 1024, H = 576, params = { ...m.defaultMorphParams(), flowSpeed: 0, surge: 0, breathing: 0, travel: 0, fieldDrift: 0, curlAmount: 0, fieldMix: 0, forkRate: 0 };
+      const data = new Float32Array(16 * 9 * 4); for (let i = 0; i < 16 * 9; i++) { data[i * 4] = .004; data[i * 4 + 2] = 1; }
+      const flow = new m.THREE.DataTexture(data, 16, 9, m.THREE.RGBAFormat, m.THREE.FloatType); flow.needsUpdate = true;
+      const run = moving => { const solver = new m.MorphSolver(passes, W, H); let frame = 0; const go = (n, f) => { for (let i = 0; i < n; i++) solver.step(1 / 60, frame++ / 60, params, { flow: f, people: null, impulse: 0, seedBurst: 0 }); }; go(600, null); const a = field(solver, W, H); go(20, moving ? flow : null); const b = field(solver, W, H); solver.dispose(); let xy = 0, xx = 0, yy = 0; for (let i = 0; i < a.length; i++) { xy += a[i] * b[i]; xx += a[i] * a[i]; yy += b[i] * b[i]; } return xy / Math.sqrt(xx * yy); };
+      const result = { still: run(false), moved: run(true) }; flow.dispose(); return result;
+    });
+    console.log('camera push', JSON.stringify(r));
+    assert.ok(r.still > .95 && r.moved < r.still - .2, `still ${r.still}, moved ${r.moved}`);
+  });
+  await check('Live plays Morphogen with no camera at all', async () => {
+    const r = await page.evaluate(() => {
+      const { m } = window.t, canvas = document.createElement('canvas'), live = new m.LiveRenderer(canvas, { element: null, frameId: 0 });
+      live.settings = { ...m.defaultLiveSettings(), look: 'morphogen' };
+      for (let i = 0; i < 240; i++) live.frame(1 / 60);
+      const gl = canvas.getContext('webgl2'), pixels = new Uint8Array(canvas.width * canvas.height * 4); gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      let sum = 0; for (let i = 0; i < pixels.length; i += 4) sum += pixels[i] + pixels[i + 1] + pixels[i + 2];
+      const result = { width: canvas.width, height: canvas.height, mean: sum / (pixels.length / 4) / 3 }; live.dispose(); return result;
+    });
+    console.log('live', JSON.stringify(r));
+    assert.equal(r.height, 1080);
+    assert.ok(r.mean > 40, `picture is dark: ${r.mean}`);
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));

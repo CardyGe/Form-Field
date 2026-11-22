@@ -6,7 +6,7 @@
  * starts. A camera that cannot play (refused, missing, lost) also leaves the shapes on their fill.
  */
 import { Stage } from '../live/Stage';
-import { usesPeople, type LiveSettings } from '../live/settings';
+import { usesCamera, usesPeople, type LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { Signals } from '../react/signals';
 import type { Gpu, Texture } from './gpu';
@@ -63,7 +63,7 @@ export class LiveSlot {
 
   get readiness(): LiveReadiness {
     const settings = this.stage.renderer.settings, people = this.stage.renderer.peopleDiagnostics();
-    return liveReadiness(this.state, { file: this.fileChosen, needsPeople: usesPeople(settings), peopleLoading: people.status === 'loading' || (people.status as { state?: string } | null)?.state === 'loading',
+    return liveReadiness(this.state, { file: this.fileChosen, needsCamera: usesCamera(settings), needsPeople: usesPeople(settings), peopleLoading: people.status === 'loading' || (people.status as { state?: string } | null)?.state === 'loading',
       drawnSinceRunning: this.stage.renderer.framesDrawn - this.runningSince, hasPicture: this.texture !== null });
   }
 

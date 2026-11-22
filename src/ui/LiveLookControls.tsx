@@ -9,6 +9,7 @@ import { newItemId } from './mapActions';
 import { LINKS_BUDGET, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, PAINT_CONTROLS, SIGNAL_CONTROLS, SIGNAL_STARTS, SMOKE_CONTROLS, SMOKE_STARTS, type LiveSettings, type SignalKey } from '../live/settings';
 import { RELIEF_PALETTES, validateReliefPalette } from '../live/relief-palettes';
 import { rampHex } from '../live/colour';
+import { MorphogenPanel } from './MorphogenPanel';
 import type { ReactivityEngine } from '../react/engine';
 import type { MeterStore } from '../react/meter';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, SOLAR } from '../core/palettes';
@@ -57,7 +58,7 @@ export function LiveLookControls({ s, update, reactFor, onView = () => {}, onCle
   const setSignal = (change: Partial<LiveSettings['signal']>) => update(v => ({ ...v, signal: { ...v.signal, ...change } }));
   return <>
         <label className="stacked-label">Look<select aria-label="Look" value={s.look} onChange={e => { onView(); set({ look: e.target.value as LookKind }); }}>{Object.entries(LOOK_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-        {s.look === 'relief' ? <>
+        {s.look === 'morphogen' ? <MorphogenPanel s={s} update={update} reactFor={reactFor} /> : s.look === 'relief' ? <>
           <label className="live-check"><input type="checkbox" checked={s.reliefPresence} onChange={e => {
             onView(); set({ reliefPresence: e.target.checked });
           }} />Body imprint

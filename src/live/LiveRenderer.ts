@@ -14,6 +14,7 @@ import type { MaskProvider } from './MaskProvider';
 import { Tracking, FLOW_SIZE } from './Tracking';
 import { Paint } from './Paint';
 import { Signal } from './Signal';
+import { Morphogen } from './Morphogen';
 import { Smoke } from './Smoke';
 import { Relief } from './Relief';
 import type { Look } from './look';
@@ -21,7 +22,7 @@ import { trackingViewFragment } from './tracking-shaders';
 import { LiveModulator } from './modulate';
 import type { Signals } from '../react/signals';
 
-const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal };
+const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal, morphogen: Morphogen };
 
 /** Operator setup view: the camera dimmed, people in blue with a pink outline. Never shown in the artwork window. */
 const peopleViewFragment = /* glsl */`
