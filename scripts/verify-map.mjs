@@ -1131,10 +1131,10 @@ try {
     await openSection(studio, 'effect');
     const settings = studio.locator('.map-effect-settings');
     await studio.locator('.map-effect-parts').getByRole('button', { name: 'Finish', exact: true }).click();
-    const heads = await settings.locator('.control-section h3').allInnerTexts();
-    for (const h of ['Layer mix', 'Color finish', 'Tonal finishing']) assert.ok(heads.includes(h), `Finish has no "${h}" group (${heads.join(', ')})`);
-    // Optional groups (Glow, Print screen, Feedback and the rest) are not all listed at once.
-    assert.ok(await settings.locator('.parameter').count() < 30, 'Finish lists every setting at once');
+    for (const name of ['Color finish', 'Tonal finishing', 'Glow', 'Feedback']) assert.equal(await settings.getByRole('button', { name: `${name} settings`, exact: true }).count(), 1, `Finish has no "${name}" row`);
+    assert.equal(await settings.getByRole('slider', { name: 'Opacity', exact: true }).count(), 1, 'Finish keeps Opacity on its list');
+    // One effect opens at a time, so the list never shows every setting.
+    assert.ok(await settings.locator('.parameter').count() < 3, 'Finish lists every setting at once');
     const brightness = async () => (await sample(output, [[.25, .25], [.4, .4], [.55, .55], [.3, .5], [.5, .3]])).colours.flat().reduce((a, b) => a + b, 0);
     await sleep(1500);
     const before = await brightness();

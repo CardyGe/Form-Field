@@ -1,4 +1,5 @@
 // Real controls and native alpha readback from the packaged application.
+import { openFinish } from './finish-ui.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -34,6 +35,7 @@ try {
     await page.getByLabel(label + ' value', { exact: true }).press('Enter');
   }
   await page.getByRole('button', { name: 'Finish', exact: true }).click();
+  await openFinish(page, 'Transform');
   for (const [label, value] of [['Size', '.3'], ['Rotation', '.45'], ['Horizontal', '.25'], ['Vertical', '-.18']]) {
     await page.getByLabel(label + ' value', { exact: true }).fill(value);
     await page.getByLabel(label + ' value', { exact: true }).press('Enter');

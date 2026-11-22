@@ -1,15 +1,11 @@
 /**
- * The Finish controls of a layer, in Studio's groups: Layer mix, Color finish, Tonal finishing, Glow, Colour split, Gradient map, Colour balance, Key, Print screen,
- * Flat colour & outlines, Time displacement and Feedback. Studio's Finish tab and Map's Finish part both draw these.
- * Optional parts show only once switched on, as in Studio, so a layer never lists every setting at once.
+ * The Finish tab of a layer: one short list of effects, each with its state and a switch, and one effect's controls
+ * at a time. Studio's Finish tab and Map's Finish part both draw it.
  */
-import type { ReactNode } from 'react';
-import { FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS, PRINT_KEYS, SPLIT_KEYS, GRADIENT_KEYS, GRADE_KEYS, KEY_KEYS } from '../core/finishing';
-import { SLIT_MODES, SLIT_SHAPES, supportsSlitScan, slitControlVisible } from '../rendering/slitscan';
-import { supportsLens } from '../rendering/colour-lens';
-import { supportsFeedback } from '../rendering/feedback';
-import { supportsGlow } from '../rendering/bloom';
-import { supportsPrint } from '../rendering/print-screen';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { TOON_KEYS, FEEDBACK_KEYS, GLOW_KEYS } from '../core/finishing';
+import { SLIT_MODES, SLIT_SHAPES, slitControlVisible } from '../rendering/slitscan';
+import { FINISH_GROUPS, finishEffectOn, finishEffectsFor, finishSummary, hasPower, powerLocked, resetFinishEffect, toggleFinishEffect, type FinishEffect } from './finish-rack';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Parameter } from './LayerControls';
 import { ColourSplitSection, GradientMapSection, ColourBalanceSection, KeySection } from './ColourSections';
@@ -44,7 +40,7 @@ function printControlShown(layer: Layer, key: string): boolean {
 export function PrintScreenSection({ layer, definitions, edit, animate, onStart, onEnd, extra, readOnly }: FinishProps) {
   const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
   const on = (layer.params.printMix ?? 0) > 0 || !!layer.modulations.printMix;
-  return <section className="control-section"><h3>Print screen</h3><p className="muted-text">Halftone dots, line screens and ordered dither, sized in pixels of a 1080-line frame. Loops close exactly.</p>
+  return <>
     {PRINT_GROUPS.map(([group, keys]) => {
       const shown = keys.filter(key => printControlShown(layer, key));
       if (!shown.length) return null;
@@ -55,7 +51,7 @@ export function PrintScreenSection({ layer, definitions, edit, animate, onStart,
         return <Parameter key={key} definition={d} value={layer.params[key] ?? d.default} animated={!!layer.modulations[key]} readOnly={readOnly?.(d) ?? false} onChange={n => set(key, n)} onAnimate={animate && d.step !== 1 ? () => animate(key) : undefined} extra={extra?.(d)} onStart={onStart} onEnd={onEnd} />;
       })}</div>;
     })}
-  </section>;
+  </>;
 }
 
 export interface FinishProps {
@@ -68,10 +64,43 @@ export interface FinishProps {
   onEnd: () => void;
   extra?: (d: ParameterDefinition) => ReactNode;
   readOnly?: (d: ParameterDefinition) => boolean;
+  /** Studio's layer settings (Transform, Mask, Output, Background), listed under the effects. */
+  layerPanels?: FinishPanel[];
+  /** The open row, when the parent keeps it across tab changes. */
+  open?: string | null;
+  onOpen?: (id: string | null) => void;
 }
 
-export function FinishSections({ layer, definitions, edit, animate, onStart, onEnd, extra, readOnly }: FinishProps) {
+export interface FinishPanel { id: string; label: string; summary?: string; on?: boolean; content: ReactNode }
+
+/** Feedback has the most settings, so they sit in four short parts under its amount. */
+const FEEDBACK_PARTS: [string, string[]][] = [
+  ['Move', ['echoZoom', 'echoRotate', 'echoDriftX', 'echoDriftY', 'echoCentreX', 'echoCentreY', 'echoTiltX', 'echoTiltY', 'echoLens']],
+  ['Frame', ['echoFrame', 'echoWindow', 'echoRound', 'echoSquare', 'echoEdge']],
+  ['Colour', ['echoHue', 'echoColourDrift', 'echoPunch', 'echoCrush', 'echoKeep', 'echoBlend']],
+  ['Damage', ['echoMelt', 'echoStreak', 'echoStreakAxis', 'echoBlock', 'echoSlip', 'echoEvents', 'echoPixel']],
+];
+
+const Chevron = ({ back = false }: { back?: boolean }) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={back ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7'} /></svg>;
+
+export function FinishSections({ layer, definitions, edit, animate, onStart, onEnd, extra, readOnly, layerPanels = [], open: openProp, onOpen }: FinishProps) {
   const p = layer.params, mod = layer.modulations;
+  const [ownOpen, setOwnOpen] = useState<string | null>(null);
+  const requested = openProp === undefined ? ownOpen : openProp;
+  const setOpen = (id: string | null) => { setOwnOpen(id); onOpen?.(id); };
+  const stored = useRef(new Map<string, Record<string, number>>());
+  const root = useRef<HTMLDivElement>(null);
+  const [feedbackPart, setFeedbackPart] = useState('Move');
+  const effects = finishEffectsFor(layer, definitions);
+  const effect = effects.find(item => item.id === requested);
+  const panel = layerPanels.find(item => item.id === requested);
+  const openId = effect?.id ?? panel?.id ?? null;
+  const order = [...FINISH_GROUPS.flatMap(group => effects.filter(item => item.group === group).map(item => item.id)), ...layerPanels.map(item => item.id)];
+  const labelOf = (id: string) => effects.find(item => item.id === id)?.label ?? layerPanels.find(item => item.id === id)?.label ?? '';
+  // A newly opened effect starts at its first control.
+  useEffect(() => {
+    for (let node = root.current?.parentElement; node; node = node.parentElement) if (/auto|scroll/.test(getComputedStyle(node).overflowY)) { node.scrollTop = 0; break; }
+  }, [openId]);
   const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
   /** One slider. Settings that choose among whole steps (step 1) have no wave. */
   const row = (d: ParameterDefinition, steps = false) => <Parameter key={d.key} definition={d} value={p[d.key] ?? d.default} animated={!!mod[d.key]} readOnly={readOnly?.(d) ?? false}
@@ -83,32 +112,80 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
   const slitChoice = (key: string, label: string, options: string[]) => slitControlVisible(layer, key) && <ChoiceParameter key={key} label={label} name={label} options={options} value={p[key] ?? 0} onChange={n => set(key, n)} />;
   const slitRows = (keys: string[]) => definitions.filter(d => keys.includes(d.key) && slitControlVisible(layer, d.key)).map(d => row(d, true));
   const slitMode = Math.round(p.slitMode ?? 0);
-  return <>
-    <section className="control-section"><h3>Layer mix</h3>
+  const blocked = (item: FinishEffect, keys: string[]) => keys.some(key => { const d = definitions.find(x => x.key === key); return !!d && (readOnly?.(d) ?? false); }) || (keys === item.keys ? false : powerLocked(layer, item));
+  const toggle = (item: FinishEffect) => {
+    const id = layer.id + ':' + item.id, result = toggleFinishEffect(layer, item, definitions, stored.current.get(id));
+    if (result.stored) stored.current.set(id, result.stored); else stored.current.delete(id);
+    onStart(); edit(() => result.layer); onEnd();
+  };
+  const powerSwitch = (item: FinishEffect) => {
+    if (!hasPower(item)) return <span className="finish-switch-space" />;
+    const on = finishEffectOn(layer, item, definitions), locked = blocked(item, Object.keys(item.power));
+    return <button type="button" role="switch" aria-checked={on} aria-label={item.label + ' on'} className="finish-switch" disabled={locked} title={powerLocked(layer, item) ? 'Animated. Change it in Motion.' : on ? 'Turn off and keep the settings' : 'Turn on'} onClick={() => toggle(item)}><span /></button>;
+  };
+  const body = (id: string) => {
+    switch (id) {
+      case 'colour': return definitions.filter(d => ['saturation', 'hue', 'exposure'].includes(d.key)).map(d => row(d));
+      case 'tone': return definitions.filter(d => effects.find(item => item.id === 'tone')!.keys.includes(d.key)).map(d => row(d));
+      case 'balance': return <ColourBalanceSection {...sectionProps} />;
+      case 'gradient': return <GradientMapSection {...sectionProps} />;
+      case 'key': return <KeySection {...sectionProps} />;
+      case 'split': return <ColourSplitSection {...sectionProps} />;
+      case 'print': return <PrintScreenSection {...sectionProps} />;
+      case 'glow': return <>{definitions.filter(d => GLOW_KEYS.includes(d.key) && (d.key === 'glowMix' || (p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((d.key !== 'glowStreakAngle' && d.key !== 'glowStreakShape') || (p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && d.key !== 'glowStreakShape').map(d => row(d, true))}
+        {((p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && choice('Streak shape', ['Line', 'Cross'], 'glowStreakShape')}</>;
+      case 'flat': return definitions.filter(d => TOON_KEYS.includes(d.key) && (d.key === 'toonMix' || (p.toonMix ?? 0) > 0) && (d.key !== 'toonOutlineColor' || (p.toonOutline ?? 0) > 0)).map(d => row(d, true));
+      case 'time': return <>{slitRows(['slitShift', 'slitSpan'])}
+        {slitChoice('slitMode', 'Time mode', SLIT_MODES)}
+        {slitControlVisible(layer, 'slitMode') && <p className="muted-text">{SLIT_MODE_HELP[slitMode] ?? SLIT_MODE_HELP[0]}</p>}
+        {slitChoice('slitDirection', 'Direction', ['Past', 'Future'])}
+        {slitChoice('slitShape', 'Delay map', SLIT_SHAPES)}
+        {slitRows(['slitSlices'])}
+        {slitControlVisible(layer, 'slitSlices') && slitMode === 2 && <p className="muted-text">Median uses at most nine slices and always an odd number, so a Time slices setting above nine is capped at nine.</p>}
+        {slitRows(['slitSmooth', 'slitBlocks', 'slitScroll', 'slitTwist', 'slitZoom', 'slitChroma', 'slitDecay', 'slitReach'])}</>;
+      case 'feedback': {
+        const shown = (d: ParameterDefinition) => FEEDBACK_KEYS.includes(d.key) && d.key !== 'echoBlend' && d.key !== 'echoStreakAxis' && (!['echoRound', 'echoSquare', 'echoEdge'].includes(d.key) || (p.echoFrame ?? 0) > 0 || (p.echoWindow ?? 0) > 0);
+        const keys = FEEDBACK_PARTS.find(([name]) => name === feedbackPart)![1];
+        return <>{definitions.filter(d => d.key === 'echo').map(d => row(d))}
+          {echoOn && <><div className="finish-parts" role="group" aria-label="Feedback settings">{FEEDBACK_PARTS.map(([name]) => <button type="button" key={name} aria-pressed={feedbackPart === name} onClick={() => setFeedbackPart(name)}>{name}</button>)}</div>
+            {definitions.filter(d => shown(d) && keys.includes(d.key)).map(d => row(d))}
+            {keys.includes('echoBlend') && choice('Echo blend', ['Mix', 'Behind source', 'Brighter'], 'echoBlend')}
+            {keys.includes('echoStreakAxis') && (p.echoStreak ?? 0) > 0 && choice('Streak direction', ['Radial', 'Box'], 'echoStreakAxis')}</>}</>;
+      }
+      default: return null;
+    }
+  };
+  const rowFor = (id: string, label: string, summary: string, on: boolean, control: ReactNode) => <div key={id} className={'finish-row' + (on ? ' on' : '')}>
+    <button type="button" className="finish-row-open" aria-label={label + ' settings'} onClick={() => setOpen(id)}><i aria-hidden="true" /><span>{label}</span><small>{summary}</small><Chevron /></button>{control}</div>;
+
+  if (openId) {
+    const index = order.indexOf(openId), previous = order[(index - 1 + order.length) % order.length], next = order[(index + 1) % order.length];
+    const active = effects.filter(item => item.id !== openId && finishEffectOn(layer, item, definitions));
+    return <div ref={root} className="finish-detail" onKeyDown={e => { if (e.key === 'Escape' && !(e.target instanceof HTMLInputElement && e.target.type !== 'range')) { e.stopPropagation(); setOpen(null); } }}>
+      <div className="finish-detail-head">
+        <div className="finish-detail-nav">
+          <button type="button" className="finish-back" onClick={() => setOpen(null)}><Chevron back />All finishes</button>
+          <button type="button" className="finish-step" aria-label={'Previous: ' + labelOf(previous)} title={labelOf(previous)} onClick={() => setOpen(previous)}><Chevron back /></button>
+          <button type="button" className="finish-step" aria-label={'Next: ' + labelOf(next)} title={labelOf(next)} onClick={() => setOpen(next)}><Chevron /></button>
+        </div>
+        <div className="finish-detail-title"><h3>{effect?.label ?? panel!.label}</h3>
+          {effect && <button type="button" className="finish-reset" disabled={blocked(effect, effect.keys)} onClick={() => { onStart(); edit(l => resetFinishEffect(l, effect, definitions)); onEnd(); stored.current.delete(layer.id + ':' + effect.id); }}>Reset</button>}
+          {effect && hasPower(effect) && powerSwitch(effect)}
+        </div>
+        {active.length > 0 && <div className="finish-hop" role="group" aria-label="Effects that are on">{active.map(item => <button type="button" key={item.id} onClick={() => setOpen(item.id)}>{item.label}</button>)}</div>}
+      </div>
+      {effect && <p className="muted-text finish-copy">{effect.description}</p>}
+      <div className="finish-detail-body">{effect ? body(effect.id) : panel!.content}</div>
+    </div>;
+  }
+  const activeCount = effects.filter(item => finishEffectOn(layer, item, definitions)).length;
+  return <div ref={root} className="finish-list">
+    <section className="control-section finish-mix"><h3>Layer mix</h3>
       <Parameter definition={opacity} value={layer.opacity} animated={!!mod.opacity} readOnly={readOnly?.(opacity) ?? false} onChange={n => edit(l => ({ ...l, opacity: n }))} onAnimate={animate ? () => animate('opacity') : undefined} onStart={onStart} onEnd={onEnd} />
-      <label className="stacked-label">Blending<select aria-label="Blending" value={layer.blend} onChange={e => edit(l => ({ ...l, blend: e.target.value as Layer['blend'] }))}><option value="normal">Normal</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="add">Light add</option><option value="source">Colour from below</option></select></label></section>
-    <section className="control-section"><h3>Color finish</h3>{definitions.filter(d => ['saturation', 'hue', 'exposure'].includes(d.key)).map(d => row(d))}</section>
-    <section className="control-section"><h3>Tonal finishing</h3><p className="muted-text">Shape luminance and colour while preserving transparency.</p>
-      {definitions.filter(d => FINISH_KEYS.includes(d.key) && !TOON_KEYS.includes(d.key) && !FEEDBACK_KEYS.includes(d.key) && !SLIT_KEYS.includes(d.key) && !GLOW_KEYS.includes(d.key) && !PRINT_KEYS.includes(d.key) && ![...SPLIT_KEYS, ...GRADIENT_KEYS, ...GRADE_KEYS, ...KEY_KEYS].includes(d.key)).map(d => row(d))}</section>
-    {supportsGlow(layer) && <section className="control-section"><h3>Glow</h3><p className="muted-text">Bright areas spill soft light. Loops close exactly; adds a few blur passes per glowing layer.</p>
-      {definitions.filter(d => GLOW_KEYS.includes(d.key) && (d.key === 'glowMix' || (p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((d.key !== 'glowStreakAngle' && d.key !== 'glowStreakShape') || (p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && d.key !== 'glowStreakShape').map(d => row(d, true))}
-      {((p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && choice('Streak shape', ['Line', 'Cross'], 'glowStreakShape')}</section>}
-    {supportsLens(layer) && <><ColourSplitSection {...sectionProps} /><GradientMapSection {...sectionProps} /><ColourBalanceSection {...sectionProps} /><KeySection {...sectionProps} /></>}
-    {supportsPrint(layer) && <PrintScreenSection layer={layer} definitions={definitions} edit={edit} animate={animate} onStart={onStart} onEnd={onEnd} extra={extra} readOnly={readOnly} />}
-    <section className="control-section"><h3>Flat colour &amp; outlines</h3><p className="muted-text">Hard palette bands and contour lines. For the cleanest edges, lower the source's Relief and Softness.</p>
-      {definitions.filter(d => TOON_KEYS.includes(d.key) && (d.key === 'toonMix' || (p.toonMix ?? 0) > 0) && (d.key !== 'toonOutlineColor' || (p.toonOutline ?? 0) > 0)).map(d => row(d, true))}</section>
-    {supportsSlitScan(layer) && <section className="control-section"><h3>Time displacement</h3><p className="muted-text">Parts of the frame show other moments of the loop. Loops close exactly; each slice renders the source once more.</p>
-      {slitRows(['slitShift', 'slitSpan'])}
-      {slitChoice('slitMode', 'Time mode', SLIT_MODES)}
-      {slitControlVisible(layer, 'slitMode') && <p className="muted-text">{SLIT_MODE_HELP[slitMode] ?? SLIT_MODE_HELP[0]}</p>}
-      {slitChoice('slitDirection', 'Direction', ['Past', 'Future'])}
-      {slitChoice('slitShape', 'Delay map', SLIT_SHAPES)}
-      {slitRows(['slitSlices'])}
-      {slitControlVisible(layer, 'slitSlices') && slitMode === 2 && <p className="muted-text">Median uses at most nine slices and always an odd number, so a Time slices setting above nine is capped at nine.</p>}
-      {slitRows(['slitSmooth', 'slitBlocks', 'slitScroll', 'slitTwist', 'slitZoom', 'slitChroma', 'slitDecay', 'slitReach'])}</section>}
-    {supportsFeedback(layer) && <section className="control-section"><h3>Feedback</h3><p className="muted-text">Each frame keeps a faded, moved echo of the last. Loops close exactly; exports warm up before the first frame.</p>
-      {definitions.filter(d => FEEDBACK_KEYS.includes(d.key) && d.key !== 'echoBlend' && d.key !== 'echoStreakAxis' && (!['echoRound', 'echoSquare', 'echoEdge'].includes(d.key) || (p.echoFrame ?? 0) > 0 || (p.echoWindow ?? 0) > 0) && (d.key === 'echo' || (p.echo ?? 0) > 0 || !!mod.echo)).map(d => row(d))}
-      {echoOn && choice('Echo blend', ['Mix', 'Behind source', 'Brighter'], 'echoBlend')}
-      {echoOn && (p.echoStreak ?? 0) > 0 && choice('Streak direction', ['Radial', 'Box'], 'echoStreakAxis')}</section>}
-  </>;
+      <label className="finish-blend">Blending<select aria-label="Blending" value={layer.blend} onChange={e => edit(l => ({ ...l, blend: e.target.value as Layer['blend'] }))}><option value="normal">Normal</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="add">Light add</option><option value="source">Colour from below</option></select></label></section>
+    <p className="finish-count">{activeCount ? activeCount + (activeCount === 1 ? ' effect on' : ' effects on') : 'No effects on'}</p>
+    {FINISH_GROUPS.map(group => { const items = effects.filter(item => item.group === group); return items.length > 0 && <section key={group} className="finish-group"><h3>{group}</h3>
+      {items.map(item => rowFor(item.id, item.label, finishSummary(layer, item, definitions), finishEffectOn(layer, item, definitions), powerSwitch(item)))}</section>; })}
+    {layerPanels.length > 0 && <section className="finish-group"><h3>Layer</h3>{layerPanels.map(item => rowFor(item.id, item.label, item.summary ?? '', !!item.on, <span className="finish-switch-space" />))}</section>}
+  </div>;
 }

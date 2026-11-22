@@ -1,3 +1,4 @@
+import { openFinish } from './finish-ui.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -47,7 +48,7 @@ try {
   const b=await saved(p=>JSON.stringify(p.layers[0].params)!==JSON.stringify(a.layers[0].params));
   assert.equal(b.layers.length,1);assert.equal(b.layers[0].kind,kind);
   console.log('Verified randomizer '+kind);
-  await page.getByRole('button',{name:'Finish',exact:true}).click();
+  await page.getByRole('button',{name:'Finish',exact:true}).click();await openFinish(page,'Tonal finishing');
   const beforeFinish=await page.evaluate(()=>window.studio.loadAutosave());
   await page.getByLabel('Midtone gamma value',{exact:true}).fill('1.27');await page.getByLabel('Midtone gamma value',{exact:true}).press('Tab');
   await saved(p=>p.layers[0].params.toneGamma===1.27);
