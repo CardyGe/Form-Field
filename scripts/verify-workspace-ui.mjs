@@ -148,11 +148,30 @@ try {
   await page.getByTitle('Undo · ⌘Z',{exact:true}).click();await saved(p=>JSON.stringify(p)===JSON.stringify(before));
   await page.getByRole('button',{name:'Shape',exact:true}).click();
  });
+ await check('colour sections show on a Surface layer and not on a Graphic layer',async()=>{
+  const titles=['Colour split','Gradient map','Colour balance','Key'];
+  for(const [kind,expected] of [['surface',true],['graphic',false]]){
+   const p={...model.createProject(),layers:[model.createLayer(kind)]};
+   await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===p.id);
+   await page.getByRole('button',{name:'Finish',exact:true}).click();
+   for(const title of titles)assert.equal(await page.locator('.inspector-content h3',{hasText:new RegExp('^'+title+'$')}).count(),expected?1:0,kind+': '+title);
+   if(expected){
+    assert.equal(await page.getByLabel('Split angle value',{exact:true}).count(),0);
+    assert.equal(await page.getByLabel('Gradient colours',{exact:true}).count(),0);
+    assert.equal(await page.getByLabel('Key by',{exact:true}).count(),0);
+    assert.equal(await page.getByLabel('Split shape',{exact:true}).count(),0);
+    assert.equal(await page.getByLabel('Channel order',{exact:true}).count(),1);
+    await snapshot('colour-sections');
+   }
+   await page.getByRole('button',{name:'Shape',exact:true}).click();
+  }
+  await fs.writeFile(fixture,JSON.stringify(original));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===original.id);
+ });
  await check('preset browsing preserves the family filter and applies normal saved looks',async()=>{
   await libraryShow();await page.getByLabel('Search library',{exact:true}).fill('');
   await library.getByRole('button',{name:'Presets',exact:true}).click();
   await page.getByLabel('Preset library filter',{exact:true}).selectOption('finish');
-  assert.equal(await library.locator('.finish-card').count(),19);
+  assert.equal(await library.locator('.finish-card').count(),22);
   await snapshot('finish-library');
   await page.getByLabel('Search library',{exact:true}).fill('tunnel');
   assert.ok(await library.locator('.preset-card').count()>0);

@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
+import { PRESETS, applyFinish, applyPreset, createLayer, finishSupported, createProject, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { SPLIT_KEYS, GRADIENT_KEYS, GRADE_KEYS, KEY_KEYS, GRADE_PARAMETERS, KEY_PARAMETERS, FINISH_KEYS } from '../src/core/finishing';
-import { gradientStops, gradientTone, keyCoverage, lensActive, spectralWeights, whiteBalance } from '../src/rendering/colour-lens';
+import { balanceControlVisible, gradientControlVisible, keyControlVisible, splitControlVisible, gradientStops, gradientTone, keyCoverage, lensActive, spectralWeights, whiteBalance } from '../src/rendering/colour-lens';
 
 test('colour and lens are off by default and older projects migrate without them', () => {
   const project = createProject();
@@ -97,4 +97,57 @@ test('grade and key controls follow the brief, migrate and stay hidden on graphi
   for (const layer of project.layers) for (const key of [...GRADE_KEYS, ...KEY_KEYS]) delete layer.params[key];
   const migrated = validateProject(JSON.parse(JSON.stringify(project)));
   assert.equal(migrated.layers[0].params.keyMix, 0); assert.equal(migrated.layers[0].params.keyLow, .25);
+});
+
+test('split controls appear only when they apply', () => {
+  const on = (params: Record<string, number>) => ({ ...createLayer('surface'), params: { ...createLayer('surface').params, splitAmount: 8, ...params } });
+  assert.equal(splitControlVisible(createLayer('surface'), 'splitAmount'), true);
+  assert.equal(splitControlVisible(createLayer('surface'), 'splitAngle'), false);
+  assert.equal(splitControlVisible(on({ splitShape: 1 }), 'splitAngle'), false);
+  assert.equal(splitControlVisible(on({ splitShape: 2 }), 'splitThreshold'), true);
+  assert.equal(splitControlVisible(on({ splitShape: 3 }), 'splitTravel'), true);
+  assert.equal(splitControlVisible(on({ splitShape: 0 }), 'splitWaves'), false);
+  assert.equal(splitControlVisible(on({ splitOrder: 0 }), 'splitBlocks'), false);
+  assert.equal(splitControlVisible(on({ splitOrder: 2 }), 'splitBlocks'), true);
+  assert.equal(splitControlVisible(createLayer('surface'), 'splitOrder'), true);
+  const animated = { ...createLayer('surface'), modulations: { splitAmount: {} as never } };
+  assert.equal(splitControlVisible(animated, 'splitShape'), true);
+});
+test('gradient controls appear only once the map is on', () => {
+  const layer = createLayer('surface');
+  assert.equal(gradientControlVisible(layer, 'gradMix'), true);
+  assert.equal(gradientControlVisible(layer, 'gradPalette'), false);
+  assert.equal(gradientControlVisible({ ...layer, params: { ...layer.params, gradMix: .5 } }, 'gradKeep'), true);
+  assert.equal(gradientControlVisible({ ...layer, modulations: { gradMix: {} as never } }, 'gradOffset'), true);
+});
+test('colour balance swatches appear only with their tint', () => {
+  const layer = createLayer('surface');
+  assert.equal(balanceControlVisible(layer, 'gradeTemperature'), true);
+  assert.equal(balanceControlVisible(layer, 'gradeShadowTint'), true);
+  assert.equal(balanceControlVisible(layer, 'gradeShadowColour'), false);
+  assert.equal(balanceControlVisible(layer, 'gradeHighlightColour'), false);
+  const tinted = { ...layer, params: { ...layer.params, gradeShadowTint: .4 } };
+  assert.equal(balanceControlVisible(tinted, 'gradeShadowColour'), true);
+  assert.equal(balanceControlVisible(tinted, 'gradeHighlightColour'), false);
+  assert.equal(balanceControlVisible({ ...layer, modulations: { gradeHighlightTint: {} as never } }, 'gradeHighlightColour'), true);
+});
+test('key controls follow the key and its mode', () => {
+  const layer = createLayer('surface');
+  assert.equal(keyControlVisible(layer, 'keyMix'), true);
+  for (const key of ['keyMode', 'keyLow', 'keySoftness', 'keyHue', 'keyInvert']) assert.equal(keyControlVisible(layer, key), false);
+  const on = (keyMode: number) => ({ ...layer, params: { ...layer.params, keyMix: 1, keyMode } });
+  assert.equal(keyControlVisible(on(0), 'keyLow'), true);
+  assert.equal(keyControlVisible(on(0), 'keyHue'), false);
+  assert.equal(keyControlVisible(on(1), 'keyHueRange'), true);
+  assert.equal(keyControlVisible(on(1), 'keyHigh'), false);
+  assert.equal(keyControlVisible(on(1), 'keySoftness'), true);
+  assert.equal(keyControlVisible({ ...layer, modulations: { keyMix: {} as never } }, 'keyMode'), true);
+});
+test('colour looks apply, replace other finishes and clear', () => {
+  const layer = applyFinish(createLayer('surface'), 'finish-edge-prism');
+  assert.equal(layer.params.splitShape, 2);
+  const mapped = applyFinish(layer, 'finish-neon-map');
+  assert.deepEqual([mapped.params.splitAmount, mapped.params.gradMix], [0, 1]);
+  assert.equal(applyFinish(mapped, 'finish-none').params.gradMix, 0);
+  assert.equal(finishSupported(createLayer('scope'), 'finish-anamorphic'), false);
 });

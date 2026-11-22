@@ -39,6 +39,42 @@ export function lensActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>
     GRADE_AMOUNTS.some(key => (p[key] ?? 0) !== 0 || !!m[key]) || (p.keyMix ?? 0) > 0 || !!m.keyMix);
 }
 
+const live = (layer: Pick<Layer, 'params' | 'modulations'>, key: string) => (layer.params[key] ?? 0) > 0 || !!layer.modulations[key];
+
+/** Whether a Split control applies, given the layer's other Split choices. */
+export function splitControlVisible(layer: Pick<Layer, 'params' | 'modulations'>, key: string): boolean {
+  if (key === 'splitAmount' || key === 'splitOrder') return true;
+  const p = layer.params, shape = Math.round(p.splitShape ?? 0);
+  if (key === 'splitBlocks' || key === 'splitChance') return Math.round(p.splitOrder ?? 0) > 0;
+  if (!live(layer, 'splitAmount')) return false;
+  if (key === 'splitAngle') return shape !== 1;
+  if (key === 'splitThreshold') return shape === 2;
+  if (key === 'splitWaves' || key === 'splitTravel') return shape === 3;
+  return true;
+}
+
+/** Everything but the amount waits until the gradient map is on. */
+export function gradientControlVisible(layer: Pick<Layer, 'params' | 'modulations'>, key: string): boolean {
+  return key === 'gradMix' || live(layer, 'gradMix');
+}
+
+/** The shadow and highlight swatches wait for their tint. */
+export function balanceControlVisible(layer: Pick<Layer, 'params' | 'modulations'>, key: string): boolean {
+  if (key === 'gradeShadowColour') return live(layer, 'gradeShadowTint');
+  if (key === 'gradeHighlightColour') return live(layer, 'gradeHighlightTint');
+  return true;
+}
+
+/** Every Key control waits for the key; the range controls follow its mode. */
+export function keyControlVisible(layer: Pick<Layer, 'params' | 'modulations'>, key: string): boolean {
+  if (key === 'keyMix') return true;
+  if (!live(layer, 'keyMix')) return false;
+  const hue = Math.round(layer.params.keyMode ?? 0) === 1;
+  if (key === 'keyLow' || key === 'keyHigh') return !hue;
+  if (key === 'keyHue' || key === 'keyHueRange') return hue;
+  return true;
+}
+
 /** Taps for Split. Sample i sits at `offset` (-.5 to .5 of the split distance)
  * and contributes to each channel by a triangle centred on that channel's
  * position (red 0, green .5, blue 1). Each channel's weights sum to 1, so grey
