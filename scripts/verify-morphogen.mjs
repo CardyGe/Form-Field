@@ -14,6 +14,7 @@ await build({ stdin: { contents: `export {MorphSolver} from './src/morphogen/sol
 export {MorphEngine} from './src/morphogen/engine';
 export {defaultMorphParams} from './src/morphogen/params';
 export {Passes} from './src/live/passes';
+export {Gpu} from './src/map/gpu';
 export {LiveRenderer} from './src/live/LiveRenderer';
 export {defaultLiveSettings} from './src/live/settings';
 export * as THREE from 'three';`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'morphogen.js'), logLevel: 'error' });
@@ -209,6 +210,23 @@ try {
       return { change };
     });
     assert.equal(r.change, 0);
+  });
+  await check('the wall output applies the flash correction and probes the uncorrected picture', async () => {
+    const r = await page.evaluate(async () => {
+      const { m } = window.t, canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 360;
+      const gpu = new m.Gpu(canvas), source = document.createElement('canvas'); source.width = source.height = 8;
+      const c2d = source.getContext('2d'); c2d.fillStyle = '#ffffff'; c2d.fillRect(0, 0, 8, 8);
+      const texture = gpu.upload(source, null), gl = canvas.getContext('webgl2'), pixel = new Uint8Array(4);
+      const draw = () => { gpu.begin(); gpu.layer(texture); gpu.finish(); gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(320, 180, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); return pixel[0]; };
+      const plain = draw(); gpu.setOutputCorrection(.25, 1); const dimmed = draw();
+      gpu.requestFlashProbe(); let probe = null; for (let i = 0; i < 200 && !probe; i++) { await new Promise(done => setTimeout(done, 5)); probe = gpu.collectFlashProbe(); }
+      gpu.setOutputCorrection(1, 1); const restored = draw();
+      return { plain, dimmed, restored, probeSize: probe?.length, probeValue: probe?.[0] };
+    });
+    console.log('wall correction', JSON.stringify(r));
+    assert.equal(r.plain, 255); assert.equal(r.restored, 255);
+    assert.ok(Math.abs(r.dimmed - 136) <= 3, `dimmed to ${r.dimmed}`);
+    assert.equal(r.probeSize, 64 * 36 * 4); assert.equal(r.probeValue, 255);
   });
   await check('camera movement pushes the stripes', async () => {
     const r = await page.evaluate(() => {

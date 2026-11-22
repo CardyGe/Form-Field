@@ -21,7 +21,8 @@ import type { LiveSettings } from '../live/settings';
 import { flatten, ringBounds } from './outline';
 import { IDENTITY, invert, multiply, quadToQuad, apply, type H3 } from './homography';
 import { coverCrop, landing, landingAspect, sourceSizeFor, type Landing } from './placement';
-import { Gpu, type ShapeDraw, type Texture } from './gpu';
+import { Gpu, type ShapeDraw, type Texture, FLASH_PROBE } from './gpu';
+import { FlashLimiter, type FlashCorrection } from './flash-limiter';
 import { chaseHead, chaseOffsets, insetOutline, onlySurfaceDiffers, outlinePolygon, staggerDelays, withSurface } from './wild';
 import { FrameHistory } from './frameHistory';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
@@ -128,6 +129,8 @@ export class MapCompositor {
   private readonly modulator = new Modulator();
   private signals: Signals = {};
   /** What is drawn this frame: the show with its links applied. */
+  private readonly flashLimiter = new FlashLimiter();
+  private flashCorrection: FlashCorrection = { gain: 1, redScale: 1 };
   private drawn: Modulated<PlayShow> = { show: this.show, opacity: new Map(), speed: new Map(), params: new Map() };
   /** The overlay (test grid, names, identify, crosshair, selection), drawn in 2D when it changes. */
   private overlay: { key: string; canvas: OffscreenCanvas; texture: Texture | null; empty: boolean } | null = null;
@@ -356,6 +359,7 @@ export class MapCompositor {
     const staggering = this.keepHistories(show);
     const drawn = this.dirty || rendered || running || staggering || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
+    this.limitFlashes(now, drawn);
     this.frameIndex++;
     const work = performance.now() - started;
     // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
@@ -363,6 +367,19 @@ export class MapCompositor {
     this.framesThisSecond++;
     if (now - this.secondStarted >= 1000) { this.fps = this.framesThisSecond * 1000 / (now - this.secondStarted); this.framesThisSecond = 0; this.secondStarted = now; }
     return drawn;
+  }
+
+  /** Reads the finished wall without waiting and corrects later frames. A correction that changes redraws the stage. */
+  private limitFlashes(now: number, drawn: boolean): void {
+    if (this.frozen) return;
+    const probe = this.gpu.collectFlashProbe();
+    if (probe) {
+      const next = this.flashLimiter.push(probe, FLASH_PROBE.width, FLASH_PROBE.height, now / 1000);
+      if (next.gain !== this.flashCorrection.gain || next.redScale !== this.flashCorrection.redScale) {
+        this.flashCorrection = next; this.gpu.setOutputCorrection(next.gain, next.redScale); this.dirty = true;
+      }
+    }
+    if (drawn || this.flashCorrection.gain < 1 || this.flashCorrection.redScale < 1) this.gpu.requestFlashProbe();
   }
 
   stats(): CompositorStats {
