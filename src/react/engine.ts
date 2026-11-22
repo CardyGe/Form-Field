@@ -135,9 +135,10 @@ export class ReactivityEngine {
       out['audio.mids'] = this.gains.mids.update(sound.mids, dt);
       out['audio.highs'] = this.gains.highs.update(sound.highs, dt);
       out['audio.level'] = this.gains.level.update(sound.level, dt);
-      const { onset, strength } = this.beat.update(sound.bass, t);
+      const { onset, followOnset, strength } = this.beat.update(sound.bass, t);
       const beat = this.beat.state(t);
-      if (onset) { this.tempo.detected(t, beat.bpm); this.tempo.followOnset(t, beat.bpm, strength); }
+      if (onset) this.tempo.detected(t, beat.bpm);
+      if (followOnset) this.tempo.followOnset(t, beat.bpm, strength);
       out['beat.pulse'] = beat.pulse;
       out['beat.count'] = beat.count;
     }

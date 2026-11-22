@@ -1,8 +1,10 @@
 /**
  * Beats from the bass: an onset is a sudden rise in bass energy (spectral flux) above an adaptive threshold, at most one
  * every 0.25 s. The tempo is read from the gaps between onsets (their median, folded into 70–180 BPM) once there are four.
+ * The follow clock gets its own output from the same test with a shorter gap, because above 120 BPM a half beat is under
+ * 0.25 s and `onset` can latch on the off-beats and never hear the kick.
  */
-const MIN_GAP = 0.25, WINDOW = 1, PULSE_DECAY = 0.15;
+const MIN_GAP = 0.25, FOLLOW_GAP = 0.12, WINDOW = 1, PULSE_DECAY = 0.15;
 
 export class BeatDetector {
   private prev = 0;
@@ -10,10 +12,11 @@ export class BeatDetector {
   private recent: { t: number; v: number }[] = [];
   private onsets: number[] = [];
   private last = -Infinity;
+  private lastFollow = -Infinity;
   count = 0;
 
   /** One frame's bass energy at time t (seconds). */
-  update(bass: number, t: number): { onset: boolean; strength: number } {
+  update(bass: number, t: number): { onset: boolean; followOnset: boolean; strength: number } {
     const v = Number.isFinite(bass) ? Math.max(0, bass) : 0;
     const f = Math.max(0, v - this.prev);
     this.prev = v;
@@ -24,11 +27,14 @@ export class BeatDetector {
     const loudest = Math.max(v, ...this.recent.map(x => x.v));
     // Above its own recent spread, and a real share of the recent bass, so a steady hum never counts.
     // With about a sixth of a second heard, above an absolute floor, so room noise after silence is not a beat.
-    const onset = this.flux.length >= 10 && f > 0.002 && f > mean + 1.5 * sd && f > 0.1 * loudest && t - this.last >= MIN_GAP;
+    const rising = this.flux.length >= 10 && f > 0.002 && f > mean + 1.5 * sd && f > 0.1 * loudest;
+    const onset = rising && t - this.last >= MIN_GAP;
+    const followOnset = rising && t - this.lastFollow >= FOLLOW_GAP;
+    if (followOnset) this.lastFollow = t;
     this.flux.push({ t, v: f });
     this.recent.push({ t, v });
     if (onset) { this.last = t; this.count++; this.onsets.push(t); if (this.onsets.length > 16) this.onsets.shift(); }
-    return { onset, strength: f };
+    return { onset, followOnset, strength: f };
   }
 
   /** The beat pulse (1 at an onset, fading over 0.15 s), the beat count, and the tempo once trusted. */

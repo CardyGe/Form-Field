@@ -29,12 +29,21 @@ const FOLLOW = {
   holdingGaps: 12, lockedGaps: 24, dominantShare: 0.75,
   /** Onsets heard before choosing between the two possible beat phases, and the share that must sit on the half-beat grid. */
   scoreOnsets: 8, scoreShare: 0.75,
+  /** How much stronger one phase must be to be called the beat. Closer than this they cannot be told apart, so it stays unlocked. */
+  scoreMargin: 1.25,
 };
 const foldBpm = (bpm: number): number => {
   let folded = bpm;
   while (folded < FOLLOW.min) folded *= 2;
   while (folded > FOLLOW.max) folded /= 2;
   return folded;
+};
+/** A measured tempo: frame timing can read 174 as 180, which is the top of the range and not half of it. */
+const foldMeasured = (bpm: number): number => {
+  let folded = bpm;
+  while (folded > FOLLOW.max * (1 + FOLLOW.agree)) folded /= 2;
+  while (folded < FOLLOW.min) folded *= 2;
+  return Math.min(FOLLOW.max, folded);
 };
 /** The distance between two tempos in octaves, ignoring whole octaves: 64, 128 and 256 are the same tempo. */
 const octaveOffset = (a: number, b: number): number => { const d = Math.log2(a / b); return d - Math.round(d); };
@@ -49,7 +58,7 @@ function dominantBpm(gaps: number[], share: number): number | null {
   }
   if (!members.length || members.length < share * bpms.length) return null;
   const mean = members.reduce((sum, b) => sum + octaveOffset(b, centre), 0) / members.length;
-  return foldBpm(centre * 2 ** mean);
+  return foldMeasured(centre * 2 ** mean);
 }
 interface PhaseScore { on: number; off: number; hits: number; heard: number }
 const newFollow = () => ({ state: 'holding' as FollowState, hasTempo: false, accepted: 0, misses: 0, lastAccepted: -Infinity, lastHeard: -Infinity, gaps: [] as number[], score: null as PhaseScore | null });
@@ -122,7 +131,7 @@ export class TempoClock {
     if (gap > FOLLOW.maxGap) f.gaps = [];
     else if (gap > 0) { f.gaps.push(gap); if (f.gaps.length > FOLLOW.lockedGaps) f.gaps.shift(); }
     if (!f.hasTempo) {
-      const bpm = bpmHint && Number.isFinite(bpmHint) && bpmHint > 0 ? foldBpm(bpmHint)
+      const bpm = bpmHint && Number.isFinite(bpmHint) && bpmHint > 0 ? foldMeasured(bpmHint)
         : f.gaps.length >= FOLLOW.startGaps ? dominantBpm(f.gaps.slice(-FOLLOW.startGaps), 1) : null;
       if (bpm !== null) this.startFollowing(t, bpm, weight);
       return;
@@ -167,6 +176,11 @@ export class TempoClock {
       this.correct(t, beats, error, Math.max(0.5, Math.round((t - f.lastAccepted) * this.bpm / 30) / 2));
     }
     if (score.heard < FOLLOW.scoreOnsets) return;
+    // Equal onsets on both phases cannot say which is the beat: keep listening rather than guess. Tap settles it.
+    if (Math.max(score.on, score.off) < FOLLOW.scoreMargin * Math.min(score.on, score.off)) {
+      f.score = { on: 0, off: 0, hits: 0, heard: 0 };
+      return;
+    }
     if (score.off > score.on) this.anchor = { t, beats: this.beatsAt(t) + 0.5 };
     f.accepted = score.hits >= FOLLOW.scoreShare * score.heard ? FOLLOW.lockAfter - 1 : 0;
     f.score = null;

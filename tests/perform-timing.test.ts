@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { beatAt, launchPhaseOffset, msAtBeat, nextBoundary, quantizeBeats } from '../src/perform/timing';
+import { BeatDetector } from '../src/react/beat';
 import { TempoClock } from '../src/react/tempo';
 import { ReactivityEngine } from '../src/react/engine';
 
@@ -8,11 +9,11 @@ const c = { anchorMs: 0, anchorBeat: 0, bpm: 120, state: 'manual', barOffset: 0 
 const BEAT_128 = 60 / 128;
 
 type Hear = (t: number, hint?: number | null, strength?: number) => void;
-/** Onsets as the real detector can emit them: at most one every 0.25 s. */
+/** Onsets as the detector's follow output can emit them: at most one every 0.12 s. */
 function listener(clock: TempoClock): Hear {
   let last = -Infinity;
   return (t, hint = null, strength = 1) => {
-    if (t - last < 0.25 - 1e-9) return;
+    if (t - last < 0.12 - 1e-9) return;
     last = t;
     clock.followOnset(t, hint, strength);
     clock.followTick(t);
@@ -153,6 +154,84 @@ for (const hint of [118, null]) {
     assert.ok(phaseErrorMs(clock, 24.5 * beat) < 30, `${phaseErrorMs(clock, 24.5 * beat)} ms`);
   });
 }
+/** Bass at 60 fps through the real detector into a following clock, as ReactivityEngine.read does it. */
+function detected() {
+  const clock = new TempoClock(), detector = new BeatDetector();
+  clock.setSource('follow');
+  let frame = 0;
+  /** Plays [time, strength] hits until `until` seconds. */
+  const listen = (hits: [number, number][], until: number) => {
+    for (; frame / 60 < until; frame++) {
+      const t = frame / 60;
+      let bass = 0;
+      for (const [at, strength] of hits) if (at <= t && t - at < 0.6) bass += strength * Math.exp(-(t - at) / 0.06);
+      const heard = detector.update(bass, t);
+      if (heard.followOnset) clock.followOnset(t, detector.state(t).bpm, heard.strength);
+      clock.followTick(t);
+    }
+  };
+  return { clock, listen };
+}
+const grid = (from: number, bpm: number, beats: number, pattern: [number, number][]): [number, number][] =>
+  Array.from({ length: beats }, (_, n) => pattern.map(([at, strength]): [number, number] => [from + (n + at) * 60 / bpm, strength])).flat();
+
+for (const bpm of [124, 128, 140, 174]) for (const startsOn of ['kick', 'off-beat']) {
+  test(`detected at 60 fps: kick and off-beat at ${bpm} BPM, started on the ${startsOn}, locks on the kick`, () => {
+    const { clock, listen } = detected(), kickAt = startsOn === 'kick' ? 0 : 0.5;
+    const start = 0.5, beats = 64;
+    listen(grid(start, bpm, beats, [[kickAt, 1], [kickAt === 0 ? 0.5 : 0, 0.4]]), start + (beats - 1) * 60 / bpm);
+    assert.equal(clock.followState, 'locked');
+    const error = phaseErrorMs(clock, start + (beats - 1 + kickAt) * 60 / bpm);
+    assert.ok(error < 30, `${error} ms from the kick`);
+  });
+}
+test('detected at 60 fps: a 4-bar off-beat breakdown then the kick returning holds phase at 128', () => {
+  const { clock, listen } = detected(), beat = 60 / 128, start = 0.5;
+  const hits = [...grid(start, 128, 32, KICK), ...grid(start + 32 * beat, 128, 16, OFF_BEAT), ...grid(start + 48 * beat, 128, 64, KICK_AND_OFF)];
+  listen(hits, start + 48 * beat);
+  assert.ok(phaseErrorMs(clock, start + 48 * beat) < 30, 'after the breakdown');
+  listen(hits, start + 111 * beat);
+  assert.equal(clock.followState, 'locked');
+  assert.ok(phaseErrorMs(clock, start + 111 * beat) < 30, 'after the kick returned');
+});
+for (const [from, to] of [[96, 128], [96, 129], [128, 96], [116, 174], [116, 172], [174, 116]]) {
+  test(`detected at 60 fps: a tempo change from ${from} to ${to} BPM is picked up`, () => {
+    const { clock, listen } = detected(), start = 0.5, change = start + 32 * 60 / from, end = change + 80 * 60 / to;
+    listen([...grid(start, from, 32, KICK), ...grid(change, to, 80, KICK)], end);
+    assert.ok(Math.abs(clock.bpm - to) <= 1, `bpm ${clock.bpm}`);
+    assert.equal(clock.followState, 'locked');
+  });
+}
+test('follow: equal kick and off-beat onsets are not guessed into a lock, and Tap settles the phase', () => {
+  const clock = new TempoClock(), hear = listener(clock), beat = 60 / 128;
+  clock.setSource('follow');
+  for (let i = 0; i < 32; i++) { hear(i * beat, 128, 1); hear((i + 0.5) * beat, 128, 1); }
+  assert.equal(clock.followState, 'holding');
+  clock.manualTap(32 * beat);
+  clock.resumeFollow(32 * beat);
+  for (let i = 33; i < 64; i++) { hear(i * beat, 128, 1); hear((i + 0.5) * beat, 128, 1); }
+  assert.equal(clock.followState, 'locked');
+  assert.ok(phaseErrorMs(clock, 64 * beat) < 30);
+});
+test('the detector onset, its 0.25 s gap and its tempo match the original detector on the same input', () => {
+  const beat = 60 / 128, detector = new BeatDetector(), frames: number[] = [];
+  let seed = 12345;
+  for (let n = 0; n < 900; n++) {
+    const t = n / 60;
+    seed = (seed * 16807) % 2147483647;
+    let bass = 0.01 * (seed / 2147483647);
+    for (let i = 0; i * beat <= t; i++) {
+      const at = 0.5 + i * beat;
+      if (at <= t) bass += Math.exp(-(t - at) / 0.06);
+      if (at + beat / 2 <= t) bass += 0.4 * Math.exp(-(t - at - beat / 2) / 0.06);
+    }
+    if (detector.update(bass, t).onset) frames.push(n);
+  }
+  // Captured from the detector as it was before Perform (commit fa25385).
+  assert.deepEqual(frames, [20, 45, 73, 101, 129, 157, 185, 213, 241, 284, 312, 340, 368, 396, 424, 452, 480, 509, 537, 565, 593, 621, 649, 677, 705, 734, 762, 790, 818, 846, 874]);
+  assert.equal(detector.count, 31);
+  assert.equal(detector.state(15).bpm, 128.57142857142853);
+});
 test('follow: tempo stays within 85 to 175', () => {
   for (const hint of [40, 60, 80, 176, 200, 240]) {
     const clock = new TempoClock();
