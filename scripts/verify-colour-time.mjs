@@ -348,7 +348,7 @@ const CHECKS = [
         const q = window.ct, glow = { glowMix: .6, glowThreshold: .1, glowSize: .3 }, rows = [];
         const scene = params => q.project([q.soft({ ...glow, ...params })], true);
         const plain = await q.px(scene({}));
-        for (const [name, params] of [['soft', { glowStreak: 1.5 }], ['flare 30deg', { glowStreak: 1.5, glowStreakShape: 1, glowStreakAngle: 30 }]]) {
+        for (const [name, params] of [['soft', { glowStreak: 1.5 }], ['cross 30deg', { glowStreak: 1.5, glowStreakShape: 1, glowStreakAngle: 30 }]]) {
           const small = await q.px(scene(params)), big = await q.px(scene(params), .9, 1920, 1080);
           const reduced = new Uint8ClampedArray(small.length);
           for (let y = 0; y < 540; y++) for (let x = 0; x < 960; x++) for (let c = 0; c < 4; c++) {
@@ -370,7 +370,7 @@ const CHECKS = [
         const q = window.ct, W = 960, H = 540, rows = [];
         const tiled = params => { const p = q.project([q.layer('surface', null, { glowMix: .6, glowThreshold: .02, glowSize: .3, ...params })]); p.tileEdges = true; return p; };
         const plain = await q.px(tiled({}));
-        for (const [name, params] of [['soft', { glowStreak: 1.5 }], ['flare', { glowStreak: 1.5, glowStreakShape: 1, glowStreakAngle: 20 }]]) {
+        for (const [name, params] of [['soft', { glowStreak: 1.5 }], ['cross', { glowStreak: 1.5, glowStreakShape: 1, glowStreakAngle: 20 }]]) {
           const px = await q.px(tiled(params));
           const columns = (a, b) => { let sum = 0; for (let y = 0; y < H; y++) for (let c = 0; c < 3; c++) sum += Math.abs(px[(y * W + a) * 4 + c] - px[(y * W + b) * 4 + c]); return sum / (H * 3); };
           let interior = 0; for (let k = 1; k <= 8; k++) { const x = Math.round(k * W / 9); interior += columns(x, x + 1); }
@@ -380,6 +380,19 @@ const CHECKS = [
       });
       const none = r.some(row => row.moved < .05) ? 'Streak has no visible effect on the render. ' : '';
       return { ok: r.every(row => row.moved >= .05 && row.seam <= row.interior * 1.25), detail: `${none}${r.map(row => `${row.name} seam ${row.seam.toFixed(3)} interior ${row.interior.toFixed(3)} moved ${row.moved.toFixed(3)}`).join('; ')} (limit 1.25x, moved at least 0.05)` };
+    },
+  },
+  {
+    name: 'streak-engage',
+    // A barely-on Glow must not leave a full-strength streak behind.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = glowMix => q.project([q.soft({ glowStreak: 1, glowMix, glowThreshold: .1, glowSize: .3 })]);
+        const a = await q.px(scene(0)), b = await q.px(scene(.001)), full = await q.px(scene(1));
+        let sum = 0, worst = 0; for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); sum += d; worst = Math.max(worst, d); }
+        return { mean: sum / a.length, worst, moved: q.difference(a, full) };
+      });
+      return { ok: r.moved >= .05 && r.mean < 1 && r.worst < 4, detail: `${r.moved >= .05 ? '' : 'Streak has no visible effect on the render. '}glow .001 against plain: mean ${r.mean.toFixed(3)}, worst ${r.worst} (limits 1 and 4); glow 1 moves it by ${r.moved.toFixed(3)}` };
     },
   },
 ];

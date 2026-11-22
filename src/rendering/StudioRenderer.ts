@@ -919,10 +919,10 @@ export class StudioRenderer {
     this.draw(this.glowBright, bright);
     pyramid.render(bright.texture, width, height, (m, t) => this.draw(m, t), this.tiling).forEach((level, i) => { u[`uGlowLevel${i}`].value = level; });
     bloomChannelWeights(amount, number(layer, 'glowSize', .5), number(layer, 'glowSpread', 0)).forEach((c, i) => (u.uGlowChannels.value[i] as THREE.Vector3).set(c[0], c[1], c[2]));
-    // Streaks stretch the same bright light; the thin flare also runs across, at right angles.
+    // Streaks stretch the same bright light; Cross also runs across, at right angles.
     if (number(layer, 'glowStreak', 0) > 0) {
-      const flare = Math.round(number(layer, 'glowStreakShape', 0)) >= 1;
-      u.uGlowStreakMap.value = streak.render(bright.texture, width, height, number(layer, 'glowStreakAngle', 0), flare, (m, t) => this.draw(m, t), this.tiling, flare);
+      const cross = Math.round(number(layer, 'glowStreakShape', 0)) >= 1;
+      u.uGlowStreakMap.value = streak.render(bright.texture, width, height, number(layer, 'glowStreakAngle', 0), cross, (m, t) => this.draw(m, t), this.tiling);
     } else u.uGlowStreakMap.value = this.fallback;
     const tint = Math.round(number(layer, 'glowTint', 0));
     if (tint >= 1) (u.uGlowColour.value as THREE.Color).set(layer.palette[tint - 1] ?? DEFAULT_PALETTE[tint - 1]);

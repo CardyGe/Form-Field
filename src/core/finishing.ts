@@ -80,7 +80,7 @@ export const GLOW_PARAMETERS:ParameterDefinition[]=[
  {key:'glowSpread',label:'Glow colour spread',min:0,max:1,step:.01,default:0,section:'Material',description:'Lets the wide part of the glow fan out into colour. 0 keeps one colour.'},
  {key:'glowStreak',label:'Glow streak',min:0,max:2,step:.01,default:0,section:'Material',description:'Stretches bright points into streaks of light. 0 is off.'},
  {key:'glowStreakAngle',label:'Streak angle',min:-90,max:90,step:1,default:0,section:'Material',description:'Direction of the streaks, in degrees from horizontal.'},
- {key:'glowStreakShape',label:'Streak shape',min:0,max:1,step:1,default:0,section:'Material',description:'Soft streaks or a thin, sharp-edged flare.'},
+ {key:'glowStreakShape',label:'Streak shape',min:0,max:1,step:1,default:0,section:'Material',description:'Line streaks one way; Cross adds a second streak at right angles.'},
 ];
 /**
  * Print screen: the layer's tone is redrawn as halftone dots, a line screen or

@@ -150,15 +150,14 @@ export class StreakBlur {
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
 
-  /** Streaks the source along angle (degrees from horizontal). `sharp` narrows
-   * the taps for a thin flare. Targets are made on first use. */
-  render(source: THREE.Texture, width: number, height: number, angle: number, cross: boolean, draw: Draw, wrap = false, sharp = cross): THREE.Texture {
+  /** Streaks the source along angle (degrees from horizontal). Targets are made on first use. */
+  render(source: THREE.Texture, width: number, height: number, angle: number, cross: boolean, draw: Draw, wrap = false): THREE.Texture {
     this.targets ??= [lightTarget(), lightTarget()];
     if (cross && this.targets.length < 4) this.targets.push(lightTarget(), lightTarget());
     const w = Math.max(2, Math.ceil(width / 4)), h = Math.max(2, Math.ceil(height / 4)), aspect = width / height;
     for (const t of this.targets) { setWrap(t, wrap); if (t.width !== w || t.height !== h) t.setSize(w, h); }
     const uniforms = this.material.uniforms, taps = uniforms.uTaps.value as THREE.Vector3;
-    if (sharp) taps.set(.5, .22, .03); else taps.set(.2042, .1802, .1238);
+    taps.set(.2042, .1802, .1238);
     const norm = taps.x + 2 * taps.y + 2 * taps.z; taps.divideScalar(norm);
     const chain = (first: number, theta: number): THREE.WebGLRenderTarget => {
       let from = source, last = this.targets![first];
