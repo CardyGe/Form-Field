@@ -113,7 +113,7 @@ test('follow: music in a new phase after a drop out is picked up again', () => {
 for (const [from, to] of [[96, 128], [96, 129], [128, 96], [116, 174], [116, 172], [174, 116], [128, 140]]) {
   test(`follow: a new track moving ${from} to ${to} BPM is picked up, though some onsets land near the old beat`, () => {
     const { clock, next, hear } = followed(32, null, from);
-    play(hear, next, to, 80, KICK);
+    play(hear, next, to, 140, KICK);
     assert.ok(Math.abs(clock.bpm - to) <= 1, `bpm ${clock.bpm}`);
     assert.equal(clock.followState, 'locked');
   });
@@ -155,14 +155,14 @@ for (const hint of [118, null]) {
   });
 }
 /** Bass at 60 fps through the real detector into a following clock, as ReactivityEngine.read does it. */
-function detected() {
+function detected(frameOffset = 0) {
   const clock = new TempoClock(), detector = new BeatDetector();
   clock.setSource('follow');
   let frame = 0;
   /** Plays [time, strength] hits until `until` seconds. */
   const listen = (hits: [number, number][], until: number) => {
-    for (; frame / 60 < until; frame++) {
-      const t = frame / 60;
+    for (; (frame + frameOffset) / 60 < until; frame++) {
+      const t = (frame + frameOffset) / 60;
       let bass = 0;
       for (const [at, strength] of hits) if (at <= t && t - at < 0.6) bass += strength * Math.exp(-(t - at) / 0.06);
       const heard = detector.update(bass, t);
@@ -196,10 +196,91 @@ test('detected at 60 fps: a 4-bar off-beat breakdown then the kick returning hol
 });
 for (const [from, to] of [[96, 128], [96, 129], [128, 96], [116, 174], [116, 172], [174, 116]]) {
   test(`detected at 60 fps: a tempo change from ${from} to ${to} BPM is picked up`, () => {
-    const { clock, listen } = detected(), start = 0.5, change = start + 32 * 60 / from, end = change + 80 * 60 / to;
-    listen([...grid(start, from, 32, KICK), ...grid(change, to, 80, KICK)], end);
+    const { clock, listen } = detected(), start = 0.5, change = start + 32 * 60 / from, end = change + 140 * 60 / to;
+    listen([...grid(start, from, 32, KICK), ...grid(change, to, 140, KICK)], end);
     assert.ok(Math.abs(clock.bpm - to) <= 1, `bpm ${clock.bpm}`);
     assert.equal(clock.followState, 'locked');
+  });
+}
+const OFFSETS = [0, 1, 2, 3, 4, 5, 6, 7].map(n => n / 8);
+/** A repeating pattern of [beat, strength] hits, every `period` beats, for `beats` beats. */
+const bars = (from: number, bpm: number, beats: number, period: number, pattern: [number, number][]): [number, number][] => {
+  const out: [number, number][] = [];
+  for (let n = 0; n * period < beats; n++) for (const [at, strength] of pattern) if (n * period + at < beats) out.push([from + (n * period + at) * 60 / bpm, strength]);
+  return out;
+};
+/** LOCKED must mean the right tempo on the kick. Not locked is an honest answer. */
+function assertNoFalseLock(clock: TempoClock, kick: number, bpm: number, label: string): void {
+  if (clock.followState !== 'locked') return;
+  const error = phaseErrorMs(clock, kick);
+  assert.ok(error < 30 && Math.abs(clock.bpm - bpm) <= 1, `${label}: LOCKED ${error.toFixed(0)} ms out at ${clock.bpm.toFixed(1)}`);
+}
+for (const bpm of [124, 128, 140]) {
+  for (const off of [0.5, 0.7, 0.9]) {
+    test(`detected: kicks on 1 and 3 with ${off} off-beats at ${bpm} BPM never lock on the off-beats`, () => {
+      for (const offset of OFFSETS) {
+        const { clock, listen } = detected(offset), start = 0.5, beat = 60 / bpm;
+        listen(bars(start, bpm, 64, 2, [[0, 1], [0.5, off], [1.5, off]]), start + 63.2 * beat);
+        assertNoFalseLock(clock, start + 62 * beat, bpm, `offset ${offset}`);
+      }
+    });
+  }
+  test(`detected: equal onsets with one kick in four dropped at ${bpm} BPM never lock on the off-beats`, () => {
+    for (const offset of OFFSETS) {
+      const { clock, listen } = detected(offset), start = 0.5, beat = 60 / bpm;
+      listen(bars(start, bpm, 64, 4, [[0, 1], [0.5, 1], [1, 1], [1.5, 1], [2, 1], [2.5, 1], [3.5, 1]]), start + 63.2 * beat);
+      assertNoFalseLock(clock, start + 60 * beat, bpm, `offset ${offset}`);
+    }
+  });
+}
+for (const bpm of [176, 178, 180, 182, 185]) {
+  test(`detected: a kick at ${bpm} BPM, above the ceiling, never shows LOCKED`, () => {
+    for (const offset of OFFSETS) {
+      const { clock, listen } = detected(offset), start = 0.5, beat = 60 / bpm;
+      const hits = bars(start, bpm, 128, 1, [[0, 1]]);
+      for (const at of [32, 64, 96, 127.2]) {
+        listen(hits, start + at * beat);
+        assert.notEqual(clock.followState, 'locked', `offset ${offset} at beat ${at}, ${clock.bpm.toFixed(1)} BPM`);
+      }
+    }
+  });
+}
+test('detected: a kick at 174 BPM still locks at every frame offset', () => {
+  for (const offset of OFFSETS) {
+    const { clock, listen } = detected(offset), start = 0.5, beat = 60 / 174;
+    listen(bars(start, 174, 128, 1, [[0, 1]]), start + 127.2 * beat);
+    assert.equal(clock.followState, 'locked', `offset ${offset}`);
+    assert.ok(Math.abs(clock.bpm - 174) <= 1, `bpm ${clock.bpm}`);
+    assert.ok(phaseErrorMs(clock, start + 127 * beat) < 30);
+  }
+});
+for (const [name, step] of [['dotted-eighth', 0.375], ['dotted-quarter', 0.75], ['triplet', 2 / 3]] as [string, number][]) {
+  test(`detected: an 8-bar ${name} breakdown keeps the 128 tempo and beat, and the kick returning locks them again`, () => {
+    for (const offset of OFFSETS) {
+      const { clock, listen } = detected(offset), start = 0.5, beat = 60 / 128, back = start + 64 * beat;
+      const hits = [...bars(start, 128, 32, 1, [[0, 1]]), ...bars(start + 32 * beat, 128, 32, step, [[0, 0.7]]), ...bars(back, 128, 64, 1, [[0, 1]])];
+      listen(hits, back - 0.05);
+      assert.notEqual(clock.followState, 'locked', `offset ${offset}: LOCKED during the breakdown at ${clock.bpm.toFixed(1)}`);
+      assert.ok(Math.abs(clock.bpm - 128) <= 1, `offset ${offset}: held ${clock.bpm}`);
+      assert.ok(phaseErrorMs(clock, back) < 30, `offset ${offset}: ${phaseErrorMs(clock, back)} ms at the return`);
+      listen(hits, back + 63.2 * beat);
+      assert.equal(clock.followState, 'locked', `offset ${offset}`);
+      assert.ok(Math.abs(clock.bpm - 128) <= 1, `offset ${offset}: ${clock.bpm}`);
+      assert.ok(phaseErrorMs(clock, back + 63 * beat) < 30);
+    }
+  });
+}
+for (const [from, to] of [[96, 128], [128, 96], [116, 174], [174, 116]]) {
+  test(`detected: a ratio change ${from} to ${to} is not LOCKED until it is confirmed, then re-acquires at every offset`, () => {
+    for (const offset of OFFSETS) {
+      const { clock, listen } = detected(offset), start = 0.5, change = start + 32 * 60 / from, end = change + 140 * 60 / to;
+      const hits = [...bars(start, from, 32, 1, [[0, 1]]), ...bars(change, to, 140, 1, [[0, 1]])];
+      listen(hits, change + 14);
+      assert.notEqual(clock.followState, 'locked', `offset ${offset}: LOCKED 14 s after the change at ${clock.bpm.toFixed(1)}`);
+      listen(hits, end);
+      assert.equal(clock.followState, 'locked', `offset ${offset}`);
+      assert.ok(Math.abs(clock.bpm - to) <= 1, `offset ${offset}: ${clock.bpm}`);
+    }
   });
 }
 test('follow: equal kick and off-beat onsets are not guessed into a lock, and Tap settles the phase', () => {
