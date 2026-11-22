@@ -69,7 +69,7 @@ Compiling in `prepare` moved the Kaleidoscope program off the first draw, and th
 
 - A frame is timed only when `requestVideoFrameCallback` reports a newly presented picture. Frames between pictures keep the GPU busy and are not timed.
 - The app caps Live output at 1080p and its feed at 720p. The proof overrides the output size in the harness and supplies a 1080p feed, so **the app cannot run this 4K path today**.
-- The clip plays in a bare harness page, because video files are blocked in the real app by a pending Content-Security-Policy decision.
+- The clip plays in a bare harness page. These timings were taken before `index.html` allowed local video files. A later check played generated files through Live's real file input and Kaleidoscope look, but did not time them.
 - `performance.now()` is coarsened to 0.1 ms. All three gates use per-frame samples. The JSON also records 5-frame means as extra information (spiral stability 1.293x, worst repeatability 24.5%). They do not decide any result.
 - In an earlier run with a CPU-backed 1080p canvas instead of decoded video, frames took 10 to 16 ms under load while GPU time stayed at 2 to 5 ms, which points to the upload (not isolated). A source that arrives through a software path may miss the budget.
 
@@ -95,7 +95,7 @@ The cost of this change was not measured separately. The lattice groups, which r
 
 ## Not measured or not verified
 
-- Video files in the real app
+- Frame timing for video files in the real app
 - A real webcam
 - The separate Live output window
 - 4K output through the app itself
