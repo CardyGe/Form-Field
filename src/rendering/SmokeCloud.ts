@@ -11,6 +11,7 @@ import { sourceViewMatrix } from './source-view';
 import { cloudBeats, cloudHit, cloudLoopBlend, cloudSettings, cloudSteps, type CloudSettings } from './smoke-cloud-model';
 
 const SIDE = 768, COUNT = SIDE * SIDE, STEP = 1 / 60, GRID_LONG = 256, DYE_LONG = 1280;
+const PRESSURE_STEPS = 12;
 const PRE_ROLL_SECONDS = 4, MAX_CHECKPOINTS = 6, SEEK_STEPS_PER_FRAME = 16;
 const TAU = Math.PI * 2;
 
@@ -161,7 +162,7 @@ class Cloud {
     this.passes = new Passes(renderer);
     const fit = (long: number): [number, number] => aspect >= 1 ? [long, Math.max(16, Math.round(long / aspect))] : [Math.max(16, Math.round(long * aspect)), long];
     const grid = fit(GRID_LONG), dye = fit(DYE_LONG);
-    this.fluid = new Fluid(this.passes, grid, dye);
+    this.fluid = new Fluid(this.passes, grid, dye, PRESSURE_STEPS);
     this.state = this.passes.pair(SIDE, SIDE, { float: true, nearest: true });
     this.soft = this.passes.target(dye[0] >> 1, dye[1] >> 1);
     this.form = this.passes.target(dye[0] >> 1, dye[1] >> 1);

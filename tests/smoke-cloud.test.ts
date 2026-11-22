@@ -50,3 +50,16 @@ test('stepping and the loop blend are bounded', () => {
   assert.equal(cloudLoopBlend(1.5, 10).weight, 1);
   assert.ok(cloudLoopBlend(0, 1).blendSeconds <= .25);
 });
+
+test('only an untouched Smoke Cloud layer may skip the full compositor', async () => {
+  const { compositesPlainly } = await import('../src/rendering/smoke-cloud-composite');
+  const plain = createLayer('smokecloud');
+  assert.equal(compositesPlainly(plain, false), true);
+  assert.equal(compositesPlainly(plain, true), false, 'tiled frames');
+  assert.equal(compositesPlainly(createLayer('surface'), false), false, 'other effects');
+  const changed: ((l: ReturnType<typeof createLayer>) => void)[] = [
+    l => { l.opacity = .5; }, l => { l.blend = 'screen'; }, l => { l.mask.kind = 'circle'; }, l => { l.transform.x = .1; }, l => { l.transform.scale = 2; }, l => { l.transform.rotation = .2; },
+    l => { l.params.exposure = 1.2; }, l => { l.params.saturation = .8; }, l => { l.params.hue = .3; }, l => { l.params.glowMix = .5; },
+  ];
+  for (const change of changed) { const l = structuredClone(plain); change(l); assert.equal(compositesPlainly(l, false), false, String(change)); }
+});

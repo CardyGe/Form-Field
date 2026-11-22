@@ -88,6 +88,38 @@ try {
     });
     console.table(rows);
   }
+  if (want('fastpath')) {
+    const r = await page.evaluate(async () => {
+      const { renderer, projectFor, TAU } = window.cloud, p = projectFor(), gl = renderer.renderer.getContext(), W = 960, H = 540; await renderer.prepare(p);
+      for (let i = 0; i < 120; i++) renderer.render(p, i / 600 * TAU, W, H, undefined, true);
+      const read = full => { renderer.fullCompositorOnly = full; renderer.render(p, 119 / 600 * TAU, W, H, undefined, false); const a = new Uint8Array(W * H * 4); gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, a); return a; };
+      const fast = read(false), full = read(true); renderer.fullCompositorOnly = false;
+      let worst = 0, lit = 0; for (let i = 0; i < fast.length; i++) { worst = Math.max(worst, Math.abs(fast[i] - full[i])); if (i % 4 === 0 && full[i] + full[i + 1] + full[i + 2] > 30) lit++; }
+      return { worst, litPct: lit / (W * H) * 100 };
+    });
+    console.log(`fast compositor differs by at most ${r.worst}/255 (${r.litPct.toFixed(0)}% of frame lit)`);
+    if (r.worst > 1 || r.litPct < 5) { code = 1; console.error('FAIL fast compositor'); } else console.log('PASS fast compositor');
+  }
+  if (flags.includes('--passes')) {
+    const rows = await page.evaluate(async () => {
+      const { renderer, projectFor, TAU } = window.cloud, three = renderer.renderer, gl = three.getContext(), p = projectFor(), original = three.render.bind(three), totals = new Map();
+      await renderer.prepare(p);
+      for (let i = 0; i < 90; i++) renderer.render(p, i / 600 * TAU, 3840, 2160, undefined, true);
+      // readPixels makes the GPU finish; gl.finish does not wait in Chromium.
+      const sync = () => { const type = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_TYPE), format = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_FORMAT), buffer = type === gl.UNSIGNED_BYTE ? new Uint8Array(16) : type === gl.FLOAT ? new Float32Array(16) : new Uint16Array(16); gl.readPixels(0, 0, 1, 1, format, type, buffer); };
+      const frames = 90; sync(); let idle = 0; for (let i = 0; i < 50; i++) { const t = performance.now(); sync(); idle += performance.now() - t; } idle /= 50;
+      three.render = (scene, camera) => {
+        const mesh = scene.children[0], material = mesh?.material, target = three.getRenderTarget(), size = target ? `${target.width}x${target.height}` : 'screen';
+        const names = Object.keys(material?.uniforms ?? {}).slice(0, 3).join(','), key = `${mesh?.isPoints ? 'POINTS ' : ''}${names} @ ${size}`, t = performance.now();
+        original(scene, camera); sync();
+        const e = totals.get(key) ?? { ms: 0, calls: 0 }; e.ms += performance.now() - t; e.calls++; totals.set(key, e);
+      };
+            for (let i = 90; i < 90 + frames; i++) { renderer.render(p, i / 600 * TAU, 3840, 2160, undefined, true); await new Promise(requestAnimationFrame); }
+      three.render = original; delete three.render;
+      return [...totals].map(([pass, e]) => ({ pass: pass.slice(0, 58), msPerFrame: +(Math.max(0, e.ms - idle * e.calls) / frames).toFixed(2), calls: +(e.calls / frames).toFixed(1) })).sort((a, b) => b.msPerFrame - a.msPerFrame).slice(0, 22);
+    });
+    console.table(rows);
+  }
   if (want('schemes')) {
     const data = await page.evaluate(async () => {
       const { shot, b64, m, TAU } = window.cloud, cw = 320, ch = 180, c = new OffscreenCanvas(cw * 5, (ch + 24) * 3), g = c.getContext('2d');

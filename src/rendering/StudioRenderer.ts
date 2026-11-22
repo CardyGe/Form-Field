@@ -22,6 +22,7 @@ import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { SmokeCloudRenderer } from './SmokeCloud';
+import { compositesPlainly, plainOverFragment } from './smoke-cloud-composite';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
@@ -174,6 +175,9 @@ export class StudioRenderer {
   private readonly liquidLayouts = new Map<string, THREE.DataTexture>();
   private scope: ScopeRenderer | null = null;
   private smokeClouds: SmokeCloudRenderer | null = null;
+  private plainOver: THREE.ShaderMaterial | null = null;
+  /** For checks: draws every layer through the full compositor. */
+  fullCompositorOnly = false;
   private previewPlaying = true;
   /** Reduced-size stand-ins for `source` while the preview draws time slices. */
   private sliceSource: THREE.WebGLRenderTarget | null = null;
@@ -868,6 +872,7 @@ export class StudioRenderer {
     this.renderer.setClearColor(0, 0);
     this.renderer.setRenderTarget(this.accumA); this.renderer.clear();
     let below = this.accumA, next = this.accumB;
+    let soleSource: THREE.Texture | null = null;
     const wrapped = ((phase % TAU) + TAU) % TAU;
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
@@ -887,6 +892,16 @@ export class StudioRenderer {
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
       const finished = lensActive(original) ? this.lensSource(original, layer, sourceTexture, wrapped, width, height) : sourceTexture;
+      // Exports always use the full compositor; a live untouched Smoke Cloud does not need its cost at 4K.
+      if (!this.exporting && !this.fullCompositorOnly && compositesPlainly(layer, this.tiling)) {
+        // Alone in the frame, it is already the finished composite: drawing it over nothing changes no pixel.
+        if (project.layers.filter(item => item.visible).length === 1) { soleSource = finished; continue; }
+        this.plainOver ??= new THREE.ShaderMaterial({ vertexShader: fullscreenVertex, fragmentShader: plainOverFragment, uniforms: { uBelow: { value: null }, uSource: { value: null } }, depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false });
+        this.plainOver.uniforms.uBelow.value = below.texture; this.plainOver.uniforms.uSource.value = finished;
+        this.draw(this.plainOver, next);
+        [below, next] = [next, below];
+        continue;
+      }
       const u = this.composite.uniforms;
       u.uBelow.value = below.texture; u.uSource.value = finished;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
@@ -932,7 +947,7 @@ export class StudioRenderer {
       this.draw(this.composite, next);
       [below, next] = [next, below];
     }
-    this.finish.uniforms.uImage.value = below.texture;
+    this.finish.uniforms.uImage.value = soleSource ?? below.texture;
     (this.finish.uniforms.uBackground.value as THREE.Color).set(project.background);
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
     this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
@@ -1477,6 +1492,7 @@ export class StudioRenderer {
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;
     this.smokeClouds?.dispose(); this.smokeClouds = null;
+    this.plainOver?.dispose(); this.plainOver = null;
     this.sliceSource?.dispose(); this.sliceSource = null;
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();
