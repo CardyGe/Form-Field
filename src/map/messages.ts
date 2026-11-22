@@ -1,11 +1,14 @@
 import type { Project } from '../shared/types';
-import { usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow } from './show';
+import { MAX_ID_LENGTH, MAX_SHAPES, usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow } from './show';
 import { shapeValidity } from './outline';
 import { EMBER_SMOKE_INPUTS } from '../react/ember-smoke';
 import { acceptSignals, type Signals } from '../react/signals';
 import { ownCornersPinnable } from './placement';
 import type { LiveSettings } from '../live/settings';
 import { clipSourceIds } from '../perform/set';
+import type { ZonePicture } from '../perform/resolve';
+import { ZONE_COUNT } from '../perform/types';
+import type { PerformValues, WallLaunch } from '../perform/wall-perform';
 
 export type MapMessage =
   /** fadeMs: this show is a scene switch, crossfading over that long. */
@@ -30,7 +33,17 @@ export type MapMessage =
   /** Open Live's camera again (after it was unplugged, or refused and then allowed). */
   | { type: 'liveRetry' }
   /** Stage 6: every video that cannot play loads again. */
-  | { type: 'videoRetry' };
+  | { type: 'videoRetry' }
+  /** Perform: a show starts over the Map show, or ends and hands the wall back. */
+  | { type: 'performStart'; zones: ZonePicture[] }
+  | { type: 'performEnd' }
+  /** The sources to keep warm off-screen. */
+  | { type: 'performArm'; sourceIds: string[] }
+  /** An exact-time launch. The same id replaces it. */
+  | { type: 'performLaunch'; launch: WallLaunch }
+  | { type: 'performCancel'; launchId: string }
+  /** Per-frame brightness, hue, speed and master. */
+  | { type: 'performValues'; values: PerformValues };
 
 /** Live's settings travel under the same limit as on Live's own output. */
 export const LIVE_SETTINGS_LIMIT = 16 * 1024;
@@ -103,6 +116,27 @@ const within = (value: unknown, limit: number): boolean => { try { const text = 
 const idOrNull = (value: unknown) => value === null || typeof value === 'string';
 const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
 
+/** Perform's limits: at most 8 armed sources (the renderer budget); a launch id is a clip-sized id plus ":ceiling", with room to spare. */
+const PERFORM_ARMED_LIMIT = 8;
+const LAUNCH_ID_LIMIT = 128;
+const BAR_MS_LIMIT = 60000;
+const BLEND_MS_LIMIT = 3600000;
+const BLEND_KINDS: unknown[] = ['cut', 'fade', 'dip', 'dissolve'];
+// Array.from first: every() skips the holes of a sparse array, and structured clone keeps them.
+const listOf = (value: unknown, limit: number, check: (item: unknown) => boolean) => Array.isArray(value) && value.length <= limit && Array.from(value).every(item => check(item));
+const sized = (value: unknown, limit: number) => typeof value === 'string' && value !== '' && value.length <= limit;
+const performId = (value: unknown) => sized(value, MAX_ID_LENGTH);
+const performIdOrNull = (value: unknown) => value === null || performId(value);
+const zoneIndex = (value: unknown) => Number.isInteger(value) && (value as number) >= 0 && (value as number) < ZONE_COUNT;
+const everyZone = (value: unknown, check: (item: unknown) => boolean) => Array.isArray(value) && value.length === ZONE_COUNT && listOf(value, ZONE_COUNT, check);
+const acceptPicture = (z: unknown) => plain(z) && listOf(z.shapeIds, MAX_SHAPES, performId) && performIdOrNull(z.sourceId) && typeof z.launched === 'boolean';
+const acceptBlend = (b: unknown) => plain(b) && BLEND_KINDS.includes(b.kind) && finite(b.durationMs) && (b.durationMs as number) >= 0 && (b.durationMs as number) <= BLEND_MS_LIMIT;
+const acceptChange = (c: unknown) => plain(c) && zoneIndex(c.zone) && performIdOrNull(c.sourceId) && listOf(c.shapeIds, MAX_SHAPES, performId) && acceptBlend(c.blend) && finite(c.phaseOffsetBeats);
+const acceptLaunch = (l: unknown) => plain(l) && sized(l.id, LAUNCH_ID_LIMIT) && finite(l.atMs) && finite(l.barMs) && (l.barMs as number) >= 1 && (l.barMs as number) <= BAR_MS_LIMIT
+  && listOf(l.changes, ZONE_COUNT, acceptChange) && new Set((l.changes as { zone: number }[]).map(c => c.zone)).size === (l.changes as unknown[]).length;
+const acceptValueZone = (z: unknown) => plain(z) && finite(z.brightness) && finite(z.hueDeg) && finite(z.speed);
+const acceptValues = (v: unknown) => plain(v) && finite(v.master) && everyZone(v.zones, acceptValueZone);
+
 /** Checks the envelope and size only. The show's geometry and a composition's contents are checked where they are used. */
 export function acceptMapMessage(value: unknown): value is MapMessage {
   if (!plain(value)) return false;
@@ -120,6 +154,12 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'fade': return finite(value.ms) && (value.ms as number) >= 0 && (value.ms as number) <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, LIVE_SETTINGS_LIMIT);
     case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
+    case 'performStart': return everyZone(value.zones, acceptPicture);
+    case 'performEnd': return true;
+    case 'performArm': return listOf(value.sourceIds, PERFORM_ARMED_LIMIT, performId);
+    case 'performLaunch': return acceptLaunch(value.launch);
+    case 'performCancel': return sized(value.launchId, LAUNCH_ID_LIMIT);
+    case 'performValues': return acceptValues(value.values);
     default: return false;
   }
 }

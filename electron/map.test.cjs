@@ -282,3 +282,21 @@ test('the output reports its frame rate to the studio, and only small, well-form
   relay(h.fromOutput(), good);
   assert.deepEqual(reports(), [['studio:map:state', good]]);
 });
+
+test('the output may report what is armed and what landed, and only in a well-formed shape', async () => {
+  const h = harness();
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  const reports = () => h.sent.filter(([channel]) => channel === 'studio:map:state');
+  const relay = h.listeners.get('studio:map:state');
+  const base = { fps: 60, level: 0, failing: [] };
+  for (const bad of [
+    { armed: 'x' }, { armed: [3] }, { armed: [''] }, { armed: Array(9).fill('a') }, { armed: [, 'a'] },
+    { landed: 'x' }, { landed: [{ launchId: '', zones: [] }] }, { landed: [{ launchId: 3, zones: [] }] },
+    { landed: [{ launchId: 'a', zones: [8] }] }, { landed: [{ launchId: 'a', zones: [1.5] }] }, { landed: [{ launchId: 'a', zones: 'x' }] },
+    { landed: [{ launchId: 'a', zones: Array(9).fill(0) }] }, { landed: Array(33).fill({ launchId: 'a', zones: [] }) }, { landed: [, { launchId: 'a', zones: [] }] },
+  ]) relay(h.fromOutput(), { ...base, ...bad });
+  assert.equal(reports().length, 0);
+  const good = { ...base, armed: ['a'], landed: [{ launchId: 'l:ceiling', zones: [7] }, { launchId: 'empty', zones: [] }] };
+  relay(h.fromOutput(), good);
+  assert.deepEqual(reports(), [['studio:map:state', good]]);
+});

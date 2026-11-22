@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize } from '../src/map/playout';
+import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize } from '../src/map/playout';
 import { applyPreset, createLayer, createProject } from '../src/core/project';
 
 const TAU = Math.PI * 2;
@@ -60,6 +60,23 @@ test('governor: 30 late frames step down, 120 easy frames step back up, and in-b
 test('drawsThisFrame: at the last level instruments draw every other frame', () => {
   assert.ok([0, 1, 2, 3, 4].every(n => drawsThisFrame(0, n)));
   assert.deepEqual([0, 1, 2, 3].map(n => drawsThisFrame(3, n)), [true, false, true, false]);
+});
+
+test('dip goes through black', () => {
+  assert.deepEqual(blendAlphas('dip', .25), { from: .5, to: 0 });
+  assert.deepEqual(blendAlphas('dip', .75), { from: 0, to: .5 });
+  assert.deepEqual(blendAlphas('dip', .5), { from: 0, to: 0 });
+  assert.deepEqual(blendAlphas('dip', 0), { from: 1, to: 0 });
+  assert.deepEqual(blendAlphas('dip', 1), { from: 0, to: 1 });
+});
+
+test('blendAlphas: a cut is done at once, fades and dissolves cross, and t stays in range', () => {
+  assert.deepEqual(blendAlphas('cut', 0), { from: 0, to: 1 });
+  assert.deepEqual(blendAlphas('fade', .25), { from: .75, to: .25 });
+  assert.deepEqual(blendAlphas('dissolve', .5), { from: .5, to: .5 });
+  assert.deepEqual(blendAlphas('fade', -1), { from: 1, to: 0 });
+  assert.deepEqual(blendAlphas('fade', 2), { from: 0, to: 1 });
+  assert.deepEqual(blendAlphas('fade', Number.NaN), { from: 1, to: 0 });
 });
 
 test('fadeAlpha and shouldFade', () => {

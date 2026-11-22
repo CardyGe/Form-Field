@@ -5,6 +5,7 @@ import type { Signals } from '../react/signals';
 import { MAX_SOURCE_LAYERS, validateWireShow, type WireShow } from './show';
 import type { DrawOptions } from './draw';
 import { validateLiveSettings, type LiveSettings } from '../live/settings';
+import { applyPerformMessage, initialWallPerform, type WallPerform } from '../perform/wall-perform';
 
 /** What the wall shows: the show, the compositions it has been sent (by revision), and the overlays. */
 export interface WallState {
@@ -17,6 +18,8 @@ export interface WallState {
   fadeMs: number | null;
   /** Live in Map: the Live screen's settings while the show plays Live, else null. */
   live: LiveSettings | null;
+  /** Perform's overlay over the show, while a show runs. */
+  perform: WallPerform;
 }
 
 export function initialWall(): WallState {
@@ -28,6 +31,7 @@ export function initialWall(): WallState {
     signals: {},
     fadeMs: null,
     live: null,
+    perform: initialWallPerform(),
   };
 }
 
@@ -65,5 +69,9 @@ export function applyMapMessage(state: WallState, value: unknown): WallState {
     case 'fade': return { ...state, fadeMs: message.ms };
     case 'liveSettings': return { ...state, live: message.settings === null ? null : validateLiveSettings(message.settings) };
     case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return state;
+    case 'performStart': case 'performEnd': case 'performArm': case 'performLaunch': case 'performCancel': case 'performValues': {
+      const perform = applyPerformMessage(state.perform, message);
+      return perform === state.perform ? state : { ...state, perform };
+    }
   }
 }

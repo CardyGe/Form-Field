@@ -8,6 +8,7 @@ import type { Project } from '../shared/types';
 import { visibleParameterDefinitions } from '../core/project';
 import { reactable } from './targets';
 import { STAGE_SIZE, type Point } from './show';
+import type { BlendKind } from '../perform/types';
 
 const TAU = Math.PI * 2;
 /** Smallest side a source is drawn at, so a thin shape still gets a picture. */
@@ -85,6 +86,15 @@ export function fadeAlpha(startedMs: number, nowMs: number, durationMs = 400): n
   // A fade of no time is a cut: done at once (never 0 / 0).
   if (!(durationMs > 0)) return 1;
   return Math.min(1, Math.max(0, (nowMs - startedMs) / durationMs));
+}
+
+/** How much of the outgoing and incoming picture to show, t from 0 to 1. A cut is done at once; a dip goes through black at the halfway point. */
+export function blendAlphas(kind: BlendKind, t: number): { from: number; to: number } {
+  if (kind === 'cut') return { from: 0, to: 1 };
+  // Written so NaN counts as the start.
+  const at = t >= 1 ? 1 : t > 0 ? t : 0;
+  if (kind === 'dip') return at < .5 ? { from: 1 - at * 2, to: 0 } : { from: 0, to: at * 2 - 1 };
+  return { from: 1 - at, to: at };
 }
 
 /** What a shape plays, as far as fading is concerned: which source, and which instruments it is made of. */

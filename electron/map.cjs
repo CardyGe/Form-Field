@@ -50,10 +50,38 @@ const within = (value, limit) => { try { const text = JSON.stringify(value); ret
 const idOrNull = value => value === null || typeof value === 'string';
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 
-/** What the output may report to the studio: its frame rate, the governor level, failing sources, prepare counts. */
+// Perform's limits and checks, as in src/map/messages.ts.
+const ZONE_COUNT = 8;
+const MAX_SHAPES = 64;
+const MAX_ID_LENGTH = 64;
+const PERFORM_ARMED_LIMIT = 8;
+const LAUNCH_ID_LIMIT = 128;
+const BAR_MS_LIMIT = 60000;
+const BLEND_MS_LIMIT = 3600000;
+const LANDED_LIMIT = 32; // more launches than one frame can land
+const BLEND_KINDS = ['cut', 'fade', 'dip', 'dissolve'];
+// Array.from first: every() skips the holes of a sparse array, and structured clone keeps them.
+const listOf = (value, limit, check) => Array.isArray(value) && value.length <= limit && Array.from(value).every(item => check(item));
+const sized = (value, limit) => typeof value === 'string' && value !== '' && value.length <= limit;
+const performId = value => sized(value, MAX_ID_LENGTH);
+const performIdOrNull = value => value === null || performId(value);
+const zoneIndex = value => Number.isInteger(value) && value >= 0 && value < ZONE_COUNT;
+const everyZone = (value, check) => Array.isArray(value) && value.length === ZONE_COUNT && listOf(value, ZONE_COUNT, check);
+const acceptPicture = z => plain(z) && listOf(z.shapeIds, MAX_SHAPES, performId) && performIdOrNull(z.sourceId) && typeof z.launched === 'boolean';
+const acceptBlend = b => plain(b) && BLEND_KINDS.includes(b.kind) && finite(b.durationMs) && b.durationMs >= 0 && b.durationMs <= BLEND_MS_LIMIT;
+const acceptChange = c => plain(c) && zoneIndex(c.zone) && performIdOrNull(c.sourceId) && listOf(c.shapeIds, MAX_SHAPES, performId) && acceptBlend(c.blend) && finite(c.phaseOffsetBeats);
+const acceptLaunch = l => plain(l) && sized(l.id, LAUNCH_ID_LIMIT) && finite(l.atMs) && finite(l.barMs) && l.barMs >= 1 && l.barMs <= BAR_MS_LIMIT
+  && listOf(l.changes, ZONE_COUNT, acceptChange) && new Set(l.changes.map(c => c.zone)).size === l.changes.length;
+const acceptValueZone = z => plain(z) && finite(z.brightness) && finite(z.hueDeg) && finite(z.speed);
+const acceptValues = v => plain(v) && finite(v.master) && everyZone(v.zones, acceptValueZone);
+const acceptLanded = l => plain(l) && sized(l.launchId, LAUNCH_ID_LIMIT) && listOf(l.zones, ZONE_COUNT, zoneIndex);
+
+/** What the output may report to the studio: its frame rate, the governor level, failing sources, prepare counts, and Perform's armed sources and landings. */
 function acceptState(value) {
   if (!plain(value) || !within(value, 16 * 1024)) return false;
-  return finite(value.fps) && Number.isInteger(value.level) && value.level >= 0 && value.level <= 3 && Array.isArray(value.failing) && (value.prepares === undefined || plain(value.prepares));
+  return finite(value.fps) && Number.isInteger(value.level) && value.level >= 0 && value.level <= 3 && Array.isArray(value.failing) && (value.prepares === undefined || plain(value.prepares))
+    && (value.armed === undefined || listOf(value.armed, PERFORM_ARMED_LIMIT, performId))
+    && (value.landed === undefined || listOf(value.landed, LANDED_LIMIT, acceptLanded));
 }
 
 function acceptMapMessage(value) {
@@ -72,6 +100,12 @@ function acceptMapMessage(value) {
     case 'fade': return finite(value.ms) && value.ms >= 0 && value.ms <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, 16 * 1024);
     case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
+    case 'performStart': return everyZone(value.zones, acceptPicture);
+    case 'performEnd': return true;
+    case 'performArm': return listOf(value.sourceIds, PERFORM_ARMED_LIMIT, performId);
+    case 'performLaunch': return acceptLaunch(value.launch);
+    case 'performCancel': return sized(value.launchId, LAUNCH_ID_LIMIT);
+    case 'performValues': return acceptValues(value.values);
     default: return false;
   }
 }
