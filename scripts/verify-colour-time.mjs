@@ -21,6 +21,12 @@ const proof = path.join(root, 'work/colour-time-proof');
 const TAU = Math.PI * 2;
 const SHAPES = ['Straight', 'Lens', 'Edges', 'Wave'];
 const STAT_MODES = [['Echo', 1], ['Median', 2], ['Darkest', 3], ['Brightest', 4]];
+// Presets legitimately dark at the phase the neutral check renders. None so far.
+const BLANK_PRESETS = [];
+// Mean 8-bit difference on a 120x68 thumbnail. Edge Prism, removed for not reading, measured 0.1 to 2.9.
+const LOOK_LIMITS = { fromPlain: 5, acrossLoop: 15 };
+// Known weak cases. Anamorphic only lights what is near full brightness, which a thin-lined Fractal barely has.
+const WEAK_LOOKS = ['Anamorphic on fractal'];
 const LOOK_GROUPS = [
   [['Neon Map', 'finish-neon-map'], ['Anamorphic', 'finish-anamorphic']],
   [['Time Vortex', 'finish-time-vortex'], ['Ghosts', 'finish-ghost-median'], ['Long Exposure', 'finish-long-exposure'], ['Premonition', 'finish-premonition'], ['Brightness Time', 'finish-brightness-time']],
@@ -809,6 +815,9 @@ const CHECKS = [
         const covered = new Uint8Array(960 * 540), faint = new Uint8Array(960 * 540), brightest = [0, 0, 0], R = q.renderer, alphas = [];
         const half = v => { const e = (v >> 10) & 31, f = v & 1023; return e === 0 ? f / 1024 / 16384 : (1 + f / 1024) * 2 ** (e - 15); };
         let alphaMismatch = 0;
+        // The Time modes sample a picture's moving edge exactly, so the reference frames must too.
+        R.image.uniforms.uExactEdge.value = 1;
+        try {
         for (let k = 0; k < slices; k++) {
           const at = P - Math.PI * 2 * (span * k / (slices - 1)) / total, frame = scene({}), px = await q.px(frame, at);
           alphas.push(Uint8Array.from({ length: 960 * 540 }, (_, n) => px[n * 4 + 3]));
@@ -824,6 +833,7 @@ const CHECKS = [
             if (a > 0 && a <= .001) faint[n] = 1;
           }
         }
+        } finally { R.image.uniforms.uExactEdge.value = 0; }
         const plain = await q.px(scene({}), P), rows = [];
         for (const [name, mode] of MODES) {
           const out = await q.px(scene({ slitShift: 1, slitSpan: span, slitSlices: slices, slitMode: mode, slitReach: .4, slitDecay: .7 }), P);
@@ -1012,6 +1022,28 @@ const CHECKS = [
     },
   },
   {
+    name: 'stats-image-edge',
+    // The bottom rows of the poster are black at every moment, so nothing may light them. The
+    // moving picture's edge used to sample a coarse mip there, and Brightest kept each such line.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async modes => {
+        const q = window.ct, rows = [];
+        for (const [name, mode] of modes) for (const [span, slices] of [[16, 8], [45, 16]]) {
+          if (mode === 2 && slices > 9) continue;
+          let peak = 0, lit = 0;
+          for (const phase of [0, 2.1, 4.2]) {
+            const p = q.project([q.poster({ slitShift: 1, slitSpan: span, slitMode: mode, slitSlices: slices })]); p.highlights = 'exact';
+            const px = await q.px(p, phase, 1920, 1080);
+            for (let y = 985; y < 1075; y++) for (let x = 0; x < 1920; x++) { const i = (y * 1920 + x) * 4, v = Math.max(px[i], px[i + 1], px[i + 2]); peak = Math.max(peak, v); if (v > 2) lit++; }
+          }
+          rows.push({ name, span, slices, peak, lit });
+        }
+        return rows;
+      }, STAT_MODES);
+      return { ok: rows.every(r => r.peak <= 2), detail: `${rows.map(r => `${r.name} ${r.span}/${r.slices} peak ${r.peak}, ${r.lit} lit`).join('; ')} (limit 2/255 on rows that are black at every moment)` };
+    },
+  },
+  {
     name: 'all-presets-neutral',
     // Every preset in the older checkout, at one phase, byte for byte against the same preset now.
     run: async ({ page }) => {
@@ -1020,19 +1052,22 @@ const CHECKS = [
         const q = window.ct, before = new q.old.StudioRenderer(document.querySelector('#b')), changed = [];
         const ids = q.old.PRESETS.map(p => p.id), current = new Set(q.m.PRESETS.map(p => p.id));
         const make = (m, preset) => { const l = m.applyPreset(m.createLayer(preset.kind), preset.id); l.id = 'preset-proof'; const p = m.createProject(); p.id = 'preset-proof'; p.layers = [l]; p.background = '#000000'; return p; };
-        let compared = 0;
+        let compared = 0, lowest = 1; const blank = [];
         for (const preset of q.old.PRESETS) {
           if (!current.has(preset.id)) continue;
           const now = make(q.m, preset), then = make(q.old, preset);
           await q.renderer.prepare(now); await before.prepare(then);
-          if (!q.same(await q.renderer.exportPNG(now, .9, 960, 540), await before.exportPNG(then, .9, 960, 540))) changed.push(preset.id);
+          const a = await q.renderer.exportPNG(now, .9, 960, 540);
+          if (!q.same(a, await before.exportPNG(then, .9, 960, 540))) changed.push(preset.id);
+          const share = q.litShare(await q.pixels(a)); lowest = Math.min(lowest, share); if (share < .005) blank.push(preset.id);
           compared++;
         }
         before.dispose();
-        return { total: ids.length, now: current.size, compared, missing: ids.filter(id => !current.has(id)), changed };
+        return { total: ids.length, now: current.size, compared, missing: ids.filter(id => !current.has(id)), changed, blank, lowest };
       });
-      const ok = r.compared === r.total && r.compared > 0 && !r.changed.length && !r.missing.length;
-      return { ok, detail: `${r.compared} of ${r.total} baseline presets compared at phase .9, 960x540 (${r.now} presets now); ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'all byte-identical'}${r.missing.length ? `; missing now: ${r.missing.join(', ')}` : ''}` };
+      const unexpected = r.blank.filter(id => !BLANK_PRESETS.includes(id));
+      const ok = r.compared === r.total && r.compared > 0 && !r.changed.length && !r.missing.length && !unexpected.length;
+      return { ok, detail: `${r.compared} of ${r.total} baseline presets compared at phase .9, 960x540 (${r.now} presets now); ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'all byte-identical'}${r.missing.length ? `; missing now: ${r.missing.join(', ')}` : ''}; lowest lit share ${(r.lowest * 100).toFixed(2)}% (limit 0.5%); blank: ${r.blank.join(', ') || 'none'}` };
     },
   },
   {
@@ -1065,23 +1100,28 @@ const CHECKS = [
           for (const key of Object.keys(l.params)) if (!(key in raw.layers[i].params)) { added++; const d = defs.find(x => x.key === key); if (!d || l.params[key] !== d.default) offDefault.push(`${l.kind}.${key}`); }
         });
         const scenes = [['all layers', p => p], ...now.layers.map((l, i) => [l.kind, p => ({ ...p, layers: [p.layers[i]] })])];
-        let compared = 0;
+        let compared = 0, lowest = 1; const blank = [];
         for (const [name, pick] of scenes) {
           const a = pick(now), b = pick(then);
           await q.renderer.prepare(a); await before.prepare(b);
-          for (const phase of [0, 2.1, 4.2]) { compared++; if (!q.same(await q.renderer.exportPNG(a, phase, 960, 540), await before.exportPNG(b, phase, 960, 540))) changed.push(`${name}@${phase}`); }
+          for (const phase of [0, 2.1, 4.2]) {
+            compared++;
+            const shot = await q.renderer.exportPNG(a, phase, 960, 540);
+            if (!q.same(shot, await before.exportPNG(b, phase, 960, 540))) changed.push(`${name}@${phase}`);
+            const share = q.litShare(await q.pixels(shot)); lowest = Math.min(lowest, share); if (share < .005) blank.push(`${name}@${phase}`);
+          }
         }
         before.dispose();
-        return { schema: raw.schemaVersion, savedSchema: now.schemaVersion, kinds: now.layers.map(l => l.kind), added, offDefault, compared, changed };
+        return { schema: raw.schemaVersion, savedSchema: now.schemaVersion, kinds: now.layers.map(l => l.kind), added, offDefault, compared, changed, blank, lowest };
       }, text);
-      const ok = r.compared === 15 && !r.changed.length && !r.offDefault.length && r.added > 0 && r.savedSchema === r.schema;
-      return { ok, detail: `${path.relative(root, file)}: schema ${r.schema} in the file, ${r.savedSchema} once opened, layers ${r.kinds.join(', ')}; ${r.added} new keys filled in, ${r.offDefault.length} off default; ${r.compared} renders ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'byte-identical'}` };
+      const ok = r.compared === 15 && !r.blank.length && !r.changed.length && !r.offDefault.length && r.added > 0 && r.savedSchema === r.schema;
+      return { ok, detail: `${path.relative(root, file)}: schema ${r.schema} in the file, ${r.savedSchema} once opened, layers ${r.kinds.join(', ')}; ${r.added} new keys filled in, ${r.offDefault.length} off default; ${r.compared} renders ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'byte-identical'}; lowest lit share ${(r.lowest * 100).toFixed(2)}% (limit 0.5%); blank: ${r.blank.join(', ') || 'none'}` };
     },
   },
   {
     name: 'looks-sheet',
-    // Contact sheets for judging by eye, with measurements beside them. Passing means every look
-    // rendered and was not blank; whether it looks good is decided from the sheets.
+    // Contact sheets for judging by eye. The gate fails any look that barely changes its layer
+    // or barely moves across the loop, apart from the exact cases named in WEAK_LOOKS.
     run: async ({ page }) => {
       await fs.mkdir(proof, { recursive: true });
       const r = await page.evaluate(async ([groups, kinds]) => {
@@ -1128,8 +1168,13 @@ const CHECKS = [
       }, [LOOK_GROUPS, ['surface', 'fractal', 'liquid', 'image']]);
       for (const sheet of r.sheets) await fs.writeFile(path.join(proof, sheet.name), Buffer.from(sheet.data, 'base64'));
       await fs.writeFile(path.join(proof, 'looks-metrics.json'), JSON.stringify(r.metrics, null, 2));
-      const blank = r.metrics.filter(m => m.lit === 0);
-      return { ok: r.sheets.length === 12 && r.metrics.length === 28 && !blank.length, detail: `${r.sheets.length} sheets and ${r.metrics.length} look measurements in ${path.relative(root, proof)}; blank: ${blank.length ? blank.map(m => `${m.look} on ${m.kind}`).join(', ') : 'none'}` };
+      const label = m => `${m.look} on ${m.kind}`;
+      const weak = r.metrics.filter(m => m.fromPlain < LOOK_LIMITS.fromPlain || m.acrossLoop < LOOK_LIMITS.acrossLoop);
+      const unexpected = weak.filter(m => !WEAK_LOOKS.includes(label(m)));
+      // An exemption that no longer applies is stale, and would hide a later regression.
+      const stale = WEAK_LOOKS.filter(name => !weak.some(m => label(m) === name));
+      const text = m => `${label(m)} (from plain ${m.fromPlain.toFixed(1)}, across loop ${m.acrossLoop.toFixed(1)})`;
+      return { ok: r.sheets.length === 12 && r.metrics.length === 28 && !unexpected.length && !stale.length, detail: `${r.sheets.length} sheets and ${r.metrics.length} looks in ${path.relative(root, proof)}; limits: from plain at least ${LOOK_LIMITS.fromPlain}, across loop at least ${LOOK_LIMITS.acrossLoop}; lowest from plain ${Math.min(...r.metrics.map(m => m.fromPlain)).toFixed(1)}, lowest across loop ${Math.min(...r.metrics.map(m => m.acrossLoop)).toFixed(1)}; expected weak: ${weak.filter(m => WEAK_LOOKS.includes(label(m))).map(text).join(', ') || 'none'}; unexpected: ${unexpected.map(text).join(', ') || 'none'}; stale exemptions: ${stale.join(', ') || 'none'}` };
     },
   },
   {
@@ -1276,6 +1321,8 @@ try {
     const shot = async (p, phase = .9, width = 960, height = 540) => { await renderer.prepare(p); return renderer.exportPNG(p, phase, width, height); };
     const px = async (...args) => pixels(await shot(...args));
     const difference = (a, b) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum / a.length; };
+    // Share of pixels with visible light. A byte comparison of two empty frames proves nothing.
+    const litShare = px => { let lit = 0; for (let i = 0; i < px.length; i += 4) if (Math.max(px[i], px[i + 1], px[i + 2]) > 8) lit++; return lit / (px.length / 4); };
     const same = (a, b) => { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; };
     // The renderer wraps phase, so 0 against TAU alone proves nothing: the seam
     // comparison is what catches motion that does not close. Read with loopVerdict.
@@ -1283,7 +1330,7 @@ try {
       const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
       return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
     };
-    window.ct = { m, old, tinyUrl, renderer, slide, layer, poster, soft, grey, bars, stripes, wave, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
+    window.ct = { m, old, tinyUrl, renderer, slide, layer, poster, soft, grey, bars, stripes, wave, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, litShare, loop };
   }, !!baseline);
 
   for (const check of selected) {

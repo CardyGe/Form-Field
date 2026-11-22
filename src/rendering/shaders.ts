@@ -12,7 +12,7 @@ varying vec2 vUv;
 ${sourceViewGLSL}
 uniform sampler2D uImage;
 uniform vec2 uFit;
-uniform float uMirror,uRepeat;
+uniform float uMirror,uRepeat,uExactEdge;
 void main() {
   vec2 uv=(sourceUV(vUv)-.5)/uFit+.5;
   // Derivatives belong to the unwrapped domain: fract() would introduce a
@@ -22,7 +22,10 @@ void main() {
   if(uRepeat>1.)uv=fract(uv*uRepeat);
   if(mod(uMirror,2.)>.5){uv.x=1.-uv.x;dx.x=-dx.x;dy.x=-dy.x;}
   if(uMirror>1.5){uv.y=1.-uv.y;dx.y=-dx.y;dy.y=-dy.y;}
-  vec4 c=(uMirror<.5&&uRepeat<1.5)?texture2D(uImage,uv):textureGrad(uImage,uv,dx,dy);
+  // Beside the early return above, automatic derivatives can pick a coarse mip and draw a
+  // one-pixel line of the picture's average colour. uExactEdge avoids it; it stays off
+  // outside the Time modes so existing renders do not change.
+  vec4 c=(uMirror<.5&&uRepeat<1.5&&uExactEdge<.5)?texture2D(uImage,uv):textureGrad(uImage,uv,dx,dy);
   gl_FragColor=vec4(c.rgb*c.a,c.a);
 }
 `;

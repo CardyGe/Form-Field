@@ -330,7 +330,7 @@ export class StudioRenderer {
       uGate: { value: new THREE.Vector4() }, uOptics: { value: new THREE.Vector4() },
       uWear: { value: new THREE.Vector4() }, uTransport: { value: new THREE.Vector4() },
     });
-    this.image = material(imageFragment, { ...viewUniforms(), uImage: { value: this.fallback }, uFit: { value: new THREE.Vector2(1, 1) }, uMirror: { value: 0 }, uRepeat: { value: 1 } });
+    this.image = material(imageFragment, { ...viewUniforms(), uImage: { value: this.fallback }, uFit: { value: new THREE.Vector2(1, 1) }, uMirror: { value: 0 }, uRepeat: { value: 1 }, uExactEdge: { value: 0 } });
     this.composite = material(compositeFragment, {
       uBelow: { value: this.accumA.texture }, uSource: { value: this.source.texture }, uMask: { value: this.fallback },
       uTranslation: { value: new THREE.Vector2() }, uTexel: { value: new THREE.Vector2(1, 1) },
@@ -1060,7 +1060,12 @@ export class StudioRenderer {
     const layer = evaluateLayer(original, phase), p = layer.params;
     if (!this.slitTargets) this.slitTargets = [target(), target()];
     for (const rt of this.slitTargets) if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
-    if (timeMode(p.slitMode) > 0) return this.statSlices(original, phase, total, duration);
+    if (timeMode(p.slitMode) > 0) {
+      // These modes keep single pixels from any slice, so a stray edge line would persist.
+      this.image.uniforms.uExactEdge.value = 1;
+      try { return this.statSlices(original, phase, total, duration); }
+      finally { this.image.uniforms.uExactEdge.value = 0; }
+    }
     let [accum, next] = this.slitTargets;
     this.clearTarget(accum);
     const delays = sliceDelays(layer), u = this.slit.uniforms;

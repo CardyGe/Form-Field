@@ -145,7 +145,7 @@ test('key controls follow the key and its mode', () => {
 });
 test('colour looks apply, replace other finishes and clear', () => {
   const layer = applyFinish(createLayer('surface'), 'finish-anamorphic');
-  assert.deepEqual([layer.params.glowMix, layer.params.glowThreshold, layer.params.glowSize, layer.params.glowStreak], [.4, 1, .1, 2]);
+  assert.deepEqual([layer.params.glowMix, layer.params.glowThreshold, layer.params.glowSize, layer.params.glowStreak], [.5, .95, .15, 2]);
   const mapped = applyFinish(layer, 'finish-neon-map');
   assert.deepEqual([mapped.params.glowStreak, mapped.params.gradMix], [0, 1]);
   assert.equal(applyFinish(mapped, 'finish-none').params.gradMix, 0);
