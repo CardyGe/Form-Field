@@ -168,10 +168,12 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
 
 /**
  * The signals the wall needs each frame: what Map's links listen to, the tempo (for tempo sync), and, while the show
- * plays Live, what Live's own links listen to.
+ * plays Live, what Live's own links listen to. During a Perform show also the tempo's speed: a video locked to the
+ * tempo plays at a rate worked out from it, and the zone's speed knob only works when the wall knows it.
  */
-export function wallInputs(show: ShowDocument, live: LiveSettings | null): Set<string> {
+export function wallInputs(show: ShowDocument, live: LiveSettings | null, perform = false): Set<string> {
   const inputs = new Set<string>(['tempo.beat', 'tempo.phase', ...show.links.map(l => l.input)]);
+  if (perform) inputs.add('tempo.bpm');
   if (live && usesLive(show)) for (const l of live.links) inputs.add(l.input);
   if (show.sources.some(s => s.project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1))) for (const input of EMBER_SMOKE_INPUTS) inputs.add(input);
   return inputs;

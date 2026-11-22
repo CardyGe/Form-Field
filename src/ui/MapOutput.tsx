@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { MapCompositor, MAX_ARMED, performDraw, type ShapeBlend } from '../map/compositor';
+import { MapCompositor, MAX_ARMED, type ShapeBlend } from '../map/compositor';
+import { performDraw } from '../perform/wall-values';
 import { isShapeShown, LIVE_SOURCE_ID, STAGE_SIZE } from '../map/show';
 import { applyMapMessage, initialWall } from '../map/wall';
 import { overlayShow, type ZonePicture } from '../perform/resolve';
@@ -44,13 +45,14 @@ export default function MapOutput() {
     /** Brightness, hue, speed and master reach the compositor clamped (performDraw), and only when they change. */
     const syncValues = () => {
       const p = state.perform;
-      if (!p.active) { if (!ending && valuesFrom) { valuesFrom = null; compositor.setPerformValues(null); } return; }
+      // A show that has ended: its master, brightness and hue ease back to plain with the handover, never in one step.
+      if (!p.active) { if (!ending && valuesFrom) { valuesFrom = null; compositor.setPerformValues(null, HANDOVER_FADE_MS); } return; }
       if (valuesFrom && valuesFrom.zones === p.zones && valuesFrom.values === p.values && valuesFrom.phaseOffsets === p.phaseOffsets) return;
       valuesFrom = { zones: p.zones, values: p.values, phaseOffsets: p.phaseOffsets };
       compositor.setPerformValues(performDraw(p));
     };
-    const apply = (fade?: number | ReadonlyMap<string, ShapeBlend>) => {
-      compositor.setShow(shown(), new Map([...state.projects].map(([id, held]) => [id, held.project])), fade);
+    const apply = (fade?: number | ReadonlyMap<string, ShapeBlend>, handover = false) => {
+      compositor.setShow(shown(), new Map([...state.projects].map(([id, held]) => [id, held.project])), fade, handover);
       compositor.setSignals(state.signals);
       compositor.setOptions(state.options);
       compositor.setFrozen(state.freeze);
@@ -120,7 +122,8 @@ export default function MapOutput() {
       } else if (ending && (performance.now() >= ending.until || ending.looks.every(id => compositor.isReady(id)))) {
         ending = null;
         compositor.setArmed(new Set());
-        apply(HANDOVER_FADE_MS);
+        // Map's show fades in from what the show left on the wall; a look still not ready stays black until it is.
+        apply(HANDOVER_FADE_MS, true);
       }
       if (compositor.frame(now)) changed = true;
       // The studio hears at once when a launch lands or an armed look becomes ready (or stops being).

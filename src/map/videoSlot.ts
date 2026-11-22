@@ -7,7 +7,7 @@
 import type { Signals } from '../react/signals';
 import type { Gpu, Texture } from './gpu';
 import type { VideoSource } from './show';
-import { videoRate } from './videoRate';
+import { videoClock, videoLoop, videoRate } from './videoRate';
 import { videoUrl } from './videoUrl';
 
 export type VideoState = 'loading' | 'playing' | 'missing' | 'unplayable';
@@ -23,6 +23,10 @@ export class VideoSlot {
   private newFrame = false;
   private frozen = false;
   private loop = -1;
+  /** Perform: the speed and bar offset last played at, and whether a speed of 0 is holding it on its frame. */
+  private pace = 1;
+  private offset = 0;
+  private held = false;
   /** Bumped on every load, so a late answer about an older load is ignored. */
   private generation = 0;
   private watching = false;
@@ -52,24 +56,35 @@ export class VideoSlot {
     if (on) { this.video.pause(); return; }
     // Unfrozen: a video that loaded while frozen starts now; a tempo loop joins the beat where it is.
     this.loop = -1;
-    if (this.state === 'playing' || this.state === 'loading') void this.video.play().catch(() => {});
+    if (!this.held && (this.state === 'playing' || this.state === 'loading')) void this.video.play().catch(() => {});
   }
 
-  /** The picture to draw: the latest frame, or null until it plays. `speed`: the Speed links leave it at this frame. */
-  frame(signals: Signals, speed = this.source.speed): Texture | null {
+  /**
+   * The picture to draw: the latest frame, or null until it plays. `speed`: the Speed links leave it at this frame.
+   * Perform: `pace` is the zone's speed (a tempo loop of n beats plays as n / pace beats; 0 holds the video on its
+   * frame) and `offset` the beats taken off the count, so the loop starts on the corrected bar. Map leaves them at 1 and 0.
+   */
+  frame(signals: Signals, speed = this.source.speed, pace = 1, offset = 0): Texture | null {
     this.fresh = false;
     if (this.state !== 'playing') return null;
     const v = this.video;
     if (!this.frozen) {
-      const { rate, beats } = videoRate(Number.isFinite(v.duration) ? v.duration : null, speed, this.source.tempoSync, signals['tempo.bpm'] ?? 120);
+      // A speed of 0 holds the video where it is, locked to the tempo or not; let go, it joins the beat where it is.
+      const hold = !(pace > 0);
+      if (hold !== this.held) { this.held = hold; this.loop = -1; if (hold) v.pause(); else void v.play().catch(() => {}); }
+      // A new speed or bar moves every loop boundary: the video joins the new loop where the beat is, not at its start.
+      if (pace !== this.pace || offset !== this.offset) { this.pace = pace; this.offset = offset; this.loop = -1; }
+    }
+    if (!this.frozen && !this.held) {
+      const clock = videoClock(signals, pace, offset);
+      const { rate, beats } = videoRate(Number.isFinite(v.duration) ? v.duration : null, speed, this.source.tempoSync, clock.bpm);
       this.playsAs = beats;
       if (Math.abs(v.playbackRate - rate) > 0.005) v.playbackRate = rate;
       // A tempo loop starts again on its beat.
-      if (beats !== null && signals['tempo.beat'] !== undefined) {
-        const loop = Math.floor(signals['tempo.beat'] / beats);
+      if (beats !== null && clock.count !== undefined) {
+        const { loop, into } = videoLoop(clock.count, beats);
         if (loop !== this.loop) {
           // Joining mid-loop, it starts where the beat is; after that, each loop starts at its beginning.
-          const into = (signals['tempo.beat'] - loop * beats) / beats;
           v.currentTime = this.loop === -1 ? Math.max(0, into * (v.duration || 0)) : 0;
           this.loop = loop;
         }

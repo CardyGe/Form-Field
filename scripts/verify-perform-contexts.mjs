@@ -108,7 +108,8 @@ try {
   for (let i = 0; i < SOURCES; i++) {
     if (i === 0) { shapes.push(baseShape); sources.push(baseSource); continue; }
     const c = cell(i), id = `ctx-source-${i}`;
-    shapes.push({ ...baseShape, id: `ctx-shape-${i}`, name: `Context ${i}`, sourceId: id, groupId: null, points: baseShape.points.map(p => ({ x: c.x + (p.x - box.x) / box.w * c.w, y: c.y + (p.y - box.y) / box.h * c.h })) });
+    // A flat green fill, so a shape showing its own fill instead of its look is plain to see; the fifth has a blue border.
+    shapes.push({ ...baseShape, id: `ctx-shape-${i}`, name: `Context ${i}`, sourceId: id, groupId: null, colour: '#00ff00', fill: 'colour', border: i === 4 ? { ...baseShape.border, width: 16, colour: '#0040ff', glow: 0, run: null } : baseShape.border, points: baseShape.points.map(p => ({ x: c.x + (p.x - box.x) / box.w * c.w, y: c.y + (p.y - box.y) / box.h * c.h })) });
     sources.push({ ...baseSource, id, revision: 1 });
     sourceMessages.push({ type: 'source', id, revision: 1, project: baseProject });
   }
@@ -159,6 +160,8 @@ try {
   const until = async (test, ms, what) => { const end = Date.now() + ms; for (;;) { if (await test()) return; if (Date.now() > end) throw new Error(`timed out waiting for ${what}`); await sleep(50); } };
   const wallNow = () => wall.evaluate(() => performance.timeOrigin + performance.now());
   // Every frame of the wall while sampling is on: how much of the stage is lit, and a small picture of three zones.
+  // The fifth zone's border is drawn inside its outline, 16 pixels wide: a strip along the top edge is all border.
+  const BORDER_STRIP = { x: cell(4).x + cell(4).w * .2, y: cell(4).y + 3 / 1080, w: cell(4).w * .6, h: 9 / 1080 };
   const inset = r => ({ x: r.x + r.w * .1, y: r.y + r.h * .1, w: r.w * .8, h: r.h * .8 });
   await wall.evaluate(zones => {
     const c = document.querySelector('canvas');
@@ -169,29 +172,33 @@ try {
       requestAnimationFrame(tick);
       if (!window.__sampling) return;
       sx.drawImage(c, 0, 0, 48, 27);
-      const d = sx.getImageData(0, 0, 48, 27).data; let lit = 0;
-      for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 30) lit++;
+      const d = sx.getImageData(0, 0, 48, 27).data; let lit = 0, sum = 0;
+      for (let i = 0; i < d.length; i += 4) { const v = d[i] + d[i + 1] + d[i + 2]; if (v > 30) lit++; sum += v; }
       const z = zones.map((r, i) => {
         thumbs[i].drawImage(c, r.x * c.width, r.y * c.height, r.w * c.width, r.h * c.height, 0, 0, 16, 12);
         const t = thumbs[i].getImageData(0, 0, 16, 12).data, out = [];
         for (let k = 0; k < t.length; k += 4) out.push(t[k], t[k + 1], t[k + 2]);
         return out;
       });
-      window.__frames.push({ at: performance.timeOrigin + performance.now(), lit, z });
+      window.__frames.push({ at: performance.timeOrigin + performance.now(), lit, mean: sum / (48 * 27 * 3), z });
     };
     requestAnimationFrame(tick);
-  }, [inset(box), inset(cell(1)), inset(cell(2)), inset(cell(3))]);
+  }, [inset(box), inset(cell(1)), inset(cell(2)), inset(cell(3)), BORDER_STRIP, inset(cell(12))]);
   const sampling = on => wall.evaluate(on => { window.__sampling = on; if (on) window.__frames = []; }, on);
   const frames = () => wall.evaluate(() => window.__frames.splice(0));
   const mean = list => list.length ? list.reduce((a, b) => a + b, 0) / list.length : 0;
   const level = (f, zone) => mean(f.z[zone]);
   const levelBetween = (list, zone, from, to) => mean(list.filter(f => f.at >= from && f.at <= to).map(f => level(f, zone)));
   const delta = (a, b, zone) => mean(a.z[zone].map((v, i) => Math.abs(v - b.z[zone][i])));
+  // How much of a region is the border's blue, and how much the flat green fill (0 to 255).
+  const tone = (f, zone, hi, lo) => { const t = f.z[zone]; let sum = 0; for (let i = 0; i < t.length; i += 3) sum += Math.max(0, t[i + hi] - t[i + lo]); return sum / (t.length / 3); };
+  const border = f => tone(f, 4, 2, 0), green = (f, zone) => tone(f, zone, 1, 0);
+  const borderBetween = (list, from, to) => mean(list.filter(f => f.at >= from && f.at <= to).map(border));
   const channels = (list, zone) => [0, 1, 2].map(c => mean(list.map(f => mean(f.z[zone].filter((_, i) => i % 3 === c)))));
   const picture = async name => { const png = await wall.evaluate(async () => { const c = document.querySelector('canvas'), copy = new OffscreenCanvas(960, 540); copy.getContext('2d').drawImage(c, 0, 0, 960, 540); const bytes = new Uint8Array(await (await copy.convertToBlob({ type: 'image/png' })).arrayBuffer()); let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); }); await fs.writeFile(path.join(out, name), Buffer.from(png, 'base64')); };
   const cut = { kind: 'cut', durationMs: 0 };
   const change = (zone, sourceId, blend) => ({ zone, sourceId, shapeIds: [shapes[zone].id], blend, phaseOffsetBeats: 0 });
-  const valuesOf = (master, zone0 = {}) => ({ type: 'performValues', values: { master, zones: Array.from({ length: 8 }, (_, i) => ({ brightness: 1, hueDeg: 0, speed: 1, ...(i === 0 ? zone0 : {}) })) } });
+  const valuesOf = (master, zone0 = {}, zone4 = {}) => ({ type: 'performValues', values: { master, zones: Array.from({ length: 8 }, (_, i) => ({ brightness: 1, hueDeg: 0, speed: 1, ...(i === 0 ? zone0 : {}), ...(i === 4 ? zone4 : {}) })) } });
   record.perform = {};
 
   await check('Perform starts black, and gives back the renderers Map was using', async () => {
@@ -264,10 +271,12 @@ try {
     const usual = deltas.filter(x => x.at < at - 50).map(x => x.d).sort((a, b) => a - b);
     const p95 = usual[Math.floor(usual.length * .95)] ?? 0;
     const around = t => Math.max(...deltas.filter(x => x.at > t - 40 && x.at < t + 80).map(x => x.d));
+    // A slow frame moves the Stop's own fade further: that much is not a jump.
+    const longest = Math.max(...list.slice(1).map((f, i) => f.at - list[i].at).filter((_, i) => list[i + 1].at > stop - 40 && list[i + 1].at < stop + 80));
     record.perform.jump = { usual: +p95.toFixed(2), atBlend: +around(at).toFixed(2), atStop: +around(stop).toFixed(2), before: +levelBetween(list, 1, stop - 150, stop - 20).toFixed(1), after: +levelBetween(list, 1, stop + 20, stop + 150).toFixed(1) };
     const allowed = Math.max(p95 * 3, 4);
     assert.ok(around(at) <= allowed, `the picture jumped by ${around(at).toFixed(1)} when the blend began (usually ${p95.toFixed(1)} a frame)`);
-    assert.ok(around(stop) <= allowed, `the picture jumped by ${around(stop).toFixed(1)} when the Stop landed (usually ${p95.toFixed(1)} a frame)`);
+    assert.ok(around(stop) <= allowed + levelBetween(list, 1, stop - 150, stop - 20) * longest / 1000, `the picture jumped by ${around(stop).toFixed(1)} when the Stop landed (usually ${p95.toFixed(1)} a frame)`);
     assert.ok(levelBetween(list, 1, stop - 150, stop - 20) > 4, 'the zone was dark before the Stop');
     const half = levelBetween(list, 1, stop + 450, stop + 550) / levelBetween(list, 1, stop - 150, stop - 20);
     assert.ok(half > .25 && half < .8, `half way through the Stop the zone is at ${half.toFixed(2)} of where it was`);
@@ -299,6 +308,40 @@ try {
     const early = levelBetween(list, 3, at + 350, at + 450) / levelBetween(list, 3, at + 1800, at + 2200);
     record.perform.fadeUp = +early.toFixed(2);
     assert.ok(early > .1 && early < .45, `a quarter of the way up the zone is at ${early.toFixed(2)}`);
+  });
+
+  await check('a border follows its shape through a fade, a dip and a Stop', async () => {
+    // The zone's brightness is 0 for this check: its looks are dark and its border is not, so the strip reads the border alone.
+    await toWall([valuesOf(1, {}, { brightness: 0 }), { type: 'performArm', sourceIds: [src(4), src(5)] }]);
+    await until(async () => { const a = await armedNow(); return a.includes(src(4)) && a.includes(src(5)); }, 15000, 'the armed looks to be ready');
+    await sampling(true);
+    const up = await wallNow() + 300, dip = up + 2600, fade = dip + 2600, stop = fade + 2400;
+    await toWall([
+      { type: 'performLaunch', launch: { id: 'B1', atMs: up, barMs: 2000, changes: [change(4, src(4), { kind: 'fade', durationMs: 1600 })] } },
+      { type: 'performLaunch', launch: { id: 'B2', atMs: dip, barMs: 2000, changes: [change(4, src(5), { kind: 'dip', durationMs: 1600 })] } },
+      { type: 'performLaunch', launch: { id: 'B3', atMs: fade, barMs: 2000, changes: [change(4, src(10), { kind: 'fade', durationMs: 1200 })] } },
+      { type: 'performLaunch', launch: { id: 'B4', atMs: stop, barMs: 2000, changes: [change(4, null, { kind: 'fade', durationMs: 1600 })] } },
+    ]);
+    await sleep(stop - up + 300 + 2400);
+    const list = await frames();
+    for (const id of ['B1', 'B2', 'B3', 'B4']) assert.deepEqual(await landedOf(id), [{ launchId: id, zones: [4] }]);
+    const full = borderBetween(list, up + 1900, up + 2400);
+    const b = {
+      full: +full.toFixed(1),
+      fadeUpQuarter: +(borderBetween(list, up + 350, up + 450) / full).toFixed(2),
+      dipMiddle: +(borderBetween(list, dip + 770, dip + 830) / full).toFixed(2),
+      fadeLowest: +(Math.min(...list.filter(f => f.at > fade - 100 && f.at < fade + 1400).map(border)) / full).toFixed(2),
+      stopHalf: +(borderBetween(list, stop + 750, stop + 850) / full).toFixed(2),
+      stopEnd: +(borderBetween(list, stop + 1900, stop + 2300) / full).toFixed(2),
+    };
+    record.perform.border = b;
+    assert.ok(full > 100, `the border strip reads ${full.toFixed(1)}: no border there`);
+    assert.ok(b.fadeUpQuarter > .1 && b.fadeUpQuarter < .45, `a quarter of the way up from black the border is at ${b.fadeUpQuarter}`);
+    assert.ok(b.dipMiddle < .15, `at the middle of a dip the border is at ${b.dipMiddle}`);
+    assert.ok(b.fadeLowest > .9, `a border that stays dropped to ${b.fadeLowest} during a fade between two looks`);
+    assert.ok(b.stopHalf > .3 && b.stopHalf < .7, `half way through a Stop the border is at ${b.stopHalf}`);
+    assert.ok(b.stopEnd < .05, `after a Stop the border is at ${b.stopEnd}`);
+    await toWall([valuesOf(1)]);
   });
 
   await check('master, brightness and hue change the picture; values out of range are held inside it', async () => {
@@ -336,12 +379,40 @@ try {
     await sleep(4000);
     const list = await frames();
     assert.equal(list.filter(f => f.lit === 0).length, 0, 'the wall was black on the way back');
+    // Only eight of Map's 24 looks can be made ready behind the show: the others must come up from black, never as their flat fill.
+    const flat = [1, 2, 3, 5].map(zone => Math.max(...list.map(f => green(f, zone))));
+    record.perform.endFill = flat.map(v => +v.toFixed(1));
+    assert.ok(Math.max(...flat) < 40, `a shape showed its flat fill on the way back (green ${flat.map(v => v.toFixed(0)).join(', ')} of 255)`);
     await wall.waitForFunction(n => Object.keys(window.__mapStats?.prepares ?? {}).length === n, SOURCES, { timeout: 20000 });
     const s = await wallState();
     record.perform.end = { frames: list.length, fewestLit: Math.min(...list.map(f => f.lit)), lit: s.lit };
     assert.equal(s.armed, null, 'the wall still reports armed looks');
     assert.ok(s.lit > 500, `the Map show is lit in only ${s.lit} samples`);
     await picture('perform-ended.png');
+  });
+
+  await check('End show with the master down brings the wall up gradually, never in one step', async () => {
+    // A second show, already playing the first zone's own look, with the master at 0: the wall is dark.
+    await toWall([{ type: 'performStart', zones: Array.from({ length: 8 }, (_, i) => i === 0 ? { shapeIds: [shapes[0].id], sourceId: src(0), launched: true } : zoneOf(i)) }, valuesOf(0)]);
+    await sleep(1500);
+    await sampling(true);
+    await sleep(400);
+    const ended = await wallNow();
+    await toWall([{ type: 'performEnd' }]);
+    await sleep(4500);
+    const list = await frames();
+    const dark = list.filter(f => f.at < ended), after = list.filter(f => f.at >= ended);
+    const final = mean(after.slice(-20).map(f => f.mean));
+    const rise = Math.max(...after.slice(1).map((f, i) => f.mean - after[i].mean));
+    const first = after.findIndex(f => f.lit > 0), full = after.findIndex(f => f.mean > final * .9);
+    record.perform.endDark = { litBefore: Math.max(...dark.map(f => f.lit)), final: +final.toFixed(1), biggestStep: +(rise / final).toFixed(2), riseMs: Math.round(after[full].at - after[first].at) };
+    assert.equal(Math.max(...dark.map(f => f.lit)), 0, 'the wall was lit with the master at 0');
+    assert.ok(final > 10, `the Map show came back at only ${final.toFixed(1)}`);
+    assert.ok(rise / final < .2, `the wall rose by ${(rise / final).toFixed(2)} of its full level in one frame`);
+    assert.ok(after[full].at - after[first].at > 150, `the wall went from dark to full in ${Math.round(after[full].at - after[first].at)} ms`);
+    const flat = Math.max(...[1, 2, 3, 5].map(zone => Math.max(...after.map(f => green(f, zone)))));
+    assert.ok(flat < 40, `a shape showed its flat fill on the way back (green ${flat.toFixed(0)} of 255)`);
+    await wall.waitForFunction(n => Object.keys(window.__mapStats?.prepares ?? {}).length === n, SOURCES, { timeout: 20000 });
   });
 
   await check('the stage kept its graphics context through the Perform run', async () => {

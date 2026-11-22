@@ -41,6 +41,7 @@ uniform vec2 uHue;          // the turn's cosine and sine
 uniform vec3 uLook;         // brightness times tint
 uniform float uAlpha;       // opacity, for drawing only (links, scene glides)
 uniform int uDecor;
+uniform float uDecorAlpha;  // Perform: how strongly the border shows through a blend; 1 otherwise
 uniform sampler2D uDecorTex;
 uniform int uRun;           // border runs: the border shows only the run's lit part
 uniform sampler2D uRunTex;  // each border pixel's place round the outline, as an angle
@@ -56,7 +57,7 @@ void main() {
   vec2 cu = (vStage - uRect.xy) / uRect.zw;
   float cover = texture(uCoverage, cu).a;
   // The border picture is already cut to the outline: it sits crisp on top of the (soft-edged) content.
-  vec4 d = uDecor == 1 ? texture(uDecorTex, cu) : vec4(0.);
+  vec4 d = uDecor == 1 ? texture(uDecorTex, cu) * uDecorAlpha : vec4(0.);
   if (uRun == 1) {
     vec4 r = texture(uRunTex, cu);
     // Holes' borders (no place round the outer outline) keep their steady border.
@@ -122,6 +123,8 @@ export interface ShapeDraw {
   alpha?: number;
   /** A border run: the border's position picture, where the head is and how long the run is (0..1 of the lap). */
   run?: { texture: Texture; head: number; length: number } | null;
+  /** Perform: how strongly the border shows while its shape blends, 0..1; 1 when missing. */
+  decorAlpha?: number;
   /** Perform: degrees to turn the picture's hue by; 0 or missing leaves it alone. The border is not turned. */
   hueDeg?: number;
 }
@@ -186,7 +189,7 @@ export class Gpu {
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'program');
       return { program, u: Object.fromEntries(uniforms.map(n => [n, gl.getUniformLocation(program, n)])) };
     };
-    this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uHueOn', 'uHue', 'uLook', 'uAlpha', 'uDecor', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
+    this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uHueOn', 'uHue', 'uLook', 'uAlpha', 'uDecor', 'uDecorAlpha', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
     this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex', 'uMaster']);
     this.quad = gl.createVertexArray()!;
@@ -310,6 +313,7 @@ export class Gpu {
     gl.uniform3f(u.uLook, ...d.look);
     gl.uniform1f(u.uAlpha, d.alpha ?? 1);
     gl.uniform1i(u.uDecor, d.decor ? 1 : 0); bind(3, 'uDecorTex', d.decor);
+    gl.uniform1f(u.uDecorAlpha, d.decorAlpha ?? 1);
     gl.uniform1i(u.uRun, d.run && d.decor ? 1 : 0); bind(4, 'uRunTex', d.run?.texture ?? null);
     gl.uniform2f(u.uRunAt, d.run?.head ?? 0, d.run?.length ?? 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
