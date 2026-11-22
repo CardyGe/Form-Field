@@ -141,6 +141,32 @@ export const GRADIENT_PARAMETERS:ParameterDefinition[]=[
  {key:'gradCycles',label:'Gradient cycles per loop',min:-8,max:8,step:1,default:0,section:'Motion',description:'Whole turns the gradient makes per loop; the loop closes exactly.'},
  {key:'gradKeep',label:'Keep brightness',min:0,max:1,step:1,default:0,section:'Material',description:'Off: the gradient sets the brightness. On: the layer keeps its own brightness and takes only the gradient\'s colour.'},
 ];
+/**
+ * Grading: white balance, then a tint in the shadows and one in the highlights.
+ * Each keeps the pixel's brightness. Off by default (all amounts 0).
+ */
+export const GRADE_PARAMETERS:ParameterDefinition[]=[
+ {key:'gradeTemperature',label:'Temperature',min:-1,max:1,step:.01,default:0,section:'Material',description:'Warms (positive) or cools (negative) the colour without changing brightness. 0 is off.'},
+ {key:'gradeTint',label:'Tint',min:-1,max:1,step:.01,default:0,section:'Material',description:'Moves the colour towards magenta (positive) or green (negative) without changing brightness. 0 is off.'},
+ {key:'gradeShadowTint',label:'Shadow tint',min:0,max:1,step:.01,default:0,section:'Material',description:'How strongly the darks take the shadow colour. Brightness is kept. 0 is off.'},
+ {key:'gradeShadowColour',label:'Shadow colour',min:1,max:6,step:1,default:1,section:'Material',description:'Palette swatch used for the shadow tint.'},
+ {key:'gradeHighlightTint',label:'Highlight tint',min:0,max:1,step:.01,default:0,section:'Material',description:'How strongly the brights take the highlight colour. Brightness is kept. 0 is off.'},
+ {key:'gradeHighlightColour',label:'Highlight colour',min:1,max:6,step:1,default:2,section:'Material',description:'Palette swatch used for the highlight tint.'},
+];
+/**
+ * Luma Key: makes part of the layer transparent by its brightness or its hue.
+ * Colour and coverage fade together, so the edge has no fringe. Off by default.
+ */
+export const KEY_PARAMETERS:ParameterDefinition[]=[
+ {key:'keyMix',label:'Key',min:0,max:1,step:.01,default:0,section:'Material',description:'How much of the layer outside the key range becomes transparent. 0 is off.'},
+ {key:'keyMode',label:'Key by',min:0,max:1,step:1,default:0,section:'Material',description:'Brightness keeps a range of tones; hue keeps one colour.'},
+ {key:'keyLow',label:'Key low',min:0,max:1,step:.01,default:.25,section:'Material',description:'Darkest tone kept when keying by brightness.'},
+ {key:'keyHigh',label:'Key high',min:0,max:1,step:.01,default:1,section:'Material',description:'Brightest tone kept when keying by brightness.'},
+ {key:'keySoftness',label:'Key softness',min:0,max:1,step:.01,default:.1,section:'Material',description:'Feathers the edge of the key.'},
+ {key:'keyHue',label:'Key hue',min:0,max:360,step:1,default:120,section:'Material',description:'The colour kept when keying by hue, in degrees round the colour wheel.'},
+ {key:'keyHueRange',label:'Hue range',min:1,max:180,step:1,default:40,section:'Material',description:'How far either side of the key hue is kept, in degrees.'},
+ {key:'keyInvert',label:'Invert key',min:0,max:1,step:1,default:0,section:'Material',description:'Off keeps the range; on removes it instead.'},
+];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[
  {key:'toneContrast',label:'Tonal contrast',min:.5,max:2,step:.01,default:1,section:'Material',description:'Luminance contrast around the pivot, preserving colour ratios.'},
  {key:'tonePivot',label:'Contrast pivot',min:.05,max:.75,step:.01,default:.18,section:'Material',description:'Anchor for Tonal contrast. Neutral contrast leaves the pivot inactive.'},
@@ -155,6 +181,8 @@ export const FINISH_PARAMETERS:ParameterDefinition[]=[
  ...PRINT_PARAMETERS,
  ...SPLIT_PARAMETERS,
  ...GRADIENT_PARAMETERS,
+ ...GRADE_PARAMETERS,
+ ...KEY_PARAMETERS,
 ];
 export const FINISH_KEYS=FINISH_PARAMETERS.map(p=>p.key);
 export const TOON_KEYS=TOON_PARAMETERS.map(p=>p.key);
@@ -164,3 +192,5 @@ export const GLOW_KEYS=GLOW_PARAMETERS.map(p=>p.key);
 export const PRINT_KEYS=PRINT_PARAMETERS.map(p=>p.key);
 export const SPLIT_KEYS=SPLIT_PARAMETERS.map(p=>p.key);
 export const GRADIENT_KEYS=GRADIENT_PARAMETERS.map(p=>p.key);
+export const GRADE_KEYS=GRADE_PARAMETERS.map(p=>p.key);
+export const KEY_KEYS=KEY_PARAMETERS.map(p=>p.key);

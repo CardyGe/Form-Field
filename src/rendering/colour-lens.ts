@@ -30,9 +30,13 @@ export function supportsLens(layer: Pick<Layer, 'kind'>): boolean {
   return layer.kind !== 'graphic';
 }
 
+/** Amounts that switch grading on; temperature and tint work in both directions. */
+const GRADE_AMOUNTS = ['gradeTemperature', 'gradeTint', 'gradeShadowTint', 'gradeHighlightTint'];
+
 export function lensActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>): boolean {
   const p = layer.params, m = layer.modulations;
-  return supportsLens(layer) && ((p.splitAmount ?? 0) > 0 || (p.splitOrder ?? 0) > 0 || (p.gradMix ?? 0) > 0 || !!m.splitAmount || !!m.gradMix);
+  return supportsLens(layer) && ((p.splitAmount ?? 0) > 0 || (p.splitOrder ?? 0) > 0 || (p.gradMix ?? 0) > 0 || !!m.splitAmount || !!m.gradMix ||
+    GRADE_AMOUNTS.some(key => (p[key] ?? 0) !== 0 || !!m[key]) || (p.keyMix ?? 0) > 0 || !!m.keyMix);
 }
 
 /** Taps for Split. Sample i sits at `offset` (-.5 to .5 of the split distance)
@@ -67,6 +71,9 @@ uniform vec3 uSplitWeights[15];
 uniform float uGradMix, uGradMidpoint, uGradShift, uGradKeep;
 uniform int uGradCount;
 uniform vec3 uGradStops[6];
+uniform vec3 uGradeWb, uShadowColour, uHighlightColour;
+uniform float uShadowTint, uHighlightTint;
+uniform float uKeyMix, uKeyMode, uKeyLow, uKeyHigh, uKeySoft, uKeyHue, uKeyHueRange, uKeyInvert;
 const float TAU = 6.28318530718;
 
 vec4 tap(vec2 uv) { return texture2D(uSource, uTile > .5 ? fract(uv) : clamp(uv, 0., 1.)); }
@@ -169,10 +176,63 @@ vec4 gradientStage(vec4 c) {
   return vec4(mix(straight, mapped, uGradMix) * c.a, c.a);
 }
 
+/** Moves the colour towards a tint and keeps its brightness: the tint is scaled
+ * to the pixel's luma, so the mix has the same luma. Nothing is clamped. */
+vec3 tintTowards(vec3 straight, vec3 tint, float weight) {
+  float l = luma(straight), t = luma(tint);
+  if (weight <= 0. || l <= 0. || t <= .0001) return straight;
+  return mix(straight, tint * (l / t), weight);
+}
+
+/** Grading on unpremultiplied colour: white balance, then shadow and highlight
+ * tints weighted by perceptual tone. Over-range light stays over range. */
+vec4 gradeStage(vec4 c) {
+  if (c.a <= .0001) return c;
+  vec3 straight = c.rgb / c.a;
+  straight *= uGradeWb;
+  float tone = pow(clamp(luma(straight), 0., 1.), 1. / 2.2);
+  straight = tintTowards(straight, uShadowColour, uShadowTint * (1. - smoothstep(0., .5, tone)));
+  straight = tintTowards(straight, uHighlightColour, uHighlightTint * smoothstep(.5, 1., tone));
+  return vec4(straight * c.a, c.a);
+}
+
+/** Port of keyCoverage in colour-lens.ts: the lower edge feathers only when it
+ * is above 0 and the upper edge only when it is below 1, so the ends stay open. */
+float keyCoverage(float v, float lo, float hi, float soft, float invert) {
+  float a = 1., b = 1.;
+  if (lo > 0.) a = soft > 0. ? smoothstep(lo - soft * .5, lo + soft * .5, v) : step(lo, v);
+  if (hi < 1.) b = soft > 0. ? 1. - smoothstep(hi - soft * .5, hi + soft * .5, v) : step(v, hi);
+  return mix(a * b, 1. - a * b, invert);
+}
+
+float hueOf(vec3 c) {
+  float mx = max(c.r, max(c.g, c.b)), d = mx - min(c.r, min(c.g, c.b));
+  float h = mx == c.r ? mod((c.g - c.b) / d, 6.) : mx == c.g ? (c.b - c.r) / d + 2. : (c.r - c.g) / d + 4.;
+  return h * 60.;
+}
+
+/** Key: colour and alpha are scaled together, so a feathered edge fades without a fringe. */
+vec4 keyStage(vec4 c) {
+  if (uKeyMix <= 0. || c.a <= .0001) return c;
+  vec3 straight = c.rgb / c.a;
+  float cover;
+  if (uKeyMode < .5) {
+    cover = keyCoverage(pow(clamp(luma(straight), 0., 1.), 1. / 2.2), uKeyLow, uKeyHigh, uKeySoft, uKeyInvert);
+  } else {
+    float mx = max(straight.r, max(straight.g, straight.b)), d = mx - min(straight.r, min(straight.g, straight.b));
+    float away = abs(hueOf(straight) - uKeyHue);
+    away = min(away, 360. - away);
+    // Greys have no hue and are never inside the key. The range is mapped so the kept half is 0 to .5.
+    float v = d < .05 * mx || mx <= 0. ? 2. : .5 * away / uKeyHueRange;
+    cover = keyCoverage(v, 0., .5, uKeySoft, uKeyInvert);
+  }
+  return c * mix(1., cover, uKeyMix);
+}
+
 void main() {
   vec4 c = uSplitOn > .5 ? splitStage(vUv) : tap(vUv);
   c.rgb = orderStage(c.rgb, vUv);
-  gl_FragColor = gradientStage(c);
+  gl_FragColor = keyStage(gradeStage(gradientStage(c)));
 }
 `;
 
@@ -192,4 +252,28 @@ function hexLuma(hex: string): number {
 export function gradientStops(index: number, palette: string[]): string[] {
   if (index > 0) return [...(GRADIENT_PALETTES[index] ?? GRADIENT_PALETTES[1]).stops];
   return [...palette].sort((a, b) => hexLuma(a) - hexLuma(b));
+}
+
+/** Per-channel multipliers for temperature and tint (each -1 to 1). They are
+ * divided by their own luma, so a white pixel keeps its brightness. */
+export function whiteBalance(temperature: number, tint: number): [number, number, number] {
+  if (temperature === 0 && tint === 0) return [1, 1, 1];
+  const m = [1 + .25 * temperature, 1 - .15 * tint, 1 - .25 * temperature];
+  const l = .2126 * m[0] + .7152 * m[1] + .0722 * m[2];
+  return [m[0] / l, m[1] / l, m[2] / l];
+}
+
+const smooth = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+/** How much of a pixel the key keeps. The range [low, high] is kept, its edges
+ * feather by `softness` centred on each edge, and the ends of the scale (0 for
+ * the lower edge, 1 for the upper) stay open. `invert` keeps what is outside.
+ * Hue keying calls this with low 0 and high .5, on half the distance to the key
+ * hue as a share of the hue range. */
+export function keyCoverage(value: number, low: number, high: number, softness: number, invert: number): number {
+  const edge = (e: number, above: boolean) => softness > 0 ? smooth(e - softness / 2, e + softness / 2, value) : Number(above ? value >= e : value <= e);
+  const a = low > 0 ? edge(low, true) : 1;
+  const b = high < 1 ? (softness > 0 ? 1 - edge(high, false) : edge(high, false)) : 1;
+  const kept = a * b;
+  return invert > 0 ? 1 - kept : kept;
 }

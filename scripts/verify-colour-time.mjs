@@ -395,6 +395,124 @@ const CHECKS = [
       return { ok: r.moved >= .05 && r.mean < 1 && r.worst < 4, detail: `${r.moved >= .05 ? '' : 'Streak has no visible effect on the render. '}glow .001 against plain: mean ${r.mean.toFixed(3)}, worst ${r.worst} (limits 1 and 4); glow 1 moves it by ${r.moved.toFixed(3)}` };
     },
   },
+  {
+    name: 'grade-grey',
+    // Grey ignores a channel swap, so Channel order 1 runs the lens pass without changing it.
+    // Every grade and key control is moved off its default except the amounts, so a tint or
+    // key that leaks in at zero strength would show.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => { const p = q.project([q.grey(params)]); p.highlights = 'exact'; return p; };
+        const plain = await q.px(scene({})), zero = await q.px(scene({ splitOrder: 1, gradeShadowColour: 3, gradeHighlightColour: 5, keyMode: 1, keyLow: .6, keyHigh: .7, keyInvert: 1 }));
+        let worst = 0; for (let i = 0; i < plain.length; i++) worst = Math.max(worst, Math.abs(plain[i] - zero[i]));
+        // A control that cannot move the render would make this check meaningless.
+        const warm = await q.px(scene({ splitOrder: 1, gradeTint: .5 }));
+        return { worst, moved: q.difference(plain, warm) };
+      });
+      return { ok: r.worst <= 1 && r.moved > 0, detail: `${r.moved > 0 ? '' : 'Tint has no effect on the render. '}zero tints and a closed key differ from the plain grey by at most ${r.worst} (limit 1)` };
+    },
+  },
+  {
+    name: 'grade-temperature',
+    // Warmer: red up, blue down. Brightness is compared in linear light and brought back to 8 bits.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => { const p = q.project([q.grey(params)]); p.highlights = 'exact'; return p; };
+        const decode = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+        const encode = v => 255 * (v <= .0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - .055);
+        const at = async params => { const px = await q.px(scene(params)), i = (270 * 960 + 480) * 4; return [...px.subarray(i, i + 3)]; };
+        const luma = c => encode(.2126 * decode(c[0]) + .7152 * decode(c[1]) + .0722 * decode(c[2]));
+        const plain = await at({}), warm = await at({ gradeTemperature: .6 }), cool = await at({ gradeTemperature: -.6 });
+        // Tint moves the heavily weighted green channel, so it shows a brightness error that temperature alone would hide.
+        const magenta = await at({ gradeTint: 1 }), green = await at({ gradeTint: -1 });
+        return { plain, warm, cool, dWarm: Math.abs(luma(warm) - luma(plain)), dCool: Math.abs(luma(cool) - luma(plain)), magenta, green, dMagenta: Math.abs(luma(magenta) - luma(plain)), dGreen: Math.abs(luma(green) - luma(plain)) };
+      });
+      const ok = r.warm[0] > r.warm[2] + 10 && r.cool[2] > r.cool[0] + 10 && r.dWarm <= 2 && r.dCool <= 2 &&
+        r.magenta[1] < r.magenta[0] - 5 && r.green[1] > r.green[0] + 5 && r.dMagenta <= 2 && r.dGreen <= 2;
+      return { ok, detail: `plain ${r.plain}, warm ${r.warm} (red must lead blue), cool ${r.cool} (blue must lead red); tint +1 ${r.magenta} and -1 ${r.green} (green must fall, then rise); luma change ${r.dWarm.toFixed(2)}, ${r.dCool.toFixed(2)}, ${r.dMagenta.toFixed(2)}, ${r.dGreen.toFixed(2)} (limit 2/255)` };
+    },
+  },
+  {
+    name: 'grade-tone',
+    // On a ramp the shadow tint takes the dark end and the highlight tint the bright end.
+    // Shadow colour 1 and highlight colour 2 are the layer's cyan and green swatches.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => { const p = q.project([q.ramp(params)]); p.highlights = 'exact'; return p; };
+        const at = (px, x) => [...px.subarray((270 * 960 + x) * 4, (270 * 960 + x) * 4 + 3)];
+        const plain = await q.px(scene({})), shadow = await q.px(scene({ gradeShadowTint: 1 })), highlight = await q.px(scene({ gradeHighlightTint: 1 }));
+        const gap = (a, b) => Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+        return { dark: at(shadow, 96), darkPlain: at(plain, 96), brightOfShadow: gap(at(shadow, 940), at(plain, 940)),
+          bright: at(highlight, 864), darkOfHighlight: gap(at(highlight, 96), at(plain, 96)) };
+      });
+      const ok = r.dark[2] > r.dark[0] + 15 && r.bright[1] > r.bright[0] + 15 && r.bright[1] > r.bright[2] + 15 && r.brightOfShadow <= 2 && r.darkOfHighlight <= 2;
+      return { ok, detail: `dark end with shadow tint ${r.dark} (plain ${r.darkPlain}; blue must lead red), bright end with highlight tint ${r.bright} (green must lead); the other end moves by ${r.brightOfShadow} and ${r.darkOfHighlight} (limit 2)` };
+    },
+  },
+  {
+    name: 'grade-engage',
+    // A barely-on grade must look like the plain layer, and a full one must change it.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => q.project([q.soft(params)]);
+        const a = await q.px(scene({})), b = await q.px(scene({ gradeTemperature: .001, gradeTint: .001, gradeShadowTint: .001, gradeHighlightTint: .001 }));
+        const full = await q.px(scene({ gradeTemperature: 1, gradeTint: 1, gradeShadowTint: 1, gradeHighlightTint: 1 }));
+        let sum = 0, worst = 0; for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); sum += d; worst = Math.max(worst, d); }
+        return { mean: sum / a.length, worst, moved: q.difference(a, full) };
+      });
+      return { ok: r.moved >= 1 && r.mean < 1 && r.worst < 4, detail: `${r.moved >= 1 ? '' : 'Grading has no visible effect on the render. '}amount .001 against plain: mean ${r.mean.toFixed(3)}, worst ${r.worst} (limits 1 and 4); amount 1 moves it by ${r.moved.toFixed(3)}` };
+    },
+  },
+  {
+    name: 'key-alpha',
+    // A ramp keyed at .5: clear below, untouched above, and across the soft edge the straight colour
+    // stays the plain colour, which a key that only changed coverage would brighten.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => { const p = q.project([q.ramp(params)], true); p.highlights = 'exact'; return p; };
+        const plain = await q.px(scene({})), keyed = await q.px(scene({ keyMix: 1, keyLow: .5, keyHigh: 1, keySoftness: .1 }));
+        const y = 270 * 960 * 4; let below = 0, above = 0, fringe = 0, feathered = 0;
+        for (let x = 0; x < 960; x++) {
+          const i = y + x * 4, v = x / 960;
+          if (v < .42) below = Math.max(below, keyed[i + 3]);
+          else if (v > .58) for (let c = 0; c < 4; c++) above = Math.max(above, Math.abs(keyed[i + c] - plain[i + c]));
+          else if (keyed[i + 3] >= 128) for (let c = 0; c < 3; c++) fringe = Math.max(fringe, Math.abs(keyed[i + c] - plain[i + c]));
+          if (keyed[i + 3] > 20 && keyed[i + 3] < 235) feathered++;
+        }
+        return { below, above, fringe, feathered };
+      });
+      return { ok: r.below <= 2 && r.above <= 2 && r.fringe <= 3 && r.feathered > 10, detail: `${r.feathered > 10 ? '' : 'The key has no soft edge. '}alpha below the key at most ${r.below} (limit 2); above it differs from plain by at most ${r.above} (limit 2); straight colour in the soft edge differs from plain by at most ${r.fringe} (limit 3); ${r.feathered} feathered columns` };
+    },
+  },
+  {
+    name: 'key-hue',
+    // Seven bars: red, green, blue, yellow, cyan, magenta, grey. Only green survives a green key.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => { const p = q.project([q.bars(params)], true); p.highlights = 'exact'; return p; };
+        const plain = await q.px(scene({})), keyed = await q.px(scene({ keyMix: 1, keyMode: 1, keyHue: 120, keyHueRange: 40 }));
+        const bar = k => (270 * 960 + Math.round((k + .5) * 960 / 7)) * 4;
+        const alpha = [0, 1, 2, 3, 4, 5, 6].map(k => keyed[bar(k) + 3]);
+        let colour = 0; for (let c = 0; c < 3; c++) colour = Math.max(colour, Math.abs(keyed[bar(1) + c] - plain[bar(1) + c]));
+        return { alpha, colour };
+      });
+      const ok = r.alpha[1] >= 253 && r.alpha.filter((_, k) => k !== 1).every(a => a <= 2) && r.colour <= 2;
+      return { ok, detail: `bar alpha (red, green, blue, yellow, cyan, magenta, grey) ${r.alpha}: only green may stay opaque; its colour differs from plain by ${r.colour} (limit 2)` };
+    },
+  },
+  {
+    name: 'key-engage',
+    // A barely-on key must look like the plain layer, and a full one must change it.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, scene = params => q.project([q.soft(params)]);
+        const a = await q.px(scene({})), b = await q.px(scene({ keyMix: .001, keyLow: .5 })), full = await q.px(scene({ keyMix: 1, keyLow: .5 }));
+        let sum = 0, worst = 0; for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); sum += d; worst = Math.max(worst, d); }
+        return { mean: sum / a.length, worst, moved: q.difference(a, full) };
+      });
+      return { ok: r.moved >= 1 && r.mean < 1 && r.worst < 4, detail: `${r.moved >= 1 ? '' : 'Key has no visible effect on the render. '}amount .001 against plain: mean ${r.mean.toFixed(3)}, worst ${r.worst} (limits 1 and 4); amount 1 moves it by ${r.moved.toFixed(3)}` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -452,6 +570,9 @@ try {
     const rampUrl = await dataUrl(960, 540, x => { const v = Math.round(255 * (x + 960 / 540 / 2) / (960 / 540)); return [v, v, v, 255]; });
     const rampLayer = (params = {}) => image(rampUrl, params, 'ramp');
     const grey = (params = {}) => image(greyUrl, params, 'grey');
+    const colourBars = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [0, 255, 255], [255, 0, 255], [128, 128, 128]];
+    const barsUrl = await dataUrl(960, 540, x => [...colourBars[Math.min(6, Math.floor((x + 960 / 540 / 2) / (960 / 540) * 7))], 255]);
+    const bars = (params = {}) => image(barsUrl, params, 'bars');
     const layer = (kind, preset, params = {}) => { const l = preset ? m.applyPreset(m.createLayer(kind), preset) : m.createLayer(kind); Object.assign(l.params, params); l.id = `${kind}-proof`; return l; };
     const project = (layers, transparent = false) => { const p = m.createProject(); p.id = 'colour-proof'; p.layers = layers; p.background = '#000000'; p.transparent = transparent; return p; };
     const pixels = async bytes => {
@@ -477,7 +598,7 @@ try {
       const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
       return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
     };
-    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
+    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, bars, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
   }, !!baseline);
 
   for (const check of selected) {

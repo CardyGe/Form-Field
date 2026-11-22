@@ -22,7 +22,7 @@ import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
-import { gradientStops, lensActive, lensFragment, spectralWeights } from './colour-lens';
+import { gradientStops, lensActive, lensFragment, spectralWeights, whiteBalance } from './colour-lens';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -202,6 +202,10 @@ export class StudioRenderer {
     uSplitWeights: { value: Array.from({ length: 15 }, () => new THREE.Vector3()) },
     uGradMix: { value: 0 }, uGradMidpoint: { value: .5 }, uGradShift: { value: 0 }, uGradKeep: { value: 0 }, uGradCount: { value: 0 },
     uGradStops: { value: Array.from({ length: 6 }, () => new THREE.Color()) },
+    uGradeWb: { value: new THREE.Vector3(1, 1, 1) }, uShadowColour: { value: new THREE.Color() }, uHighlightColour: { value: new THREE.Color() },
+    uShadowTint: { value: 0 }, uHighlightTint: { value: 0 },
+    uKeyMix: { value: 0 }, uKeyMode: { value: 0 }, uKeyLow: { value: .25 }, uKeyHigh: { value: 1 }, uKeySoft: { value: .1 },
+    uKeyHue: { value: 120 }, uKeyHueRange: { value: 40 }, uKeyInvert: { value: 0 },
   });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
@@ -866,7 +870,9 @@ export class StudioRenderer {
     const amount = number(layer, 'splitAmount', 0), order = Math.round(number(layer, 'splitOrder', 0));
     // A modulated amount can rest at zero, where there is nothing to do.
     const mix = number(layer, 'gradMix', 0);
-    if (amount <= 0 && order === 0 && mix <= 0) return source;
+    const temperature = number(layer, 'gradeTemperature', 0), tint = number(layer, 'gradeTint', 0);
+    const shadow = number(layer, 'gradeShadowTint', 0), highlight = number(layer, 'gradeHighlightTint', 0), key = number(layer, 'keyMix', 0);
+    if (amount <= 0 && order === 0 && mix <= 0 && temperature === 0 && tint === 0 && shadow <= 0 && highlight <= 0 && key <= 0) return source;
     this.lensTarget ??= target();
     const output = this.lensTarget;
     if (output.width !== width || output.height !== height) output.setSize(width, height);
@@ -896,6 +902,16 @@ export class StudioRenderer {
     const stops = gradientStops(Math.round(number(layer, 'gradPalette', 0)), layer.palette), colours = u.uGradStops.value as THREE.Color[];
     u.uGradCount.value = Math.min(6, stops.length);
     for (let i = 0; i < 6; i++) colours[i].set(stops[Math.min(i, stops.length - 1)] ?? '#000000');
+    // Grading and Key: neutral values leave the pixel exactly as it was.
+    (u.uGradeWb.value as THREE.Vector3).fromArray(whiteBalance(temperature, tint));
+    u.uShadowTint.value = shadow; u.uHighlightTint.value = highlight;
+    const swatch = (key: string, fallback: number) => { const i = Math.round(number(layer, key, fallback)); return layer.palette[i - 1] ?? DEFAULT_PALETTE[i - 1]; };
+    (u.uShadowColour.value as THREE.Color).set(swatch('gradeShadowColour', 1));
+    (u.uHighlightColour.value as THREE.Color).set(swatch('gradeHighlightColour', 2));
+    u.uKeyMix.value = key; u.uKeyMode.value = Math.round(number(layer, 'keyMode', 0));
+    u.uKeyLow.value = number(layer, 'keyLow', .25); u.uKeyHigh.value = number(layer, 'keyHigh', 1); u.uKeySoft.value = number(layer, 'keySoftness', .1);
+    u.uKeyHue.value = number(layer, 'keyHue', 120); u.uKeyHueRange.value = number(layer, 'keyHueRange', 40);
+    u.uKeyInvert.value = Math.round(number(layer, 'keyInvert', 0));
     this.draw(this.lens, output);
     return output.texture;
   }
