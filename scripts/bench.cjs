@@ -10,6 +10,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { build } = require('esbuild');
 
+// Taken before this process does any work, so the proof's own load cannot count against the machine.
+const loadAtLaunch = os.loadavg();
 const root = path.resolve(__dirname, '..');
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -85,16 +87,17 @@ app.whenReady().then(async () => {
 
   const machine = { model: os.cpus()[0]?.model, cpus: os.cpus().length, memoryGB: Math.round(os.totalmem() / 2 ** 30),
     platform: os.platform(), release: os.release(), arch: os.arch() };
-  ipcMain.handle('bench-config', () => ({ caseSelector, size, width: SIZES[size][0], height: SIZES[size][1], frames, images: imageDir !== null, proof, onlyGates }));
-  // Read-only: the load average and any other process's GPU helper. Nothing here touches them.
+  ipcMain.handle('bench-config', () => ({ caseSelector, size, width: SIZES[size][0], height: SIZES[size][1], frames, images: imageDir !== null, proof, onlyGates, loadAtLaunch }));
+  // Read-only: the load average and what other processes are using. Nothing here touches them.
   ipcMain.handle('bench-load', () => {
-    const own = new Set(app.getAppMetrics().map(metric => metric.pid));
-    const competingGpu = execFileSync('ps', ['-axo', 'pid=,pcpu=,comm='], { encoding: 'utf8' }).split('\n').flatMap(line => {
+    const own = new Set([process.pid, ...app.getAppMetrics().map(metric => metric.pid)]);
+    const others = execFileSync('ps', ['-axo', 'pid=,pcpu=,comm='], { encoding: 'utf8' }).split('\n').flatMap(line => {
       const match = line.match(/^\s*(\d+)\s+([\d.]+)\s+(.*)$/);
-      if (!match || own.has(Number(match[1])) || !/Helper \(GPU\)/.test(match[3])) return [];
+      if (!match || own.has(Number(match[1])) || path.basename(match[3]) === 'ps') return [];
       return [{ pid: Number(match[1]), cpu: Number(match[2]), command: path.basename(match[3]) }];
     });
-    return { at: new Date().toISOString(), load: os.loadavg(), competingGpu };
+    return { at: new Date().toISOString(), load: os.loadavg(), competingCpu: others.reduce((sum, item) => sum + item.cpu, 0),
+      competingGpu: others.filter(item => /Helper \(GPU\)/.test(item.command)) };
   });
   ipcMain.handle('bench-note', (_, text) => { console.log(text); });
   ipcMain.handle('bench-image', (_, name, base64) => {

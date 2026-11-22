@@ -7,8 +7,9 @@ const TAU = Math.PI * 2;
 const LIMIT_255 = 1 / 255;
 const WARMUP_MS = 2500, BATCH = 25, TIMING_FRAMES = 360, BATCH_MEAN = 5;
 const BUDGET_MS = 8, STABILITY_RATIO = 1.25, REPEAT_TOLERANCE = .05, LOOP_SHARE = .999;
-// Above this one-minute load, or with another GPU process this busy, the machine is not quiet.
-const QUIET_LOAD = 2, GPU_BUSY_PERCENT = 5;
+// Not quiet: this one-minute load before the proof started, or, at any point in the timing runs,
+// other processes using this much CPU in total (100 = one core) or another GPU process this busy.
+const QUIET_LOAD = 2, COMPETING_CPU_PERCENT = 200, GPU_BUSY_PERCENT = 5;
 const FEED_W = 1920, FEED_H = 1080, OUTPUT_W = 3840, OUTPUT_H = 2160;
 const FOLD_W = 480, FOLD_H = 270, REFERENCE = 16, TILE_W = 1920, TILE_H = 1080, PICTURE = 2048;
 const CENTRE_W = 961, CENTRE_H = 541, CENTRE_FRAMES = 48;
@@ -404,10 +405,23 @@ async function videoFeed() {
   const element = document.createElement('video');
   element.muted = true; element.loop = true; element.playsInline = true; element.src = url;
   await element.play();
-  const source = { element, frameId: 1, last: element.currentTime,
-    /** True once a new picture has been presented. */
-    poll() { if (element.currentTime === source.last) return false; source.last = element.currentTime; source.frameId++; return true; },
-    close() { element.pause(); element.removeAttribute('src'); element.load(); URL.revokeObjectURL(url); } };
+  // currentTime runs on between pictures, so only the presentation callback says a picture is new.
+  let presented = 0, consumed = 0, lastMediaTime = -1, closed = false;
+  const onPicture = (_now, metadata) => {
+    if (closed) return;
+    if (metadata.mediaTime !== lastMediaTime) { lastMediaTime = metadata.mediaTime; presented++; }
+    element.requestVideoFrameCallback(onPicture);
+  };
+  element.requestVideoFrameCallback(onPicture);
+  const source = { element, frameId: 1, missedPictures: 0,
+    /** True once a picture not yet consumed has been presented. */
+    poll() {
+      if (presented === consumed) return false;
+      source.missedPictures += presented - consumed - 1;
+      consumed = presented; source.frameId++;
+      return true;
+    },
+    close() { closed = true; element.pause(); element.removeAttribute('src'); element.load(); URL.revokeObjectURL(url); } };
   return { source, size: () => [element.videoWidth, element.videoHeight] };
 }
 
@@ -484,21 +498,25 @@ const TIMING_CASES = [
   ['p4m', { group: 3, spiral: false }], ['p6m', { group: 4, spiral: false }], ['spiral', { group: 0, spiral: true }],
 ];
 
-function isLoaded(sample) { return sample.load[0] > QUIET_LOAD || sample.competingGpu.some(p => p.cpu >= GPU_BUSY_PERCENT); }
+const competing = sample => sample.competingCpu >= COMPETING_CPU_PERCENT || sample.competingGpu.some(p => p.cpu >= GPU_BUSY_PERCENT);
 
-async function timingGates(modules) {
+async function timingGates(modules, config) {
   const { agree } = modules, runs = [], feed = await videoFeed();
+  const busyAtLaunch = config.loadAtLaunch[0] > QUIET_LOAD;
   const [videoWidth, videoHeight] = feed.size();
   if (videoWidth !== FEED_W || videoHeight !== FEED_H) throw new Error(`The test video is ${videoWidth}x${videoHeight}.`);
   try { for (let r = 0; r < 2; r++) {
-    const before = await window.bench.load(), cases = {};
+    const before = await window.bench.load(), cases = {}, samples = [before];
     for (const [name, settings] of TIMING_CASES) {
       await note(`4K run ${r + 1}: ${name}`);
+      const missedBefore = feed.source.missedPictures;
       cases[name] = await liveRun(modules, settings, feed.source);
+      cases[name].picturesMissedBetweenPolls = feed.source.missedPictures - missedBefore;
+      samples.push(await window.bench.load());
       await note(`  median ${cases[name].raw.median.toFixed(2)} ms, p95 ${cases[name].raw.p95.toFixed(2)} ms`);
     }
-    const after = await window.bench.load();
-    runs.push({ before, after, loaded: isLoaded(before) || after.competingGpu.some(p => p.cpu >= GPU_BUSY_PERCENT), cases });
+    const after = samples.at(-1);
+    runs.push({ before, after, peakCompetingCpu: Math.max(...samples.map(s => s.competingCpu)), loaded: busyAtLaunch || samples.some(competing), cases });
   } } finally { feed.source.close(); }
   const loaded = runs.some(run => run.loaded);
   const names = TIMING_CASES.map(([name]) => name);
@@ -506,9 +524,10 @@ async function timingGates(modules) {
   const stabilityRaw = Math.max(...runs.map(run => run.cases.spiral.raw.p95 / run.cases.spiral.raw.median));
   const stabilityBatched = Math.max(...runs.map(run => run.cases.spiral.batched.p95 / run.cases.spiral.batched.median));
   const repeat = Object.fromEntries(names.map(name => {
-    // Batch means: a 2 ms median on a 0.1 ms clock can only move in 5% steps, the size of this limit.
-    const a = runs[0].cases[name].batched.median, b = runs[1].cases[name].batched.median;
-    return [name, { a, b, difference: Math.abs(a - b) / Math.max(a, b), met: agree(a, b, REPEAT_TOLERANCE) }];
+    const a = runs[0].cases[name].raw.median, b = runs[1].cases[name].raw.median;
+    const batchA = runs[0].cases[name].batched.median, batchB = runs[1].cases[name].batched.median;
+    // The 5-frame-mean figure is extra information only and never decides the result.
+    return [name, { a, b, difference: Math.abs(a - b) / Math.max(a, b), met: agree(a, b, REPEAT_TOLERANCE), extraBatchMeanDifference: Math.abs(batchA - batchB) / Math.max(batchA, batchB) }];
   }));
   const worstRepeat = Math.max(...Object.values(repeat).map(row => row.difference));
   const repeatMet = Object.values(repeat).every(row => row.met);
@@ -518,7 +537,7 @@ async function timingGates(modules) {
       value: worstP95, unit: 'ms worst p95 of 6 cases, 2 runs', loaded, status: timingStatus(worstP95 <= BUDGET_MS, loaded) },
     { id: 'frame-stability', name: 'Frame stability', kind: 'timing', limit: `spiral p95 <= ${STABILITY_RATIO} x median, per frame`,
       value: stabilityRaw, unit: 'x median (worst run, per frame)', batchedRatio: stabilityBatched, loaded, status: timingStatus(stabilityRaw <= STABILITY_RATIO, loaded) },
-    { id: 'repeatability', name: 'Repeatability', kind: 'timing', limit: `two runs agree within ${REPEAT_TOLERANCE * 100}% on the median of ${BATCH_MEAN}-frame means, every case`,
+    { id: 'repeatability', name: 'Repeatability', kind: 'timing', limit: `two runs agree within ${REPEAT_TOLERANCE * 100}% on the per-frame median, every case`,
       value: worstRepeat * 100, unit: '% worst difference', loaded, status: timingStatus(repeatMet, loaded), cases: repeat },
   ] };
 }
@@ -557,7 +576,7 @@ export async function runProof(modules, config, checks) {
   if (['4k-budget', 'frame-stability', 'repeatability'].some(wanted)) {
     await note('timing');
     try {
-      timing = await timingGates(modules);
+      timing = await timingGates(modules, config);
       gates.push(...timing.gates);
       if (finite) {
         finite.liveNonFinite = timing.liveNonFinite;
@@ -569,7 +588,7 @@ export async function runProof(modules, config, checks) {
         gates.push({ id, name, kind: 'timing', limit: 'gate must run', value: null, unit: '', status: 'FAIL', error: text });
     }
   }
-  return { proof: 'kaleidoscope', quietRule: { load1Above: QUIET_LOAD, otherGpuCpuPercentAtLeast: GPU_BUSY_PERCENT }, loadAtStart: started, loadAtEnd: await window.bench.load(),
-    timingMethod: 'performance.now() around LiveRenderer.frame plus a one-pixel readback, on frames carrying a new picture from a generated 1080p VP9 video. The clock is coarsened to 0.1 ms: budget and stability use per-frame samples; repeatability uses the median of 5-frame means.',
+  return { proof: 'kaleidoscope', quietRule: { load1AtLaunchAbove: QUIET_LOAD, otherProcessesCpuPercentAtLeast: COMPETING_CPU_PERCENT, otherGpuCpuPercentAtLeast: GPU_BUSY_PERCENT }, loadAtLaunch: config.loadAtLaunch, loadAtStart: started, loadAtEnd: await window.bench.load(),
+    timingMethod: 'performance.now() around LiveRenderer.frame plus a one-pixel readback, on frames carrying a newly presented picture (requestVideoFrameCallback) from a generated 1080p VP9 video. The clock is coarsened to 0.1 ms. Every gate uses per-frame samples; 5-frame means are extra information only.',
     timingRuns: timing?.runs ?? [], gates };
 }
