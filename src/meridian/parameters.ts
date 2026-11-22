@@ -1,4 +1,5 @@
 import type { ParameterDefinition } from '../shared/types';
+import { SEED_SCHEME } from './schemes';
 
 export const MERIDIAN_GROUPS: readonly string[] = ['Score', 'Structure', 'Rings', 'Spokes', 'Nodes', 'Hero', 'Rhythm', 'Glitch', 'Light', 'Colour', 'Output', 'Safety', 'Reaction'];
 /** Macros and moves sit outside the lockable groups: they are always on screen. */
@@ -51,8 +52,8 @@ const STRUCTURE: Row[] = [
   ['structureRotation', 'Rotation', -180, 180, 0.1, 0, 'Turns the whole design, in degrees.'],
   ['structureZoom', 'Zoom', 0.5, 2, 0.01, 1, 'Makes the whole design larger or smaller in the frame.'],
   ['structureTilt', 'Perspective tilt', 0, 1, 0.01, 0, 'Leans the design away from you as if it were a disc seen at an angle.'],
-  ['structureSquareMix', 'Polar / square mix', 0, 1, 0.01, 0, 'Blends the round layout towards a square grid.'],
-  ['structureNegativeSpace', 'Negative space', 0, 1, 0.01, 0.5, 'How much empty space is kept around the busy parts.'],
+  ['structureSquareMix', 'Polar / square mix', 0, 1, 0.01, 0, 'Bends the rings and everything on them from circles towards squares.'],
+  ['structureNegativeSpace', 'Negative space', 0, 1, 0.01, 0.5, 'Below the middle, quiet bands fill with marks. Above it, empty wedges open through the design.'],
 ];
 const RINGS: Row[] = [
   ['ringCount', 'Ring count', 0, 32, 1, 7, 'The most rings drawn. Fewer gives a calmer design.'],
@@ -133,12 +134,12 @@ const GLITCH: Row[] = [
   ['glitchBlockAspect', 'Block aspect', 0.25, 4, 0.01, 1, 'Whether the blocks are wide and flat or tall and thin.'],
   ['glitchSlipH', 'Horizontal slip', 0, 1, 0.01, 0.3, 'How far blocks slide sideways.'],
   ['glitchSlipV', 'Vertical slip', 0, 1, 0.01, 0.1, 'How far blocks slide up or down.'],
-  ['glitchRgbSplit', 'RGB split', 0, 1, 0.01, 0.3, 'Pulls the red, green and blue apart at the tear.'],
+  ['glitchRgbSplit', 'RGB split', 0, 1, 0.01, 0.16, 'Pulls the red, green and blue apart at the tear.'],
   ['glitchScanBands', 'Scan bands', 0, 1, 0.01, 0.2, 'Adds horizontal bands like a failing screen.'],
   ['glitchPosterise', 'Posterise', 0, 1, 0.01, 0, 'Reduces the colour to a few flat steps.'],
-  ['glitchHoldFrames', 'Hold frames', 0, 12, 1, 2, 'How many frames a tear is held before it changes.'],
-  ['glitchRadialTear', 'Radial tear', 0, 1, 0.01, 0.5, 'Tears the design outwards from the centre.'],
-  ['glitchSpread', 'Spread', 0, 1, 0.01, 0.5, 'How far across the frame the tear reaches.'],
+  ['glitchHoldFrames', 'Hold frames', 0, 12, 1, 5, 'How many frames a tear is held before it changes.'],
+  ['glitchRadialTear', 'Radial tear', 0, 1, 0.01, 0.26, 'Tears the design outwards from the centre.'],
+  ['glitchSpread', 'Spread', 0, 1, 0.01, 0.32, 'How far across the frame the tear reaches.'],
   ['glitchColourShred', 'Colour shred', 0, 1, 0.01, 0.2, 'Scrambles the colour inside torn areas.'],
   ['glitchRecovery', 'Recovery', 0, 1, 0.01, 0.5, 'How quickly the design settles again after a tear.'],
   ['glitchSeed', 'Glitch seed', 0, 999999, 1, 1, 'Picks which pattern the tears follow. Change it to get different tears.'],
@@ -156,10 +157,10 @@ const LIGHT: Row[] = [
   ['lightContrast', 'Contrast', 0.5, 2, 0.01, 1, 'The difference between the brightest and dimmest parts.'],
 ];
 const COLOUR: Row[] = [
-  ['colourPalette', 'Palette', 0, 7, 1, 0, 'Chooses one of the ready-made colour schemes.'],
+  ['colourPalette', 'Palette', 0, SEED_SCHEME, 1, SEED_SCHEME, 'Chooses a colour scheme. Seed chooses gives every composition its own.'],
   ['colourBase', 'Base colour', 0, 5, 1, 0, 'Which swatch of the layer palette draws the main lines.'],
   ['colourAccent', 'Accent colour', 0, 5, 1, 1, 'Which swatch of the layer palette draws the highlights.'],
-  ['colourPeakPalette', 'Peak palette', 0, 7, 1, 0, 'A second colour scheme used only at the peak. 0 keeps the main one.'],
+  ['colourPeakPalette', 'Peak palette', 0, SEED_SCHEME, 1, SEED_SCHEME, 'A second colour scheme that tears in at the peak. Same as main keeps one scheme throughout.'],
   ['colourHueDrift', 'Hue drift', 0, 1, 0.01, 0, 'Lets the colours slowly slide round the colour wheel.'],
   ['colourAccentFrequency', 'Accent frequency', 0, 1, 0.01, 0.3, 'How often the accent colour appears.'],
   ['colourSaturation', 'Saturation', 0, 2, 0.01, 1, 'How vivid the colours are. 0 is grey.'],

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { INSTRUMENT_KINDS } from '../src/core/instruments';
-import { createLayer, createProject, parameterDefinitions, validateProject, varyLayer } from '../src/core/project';
+import { applyPreset, assertImportableImage, createLayer, createProject, MAX_ASSET_BYTES, MAX_IMPORT_BYTES, meridianMark, parameterDefinitions, PRESETS, validateProject, varyLayer } from '../src/core/project';
 import { canLinkParameter, targetRange } from '../src/map/targets';
 import { compose, scoreQuality } from '../src/meridian/composer';
 import { applyMacros } from '../src/meridian/macros';
@@ -215,4 +215,40 @@ test('Variation never touches safety, output flags, macros, moves or seeds, and 
     }
   }
   assert.ok(moved > 0, 'variation should still change drawing parameters');
+});
+
+const meridianPresets = () => PRESETS.filter((preset) => preset.kind === 'meridian');
+
+test('the curated Meridian library has at least ten valid presets and none names the reference', () => {
+  const presets = meridianPresets();
+  assert.ok(presets.length >= 10, `${presets.length} presets`);
+  for (const preset of presets) {
+    assert.doesNotMatch(preset.name, /microlog/i);
+    const layer = applyPreset(createLayer('meridian'), preset.id);
+    assert.deepEqual(validateProject(withLayer(layer)).layers[0].params, layer.params, preset.id);
+    assert.equal(layer.params.seed, preset.params.seed, `${preset.id} keeps its composition`);
+  }
+});
+
+test('a Meridian preset keeps the seed bank and the Mark', () => {
+  const layer = createLayer('meridian');
+  layer.params.seedSlot3 = 77;
+  layer.meridian = { locks: [], mark: { dataUrl: PIXEL, width: 1, height: 1 } };
+  const next = applyPreset(layer, meridianPresets()[0].id);
+  assert.equal(next.params.seedSlot3, 77);
+  assert.equal(next.meridian?.mark?.dataUrl, PIXEL);
+});
+
+test('Mark is off by default', () => {
+  assert.equal(createLayer('meridian').meridian?.mark, undefined);
+  for (const preset of meridianPresets()) assert.equal(applyPreset(createLayer('meridian'), preset.id).meridian?.mark, undefined, preset.id);
+});
+
+test('Mark takes a valid PNG and refuses anything over the image limits', () => {
+  assert.deepEqual(meridianMark(PIXEL), { dataUrl: PIXEL, width: 1, height: 1 });
+  assert.throws(() => meridianMark(`data:image/png;base64,${'A'.repeat(Math.ceil(MAX_ASSET_BYTES / 3) * 4 + 4)}`), /20 MiB/);
+  assert.throws(() => meridianMark('data:image/jpeg;base64,/9j/2Q=='), /PNG/);
+  assert.throws(() => assertImportableImage({ type: 'image/png', size: MAX_IMPORT_BYTES + 1 }), /12 MB/);
+  assert.throws(() => assertImportableImage({ type: 'image/gif', size: 10 }), /PNG or JPEG/);
+  assert.doesNotThrow(() => assertImportableImage({ type: 'image/png', size: MAX_IMPORT_BYTES }));
 });

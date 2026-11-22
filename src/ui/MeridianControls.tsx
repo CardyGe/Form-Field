@@ -5,6 +5,7 @@ import { ChoiceParameter, Icon, Parameter } from './LayerControls';
 import { MACRO_KEYS, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
 import { applyLockedVariation, applyMorph, captureMorph, filterParameters, MAX_STORED_SEED, MERIDIAN_CHOICES, PANEL_PARAMETERS, performanceShortcut, KeyHolds, recallSeed, SEED_SLOTS, storeSeed, toggleGroupLock, type MoveKey, type PerformanceAction } from '../meridian/panel';
 import { heldMoves } from '../meridian/held-moves';
+import { assertImportableImage, MAX_IMPORT_SIDE, meridianMark } from '../core/project';
 import './meridian.css';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -183,6 +184,37 @@ function SeedField({ value, onChange }: { value: number; onChange: (n: number) =
     onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setDraft(String(value)); } }} /></label>;
 }
 
+/** Reads a user's PNG through the same checks as any imported image. */
+async function readMark(file: File): Promise<NonNullable<NonNullable<Layer['meridian']>['mark']>> {
+  assertImportableImage(file);
+  const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('Image could not be read.')); reader.readAsDataURL(file); });
+  const mark = meridianMark(dataUrl);
+  if (mark.width > MAX_IMPORT_SIDE || mark.height > MAX_IMPORT_SIDE) throw new Error('Images must be no larger than 8192 pixels on either side.');
+  await new Promise<void>((resolve, reject) => { const image = new Image(); image.onload = () => resolve(); image.onerror = () => reject(new Error('Image could not be decoded.')); image.src = dataUrl; });
+  return mark;
+}
+
+/** Off until a PNG is imported. The final point of each phrase then opens into it during Rest. */
+function MarkControl({ layer, edit, notify }: { layer: Layer; edit: (change: (l: Layer) => Layer) => void; notify: (message: string) => void }) {
+  const input = useRef<HTMLInputElement>(null), mark = layer.meridian?.mark;
+  const choose = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const next = await readMark(file);
+      edit(l => ({ ...l, meridian: { locks: [], ...l.meridian, mark: next } }));
+    } catch (e) { notify(e instanceof Error ? e.message.replace(/^Invalid project: mark /, 'This Mark ') : 'The Mark could not be imported.'); }
+  };
+  const remove = () => edit(l => { const { mark: _removed, ...state } = l.meridian ?? { locks: [] }; return { ...l, meridian: state }; });
+  return <>
+    <div className="m-heading"><span>Mark</span><small>{mark ? `${mark.width} × ${mark.height}` : 'Off'}</small></div>
+    <input ref={input} hidden type="file" accept="image/png" aria-label="Mark PNG file" onChange={e => { void choose(e.target.files?.[0]); e.target.value = ''; }} />
+    <div className="m-mark-row">
+      <button className={`m-capture m-mark ${mark ? 'is-filled' : ''}`} title="Import your own PNG. The last point of each phrase opens into it during Rest." onClick={() => input.current?.click()}>{mark ? 'Replace PNG' : 'Import PNG'}</button>
+      {mark && <button className="m-capture m-mark" title="Turn the Mark off" onClick={remove}>Remove</button>}
+    </div>
+  </>;
+}
+
 export function MeridianControls({ layer, edit, performance, notify, onAnimateKey, onStart, onEnd, queued }: {
   layer: Layer; edit: (change: (l: Layer) => Layer) => void; performance: MeridianPerformance; notify: (message: string) => void;
   onAnimateKey?: (key: string) => void; onStart: () => void; onEnd: () => void;
@@ -210,6 +242,7 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
       <SeedBank layer={layer} edit={edit} performance={performance} notify={notify} />
       <div className="m-heading"><span>Morph</span></div>
       <Morph layer={layer} edit={edit} onStart={onStart} onEnd={onEnd} />
+      <MarkControl layer={layer} edit={edit} notify={notify} />
     </section>
     <label className="m-search"><Icon name="search" size={14} /><input type="search" aria-label="Search parameters" placeholder={`Search ${PANEL_PARAMETERS.length} parameters`} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') setQuery(''); }} /></label>
     <div className="m-groups">

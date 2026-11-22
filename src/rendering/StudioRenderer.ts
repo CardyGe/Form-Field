@@ -477,6 +477,10 @@ export class StudioRenderer {
         required.add(this.assetKey(layer.image.dataUrl, false, repeat));
         pending.push(this.loadAsset(layer.image.dataUrl, false, repeat).promise);
       }
+      if (layer.kind === 'meridian' && layer.meridian?.mark) {
+        required.add(this.assetKey(layer.meridian.mark.dataUrl, false));
+        pending.push(this.loadAsset(layer.meridian.mark.dataUrl, false).promise);
+      }
       if (layer.mask.kind === 'image' && layer.mask.dataUrl) {
         required.add(this.assetKey(layer.mask.dataUrl, true));
         pending.push(this.loadAsset(layer.mask.dataUrl, true).promise);
@@ -733,6 +737,8 @@ export class StudioRenderer {
     } else if (layer.kind === 'meridian') {
       this.meridian ??= new MeridianRenderer();
       this.meridianRuntime.structure = original.params;
+      const mark = layer.meridian?.mark, markAsset = mark ? this.assets.get(this.assetKey(mark.dataUrl, false)) : undefined;
+      this.meridianRuntime.mark = mark && markAsset?.texture.image ? { texture: markAsset.texture, width: mark.width, height: mark.height } : null;
       this.meridian.draw(this.renderer, layer, phase, this.width, this.height, this.source, this.drawPass, this.meridianRuntime);
     } else {
       const u = this.sculptureUniforms;

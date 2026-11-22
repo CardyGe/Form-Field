@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { compose } from '../src/meridian/composer';
 import { DisplayList, STRIDE } from '../src/meridian/display-list';
 import { evaluate, performedState, positionAt, type PhrasePosition } from '../src/meridian/evaluate';
-import { PHRASE_STATES, PRIMITIVE, type PerformanceState, type PhraseState, type Score, type ScoreElement } from '../src/meridian/types';
+import { COLLAPSE_STYLES, FORM_KINDS, PHRASE_STATES, PRIMITIVE, type CollapseStyle, type PerformanceState, type PhraseState, type Score, type ScoreElement } from '../src/meridian/types';
 
 const PERF: PerformanceState = { hold: false, tension: 0, burst: 0, forcedState: null };
 const BEATS_PER_BAR = 4;
@@ -48,19 +48,28 @@ test('rest is almost empty and peak is full', () => {
   }
 });
 
-test('collapse ends at one point', () => {
-  const score = compose(5, {});
-  const list = draw(score, at(score, 'collapse', 0.999));
-  assert.ok(list.count > 10, 'the falling structure is still being drawn');
-  for (let i = 0; i < list.count; i++) {
-    assert.ok(Math.hypot(field(list, i, 'x'), field(list, i, 'y')) < 0.01, `instance ${i} start`);
-    if (field(list, i, 'kind') === PRIMITIVE.segment) assert.ok(Math.hypot(field(list, i, 'p0'), field(list, i, 'p1')) < 0.01, `instance ${i} end`);
-    if (field(list, i, 'kind') === PRIMITIVE.ring || field(list, i, 'kind') === PRIMITIVE.arc) assert.ok(field(list, i, 'p0') < 0.01, `instance ${i} radius`);
+/** The same composition with a chosen collapse, centred so a line through it can be measured. */
+const withCollapse = (seed: number, collapse: CollapseStyle): Score => {
+  const score = compose(seed, {});
+  return { ...score, form: { ...score.form!, collapse, collapseAngle: 0, centreX: 0, centreY: 0, twinX: 0, twinY: 0, square: 0 } };
+};
+
+test('every collapse style, on every form, ends at one point', () => {
+  for (const collapse of COLLAPSE_STYLES) for (let seed = 0; seed < FORM_KINDS.length; seed++) {
+    const original = compose(seed, {});
+    const score = { ...original, form: { ...original.form!, collapse } };
+    const list = draw(score, at(score, 'collapse', 0.9995));
+    assert.ok(list.count >= 1, `${collapse} ${seed}`);
+    for (let i = 0; i < list.count; i++) {
+      assert.ok(Math.hypot(field(list, i, 'x'), field(list, i, 'y')) < 0.01, `${collapse} ${seed} instance ${i} start`);
+      if (field(list, i, 'kind') === PRIMITIVE.segment) assert.ok(Math.hypot(field(list, i, 'p0'), field(list, i, 'p1')) < 0.01, `${collapse} ${seed} instance ${i} end`);
+      if (field(list, i, 'kind') === PRIMITIVE.ring || field(list, i, 'kind') === PRIMITIVE.arc) assert.ok(field(list, i, 'p0') < 0.01, `${collapse} ${seed} instance ${i} radius`);
+    }
   }
 });
 
-test('collapse passes through a horizontal line', () => {
-  const score = compose(5, {});
+test('the fold collapse passes through a line', () => {
+  const score = withCollapse(5, 'fold');
   const list = draw(score, at(score, 'collapse', 0.8));
   let widest = 0;
   let tallest = 0;
@@ -160,4 +169,20 @@ test('the evaluator hot path has no allocating syntax', () => {
   const hot = source.slice(source.indexOf('// HOT PATH')).replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
   assert.ok(hot.includes('export function evaluate'));
   for (const pattern of [/\bnew\s/, /=>/, /[=(,:]\s*\[/, /[=(,]\s*\{/, /\.\.\./, /\.(map|filter|slice|concat|flatMap|reduce|forEach)\(/, /`/]) assert.equal(pattern.test(hot), false, String(pattern));
+});
+
+test('consecutive seeds walk through every form, and colour and collapse vary', () => {
+  const scores = Array.from({ length: 64 }, (_, seed) => compose(seed, {}));
+  assert.equal(new Set(scores.slice(0, FORM_KINDS.length).map((score) => score.form!.kind)).size, FORM_KINDS.length);
+  assert.ok(new Set(scores.map((score) => score.form!.scheme)).size >= 6);
+  assert.equal(new Set(scores.map((score) => score.form!.collapse)).size, COLLAPSE_STYLES.length);
+});
+
+test('square mix bends a ring and negative space clears marks, both from the parameters', () => {
+  const score = compose(1, {});
+  const position = at(score, 'build', 0.9);
+  const plain = draw(score, position);
+  assert.notDeepEqual(draw(score, position, PERF, { structureSquareMix: 1 }).data, plain.data);
+  assert.ok(draw(score, position, PERF, { structureNegativeSpace: 1 }).count < plain.count);
+  assert.ok(draw(score, position, PERF, { structureNegativeSpace: 0 }).count > plain.count);
 });

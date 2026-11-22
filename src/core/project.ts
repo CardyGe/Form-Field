@@ -7,6 +7,7 @@ import { supportsSlitScan } from '../rendering/slitscan';
 import { supportsGlow } from '../rendering/bloom';
 import { supportsPrint } from '../rendering/print-screen';
 import { SCOPE_FIGURES } from '../rendering/scope-curve';
+import { MERIDIAN_LOOKS } from '../meridian/presets';
 import { MERIDIAN_FIXED, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import type { Layer, LayerKind, MeridianLayerState, ParameterDefinition, Preset, Project } from '../shared/types';
@@ -14,6 +15,9 @@ import { GRAPHIC_LOOKS, GRAPHIC_PARAMETERS, GRAPHIC_VARIANTS, graphicVisibleKeys
 
 const TAU = Math.PI * 2;
 export const MAX_ASSET_BYTES = 20 * 1024 * 1024;
+/** What the app accepts from an imported file, before it becomes a project asset. */
+export const MAX_IMPORT_BYTES = 12 * 1024 * 1024;
+export const MAX_IMPORT_SIDE = 8192;
 const MAX_IMAGE_DIMENSION = 16384;
 const MAX_IMAGE_PIXELS = 64 * 1024 * 1024;
 const DEFAULT_PALETTE = ['#49efd6', '#cbf34a', '#ef62d9', '#7747ef', '#ff826c', '#19112e'];
@@ -556,6 +560,8 @@ PRESETS.push(
   preset('pour-lace', 'Pour Lace', 'Acrylic-pour yellow and cyan with dark lacing.', 'surface', POUR, { style: 0, variant: 1, scale: 2.6, warp: 0.8, detail: 0.6, turbulence: 0.35, roundness: 0.85, relief: 0, softness: 0, contrast: 0.75, reveal: 0, toonMix: 1, toonBands: 4, toonSoftness: 0.05, toonOutline: 2.5, delayShape: 0, delaySpread: 0.4, pause: 0.3 }),
 );
 
+PRESETS.push(...MERIDIAN_LOOKS.map(look => preset(look.id, look.name, look.description, 'meridian', look.palette, { colourPalette: 0, colourPeakPalette: 0, ...look.params })));
+
 /** Two Surface showcases for the feedback and time-displacement finishes. */
 export const FINISH_SHOWCASE_IDS = ['recursion-tunnel', 'time-terraces'];
 PRESETS.push(
@@ -639,8 +645,15 @@ export function applyPreset(layer: Layer, presetId: string): Layer {
   if (selected.kind !== layer.kind) throw new Error(`Preset ${selected.name} requires a ${selected.kind} layer.`);
   return {
     ...structuredClone(layer), name: selected.name, palette: [...selected.palette],
-    params: { ...selected.params, seed: layer.params.seed ?? 1729 }, modulations: {},
+    params: selected.kind === 'meridian' ? meridianPresetParams(selected, layer) : { ...selected.params, seed: layer.params.seed ?? 1729 }, modulations: {},
   };
+}
+
+/** A Meridian preset is its composition, so it brings its own seed. The performer's seed bank stays. */
+function meridianPresetParams(preset: Preset, layer: Layer): Record<string, number> {
+  const params = { ...preset.params };
+  for (let slot = 0; slot < 8; slot++) params[`seedSlot${slot}`] = layer.params[`seedSlot${slot}`] ?? 0;
+  return params;
 }
 
 export function hashSeed(value: string): number {
@@ -879,6 +892,18 @@ function imageAsset(value: unknown, path: string): { dataUrl: string; width: num
   }
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION || width * height > MAX_IMAGE_PIXELS) fail(path, 'has unsupported image dimensions (maximum 16384 per side and 64 megapixels).');
   return { dataUrl: value, width, height };
+}
+
+/** The file checks every image import shares. Throws the message to show the user. */
+export function assertImportableImage(file: { type: string; size: number }): void {
+  if (!['image/png', 'image/jpeg'].includes(file.type)) throw new Error('Choose a PNG or JPEG image.');
+  if (file.size > MAX_IMPORT_BYTES) throw new Error('Choose an image smaller than 12 MB.');
+}
+
+/** A Mark is the user's own logo as a PNG, held to the same limits as any imported image. */
+export function meridianMark(dataUrl: string): { dataUrl: string; width: number; height: number } {
+  if (!dataUrl.startsWith('data:image/png;')) fail('mark', 'must be a PNG.');
+  return imageAsset(dataUrl, 'mark');
 }
 
 /** A Meridian file is opened on stage, so a damaged value is repaired rather than refused. Unknown keys still fail. */

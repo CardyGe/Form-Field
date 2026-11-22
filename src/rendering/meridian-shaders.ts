@@ -23,7 +23,8 @@ const placement = /* glsl */`
     return mix(c,aInk.w<.26?uInks[2]:uInks[1],uPeak*torn*.9*clamp(aInk.z*4.,0.,1.));
   }
   // Half a line in this pass's pixels, and how far its quad must reach in frame units.
-  float halfLine() { return max(max(aTail.z,uMinWidth)*.5*uRes,uRes<1.?.8:0.); }
+  // A negative width is a band, measured in frame heights.
+  float halfLine() { float w=aTail.z<0.?-aTail.z/uPixel:max(aTail.z,uMinWidth); return max(w*.5*uRes,uRes<1.?.8:0.); }
   float reach(float hw) { return (hw/uRes+uEdge+uHaloReach+1.)*uPixel; }
 `;
 
@@ -41,7 +42,7 @@ export const curveVertex = /* glsl */`
     vec2 at=aHead.yz+rim*vec2(cos(angle),sin(angle));
     vLocal=at-aHead.yz;
     vLine=vec4(kind,radius,start,sweep);
-    vMark=vec4(hw,aTail.w,aInk.y,arc?0.:aTail.x);
+    vMark=vec4(hw,aTail.w,aInk.y,arc?(aTail.z<0.?-1.:0.):aTail.x);
     vColour=ink(aInk.x,radius);
     gl_Position=place(at);
     vWobblePhase=arc?0.:aTail.y;
@@ -94,9 +95,15 @@ export const lightFragment = /* glsl */`
       float d=abs(len-target_);
       if (kind>.5) {
         float t=mod(atan(vLocal.y,vLocal.x)-vLine.z,TAU), over=t-vLine.w;
-        if (over>0.) d=length(vec2(d,min(over,TAU-t)*vLine.y));
-      }
-      px=d/unit; signedPx=px-hw;
+        if (vMark.w<0.) {
+          // A band ends square, with an edge as clean as its sides.
+          float endPx=(over>0.?min(over,TAU-t):-min(t,vLine.w-t))*vLine.y/unit;
+          px=d/unit; signedPx=max(px-hw,endPx);
+        } else {
+          if (over>0.) d=length(vec2(d,min(over,TAU-t)*vLine.y));
+          px=d/unit; signedPx=px-hw;
+        }
+      } else { px=d/unit; signedPx=px-hw; }
     } else if (kind<2.5) {
       // Segment, with round ends unless it is a link in a chain.
       float unit=max(length(vec2(dFdx(vLocal.y),dFdy(vLocal.y))),1e-7);
@@ -125,7 +132,8 @@ export const lightFragment = /* glsl */`
       return;
     }
     // The core of a heavy line runs white-hot; a hairline stays its colour until lines cross.
-    float hot=hw>1.5?exp(-px*px/(hw*hw*.42)):.28;
+    // A wide band stays flat colour, so only true lines burn at the core.
+    float hot=(hw>1.5?exp(-px*px/(hw*hw*.42)):.28)*(1.-smoothstep(14.,34.,hw));
     float lift=clamp(glow,0.,2.);
     vec3 line=vColour*cover*(1.02+.7*lift)+uHot*cover*hot*uCore*(.22+2.6*lift);
     vec3 skirt=vColour*uLineGlow*(.045+.3*lift)*exp(-max(px-hw,0.)/1.7);
@@ -281,4 +289,19 @@ export const tearFragment = /* glsl */`
     // Transparent alpha follows the colour, as in Resolve, so darkened areas do not occlude the layers below.
     float cover=uTransparent>.5?clamp(max(c.r,max(c.g,c.b)),0.,1.):middle.a;
     gl_FragColor=vec4(c,cover);
+  }`;
+
+/** The user's Mark, laid over the finished picture where the final point rests. The picture is premultiplied, the Mark is not. */
+export const markFragment = /* glsl */`
+  precision highp float; varying vec2 vUv;
+  uniform sampler2D uImage, uMark;
+  uniform vec2 uCentre, uBox;
+  uniform float uAlpha;
+  void main() {
+    vec4 base=texture2D(uImage,vUv);
+    vec2 at=(vUv-uCentre)/uBox+.5;
+    if (at.x<0.||at.x>1.||at.y<0.||at.y>1.) { gl_FragColor=base; return; }
+    vec4 mark=texture2D(uMark,at);
+    float a=mark.a*uAlpha;
+    gl_FragColor=vec4(base.rgb*(1.-a)+mark.rgb*a,base.a+a-base.a*a);
   }`;

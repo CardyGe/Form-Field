@@ -5,9 +5,10 @@ import { DisplayList, STRIDE } from '../meridian/display-list';
 import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate';
 import { applyMacros } from '../meridian/macros';
 import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
-import { PRIMITIVE, type PerformanceState, type Score } from '../meridian/types';
+import { MERIDIAN_SCHEMES, SEED_SCHEME } from '../meridian/schemes';
+import { PRIMITIVE, type PerformanceState, type Score, type ScoreForm } from '../meridian/types';
 import { BLOOM_HEIGHTS, BloomPyramid, lightTarget } from './bloom';
-import { CURVE_SIDES, curveVertex, lightFragment, markVertex, resolveFragment, tearFragment } from './meridian-shaders';
+import { CURVE_SIDES, curveVertex, lightFragment, markFragment, markVertex, resolveFragment, tearFragment } from './meridian-shaders';
 import { fullscreenVertex } from './shaders';
 import { sourceViewMatrix } from './source-view';
 
@@ -18,6 +19,8 @@ export interface MeridianRuntime {
   structure?: Readonly<Record<string, number>>;
   /** Output frames in one loop at the project's frame rate. A tear holds for whole frames of this count. */
   loopFrames?: number;
+  /** The layer's imported Mark, once it has loaded. */
+  mark?: { texture: THREE.Texture; width: number; height: number } | null;
 }
 
 const TAU = Math.PI * 2;
@@ -28,17 +31,10 @@ const GHOST_BEATS = 0.09; // How far back the last echo reaches at Trail length 
 const SCORE_CACHE = 16;
 const DEFAULT_LOOP_FRAMES = 300; // The default 10 second, 30 fps loop, for a draw with no project behind it.
 const FALLBACK_PALETTE = ['#e8f1ff', '#ff6a2a', '#35d0ff', '#ffffff', '#ff9a5a', '#04050a'];
-/** Colour schemes: base, accent, second accent, hero core, halo, ground. Palette 0 is the layer's own swatches. */
-const SCHEMES: readonly (readonly string[])[] = [
-  FALLBACK_PALETTE,
-  ['#f4f7ff', '#ff2d55', '#7a5cff', '#ffffff', '#ff3d6e', '#050308'],
-  ['#d8fff4', '#00ffc2', '#2a8bff', '#ffffff', '#16e6c0', '#010607'],
-  ['#fff1dc', '#ffb000', '#ff4a00', '#fffbe8', '#ff7a18', '#070402'],
-  ['#ece6ff', '#b45cff', '#ff3fd0', '#ffffff', '#9a4dff', '#05030b'],
-  ['#e6f6ff', '#2fb4ff', '#c8ff2e', '#ffffff', '#1f8cff', '#01040a'],
-  ['#ffffff', '#ffffff', '#9aa4b8', '#ffffff', '#c8d4ea', '#030304'],
-  ['#ffe9f2', '#ff5fa2', '#ffd23f', '#ffffff', '#ff4d8d', '#080306'],
-];
+const TEAR_BURST_HOLDS = 3; // Holds in one burst of the tear.
+const MARK_HEIGHT = .3; // The Mark's height as a share of the frame.
+const MARK_IN = .4;    // Share of Rest over which the point opens into the Mark.
+const MARK_OUT = .22;  // Share of Rest over which it closes back to the point.
 const STRUCTURAL = MERIDIAN_PARAMETERS.filter(d => d.structural).map(d => d.key);
 const ALL_KEYS = MERIDIAN_PARAMETERS.map(d => d.key);
 const BLOOM_UNIFORMS = BLOOM_HEIGHTS.map((_, i) => `uBloom${i}`);
@@ -142,6 +138,13 @@ export class MeridianRenderer {
     },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
+  private readonly markPass = new THREE.ShaderMaterial({
+    vertexShader: fullscreenVertex, fragmentShader: markFragment,
+    uniforms: { uImage: { value: null }, uMark: { value: null }, uCentre: { value: new THREE.Vector2(.5, .5) }, uBox: { value: new THREE.Vector2(1, 1) }, uAlpha: { value: 0 } },
+    depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
+  });
+  private markAlpha = 0;
+  private form: ScoreForm | undefined;
 
   constructor() {
     for (const [instances, material] of [[this.curves, this.curveMaterial], [this.marks, this.markMaterial]] as const) {
@@ -212,6 +215,8 @@ export class MeridianRenderer {
     const loopFrames = Math.max(1, Math.round(runtime?.loopFrames ?? DEFAULT_LOOP_FRAMES));
     const frame = Math.min(loopFrames - 1, Math.floor(along / repeat * loopFrames + 1e-6));
     this.tearAmount = this.prepareTear(score, position.progress, frame, loopFrames / repeat, phrase, live);
+    this.form = score.form;
+    this.prepareMark(runtime?.mark, position.progress, ends[5], live, width / height);
     sourceViewMatrix(layer.transform, width / height, this.view);
     this.renderList(renderer, list, live, layer.palette, this.view.invert(), layer.transform.scale, position.progress, peak, width, height, target, draw);
   }
@@ -234,9 +239,13 @@ export class MeridianRenderer {
     const recovery = read(p, 'glitchRecovery');
     const settled = ends[4] + (ends[5] - ends[4]) * .7 * (1 - recovery);
     const shape = smoothRange(held, ends[3], ends[3] + peakLength * .1) * (1 - smoothRange(held, releases, settled));
-    const amount = Math.min(1, glitch * shape);
+    const seed = (score.seed ^ Math.imul(Math.round(read(p, 'glitchSeed')), 0x9e3779b1)) >>> 0;
+    // The tear comes in bursts: the first always lands, then runs of holds alternate between rips and a nearly clean picture.
+    const burst = tearNoise(seed, Math.floor(step / TEAR_BURST_HOLDS), 5) / 97;
+    const gate = step < TEAR_BURST_HOLDS ? .55 : burst < .42 ? .08 : burst < .8 ? .28 : .6;
+    const amount = Math.min(1, glitch * shape * gate);
     if (amount <= 0) return 0;
-    const u = this.tear.uniforms, seed = (score.seed ^ Math.imul(Math.round(read(p, 'glitchSeed')), 0x9e3779b1)) >>> 0;
+    const u = this.tear.uniforms;
     (u.uNoise.value as THREE.Vector4).set(tearNoise(seed, step, 1), tearNoise(seed, step, 2), tearNoise(seed, step, 3), tearNoise(seed, step, 4));
     u.uDrive.value = 1 + .6 * Math.max(0, glitch - 1);
     (u.uSlip.value as THREE.Vector2).set(read(p, 'glitchSlipH'), read(p, 'glitchSlipV'));
@@ -247,6 +256,18 @@ export class MeridianRenderer {
     u.uSpread.value = read(p, 'glitchSpread');
     u.uShred.value = read(p, 'glitchColourShred');
     return amount;
+  }
+
+  /** The Mark opens from the final point early in Rest and closes back into it before the next Seed. */
+  private prepareMark(mark: MeridianRuntime['mark'], progress: number, restStart: number, p: Readonly<Record<string, number>>, aspect: number): void {
+    const rest = Math.max(1 - restStart, 1e-6), into = (progress - restStart) / rest;
+    this.markAlpha = mark && into > 0 ? smoothRange(into, 0, MARK_IN) * (1 - smoothRange(into, 1 - MARK_OUT, 1)) : 0;
+    if (!mark || this.markAlpha <= 0) return;
+    const u = this.markPass.uniforms, grow = .86 + .14 * smoothRange(into, 0, MARK_IN);
+    u.uMark.value = mark.texture;
+    u.uAlpha.value = this.markAlpha;
+    (u.uCentre.value as THREE.Vector2).set(.5 + read(p, 'structureCentreX'), .5 + read(p, 'structureCentreY'));
+    (u.uBox.value as THREE.Vector2).set(MARK_HEIGHT * grow * (mark.width / mark.height) / aspect, MARK_HEIGHT * grow);
   }
 
   /** Afterglow: earlier moments of the phrase, drawn fainter into the same frame. Exact at any frame, in any order. */
@@ -264,6 +285,7 @@ export class MeridianRenderer {
         const d = ghost.data, at = i * STRIDE;
         // The surviving point would only brighten itself, so echoes keep to the structure.
         if (d[at] === PRIMITIVE.dot && d[at + 3] > .0055 && Math.hypot(d[at + 1], d[at + 2]) < 1e-6) continue;
+        if (d[at + 6] < 0 && d[at] !== PRIMITIVE.ring) continue; // A heavy band would smear across the frame; the hero's whole ring may echo.
         list.push(d[at], d[at + 1], d[at + 2], d[at + 3], d[at + 4], d[at + 5], d[at + 6], d[at + 7] * .4, d[at + 8], d[at + 9] * fade, d[at + 10], d[at + 11]);
       }
     }
@@ -272,6 +294,8 @@ export class MeridianRenderer {
   /** Draws a ready-made list with no phrase behind it. Live input and the checks use this. */
   drawList(renderer: THREE.WebGLRenderer, list: DisplayList, params: Readonly<Record<string, number>>, palette: readonly string[], width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw): void {
     this.tearAmount = 0;
+    this.markAlpha = 0;
+    this.form = undefined;
     this.renderList(renderer, list, params, palette, this.identity, 1, 0, 0, width, height, target, draw);
   }
 
@@ -337,9 +361,14 @@ export class MeridianRenderer {
     r.uLift.value = read(p, 'lightBackgroundLift');
     r.uBlack.value = read(p, 'outputBlackLevel');
     r.uTransparent.value = read(p, 'outputTransparent') >= .5 ? 1 : 0;
-    if (this.tearAmount <= 0) { draw(this.resolve, target); return; }
+    if (this.tearAmount <= 0 && this.markAlpha <= 0) { draw(this.resolve, target); return; }
     if (this.untorn.width !== width || this.untorn.height !== height) this.untorn.setSize(width, height);
     draw(this.resolve, this.untorn);
+    if (this.tearAmount <= 0) {
+      this.markPass.uniforms.uImage.value = this.untorn.texture;
+      draw(this.markPass, target);
+      return;
+    }
     const t = this.tear.uniforms, rows = 1 / (.018 + .2 * read(p, 'glitchBlockSize') ** 1.5);
     t.uImage.value = this.untorn.texture;
     t.uTear.value = this.tearAmount;
@@ -365,16 +394,16 @@ export class MeridianRenderer {
   }
 
   private setColours(p: Readonly<Record<string, number>>, palette: readonly string[], progress: number, peak: number): void {
-    const scheme = Math.round(p.colourPalette ?? 0);
-    const main = scheme > 0 ? SCHEMES[Math.min(scheme, SCHEMES.length - 1)] : palette;
+    const scheme = this.schemeIndex(p.colourPalette, this.form?.scheme);
+    const main = scheme > 0 ? MERIDIAN_SCHEMES[scheme - 1].swatches : palette;
     for (let i = 0; i < 6; i++) {
       const hex = main[i] ?? FALLBACK_PALETTE[i];
       if (this.parsed[i] !== hex) { this.swatches[i].set(hex); this.parsed[i] = hex; }
     }
-    const peakScheme = Math.round(p.colourPeakPalette ?? 0);
+    const peakScheme = this.schemeIndex(p.colourPeakPalette, this.form?.peakScheme);
     if (peakScheme !== this.parsedPeak) {
       this.parsedPeak = peakScheme;
-      if (peakScheme > 0) for (let i = 0; i < 6; i++) this.peakSwatches[i].set(SCHEMES[Math.min(peakScheme, SCHEMES.length - 1)][i]);
+      if (peakScheme > 0) for (let i = 0; i < 6; i++) this.peakSwatches[i].set(MERIDIAN_SCHEMES[peakScheme - 1].swatches[i]);
     }
     const u = this.shared, inks = u.uInks.value;
     const base = clampIndex(p.colourBase, 0), accent = clampIndex(p.colourAccent, 1), second = accent === 2 ? 1 : 2;
@@ -385,6 +414,12 @@ export class MeridianRenderer {
     this.ink(u.uHot.value, 3, peakScheme, peak, p, progress);
     this.ink(u.uHalo.value, mono ? base : 4, peakScheme, peak, p, progress);
     (this.resolve.uniforms.uGround.value as THREE.Color).copy(this.swatches[5]);
+  }
+
+  /** A Palette value as a scheme number. Seed chooses takes the composition's own; with no composition it means none. */
+  private schemeIndex(value: number | undefined, seeded: number | undefined): number {
+    const index = Math.max(0, Math.min(SEED_SCHEME, Math.round(value ?? 0)));
+    return index === SEED_SCHEME ? seeded ?? 0 : index;
   }
 
   private ink(out: THREE.Color, index: number, peakScheme: number, peak: number, p: Readonly<Record<string, number>>, progress: number): void {
@@ -399,7 +434,7 @@ export class MeridianRenderer {
 
   dispose(): void {
     this.curves.dispose(); this.marks.dispose();
-    this.curveMaterial.dispose(); this.markMaterial.dispose(); this.resolve.dispose(); this.tear.dispose();
+    this.curveMaterial.dispose(); this.markMaterial.dispose(); this.resolve.dispose(); this.tear.dispose(); this.markPass.dispose();
     this.light.dispose(); this.glow.dispose(); this.untorn.dispose(); this.bloom.dispose();
   }
 }

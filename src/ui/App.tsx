@@ -6,7 +6,7 @@ import { supportsPrint } from '../rendering/print-screen';
 import { INSTRUMENTS, isInstrument, PROJECTION_LOOK_IDS } from '../core/instruments';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from 'react';
 import type { ExportFormat, Supersample, ExportJob, ExportProgress, Layer, LayerKind, Modulation, ParameterDefinition, Project, StudioStatus } from '../shared/types';
-import { applyPreset, createLayer, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FRACTAL_FAMILIES, FRACTAL_VARIANTS, FRACTAL_PROJECTION_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported } from '../core/project';
+import { applyPreset, assertImportableImage, createLayer, MAX_IMPORT_SIDE, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FRACTAL_FAMILIES, FRACTAL_VARIANTS, FRACTAL_PROJECTION_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported } from '../core/project';
 import { frameCount, phaseAtFrame, sampleModulation } from '../core/timeline';
 import { isEvolving } from '../core/playback';
 import { SurfaceEditor } from './SurfaceEditor';
@@ -193,7 +193,7 @@ export default function App() {
   const definitions = selected ? visibleParameterDefinitions(selected) : [];
   const selectedModKey = modKey === 'opacity' || modKey.startsWith('transform.') || definitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation && !d.structural) || (selected?.modulations[modKey] && allDefinitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation)) ? modKey : definitions.find(d => d.step !== 1 && !d.preparation && !d.structural)?.key ?? 'opacity';
   const modulation = selected?.modulations[selectedModKey];
-  const effectivePresetFilter = presetFilter === 'selected' ? selected?.kind === 'surface' || selected?.kind === 'fractal' || selected?.kind === 'graphic' ? `${selected.kind}-${Math.round(selected.params.style ?? 0)}` : selected?.kind === 'sculpture' ? `sculpture-${Math.round(selected.params.form ?? 0)}` : selected && ['oil', 'liquid', 'scope', 'super8'].includes(selected.kind) ? selected.kind : selected && isInstrument(selected.kind) ? selected.kind : 'all' : presetFilter;
+  const effectivePresetFilter = presetFilter === 'selected' ? selected?.kind === 'surface' || selected?.kind === 'fractal' || selected?.kind === 'graphic' ? `${selected.kind}-${Math.round(selected.params.style ?? 0)}` : selected?.kind === 'sculpture' ? `sculpture-${Math.round(selected.params.form ?? 0)}` : selected && ['oil', 'liquid', 'scope', 'super8', 'meridian'].includes(selected.kind) ? selected.kind : selected && isInstrument(selected.kind) ? selected.kind : 'all' : presetFilter;
   const visiblePresets = PRESETS.filter(preset => effectivePresetFilter === 'projection' && PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'fractal-projection' && FRACTAL_PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'flat' && FLAT_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'all' || preset.kind === effectivePresetFilter || `${preset.kind}-${preset.kind === 'sculpture' ? preset.params.form : preset.params.style}` === effectivePresetFilter);
   const searchedFinishes = FINISH_LOOKS.filter(f => `${f.name} ${f.description}`.toLowerCase().includes(libraryQuery));
   const searchedPresets = visiblePresets.filter(p => `${p.name} ${p.description} ${kindLabels[p.kind]}`.toLowerCase().includes(libraryQuery));
@@ -367,11 +367,10 @@ export default function App() {
   const importImage = async (file: File | undefined, asMask = false) => {
     if (!file) return;
     try {
-      if (!['image/png', 'image/jpeg'].includes(file.type)) throw new Error('Choose a PNG or JPEG image.');
-      if (file.size > 12 * 1024 * 1024) throw new Error('Choose an image smaller than 12 MB.');
+      assertImportableImage(file);
       const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('Image could not be read.')); reader.readAsDataURL(file); });
       const image = await new Promise<HTMLImageElement>((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error('Image could not be decoded.')); image.src = dataUrl; });
-      if (image.naturalWidth > 8192 || image.naturalHeight > 8192) throw new Error('Images must be no larger than 8192 pixels on either side.');
+      if (image.naturalWidth > MAX_IMPORT_SIDE || image.naturalHeight > MAX_IMPORT_SIDE) throw new Error('Images must be no larger than 8192 pixels on either side.');
       if (asMask) { const next = { ...projectRef.current, layers: projectRef.current.layers.map(l => l.id === selected?.id ? { ...l, mask: { ...l.mask, kind: 'image' as const, dataUrl } } : l) }; replace(validateProject(next)); }
       else { if (projectRef.current.layers.length >= 4) throw new Error('Remove a layer before importing another image.'); const layer = createLayer('image'); layer.name = (file.name.replace(/\.[^.]+$/, '') || 'Imported image').slice(0, 60); layer.image = { name: file.name.slice(0, 240), dataUrl, width: image.naturalWidth, height: image.naturalHeight, fit: 'contain' }; replace(validateProject({ ...projectRef.current, layers: [...projectRef.current.layers, layer] })); setSelectedId(layer.id); }
     } catch (e) { reportError(String(e)); }

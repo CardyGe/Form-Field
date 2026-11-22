@@ -37,7 +37,6 @@ const PENDING = {
   Rhythm: ['rhythmRingHits', 'rhythmRingSteps', 'rhythmSpokeHits', 'rhythmSpokeSteps', 'rhythmNodeHits', 'rhythmNodeSteps', 'rhythmRotation', 'rhythmSwing', 'rhythmSubdivisionRamp', 'rhythmPolyrhythm', 'rhythmAccent', 'rhythmHumanise', 'rhythmPeakRate'],
   Reaction: ['reactionBass', 'reactionMids', 'reactionHighs', 'reactionBeat', 'reactionAttack', 'reactionRelease', 'reactionTempoMultiplier', 'reactionBeatSnap'],
   Safety: ['safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField'],
-  Structure: ['structureSquareMix', 'structureNegativeSpace'],
 };
 const AWAITING_CONDUCTOR = ['moveNext', 'moveHold', 'moveDrop', 'moveCollapse', 'moveMutate', 'moveReseed', 'moveBurst', 'moveRecall', 'scoreQuantise', 'scoreAutopilot'];
 // These act on the layer rather than the frame; tests/meridian-panel.test.ts proves what they do.
@@ -130,6 +129,8 @@ async function verifySurface(real, ui, qa, failures) {
   await ui.getByLabel('Meridian seed').fill('77');
   await ui.getByLabel('Meridian seed').press('Enter');
   await ui.locator('.m-seed span').dblclick();
+  // The field updates after React commits the edit, so give it a moment rather than reading it in the same tick.
+  await ui.waitForFunction(() => document.querySelector('[aria-label="Meridian seed"]')?.value === '1729', null, { timeout: 2000 }).catch(() => undefined);
   const seedReset = await ui.getByLabel('Meridian seed').inputValue();
   await ui.getByRole('button', { name: /^Rings/ }).click();
   const drawOn = ui.getByRole('combobox', { name: 'Draw-on style' });
@@ -180,6 +181,17 @@ async function verifySurface(real, ui, qa, failures) {
   if (!result.morphKept) failures.push(`the morph lost its place (slider ${morphKept}, Scale ${macroKept})`);
   await morphSlider.fill('0');
   await ui.getByRole('button', { name: 'Play', exact: true }).click();
+
+  // Mark: off until a PNG is imported, and removable again.
+  const markState = () => ui.locator('.m-heading', { hasText: 'Mark' }).locator('small').textContent();
+  const markOff = await markState();
+  const png = await qa.evaluate(async () => { const canvas = new OffscreenCanvas(24, 12); canvas.getContext('2d').fillRect(2, 2, 20, 8); return Array.from(new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer())); });
+  await ui.getByLabel('Mark PNG file').setInputFiles({ name: 'mark.png', mimeType: 'image/png', buffer: Buffer.from(png) });
+  await ui.locator('.m-heading', { hasText: '24 × 12' }).waitFor();
+  await ui.getByRole('button', { name: 'Remove', exact: true }).click();
+  await ui.locator('.m-heading', { hasText: 'Off' }).waitFor();
+  result.mark = { startsOff: markOff === 'Off', importedAndRemoved: true };
+  if (markOff !== 'Off') failures.push(`Mark did not start off (${markOff})`);
 
   await blur();
   await ui.locator('.inspector-content').evaluate(element => { element.scrollTop = 0; });
@@ -237,14 +249,14 @@ async function verifyInApp(qa, failures) {
     const gap = Math.min(800, Math.max(250, saved.duration * 1000 / FRAMES));
     const preview = ui.locator('.preview-stage canvas').first(), shots = [];
     for (let i = 0; i < FRAMES; i++) {
-      shots.push(Array.from(await preview.screenshot()));
+      shots.push((await preview.screenshot()).toString('base64'));
       await ui.waitForTimeout(gap);
     }
     const seen = await qa.evaluate(async ([shots, w, h, across]) => {
       const sheet = new OffscreenCanvas(across * w, Math.ceil(shots.length / across) * h), paint = sheet.getContext('2d', { willReadFrequently: true });
       const frames = [];
       for (let i = 0; i < shots.length; i++) {
-        const bitmap = await createImageBitmap(new Blob([new Uint8Array(shots[i])], { type: 'image/png' }));
+        const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(shots[i]), c => c.charCodeAt(0))], { type: 'image/png' }));
         const x = (i % across) * w, y = Math.floor(i / across) * h;
         paint.drawImage(bitmap, x, y, w, h);
         frames.push(paint.getImageData(x, y, w, h).data);
@@ -252,9 +264,9 @@ async function verifyInApp(qa, failures) {
       const lit = frames.map(f => { let n = 0; for (let i = 0; i < f.length; i += 4) if (f[i] + f[i + 1] + f[i + 2] > 120) n++; return n / (f.length / 4); });
       const moved = frames.slice(1).map((f, k) => { let sum = 0; for (let i = 0; i < f.length; i++) sum += Math.abs(f[i] - frames[k][i]); return sum / f.length; });
       const png = new Uint8Array(await (await sheet.convertToBlob({ type: 'image/png' })).arrayBuffer());
-      return { lit, moved, png: Array.from(png) };
+      return { lit, moved, png: window.meridianQA.toBase64(png) };
     }, [shots, 400, 225, 4]);
-    await fs.writeFile(path.join(out, 'in-app-motion.png'), Buffer.from(seen.png));
+    await fs.writeFile(path.join(out, 'in-app-motion.png'), Buffer.from(seen.png, 'base64'));
     const litMost = Math.max(...seen.lit), changed = seen.moved.filter(value => value > .05).length;
     if (!(litMost > .005)) failures.push(`the Meridian layer does not draw in the app (lit ${litMost.toFixed(4)})`);
     if (changed < FRAMES / 2) failures.push(`the picture changed in only ${changed} of ${FRAMES - 1} steps`);
@@ -471,7 +483,8 @@ try {
       target.dispose();
       return worst;
     };
-    window.meridianQA = { m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold, tearChecks, tearHold, tearBlack, tearShort, tearEmpty, tearAlpha };
+    const toBase64 = bytes => { let text = ''; for (let i = 0; i < bytes.length; i += 32768) text += String.fromCharCode(...bytes.subarray(i, i + 32768)); return btoa(text); };
+    window.meridianQA = { toBase64, m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold, tearChecks, tearHold, tearBlack, tearShort, tearEmpty, tearAlpha };
   });
 
   const report = { luma: {}, widths: {}, errors };
@@ -567,9 +580,9 @@ try {
     const bytes = await page.evaluate(async ([seed, index, share, w, h]) => {
       const { m, studio, layerFor, phaseOf } = window.meridianQA, project = m.createProject();
       project.layers = [layerFor(seed)]; project.background = '#000000';
-      return Array.from(await studio.exportPNG(project, phaseOf(seed, index, share), w, h));
+      return window.meridianQA.toBase64(await studio.exportPNG(project, phaseOf(seed, index, share), w, h));
     }, [seed, index, share, ...STILL]);
-    await fs.writeFile(path.join(out, `seed${seed}-${name}.png`), Buffer.from(bytes));
+    await fs.writeFile(path.join(out, `seed${seed}-${name}.png`), Buffer.from(bytes, 'base64'));
     tiles.push(bytes);
   }
   // Full-size frames, for judging line quality and the smoothness of a collapsing ring.
@@ -578,22 +591,43 @@ try {
     const bytes = await page.evaluate(async ([index, share]) => {
       const { m, studio, layerFor, phaseOf } = window.meridianQA, project = m.createProject();
       project.layers = [layerFor(4)]; project.background = '#000000';
-      return Array.from(await studio.exportPNG(project, phaseOf(4, index, share), 1920, 1080));
+      return window.meridianQA.toBase64(await studio.exportPNG(project, phaseOf(4, index, share), 1920, 1080));
     }, [index, share]);
-    await fs.writeFile(path.join(out, `full-${name}.png`), Buffer.from(bytes));
+    await fs.writeFile(path.join(out, `full-${name}.png`), Buffer.from(bytes, 'base64'));
   }
   const sheet = await page.evaluate(async ([tiles, across, w, h]) => {
     const canvas = new OffscreenCanvas(across * w, Math.ceil(tiles.length / across) * h), context = canvas.getContext('2d');
     for (let i = 0; i < tiles.length; i++) {
-      const bitmap = await createImageBitmap(new Blob([new Uint8Array(tiles[i])], { type: 'image/png' }));
+      const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(tiles[i]), c => c.charCodeAt(0))], { type: 'image/png' }));
       context.drawImage(bitmap, (i % across) * w, Math.floor(i / across) * h, w, h);
     }
-    return Array.from(new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer()));
+    return window.meridianQA.toBase64(new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer()));
   }, [tiles, SEEDS.length, 400, 225]);
-  await fs.writeFile(path.join(out, 'first-look.png'), Buffer.from(sheet));
+  await fs.writeFile(path.join(out, 'first-look.png'), Buffer.from(sheet, 'base64'));
+
+  // The Mark: absent by default, opens from the point in Rest, and leaves the Peak untouched.
+  report.mark = await page.evaluate(async () => {
+    const { m, studio, layerFor, phaseOf } = window.meridianQA, canvas = document.createElement('canvas');
+    canvas.width = 64; canvas.height = 64;
+    const paint = canvas.getContext('2d'); paint.fillStyle = '#ff00ff'; paint.fillRect(8, 8, 48, 48);
+    const mark = { dataUrl: canvas.toDataURL('image/png'), width: 64, height: 64 };
+    const frame = async (withMark, phase) => {
+      const project = m.createProject(), layer = layerFor(4);
+      if (withMark) layer.meridian = { locks: [], mark };
+      project.layers = [layer]; project.background = '#000000';
+      const bitmap = await createImageBitmap(new Blob([await studio.exportPNG(project, phase, 320, 180)], { type: 'image/png' }));
+      const canvas2 = new OffscreenCanvas(320, 180), context = canvas2.getContext('2d'); context.drawImage(bitmap, 0, 0);
+      return context.getImageData(0, 0, 320, 180).data;
+    };
+    const apart = (a, b) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum / a.length; };
+    const rest = phaseOf(4, 6, .6), peak = phaseOf(4, 4, .4);
+    return { rest: apart(await frame(true, rest), await frame(false, rest)), peak: apart(await frame(true, peak), await frame(false, peak)) };
+  });
+  if (!(report.mark.rest > 1)) failures.push(`the Mark does not appear in Rest (${report.mark.rest.toFixed(3)})`);
+  if (!(report.mark.peak < .05)) failures.push(`the Mark changes the Peak (${report.mark.peak.toFixed(3)})`);
 
   report.ui = await verifyInApp(page, failures);
-  console.log(JSON.stringify({ structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
+  console.log(JSON.stringify({ mark: report.mark, structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));
   assert.deepEqual(errors, []);
   assert.deepEqual(failures, []);

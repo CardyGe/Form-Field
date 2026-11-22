@@ -8,6 +8,7 @@ const DEFAULT_CAPACITY = 20000;
  * segment: x,y start, p0,p1 end, p2 1 for a link in a flattened curve (no end caps).
  * square, dot: x,y centre, p0 half size, p1 rotation. `width` is unused.
  * fill: x,y centre, p0 radius. Soft light inside a circle, strongest at its rim. `width` is unused.
+ * A negative `width` is a solid band measured in frame heights, with square ends, so it keeps its share of the frame at any size.
  * `colour` is a swatch index; a fraction blends towards the next swatch.
  */
 export class DisplayList {

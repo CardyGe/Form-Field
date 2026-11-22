@@ -2,6 +2,7 @@ import { isTypingTarget } from '../map/keys';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { MERIDIAN_FIXED, MERIDIAN_MOVES, MERIDIAN_PARAMETERS, PERFORMANCE_GROUP } from './parameters';
 import { createRandom } from './random';
+import { MERIDIAN_SCHEMES } from './schemes';
 
 export const SEED_SLOTS = 8;
 const slotKey = (slot: number) => `seedSlot${slot}`;
@@ -14,7 +15,7 @@ export const PANEL_PARAMETERS: readonly ParameterDefinition[] = MERIDIAN_PARAMET
 
 const OFF_ON = ['Off', 'On'];
 const SWATCHES = ['Swatch 1', 'Swatch 2', 'Swatch 3', 'Swatch 4', 'Swatch 5', 'Swatch 6'];
-const SCHEMES = ['Crimson', 'Aqua', 'Amber', 'Violet', 'Electric', 'Silver', 'Rose'];
+const SCHEMES = MERIDIAN_SCHEMES.map((scheme) => scheme.name);
 /** Stepped parameters that are named choices, so they show as dropdowns. */
 export const MERIDIAN_CHOICES: Readonly<Record<string, readonly string[]>> = {
   scoreQuantise: ['At once', 'Beat', 'Bar', 'Phrase'],
@@ -23,10 +24,10 @@ export const MERIDIAN_CHOICES: Readonly<Record<string, readonly string[]>> = {
   spokeRetractStyle: ['To centre', 'To edge', 'Fade'],
   nodeShape: ['As designed', 'Dots', 'Squares'],
   nodeChasePattern: ['Round', 'Outwards', 'Inwards', 'Scattered'],
-  colourPalette: ['Layer swatches', ...SCHEMES],
+  colourPalette: ['Layer swatches', ...SCHEMES, 'Seed chooses'],
   colourBase: SWATCHES,
   colourAccent: SWATCHES,
-  colourPeakPalette: ['Same as main', ...SCHEMES],
+  colourPeakPalette: ['Same as main', ...SCHEMES, 'Seed chooses'],
   outputMono: OFF_ON,
   outputTransparent: OFF_ON,
   safetyFlashGuard: OFF_ON,
