@@ -796,6 +796,7 @@ export class StudioRenderer {
     const wrapped = ((phase % TAU) + TAU) % TAU;
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
+    this.meridianRuntime.loopFrames = total;
     this.releaseFeedback(project);
     for (const original of project.layers) {
       if (!original.visible) continue;

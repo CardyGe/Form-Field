@@ -237,7 +237,39 @@ try {
         loops: same(await frame(0), await studio.exportPNG(project, Math.PI * 2, 320, 180)),
       };
     };
-    window.meridianQA = { m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold, tearChecks };
+    // Hold frames, in real output frames: the tear shader's inputs must stay the same for exactly N frames.
+    const tearHold = async (fps, hold) => {
+      const project = m.createProject(), layer = layerFor(4);
+      layer.params.glitchHoldFrames = hold;
+      project.layers = [layer]; project.background = '#000000'; project.duration = 4; project.fps = { num: fps, den: 1 };
+      const total = m.frameCount(project), from = Math.floor(phaseOf(4, 4, 0) / (Math.PI * 2) * total), to = Math.ceil(phaseOf(4, 5, 0) / (Math.PI * 2) * total);
+      const runs = [];
+      let last = null;
+      for (let frame = from; frame < to; frame++) {
+        await studio.exportPNG(project, m.phaseAtFrame(frame, total), 32, 18);
+        const tear = studio.meridian.tear.uniforms, noise = tear.uNoise.value;
+        const pattern = studio.meridian.tearAmount > 0 ? [noise.x, noise.y, noise.z, noise.w, tear.uTear.value].join() : null;
+        if (pattern !== null && pattern === last) runs[runs.length - 1]++;
+        else if (pattern !== null) runs.push(1);
+        last = pattern;
+      }
+      return { fps, hold, runs, inner: runs.slice(1, -1) };
+    };
+    // With a raised black level, nothing in a torn frame may fall below it.
+    const tearBlack = level => {
+      const w = 480, h = 270, target = floatTarget(w, h);
+      let lowest = Infinity;
+      for (const seed of [1, 2, 3, 4, 5, 6]) for (const share of [.2, .4, .7]) {
+        const layer = layerFor(seed);
+        Object.assign(layer.params, { outputBlackLevel: level, glitchAmount: 2, glitchScanBands: 1, glitchColourShred: 1, glitchPosterise: 1 });
+        meridian.draw(gl, layer, phaseOf(seed, 4, share), w, h, target, draw);
+        const data = read(target, w, h);
+        for (let i = 0; i < data.length; i += 4) lowest = Math.min(lowest, data[i], data[i + 1], data[i + 2]);
+      }
+      target.dispose();
+      return lowest;
+    };
+    window.meridianQA = { m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold, tearChecks, tearHold, tearBlack };
   });
 
   const report = { luma: {}, widths: {}, errors };
@@ -303,6 +335,16 @@ try {
   if (!tear.repeatPeak) failures.push(`Peak frame ${tear.peakFrame} differs when rendered again after other frames`);
   if (!tear.loops) failures.push('frame N of the loop does not equal frame 0');
 
+  report.tearHold = [];
+  for (const [fps, hold] of [[30, 1], [30, 3], [60, 5]]) {
+    const result = await page.evaluate(([fps, hold]) => window.meridianQA.tearHold(fps, hold), [fps, hold]);
+    report.tearHold.push({ fps, hold, inner: result.inner.length });
+    if (result.inner.length < 2 || result.inner.some(run => run !== hold)) failures.push(`Hold ${hold} at ${fps} fps gave runs of ${result.runs.join(', ')} frames`);
+  }
+  const BLACK_LEVEL = .1;
+  report.tearBlack = await page.evaluate(level => window.meridianQA.tearBlack(level), BLACK_LEVEL);
+  if (report.tearBlack < BLACK_LEVEL - 1e-3) failures.push(`a torn pixel reaches ${report.tearBlack.toFixed(4)}, below the black level ${BLACK_LEVEL}`);
+
   // Stills go through the whole Studio path, so masks, blend and transform stay in the proof.
   const tiles = [];
   for (const name of SHEET) for (const seed of SEEDS) {
@@ -336,7 +378,7 @@ try {
   await fs.writeFile(path.join(out, 'first-look.png'), Buffer.from(sheet));
 
   report.ui = await verifyInApp(page, failures);
-  console.log(JSON.stringify({ structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, ui: report.ui }));
+  console.log(JSON.stringify({ structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));
   assert.deepEqual(errors, []);
   assert.deepEqual(failures, []);

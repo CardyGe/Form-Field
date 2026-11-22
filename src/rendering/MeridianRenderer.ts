@@ -16,6 +16,8 @@ export interface MeridianRuntime {
   list?: DisplayList; signals?: Readonly<Record<string, number>>; dt?: number;
   /** The layer's values before animation. Structural values come from here, so a saved animation cannot rebuild the Score each frame. */
   structure?: Readonly<Record<string, number>>;
+  /** Output frames in one loop at the project's frame rate. A tear holds for whole frames of this count. */
+  loopFrames?: number;
 }
 
 const TAU = Math.PI * 2;
@@ -24,9 +26,7 @@ const BEATS_PER_BAR = 4;
 const GHOSTS = 5;
 const GHOST_BEATS = 0.09; // How far back the last echo reaches at Trail length 1.
 const SCORE_CACHE = 16;
-/** A tear holds for whole steps of the phrase. One step is one frame of the default 10 second, 30 fps loop. */
-const TEAR_STEPS = 300;
-const TEAR_COARSE = 3;      // The blocks change this many times more slowly than the scanlines.
+const DEFAULT_LOOP_FRAMES = 300; // The default 10 second, 30 fps loop, for a draw with no project behind it.
 const FALLBACK_PALETTE = ['#e8f1ff', '#ff6a2a', '#35d0ff', '#ffffff', '#ff9a5a', '#04050a'];
 /** Colour schemes: base, accent, second accent, hero core, halo, ground. Palette 0 is the layer's own swatches. */
 const SCHEMES: readonly (readonly string[])[] = [
@@ -138,6 +138,7 @@ export class MeridianRenderer {
       uImage: { value: null }, uInks: this.shared.uInks, uNoise: { value: new THREE.Vector4() }, uGrid: { value: new THREE.Vector2(1, 1) },
       uSlip: { value: new THREE.Vector2() }, uCentre: { value: new THREE.Vector2(.5, .5) }, uTear: { value: 0 }, uDrive: { value: 1 }, uAspect: { value: 1 },
       uSplit: { value: 0 }, uBands: { value: 0 }, uPosterise: { value: 0 }, uRadial: { value: 0 }, uSpread: { value: 0 }, uShred: { value: 0 },
+      uGround: this.resolve.uniforms.uGround, uLift: { value: 0 }, uBlack: { value: 0 }, uTransparent: { value: 0 },
     },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
@@ -208,27 +209,32 @@ export class MeridianRenderer {
       this.appendGhosts(score, live, position.beat, list);
     }
     const ends = score.stateEnds, peak = smoothRange(position.progress, ends[3], ends[3] + (ends[4] - ends[3]) * .2) * (1 - smoothRange(position.progress, ends[4], ends[5]));
-    this.tearAmount = this.prepareTear(score, position.progress, live);
+    const loopFrames = Math.max(1, Math.round(runtime?.loopFrames ?? DEFAULT_LOOP_FRAMES));
+    const frame = Math.min(loopFrames - 1, Math.floor(along / repeat * loopFrames + 1e-6));
+    const phraseFrame = Math.ceil(phrase * loopFrames / repeat - 1e-6);
+    this.tearAmount = this.prepareTear(score, position.progress, frame, phraseFrame, loopFrames, repeat, phrase, live);
     sourceViewMatrix(layer.transform, width / height, this.view);
     this.renderList(renderer, list, live, layer.palette, this.view.invert(), layer.transform.scale, position.progress, peak, width, height, target, draw);
   }
 
   /**
    * How torn this moment is, 0 to 1, and the pattern it shows. It cuts in at the start of Peak, holds, and Recovery
-   * sets how far it trails into Collapse. Depends only on the Score, the position and the Glitch values.
+   * sets how far it trails into Collapse. Amount and pattern are both read at the first frame of the current hold,
+   * counted from the start of the phrase, so they stay exactly still for Hold frames of real output.
    */
-  private prepareTear(score: Score, progress: number, p: Readonly<Record<string, number>>): number {
+  private prepareTear(score: Score, progress: number, frame: number, phraseFrame: number, loopFrames: number, repeat: number, phrase: number, p: Readonly<Record<string, number>>): number {
     const glitch = read(p, 'glitchAmount'), ends = score.stateEnds, peakLength = ends[4] - ends[3];
-    if (glitch <= 0 || progress < ends[3]) return 0;
+    if (glitch <= 0 || progress < ends[3] || progress >= ends[5]) return 0;
+    const hold = Math.max(1, Math.round(read(p, 'glitchHoldFrames')));
+    const step = Math.floor(Math.max(0, frame - phraseFrame) / hold);
+    const held = Math.max(0, (phraseFrame + step * hold) / loopFrames * repeat - phrase);
     const recovery = read(p, 'glitchRecovery');
     const settled = ends[4] + (ends[5] - ends[4]) * .7 * (1 - recovery);
-    const shape = smoothRange(progress, ends[3], ends[3] + peakLength * .1) * (1 - smoothRange(progress, ends[4] - peakLength * .45, settled));
+    const shape = smoothRange(held, ends[3], ends[3] + peakLength * .1) * (1 - smoothRange(held, ends[4] - peakLength * .45, settled));
     const amount = Math.min(1, glitch * shape);
     if (amount <= 0) return 0;
     const u = this.tear.uniforms, seed = (score.seed ^ Math.imul(Math.round(read(p, 'glitchSeed')), 0x9e3779b1)) >>> 0;
-    const step = Math.floor(progress * TEAR_STEPS / (Math.max(0, Math.round(read(p, 'glitchHoldFrames'))) + 1));
-    const coarse = Math.floor(step / TEAR_COARSE);
-    (u.uNoise.value as THREE.Vector4).set(tearNoise(seed, coarse, 1), tearNoise(seed, coarse, 2), tearNoise(seed, step, 3), tearNoise(seed, step, 4));
+    (u.uNoise.value as THREE.Vector4).set(tearNoise(seed, step, 1), tearNoise(seed, step, 2), tearNoise(seed, step, 3), tearNoise(seed, step, 4));
     u.uDrive.value = 1 + .6 * Math.max(0, glitch - 1);
     (u.uSlip.value as THREE.Vector2).set(read(p, 'glitchSlipH'), read(p, 'glitchSlipV'));
     u.uSplit.value = read(p, 'glitchRgbSplit');
@@ -335,6 +341,9 @@ export class MeridianRenderer {
     t.uImage.value = this.untorn.texture;
     t.uTear.value = this.tearAmount;
     t.uAspect.value = aspect;
+    t.uLift.value = r.uLift.value;
+    t.uBlack.value = r.uBlack.value;
+    t.uTransparent.value = r.uTransparent.value;
     (t.uGrid.value as THREE.Vector2).set(rows * aspect / read(p, 'glitchBlockAspect'), rows);
     (t.uCentre.value as THREE.Vector2).copy(r.uCentre.value as THREE.Vector2);
     draw(this.tear, target);

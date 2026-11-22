@@ -172,7 +172,8 @@ export const tearFragment = /* glsl */`
   uniform vec3 uInks[3];
   uniform vec4 uNoise;
   uniform vec2 uGrid, uSlip, uCentre;
-  uniform float uTear, uDrive, uAspect, uSplit, uBands, uPosterise, uRadial, uSpread, uShred;
+  uniform vec3 uGround;
+  uniform float uTear, uDrive, uAspect, uSplit, uBands, uPosterise, uRadial, uSpread, uShred, uLift, uBlack, uTransparent;
   const float TAU=6.28318530718;
   float hash(vec2 p, float salt) {
     vec3 q=fract(vec3(p.xyx)*vec3(.1031,.1030,.0973)+salt*.137);
@@ -264,6 +265,11 @@ export const tearFragment = /* glsl */`
     float band=floor(vUv.y*34.);
     if (hash(vec2(band,21.),uNoise.y)<uBands*.8*uTear) c*=.26+.5*step(.5,fract(vUv.y*270.));
 
+    // A tear can darken light, but never below the ground and black level Resolve laid down.
+    if (uTransparent<.5) {
+      vec3 ground=uGround+uLift*(.35+.65*exp(-dot(from,from)*2.6))*vec3(.32,.42,.62);
+      c=max(c,uBlack+ground*(1.-uBlack));
+    }
     float cover=clamp(max(middle.a,max(c.r,max(c.g,c.b))),0.,1.);
     gl_FragColor=vec4(c,cover);
   }`;
