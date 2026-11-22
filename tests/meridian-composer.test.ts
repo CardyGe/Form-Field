@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compose, composeCandidates, pickBest, scoreQuality } from '../src/meridian/composer';
+import { MERIDIAN_DEFAULTS } from '../src/meridian/parameters';
 import { PHRASE_STATES } from '../src/meridian/types';
 
-const DEFAULTS = { symmetry: 0, zones: 4, ringCount: 7, spokeCount: 12, nodeDensity: 0.5, latticeType: 0.35 };
+const DEFAULTS = MERIDIAN_DEFAULTS;
 
 test('same seed and settings give the same score', () => assert.deepEqual(compose(42, DEFAULTS), compose(42, DEFAULTS)));
 test('1,000 seeds pass every hard limit', () => { for (let s = 0; s < 1000; s++) assert.deepEqual(scoreQuality(compose(s, DEFAULTS)).hardFailures, [], `seed ${s}`); });
@@ -57,4 +58,18 @@ test('scoreQuality reports each broken hard limit', () => {
   assert.ok(failures(good.elements.filter((e) => e.group !== 'hero')) > 0, 'no hero');
   assert.ok(failures([...good.elements, ring, { ...ring, radius: 0.205 }]) > 0, 'near-tangent rings');
   assert.ok(failures(good.elements, [0.1, 0.2, 0.3, 0.3, 0.5, 0.6, 0.99]) > 0, 'stateEnds');
+});
+
+test('state proportions stretch their own state, and neutral leaves the score unchanged', () => {
+  const lengths = (ends: readonly number[]) => ends.map((end, i) => end - (i ? ends[i - 1] : 0));
+  const base = compose(8, DEFAULTS);
+  assert.deepEqual(compose(8, { ...DEFAULTS, scorePeak: 1 }), base);
+  const peak = compose(8, { ...DEFAULTS, scorePeak: 4 });
+  assert.ok(lengths(peak.stateEnds)[4] > lengths(base.stateEnds)[4] * 1.8);
+  for (const params of [{ ...DEFAULTS, scoreRest: 0.1, scoreDraw: 0.1, scoreCollapse: 0.1 }, { ...DEFAULTS, scoreBuild: 4, scoreCharge: 4, scorePeak: 4, scoreRest: 4 }]) {
+    const { stateEnds } = compose(8, params);
+    assert.equal(stateEnds[stateEnds.length - 1], 1);
+    stateEnds.forEach((end, i) => assert.ok(end > (i ? stateEnds[i - 1] : 0)));
+    assert.deepEqual(scoreQuality(compose(8, params)).hardFailures, []);
+  }
 });

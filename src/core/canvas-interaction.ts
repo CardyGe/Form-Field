@@ -36,7 +36,7 @@ export function canvasAxes(layer: Layer, locks: VariationLocks): ParameterDefini
   ][Math.round(layer.params.style)] ?? [];
   // Finishing and feedback controls act on the finished layer, never as drag axes.
   const available = visibleParameterDefinitions(layer).filter(d => !FINISH_KEYS.includes(d.key) &&
-    d.step !== 1 && !d.preparation && !layer.modulations[d.key] &&
+    d.step !== 1 && !d.preparation && !d.structural && !layer.modulations[d.key] &&
     (d.section === 'Shape' && !locks.structure || keys.includes(d.key) && d.section === 'Material' && !locks.material));
   return [...keys.map(key => available.find(d => d.key === key)), ...available]
     .filter((d, i, all): d is ParameterDefinition => !!d && all.indexOf(d) === i).slice(0, 2);

@@ -7,8 +7,9 @@ import { supportsSlitScan } from '../rendering/slitscan';
 import { supportsGlow } from '../rendering/bloom';
 import { supportsPrint } from '../rendering/print-screen';
 import { SCOPE_FIGURES } from '../rendering/scope-curve';
+import { MERIDIAN_FIXED, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
-import type { Layer, LayerKind, ParameterDefinition, Preset, Project } from '../shared/types';
+import type { Layer, LayerKind, MeridianLayerState, ParameterDefinition, Preset, Project } from '../shared/types';
 import { GRAPHIC_LOOKS, GRAPHIC_PARAMETERS, GRAPHIC_VARIANTS, graphicVisibleKeys } from './graphics';
 
 const TAU = Math.PI * 2;
@@ -40,6 +41,8 @@ export const SUPER8_PROJECTOR_KEYS = ['emulsion', 'gateMode', 'gateInset', 'gate
 const SCOPE_PALETTE = ['#ff2a8a', '#ff1e6e', '#c81050', '#ffffff', '#ff7ad0', '#000000'];
 // Liquid Light: 0 rim, 1 body, 2 mid, 3 hot, 4 wash, 5 ground.
 const LIQUID_PALETTE = ['#7a0006', '#ff1414', '#ff7a00', '#ffe81a', '#1a1aff', '#050002'];
+// Meridian: 0 base line, 1 primary accent, 2 secondary accent, 3 hero core, 4 halo, 5 ground.
+const MERIDIAN_PALETTE = ['#e8f1ff', '#ff6a2a', '#35d0ff', '#ffffff', '#ff9a5a', '#04050a'];
 const OIL_PALETTE = ['#eeff00', '#a7de12', '#060710', '#25b8ed', '#071275', '#e2a51c'];
 
 const parameter = (key: string, label: string, min: number, max: number, step: number, value: number, section: ParameterDefinition['section']): ParameterDefinition =>
@@ -356,6 +359,7 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
   ],
   graphic: GRAPHIC_PARAMETERS,
+  meridian: MERIDIAN_PARAMETERS.map(d => ({ ...d })),
   image: [
     parameter('mirror', 'Mirror', 0, 3, 1, 0, 'Shape'),
     parameter('repeat', 'Repeat', 1, 8, 1, 1, 'Shape'),
@@ -393,6 +397,7 @@ const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
   oil: ['layout','dome','anisotropy','sheenAngle','caustics', 'iridescence', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion'],
   scope: [SCOPE_MODE.key, ...EMBER_KEYS],
   graphic: [...TIMING_KEYS],
+  meridian: MERIDIAN_PARAMETERS.map(d => d.key),
   image: ['mirror', 'repeat', ...GRADING_FIELDS],
 };
 
@@ -608,12 +613,12 @@ export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
     id: crypto.randomUUID(),
-    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'scope' ? 'Oscilloscope' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
+    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'scope' ? 'Oscilloscope' : kind === 'meridian' ? 'Meridian' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
     kind, visible: true, opacity: 1, blend: 'normal',
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     mask: { kind: 'none', softness: 0.15, invert: false, size: 0.8 },
     params: { ...defaultParams(kind), ...(isInstrument(kind) ? INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].params : kind === 'graphic' ? GRAPHIC_LOOKS[0].params : kind === 'super8' ? SUPER8_PROJECTOR_LOOK : kind === 'fractal' ? { evolution: FRACTAL_EVOLUTION } : {}), seed: 1729 },
-    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
+    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'meridian' ? MERIDIAN_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
   };
 }
 
@@ -659,7 +664,7 @@ export function clampParameter(value: number, definition: ParameterDefinition): 
 }
 
 // Identity, coverage and Julia topology are deliberate composition choices.
-const VARIATION_FIXED = new Set(['scopeMode','emberPhrases','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
+const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'scopeMode','emberPhrases','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
 export type VariationLocks = { palette: boolean; structure: boolean; motion: boolean; material: boolean };
 
 /** Deterministic by default; UI entropy is independent of the locked film seed. */
@@ -687,7 +692,7 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
   for (const d of definitions) {
     const key = d.key, original = layer.params[key];
     const locked = d.section === 'Motion' ? locks.motion : d.section === 'Material' ? locks.material : locks.structure;
-    if (locked || VARIATION_FIXED.has(key) || layer.kind === 'fractal' && ['focalX', 'focalY', 'cutout', 'autoTravel', 'position', 'passage', 'reveal'].includes(key) || (locks.palette && ['hue','saturation','vibrance'].includes(key))) continue;
+    if (locked || VARIATION_FIXED.has(key) || d.momentary || d.structural || layer.kind === 'fractal' && ['focalX', 'focalY', 'cutout', 'autoTravel', 'position', 'passage', 'reveal'].includes(key) || (locks.palette && ['hue','saturation','vibrance'].includes(key))) continue;
     // Preserve artist-authored routes and their baseline values as a unit.
     // Flat colour is an explicit choice: never switch it on, change its palette
     // cycling (which can strobe), or vary its controls while it is off.
@@ -874,9 +879,42 @@ function imageAsset(value: unknown, path: string): { dataUrl: string; width: num
   return { dataUrl: value, width, height };
 }
 
+/** A Meridian file is opened on stage, so a damaged value is repaired rather than refused. Unknown keys still fail. */
+function repairMeridianParams(params: Record<string, unknown>): void {
+  for (const d of MERIDIAN_PARAMETERS) {
+    const value = params[d.key];
+    if (value === undefined) continue;
+    params[d.key] = typeof value !== 'number' || !Number.isFinite(value) ? d.default
+      : d.step === 1 ? Math.min(d.max, Math.max(d.min, Math.round(value))) : Math.min(d.max, Math.max(d.min, value));
+  }
+}
+
+/** The part of a Meridian layer's saved state that is sound; anything else is dropped, and nothing here is fatal. */
+function meridianState(input: unknown): MeridianLayerState | undefined {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return undefined;
+  const raw = input as Record<string, unknown>;
+  if (!Array.isArray(raw.locks) || raw.locks.some(lock => typeof lock !== 'string')) return undefined;
+  const state: MeridianLayerState = { locks: (raw.locks as string[]).filter((lock, i, all) => MERIDIAN_GROUPS.includes(lock) && all.indexOf(lock) === i) };
+  for (const slot of ['morphA', 'morphB'] as const) {
+    const capture = raw[slot];
+    if (typeof capture !== 'object' || capture === null || Array.isArray(capture)) continue;
+    const entries = Object.entries(capture as Record<string, unknown>);
+    const known = (key: string) => MERIDIAN_PARAMETERS.some(d => d.key === key);
+    if (entries.every(([key, value]) => known(key) && typeof value === 'number' && Number.isFinite(value))) state[slot] = Object.fromEntries(entries) as Record<string, number>;
+  }
+  const mark = raw.mark;
+  if (typeof mark === 'object' && mark !== null) {
+    try {
+      const m = mark as Record<string, unknown>, asset = imageAsset(m.dataUrl, 'mark');
+      if (m.width === asset.width && m.height === asset.height) state.mark = { dataUrl: asset.dataUrl, width: asset.width, height: asset.height };
+    } catch { /* a damaged mark is dropped */ }
+  }
+  return state;
+}
+
 function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
   const path = `layers[${index}]`; const layer = object(input, path);
-  keys(layer, ['id', 'name', 'kind', 'visible', 'opacity', 'blend', 'transform', 'mask', 'params', 'palette', 'image', 'modulations','surface'], path);
+  keys(layer, ['id', 'name', 'kind', 'visible', 'opacity', 'blend', 'transform', 'mask', 'params', 'palette', 'image', 'modulations','surface','meridian'], path);
   if(own(layer,'surface')){
     if(version!==2)fail(`${path}.surface`,'requires document version 2.');
     const surface=object(layer.surface,`${path}.surface`);keys(surface,['source','role','influence','points','clipMask'],`${path}.surface`);if(own(surface,'clipMask'))boolean(surface.clipMask,`${path}.surface.clipMask`);
@@ -886,7 +924,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
     if(!isSimplePolygon(surface.points as {x:number;y:number}[]))fail(`${path}.surface.points`,'must form a simple polygon with a useful area.');
     if(surface.source==='mask'&&(layer.mask as Record<string,unknown>)?.kind!=='image')fail(`${path}.surface.source`,'requires an imported image mask.');
   }
-  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
+  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', 'meridian', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
   text(layer.id, `${path}.id`, 100); text(layer.name, `${path}.name`);
   boolean(layer.visible, `${path}.visible`); number(layer.opacity, `${path}.opacity`, 0, 1);
   choice(layer.blend, ['normal', 'screen', 'multiply', 'add', 'source'] as const, `${path}.blend`);
@@ -906,6 +944,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
   for (const key of [...(ADDED_FIELDS[kind] ?? []),...FINISH_KEYS,...(isInstrument(kind)?INSTRUMENT_UPGRADE_KEYS[kind]:[])]) {
     if (!own(params, key)) params[key] = DEFINITIONS[kind].find((definition) => definition.key === key)!.default;
   }
+  if (kind === 'meridian') repairMeridianParams(params);
   keys(params, ['seed', ...DEFINITIONS[kind].map((definition) => definition.key)], `${path}.params`);
   number(params.seed, `${path}.params.seed`, 0, 0xffffffff, true);
   for (const definition of DEFINITIONS[kind]) number(params[definition.key], `${path}.params.${definition.key}`, definition.min, definition.max, definition.step === 1);
@@ -949,7 +988,11 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
       previous = time;
     });
   }
-  return { ...structuredClone(input as Layer), params: params as Record<string, number> };
+  const result: Layer = { ...structuredClone(input as Layer), params: params as Record<string, number> };
+  delete result.meridian;
+  const state = kind === 'meridian' ? meridianState(layer.meridian) : undefined;
+  if (state) result.meridian = state;
+  return result;
 }
 
 export function validateProject(input: unknown): Project {

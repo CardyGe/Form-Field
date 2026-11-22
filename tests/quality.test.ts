@@ -41,7 +41,7 @@ test('smart variations preserve effect identity, coverage, composition and autho
 });
 
 test('independent entropy changes unlocked material even while the source seed is locked', () => {
-  for(const kind of ['surface','sculpture','fractal','oil','liquid','scope','super8','graphic','image'] as const) {
+  for(const kind of ['surface','sculpture','fractal','oil','liquid','scope','super8','graphic','image','meridian'] as const) {
     const layer=createLayer(kind),locks={palette:true,structure:true,motion:true,material:false};
     const a=varyLayer(layer,.65,locks,123),b=varyLayer(layer,.65,locks,456);
     assert.equal(a.params.seed,layer.params.seed);assert.equal(b.params.seed,layer.params.seed);

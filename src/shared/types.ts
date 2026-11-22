@@ -3,7 +3,7 @@ import type { LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import type { MapMessage } from '../map/messages';
-export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | InstrumentKind;
+export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | 'meridian' | InstrumentKind;
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'add' | 'source';
 export type ModulationKind = 'sine' | 'pulse' | 'noise' | 'keyframes';
 export interface KeyPoint { time: number; value: number }
@@ -36,6 +36,14 @@ export interface Layer {
   palette: string[];
   image?: { name: string; dataUrl: string; width: number; height: number; fit: 'contain' | 'cover' };
   modulations: Record<string, Modulation>;
+  /** Meridian only: group locks, the two morph captures and the optional mark. */
+  meridian?: MeridianLayerState;
+}
+export interface MeridianLayerState {
+  locks: string[];
+  morphA?: Record<string, number>;
+  morphB?: Record<string, number>;
+  mark?: { dataUrl: string; width: number; height: number };
 }
 export interface Project {
   schemaVersion: 1 | 2;
@@ -64,6 +72,12 @@ export interface ParameterDefinition {
   max: number;
   step: number;
   default: number;
+  /** Meridian: the panel group this belongs to. */
+  group?: string;
+  /** Meridian: takes effect at the next phrase, not at once. */
+  structural?: boolean;
+  /** Meridian: a button that acts on its rising edge. */
+  momentary?: boolean;
   section: 'Shape' | 'Motion' | 'Material' | 'Camera';
 }
 export interface Preset {

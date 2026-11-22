@@ -20,9 +20,9 @@ export function bloomWeights(amount: number, size: number): number[] {
 }
 
 /** Glow cannot run on tiled patterns (the source is a tile, not the frame);
- * the Oscilloscope has its own bloom. */
+ * the Oscilloscope and Meridian have their own bloom. */
 export function supportsGlow(layer: Pick<Layer, 'kind'>): boolean {
-  return layer.kind !== 'graphic' && layer.kind !== 'scope';
+  return layer.kind !== 'graphic' && layer.kind !== 'scope' && layer.kind !== 'meridian';
 }
 
 export function glowActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>): boolean {

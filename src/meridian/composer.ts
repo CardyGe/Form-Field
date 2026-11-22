@@ -25,6 +25,8 @@ const RATIO_SET = [1.25, 4 / 3, Math.SQRT2, 1.5, (1 + Math.sqrt(5)) / 2];
 const AUTO_SYMMETRY = [3, 4, 5, 6, 6, 8, 8, 12];
 const LINE = { hair: 1, fine: 1.6 } as const;
 const STATE_SHARES = [0.05, 0.19, 0.23, 0.15, 0.1, 0.12, 0.16];
+/** Parameter that stretches each state's share. Seed has none: it is always the brief opening point. */
+const STATE_KEYS = [null, 'scoreDraw', 'scoreBuild', 'scoreCharge', 'scorePeak', 'scoreCollapse', 'scoreRest'] as const;
 const INTERIOR_STEPS = [0.382, 0.618, 0.236, 0.764];
 const ROLE_PLANS: readonly (readonly ZoneRole[])[] = [
   ['scale', 'void', 'lattice', 'orbit'],
@@ -68,7 +70,10 @@ function composeCandidate(seed: number, random: Random, params: ComposeParams): 
   const accentZone = heroZone + 1 < zones ? heroZone + 1 : Math.max(0, heroZone - 1);
 
   // Phrase timing and rhythm.
-  const shares = STATE_SHARES.map((share) => share * (0.85 + random() * 0.3));
+  const shares = STATE_SHARES.map((share, i) => {
+    const key = STATE_KEYS[i];
+    return share * (0.85 + random() * 0.3) * (key ? clamp(finite(params[key], 1), 0.1, 4) : 1);
+  });
   const total = shares.reduce((sum, share) => sum + share, 0);
   let running = 0;
   const stateEnds = shares.map((share, i) => (i === shares.length - 1 ? 1 : (running += share / total)));

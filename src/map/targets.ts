@@ -5,6 +5,7 @@
  *   source.<id>.param.<layer>.<setting>
  * A target's range comes from the shape's own rules, or from the instrument's parameter definitions.
  */
+import { MERIDIAN_UNLINKED } from '../meridian/parameters';
 import { readParameterDefinitions, scopeParameterVisible, visibleParameterDefinitions } from '../core/project';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { BRIGHTNESS_MAX, LIVE_SOURCE_ID, SPEED_RANGE, ZOOM_RANGE, isVideoId, type ShowDocument } from './show';
@@ -33,6 +34,7 @@ export function parseTarget(target: string): Target | null {
 }
 
 export function canLinkParameter(layer: Layer, key: string): boolean {
+  if (layer.kind === 'meridian') return !MERIDIAN_UNLINKED.includes(key);
   return layer.kind !== 'scope' || key !== 'scopeMode' && key !== 'emberPhrases';
 }
 
