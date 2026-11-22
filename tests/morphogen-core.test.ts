@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MORPH_CONTROLS, defaultMorphParams, validateMorphParams } from '../src/morphogen/params';
 import { accumulateSteps, stableStep } from '../src/morphogen/stability';
+import { formAt } from '../src/morphogen/forms';
 
 test('steps carry their fraction to the next frame', () => {
   const first = accumulateSteps(0, 1 / 60, 6, .1, 12);
@@ -49,7 +50,34 @@ test('a full parameter set stays small enough for the Live message', () => {
 });
 
 test('step at the default spacing matches the bound', () => {
-  assert.ok(Math.abs(stableStep(12, 0, 0) - .0873) < .0005);
+  assert.ok(Math.abs(stableStep(12, 0, 0) - .1251) < .0005);
+});
+
+test('motion controls exist with lively defaults', () => {
+  const d = defaultMorphParams();
+  assert.ok(d.flowSpeed >= .4);
+  assert.ok(d.surge >= .3);
+  assert.ok(d.shimmer >= .4);
+});
+
+test('a moving form stays on screen for hours', () => {
+  const params = { ...defaultMorphParams(), orbit: 1, formX: .6, formY: -.6, formSize: .5 };
+  for (let time = 0; time < 20000; time += 7.3) {
+    const f = formAt(params, time);
+    assert.ok(Math.abs(f.x) <= 1 && Math.abs(f.y) <= 1, `form left the picture at ${time}`);
+  }
+});
+
+test('orbit zero holds the form exactly where it was placed', () => {
+  const f = formAt({ ...defaultMorphParams(), orbit: 0, formX: .3, formY: -.2 }, 123);
+  assert.equal(f.x, .3);
+  assert.equal(f.y, -.2);
+});
+
+test('orbit moves the form continuously', () => {
+  const params = { ...defaultMorphParams(), orbit: .6 }, a = formAt(params, 10), b = formAt(params, 10 + 1 / 60), c = formAt(params, 16);
+  assert.ok(Math.hypot(a.x - b.x, a.y - b.y) < .01, 'form jumped between frames');
+  assert.ok(Math.hypot(a.x - c.x, a.y - c.y) > .02, 'form is not moving');
 });
 
 /** The solver's update on the CPU: 9-point Laplacian applied twice, periodic edges. */

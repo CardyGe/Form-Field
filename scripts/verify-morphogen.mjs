@@ -118,12 +118,29 @@ try {
     const apart = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
     assert.ok(apart(looks[0].mean, looks[1].mean) > 12 && apart(looks[1].mean, looks[2].mean) > 12 && apart(looks[0].mean, looks[2].mean) > 12, 'looks are too similar');
   });
+  await check('the stripes themselves travel and reorganise', async () => {
+    const r = await page.evaluate(() => {
+      const { m, passes, field } = window.t, W = 1024, H = 576, solver = new m.MorphSolver(passes, W, H), params = { ...m.defaultMorphParams(), wavelength: 13, asymmetry: .16 };
+      const input = { flow: null, people: null, impulse: 0, seedBurst: 0 };
+      let frame = 0;
+      const run = n => { for (let i = 0; i < n; i++) solver.step(1 / 60, frame++ / 60, params, input); };
+      run(900); const a = field(solver, W, H); run(180); const b = field(solver, W, H); run(1620); const c = field(solver, W, H);
+      solver.dispose();
+      const correlate = (x, y) => { let xy = 0, xx = 0, yy = 0; for (let i = 0; i < x.length; i++) { xy += x[i] * y[i]; xx += x[i] * x[i]; yy += y[i] * y[i]; } return xy / Math.sqrt(xx * yy); };
+      let peak = 0; for (const v of c) peak = Math.max(peak, Math.abs(v));
+      return { after3s: correlate(a, b), after30s: correlate(a, c), peak };
+    });
+    console.log('motion', JSON.stringify(r));
+    assert.ok(r.after3s < .8, `stripes barely moved in 3 s: correlation ${r.after3s.toFixed(3)}`);
+    assert.ok(r.after30s < .35, `pattern did not reorganise in 30 s: correlation ${r.after30s.toFixed(3)}`);
+    assert.ok(r.peak > .5, `motion dissolved the stripes: peak ${r.peak.toFixed(3)}`);
+  });
   await check('the picture keeps moving, and frame cost is measured', async () => {
     await fs.rm(path.join(out, 'clip'), { recursive: true, force: true });
     await fs.mkdir(path.join(out, 'clip'), { recursive: true });
     await page.evaluate(() => {
       const { m, passes } = window.t, engine = new m.MorphEngine(passes, 1920, 1080);
-      const params = { ...m.defaultMorphParams(), palette: 0, formType: 1, fieldType: 0, wavelength: 13, asymmetry: .16, irid: .75, breathing: .7, travel: .6, fieldDrift: .8, curlAmount: .35, envRotate: 0 };
+      const params = { ...m.defaultMorphParams(), palette: 0, formType: 1, fieldType: 0, wavelength: 13, asymmetry: .16, irid: .75 };
       const input = { flow: null, people: null, impulse: 0, seedBurst: 0 };
       for (let i = 0; i < 900; i++) engine.step(1 / 60, i / 60, params, input);
       const copy = passes.material('uniform sampler2D uImage;void main(){vec3 c=clamp(texture2D(uImage,vUv).rgb,0.,1.);gl_FragColor=vec4(mix(c*12.92,1.055*pow(c,vec3(1./2.4))-.055,step(.0031308,c)),1.);}', { uImage: { value: engine.output } });
@@ -155,7 +172,7 @@ try {
     }
     await page.evaluate(() => { const c = window.t.clip; c.copy.dispose(); c.engine.dispose(); });
     console.log(`mean change per clip frame: ${(change / 149).toFixed(2)} of 255`);
-    assert.ok(change / 149 > .5, 'the picture is not moving');
+    assert.ok(change / 149 > 4, `the picture is too still: ${(change / 149).toFixed(2)}`);
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));

@@ -4,7 +4,7 @@ const header = /* glsl */`precision highp float;precision highp int;precision hi
 export const shadeFragment = header + /* glsl */`
 uniform sampler2D uState;uniform vec3 uStops[5];uniform vec2 uFormPos,uOut;
 uniform float uAspect,uFormType,uFormSize,uFormSoft,uRefraction,uDepth,uBevel,uSharp,uWavelength,uRough,uMetal,uCoat,uLightAngle,uEnvRotate;
-uniform float uIrid,uFilm,uFilmVary,uFilmIor,uColourShift,uZones,uSaturation,uExposure,uChroma,uTime;
+uniform float uIrid,uFilm,uFilmVary,uFilmIor,uColourShift,uZones,uSaturation,uExposure,uChroma,uTime,uShimmer;
 const float PI=3.14159265;
 
 // Cubic B-spline value and gradient from one 16-texel footprint, so normals stay smooth when the field is enlarged.
@@ -21,11 +21,11 @@ void field(vec2 uv,out vec2 value,out vec2 dx,out vec2 dy){
  }
 }
 vec3 ramp(float t){t=fract(t)*5.;int i=int(floor(t))%5;float f=fract(t);f=f*f*(3.-2.*f);return mix(uStops[i],uStops[(i+1)%5],f);}
-float zones(vec2 p){float t=uTime*.035;return sin(p.x*1.15+1.6*sin(p.y*.8+t)+t*.7)*.55+sin(p.y*1.45-1.3*sin(p.x*.7-t*.8)-t*.5)*.45;}
+float zones(vec2 p){float t=uTime*(.035+.16*uShimmer);return sin(p.x*1.15+1.6*sin(p.y*.8+t)+t*.7)*.55+sin(p.y*1.45-1.3*sin(p.x*.7-t*.8)-t*.5)*.45;}
 
 // A procedural photo studio: a room graded from the palette with three softboxes.
 vec3 studio(vec3 r,float rough){
- float c=cos(uEnvRotate),s=sin(uEnvRotate);r.xy=mat2(c,-s,s,c)*r.xy;
+ float turn=uEnvRotate+uTime*.27*uShimmer,c=cos(turn),s=sin(turn);r.xy=mat2(c,-s,s,c)*r.xy;
  float w=.05+rough*.5;
  vec3 room=mix(uStops[3]*.16,mix(uStops[1],uStops[0],.35)*1.05,smoothstep(-.9,.9,r.y+.25*r.x));
  float key=smoothstep(.62-w,.62+w,dot(r,normalize(vec3(-.55,.62,.56))));
@@ -53,13 +53,13 @@ void main(){
  vec3 n=normalize(vec3(-slope-radial*dome*mask*.72,1.));
 
  float zone=zones(p);
- vec3 albedo=ramp(uColourShift+uZones*.3*zone+shaped*.11+.2*mask);
- float metal=uMetal,rough=uRough;
- vec3 view=vec3(0.,0.,1.),r=reflect(-view,n),l=normalize(vec3(cos(uLightAngle)*.72,sin(uLightAngle)*.72,.7));
+ vec3 albedo=ramp(uColourShift+uTime*.009*uShimmer+uZones*.3*zone+shaped*.11+.2*mask);
+ float metal=uMetal,rough=uRough,lightTurn=uLightAngle+uTime*.41*uShimmer;
+ vec3 view=vec3(0.,0.,1.),r=reflect(-view,n),l=normalize(vec3(cos(lightTurn)*.72,sin(lightTurn)*.72,.7));
 
  // Thin film: interference phase per channel, faded where it would alias within a pixel.
  float cosT=sqrt(max(0.,1.-(1.-n.z*n.z)/(uFilmIor*uFilmIor)));
- float thickness=uFilm*(1.+uFilmVary*(.42*shaped+.28*zone));
+ float thickness=uFilm*(1.+uFilmVary*(.42*shaped+.28*zone)+.12*uShimmer*sin(uTime*.33+p.x*.8-p.y*.6));
  vec3 phase=4.*PI*uFilmIor*thickness*cosT/vec3(650.,532.,450.);
  vec3 film=.5+.5*cos(phase+PI);
  float blur=fwidth(phase.g);film=mix(vec3(.5),film,1./(1.+blur*blur*.3));

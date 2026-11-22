@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { MorphParams } from './params';
 import type { GpuPasses } from './solver';
+import { formAt } from './forms';
 import { MORPH_PALETTES } from './palettes';
 import { blurFragment, brightFragment, finishFragment, shadeFragment } from './shade-shaders';
 
@@ -27,7 +28,7 @@ export class MorphShade {
     const number = (...keys: string[]) => Object.fromEntries(keys.map(k => [k, { value: 0 }]));
     this.shade = passes.material(shadeFragment, {
       uState: { value: null }, uStops: { value: linearStops(0) }, uFormPos: { value: new THREE.Vector2() }, uOut: { value: new THREE.Vector2(width, height) },
-      ...number('uAspect', 'uFormType', 'uFormSize', 'uFormSoft', 'uRefraction', 'uDepth', 'uBevel', 'uSharp', 'uWavelength', 'uRough', 'uMetal', 'uCoat', 'uLightAngle', 'uEnvRotate', 'uIrid', 'uFilm', 'uFilmVary', 'uFilmIor', 'uColourShift', 'uZones', 'uSaturation', 'uExposure', 'uChroma', 'uTime'),
+      ...number('uAspect', 'uFormType', 'uFormSize', 'uFormSoft', 'uRefraction', 'uDepth', 'uBevel', 'uSharp', 'uWavelength', 'uRough', 'uMetal', 'uCoat', 'uLightAngle', 'uEnvRotate', 'uIrid', 'uFilm', 'uFilmVary', 'uFilmIor', 'uColourShift', 'uZones', 'uSaturation', 'uExposure', 'uChroma', 'uTime', 'uShimmer'),
     });
     this.bright = passes.material(brightFragment, { uImage: { value: null }, uTexel: { value: new THREE.Vector2() } });
     this.blur = passes.material(blurFragment, { uImage: { value: null }, uStep: { value: new THREE.Vector2() } });
@@ -40,12 +41,13 @@ export class MorphShade {
     const u = this.shade.uniforms;
     if (this.palette !== params.palette) { u.uStops.value = linearStops(params.palette); this.palette = params.palette; }
     u.uState.value = state; u.uAspect.value = this.width / this.height; (u.uOut.value as THREE.Vector2).set(this.width, this.height);
-    (u.uFormPos.value as THREE.Vector2).set(params.formX, params.formY);
+    const form = formAt(params, time);
+    (u.uFormPos.value as THREE.Vector2).set(form.x, form.y);
     const values: Record<string, number> = {
       uFormType: params.formType, uFormSize: params.formSize, uFormSoft: params.formSoft, uRefraction: params.refraction, uDepth: params.depth, uBevel: params.bevel,
       uSharp: params.lineSharp, uWavelength: params.wavelength, uRough: params.roughness, uMetal: params.metal, uCoat: params.clearcoat, uLightAngle: params.lightAngle,
       uEnvRotate: params.envRotate, uIrid: params.irid, uFilm: params.filmNm, uFilmVary: params.filmVary, uFilmIor: params.filmIor, uColourShift: params.colourShift,
-      uZones: params.colourZones, uSaturation: params.saturation, uExposure: params.exposure, uChroma: params.chroma, uTime: time,
+      uZones: params.colourZones, uSaturation: params.saturation, uExposure: params.exposure, uChroma: params.chroma, uTime: time, uShimmer: params.shimmer,
     };
     for (const key in values) u[key].value = values[key];
     this.passes.draw(this.shade, this.surface.write); this.surface.swap();
