@@ -59,7 +59,9 @@ function composeCandidate(seed: number, random: Random, params: ComposeParams): 
 
   // Radial zones, outermost first, on one ratio.
   const zones = count(params.zones, 4, 1, 8);
-  const ratio = Math.min(pick(random, RATIO_SET), (OUTER_RADIUS / INNER_LIMIT) ** (1 / zones));
+  // Always drawn, so setting Radial ratio does not change the rest of the seed's choices.
+  const seededRatio = pick(random, RATIO_SET), requestedRatio = finite(params.structureRadialRatio, 0);
+  const ratio = Math.min(requestedRatio > 1 ? requestedRatio : seededRatio, (OUTER_RADIUS / INNER_LIMIT) ** (1 / zones));
   const edges = Array.from({ length: zones + 1 }, (_, i) => OUTER_RADIUS / ratio ** i);
   const plan = pick(random, ROLE_PLANS);
   const turn = Math.floor(random() * plan.length);

@@ -30,7 +30,18 @@ const SEEDS = [1, 2, 3, 4, 5, 6];
 const STATES = { seed: [0, .6], draw: [1, .75], build: [2, .85], charge: [3, .6], peak: [4, .4], collapse: [5, .5], rest: [6, .5] };
 const SHEET = ['draw', 'build', 'peak', 'collapse'];
 const CHECKED = ['seed', 'build', 'peak', 'rest'];
-const SWEPT_GROUPS = ['Rings', 'Spokes', 'Nodes', 'Hero', 'Glitch', 'Light', 'Colour', 'Output'];
+const SWEPT_GROUPS = ['Score', 'Structure', 'Rings', 'Spokes', 'Nodes', 'Hero', 'Rhythm', 'Glitch', 'Light', 'Colour', 'Output', 'Safety', 'Reaction', 'Performance'];
+// The dead-parameter check: every Meridian parameter must change the picture, or be named in one of these lists.
+// PENDING and AWAITING_CONDUCTOR must both be empty by Task 11.
+const PENDING = {
+  Rhythm: ['rhythmRingHits', 'rhythmRingSteps', 'rhythmSpokeHits', 'rhythmSpokeSteps', 'rhythmNodeHits', 'rhythmNodeSteps', 'rhythmRotation', 'rhythmSwing', 'rhythmSubdivisionRamp', 'rhythmPolyrhythm', 'rhythmAccent', 'rhythmHumanise', 'rhythmPeakRate'],
+  Reaction: ['reactionBass', 'reactionMids', 'reactionHighs', 'reactionBeat', 'reactionAttack', 'reactionRelease', 'reactionTempoMultiplier', 'reactionBeatSnap'],
+  Safety: ['safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField'],
+  Structure: ['structureSquareMix', 'structureNegativeSpace'],
+};
+const AWAITING_CONDUCTOR = ['moveNext', 'moveHold', 'moveDrop', 'moveCollapse', 'moveMutate', 'moveReseed', 'moveBurst', 'moveRecall', 'scoreQuantise', 'scoreAutopilot'];
+// These act on the layer rather than the frame; tests/meridian-panel.test.ts proves what they do.
+const PROVEN_BY_PANEL_TESTS = ['scoreVariation', ...Array.from({ length: 8 }, (_, i) => `seedSlot${i}`)];
 // These act only on top of another setting, so the sweep turns that setting on first rather than skipping them.
 const SWEEP_NEEDS = {
   ringDashGap: { ringDashCount: 24 },       // There is no gap until a ring is cut into dashes.
@@ -41,7 +52,80 @@ const SWEEP_NEEDS = {
   glitchPosterise: { glitchAmount: 2 },     // Bands of flat colour need a tear strong enough to cover lit structure.
 };
 // Parameters that cannot be shown to change pixels in this sweep. Each needs a reason.
-const SWEEP_SKIPS = {};
+const SWEEP_SKIPS = Object.fromEntries([...Object.values(PENDING).flat(), ...AWAITING_CONDUCTOR, ...PROVEN_BY_PANEL_TESTS].map(key => [key, true]));
+
+/** The control surface in the real app: groups, search, keys, a macro on the picture, and the minimum window width. */
+async function verifySurface(real, ui, qa, failures) {
+  const size = async (width, height) => { await real.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [width, height]); await ui.waitForTimeout(400); };
+  const blur = () => ui.evaluate(() => document.activeElement?.blur());
+  const seedShown = async () => Number(await ui.locator('.m-heading small').first().textContent());
+  const held = () => ui.locator('.m-pad.is-down').allTextContents();
+  const result = {};
+  await size(1600, 1000);
+  result.groups = await ui.locator('.m-group').count();
+  if (result.groups !== 13) failures.push(`the panel shows ${result.groups} of 13 groups`);
+
+  const search = ui.getByRole('searchbox', { name: 'Search parameters' });
+  await search.fill('failing screen');
+  result.searchGroups = await ui.locator('.m-group').count();
+  if (result.searchGroups !== 1 || !(await ui.getByText('Scan bands', { exact: true }).count())) failures.push('search did not find Scan bands by its description');
+  await search.press('n');
+  if ((await held()).length) failures.push('a move fired while typing in search');
+  await search.fill('');
+
+  await blur();
+  await ui.keyboard.down('h');
+  await ui.waitForTimeout(60);
+  const holding = await held();
+  await ui.keyboard.up('h');
+  await ui.waitForTimeout(60);
+  if (!holding.some(text => text.startsWith('Hold')) || (await held()).length) failures.push(`Hold did not press and release (${holding.join()})`);
+  await ui.getByRole('button', { name: 'Store seed in slot 1' }).click();
+  await blur();
+  const stored = await seedShown();
+  await ui.keyboard.press('r');
+  await ui.waitForTimeout(60);
+  const reseeded = await seedShown();
+  await ui.keyboard.press('1');
+  await ui.waitForTimeout(60);
+  const recalled = await seedShown();
+  result.keys = { reseedChanged: reseeded !== stored, recallRestored: recalled === stored };
+  if (reseeded === stored) failures.push('R did not change the seed');
+  if (recalled !== stored) failures.push('1 did not recall the stored seed');
+
+  await ui.getByRole('button', { name: 'Pause', exact: true }).click();
+  await ui.getByRole('slider', { name: 'Timeline position' }).fill('0.55');
+  await ui.waitForTimeout(400);
+  const preview = ui.locator('.preview-stage canvas').first();
+  const before = await preview.screenshot(), still = await preview.screenshot();
+  const scale = ui.getByRole('slider', { name: 'Scale', exact: true }), box = await scale.boundingBox();
+  await ui.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await ui.mouse.down();
+  await ui.mouse.move(box.x + box.width / 2, box.y - 4, { steps: 6 });
+  await ui.mouse.up();
+  await ui.waitForTimeout(400);
+  const after = await preview.screenshot();
+  const [noise, moved] = await qa.evaluate(async ([a, b, c]) => {
+    const pixels = async bytes => { const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/png' })), canvas = new OffscreenCanvas(320, 180), paint = canvas.getContext('2d', { willReadFrequently: true }); paint.drawImage(bitmap, 0, 0, 320, 180); return paint.getImageData(0, 0, 320, 180).data; };
+    const apart = (x, y) => { let sum = 0; for (let i = 0; i < x.length; i++) sum += Math.abs(x[i] - y[i]); return sum / x.length; };
+    const [one, two, three] = await Promise.all([pixels(a), pixels(b), pixels(c)]);
+    return [apart(one, two), apart(one, three)];
+  }, [Array.from(before), Array.from(still), Array.from(after)]);
+  result.macro = { noise: +noise.toFixed(3), moved: +moved.toFixed(3) };
+  if (!(moved > .2 && moved > noise * 3)) failures.push(`the Scale macro barely changes the picture (${moved.toFixed(3)} against ${noise.toFixed(3)})`);
+  await scale.dblclick();
+  await ui.getByRole('button', { name: 'Play', exact: true }).click();
+
+  await blur();
+  await ui.locator('.inspector-content').evaluate(element => { element.scrollTop = 0; });
+  await ui.waitForTimeout(300);
+  await ui.locator('#inspector-panel').screenshot({ path: path.join(out, 'control-surface.png') });
+  await size(960, 640);
+  result.overflow = await ui.evaluate(() => ['.inspector-content', '.meridian-controls', '.m-macros', '.m-pads', '.m-bank', '.m-groups'].filter(selector => { const e = document.querySelector(selector); return e.scrollWidth > e.clientWidth; }).concat(document.documentElement.scrollWidth > innerWidth ? ['page'] : []));
+  if (result.overflow.length) failures.push(`horizontal overflow at the minimum width: ${result.overflow.join(', ')}`);
+  await size(1600, 1000);
+  return result;
+}
 
 /** The real app: add Meridian from its card, let it play, and capture what is on the preview. */
 async function verifyInApp(qa, failures) {
@@ -70,6 +154,8 @@ async function verifyInApp(qa, failures) {
     if (!saved) { failures.push('the Meridian card did not add a layer'); return { added: false }; }
 
     await ui.getByRole('button', { name: 'Shape', exact: true }).click();
+    await ui.getByRole('button', { name: /^Rings/ }).click();
+    await ui.getByRole('button', { name: /^Nodes/ }).click();
     const animateStructural = await ui.getByTitle('Animate Node density', { exact: true }).count();
     const animateLive = await ui.getByTitle('Animate Ring weight', { exact: true }).count();
     if (animateStructural !== 0) failures.push('Node density, a structural parameter, offers Animate');
@@ -80,6 +166,7 @@ async function verifyInApp(qa, failures) {
     if (motionLive !== 1) failures.push('the Motion panel lost Ring weight');
     await ui.getByRole('button', { name: 'Shape', exact: true }).click();
     if (motionOption !== 0) failures.push('the Motion panel offers Node density');
+    const surface = await verifySurface(real, ui, qa, failures);
 
     // Across most of one loop, so the frames span the phrase.
     const gap = Math.min(800, Math.max(250, saved.duration * 1000 / FRAMES));
@@ -107,7 +194,7 @@ async function verifyInApp(qa, failures) {
     if (!(litMost > .005)) failures.push(`the Meridian layer does not draw in the app (lit ${litMost.toFixed(4)})`);
     if (changed < FRAMES / 2) failures.push(`the picture changed in only ${changed} of ${FRAMES - 1} steps`);
     if (appErrors.length) failures.push(`app console errors: ${appErrors.join(' | ').slice(0, 400)}`);
-    return { added: true, duration: saved.duration, animateStructural, animateLive, motionOption, motionLive, litMost: +litMost.toFixed(4), changedSteps: changed, of: FRAMES - 1 };
+    return { added: true, surface, duration: saved.duration, animateStructural, animateLive, motionOption, motionLive, litMost: +litMost.toFixed(4), changedSteps: changed, of: FRAMES - 1 };
   } finally {
     await real.close();
   }
@@ -374,7 +461,9 @@ try {
   if (!hold.same) failures.push('a saved structural animation changed the picture');
 
   const swept = await page.evaluate(([groups, needs, skips]) => window.meridianQA.sweep(groups, needs, skips), [SWEPT_GROUPS, SWEEP_NEEDS, SWEEP_SKIPS]);
-  report.sweep = { ...swept, skipped: Object.keys(SWEEP_SKIPS) };
+  report.sweep = { ...swept, pending: Object.values(PENDING).flat().length, awaitingConductor: AWAITING_CONDUCTOR.length, provenByPanelTests: PROVEN_BY_PANEL_TESTS.length };
+  const total = await page.evaluate(() => window.meridianQA.m.MERIDIAN_PARAMETERS.length);
+  if (swept.swept + Object.keys(SWEEP_SKIPS).length !== total) failures.push(`the dead-parameter check covers ${swept.swept + Object.keys(SWEEP_SKIPS).length} of ${total} parameters`);
   if (swept.dead.length) failures.push(`parameters that change no pixels: ${swept.dead.join(', ')}`);
 
   const tear = await page.evaluate(() => window.meridianQA.tearChecks());

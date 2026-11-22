@@ -44,7 +44,7 @@ const SCORE: Row[] = [
 const STRUCTURE: Row[] = [
   ['symmetry', 'Symmetry order', 0, 24, 1, 0, 'How many times the design repeats around the centre. 0 lets the seed choose.'],
   ['zones', 'Zones', 1, 8, 1, 4, 'How many bands the design is divided into from the edge to the centre.'],
-  ['structureRadialRatio', 'Radial ratio', 0, 2.2, 0.01, 0, 'How quickly each band shrinks towards the centre. 0 lets the seed choose.'],
+  ['structureRadialRatio', 'Radial ratio', 0, 2.2, 0.01, 0, 'How quickly each band shrinks towards the centre. 1 or below lets the seed choose.'],
   ['structureCentreX', 'Centre X', -0.5, 0.5, 0.01, 0, 'Slides the whole design left or right.'],
   ['structureCentreY', 'Centre Y', -0.5, 0.5, 0.01, 0, 'Slides the whole design up or down.'],
   ['structureEllipse', 'Ellipse', 0, 1, 0.01, 0, 'Squashes the circles into ovals.'],
