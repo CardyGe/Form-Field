@@ -7,6 +7,7 @@ import { accumulateSteps, stableStep } from './stability';
 
 /** What the engine needs from the host's pass helper. The app's `Passes` class satisfies it. */
 export interface GpuPasses {
+  readonly renderer: THREE.WebGLRenderer;
   material(fragment: string, uniforms: Record<string, THREE.IUniform>): THREE.ShaderMaterial;
   draw(material: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget | null): void;
   pair(width: number, height: number, options: { float?: boolean; nearest?: boolean }): { read: THREE.WebGLRenderTarget; write: THREE.WebGLRenderTarget; swap(): void; setSize(width: number, height: number): void; dispose(): void };

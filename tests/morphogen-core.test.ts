@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { MORPH_CONTROLS, defaultMorphParams, validateMorphParams } from '../src/morphogen/params';
 import { accumulateSteps, stableStep } from '../src/morphogen/stability';
 import { formAt } from '../src/morphogen/forms';
+import { ActivityGovernor, fieldActivity } from '../src/morphogen/activity';
 
 test('steps carry their fraction to the next frame', () => {
   const first = accumulateSteps(0, 1 / 60, 6, .1, 12);
@@ -51,6 +52,40 @@ test('a full parameter set stays small enough for the Live message', () => {
 
 test('step at the default spacing matches the bound', () => {
   assert.ok(Math.abs(stableStep(12, 0, 0) - .1251) < .0005);
+});
+
+test('a lively pattern gets no help', () => {
+  const g = new ActivityGovernor();
+  for (let i = 0; i < 30; i++) assert.deepEqual(g.update(.8, .35, 1), { driftBoost: 0, seedBurst: 0 });
+});
+
+test('a settled pattern gets more drift first and seeds only after eight seconds', () => {
+  const g = new ActivityGovernor();
+  const first = g.update(.05, .35, 1);
+  assert.ok(first.driftBoost > 0);
+  assert.equal(first.seedBurst, 0);
+  for (let i = 0; i < 6; i++) assert.equal(g.update(.05, .35, 1).seedBurst, 0);
+  assert.ok(g.update(.05, .35, 1.5).seedBurst > 0);
+});
+
+test('help relaxes after the pattern recovers and never exceeds its limits', () => {
+  const g = new ActivityGovernor();
+  for (let i = 0; i < 600; i++) { const r = g.update(0, .35, 1); assert.ok(r.driftBoost <= 1 && r.seedBurst <= 1); }
+  let last = g.update(.9, .35, 1);
+  for (let i = 0; i < 30; i++) last = g.update(.9, .35, 1);
+  assert.deepEqual(last, { driftBoost: 0, seedBurst: 0 });
+});
+
+test('Keep alive at zero never intervenes', () => {
+  const g = new ActivityGovernor();
+  for (let i = 0; i < 60; i++) assert.deepEqual(g.update(0, 0, 1), { driftBoost: 0, seedBurst: 0 });
+});
+
+test('activity is zero for an unchanged field and high for a new one', () => {
+  const a = Float32Array.from({ length: 400 }, (_, i) => Math.sin(i * .7)), b = Float32Array.from({ length: 400 }, (_, i) => Math.cos(i * 1.9));
+  assert.equal(fieldActivity(a, a), 0);
+  assert.ok(fieldActivity(a, b) > .8);
+  assert.equal(fieldActivity(new Float32Array(400), new Float32Array(400)), 0);
 });
 
 test('motion controls exist with lively defaults', () => {

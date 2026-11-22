@@ -187,6 +187,29 @@ try {
     console.log('variance after 2 s', variance.toFixed(4));
     assert.ok(variance > .08, `stripes have not formed: ${variance}`);
   });
+  await check('a pattern with every motion control off is stirred back to life', async () => {
+    const r = await page.evaluate(async () => {
+      const { m, passes } = window.t, engine = new m.MorphEngine(passes, 640, 360);
+      const params = { ...m.defaultMorphParams(), flowSpeed: 0, surge: 0, shimmer: 0, breathing: 0, travel: 0, fieldDrift: 0, curlAmount: 0, forkRate: 0, orbit: 0 };
+      const input = { flow: null, people: null, impulse: 0, seedBurst: 0 }; let best = 0;
+      for (let i = 0; i < 3600; i++) { engine.step(1 / 60, i / 60, params, input); if (i % 30 === 0) await new Promise(done => setTimeout(done)); if (i > 1800) best = Math.max(best, engine.activity); }
+      engine.dispose(); return { best };
+    });
+    console.log('rescued activity', r.best.toFixed(3));
+    assert.ok(r.best > .1, `pattern stayed frozen: ${r.best}`);
+  });
+  await check('Hold keeps the pattern exactly still', async () => {
+    const r = await page.evaluate(async () => {
+      const { m, passes } = window.t, engine = new m.MorphEngine(passes, 640, 360), params = { ...m.defaultMorphParams(), speed: 1 };
+      const input = { flow: null, people: null, impulse: 0, seedBurst: 0 };
+      for (let i = 0; i < 180; i++) engine.step(1 / 60, i / 60, params, input);
+      const held = { ...params, speed: 0, freezeFloor: 1 }, first = engine.readField();
+      for (let i = 0; i < 300; i++) { engine.step(1 / 60, (180 + i) / 60, held, input); if (i % 30 === 0) await new Promise(done => setTimeout(done)); }
+      const second = engine.readField(); engine.dispose(); let change = 0; for (let i = 0; i < first.length; i++) change = Math.max(change, Math.abs(first[i] - second[i]));
+      return { change };
+    });
+    assert.equal(r.change, 0);
+  });
   await check('camera movement pushes the stripes', async () => {
     const r = await page.evaluate(() => {
       const { m, passes, field } = window.t, W = 1024, H = 576, params = { ...m.defaultMorphParams(), flowSpeed: 0, surge: 0, breathing: 0, travel: 0, fieldDrift: 0, curlAmount: 0, fieldMix: 0, forkRate: 0 };
