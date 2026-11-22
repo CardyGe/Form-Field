@@ -197,6 +197,15 @@ function pictureStats(px) {
   const mean = sum / n;
   return { mean, deviation: Math.sqrt(Math.max(0, square / n - mean * mean)), maxAlpha: alpha };
 }
+// Mean absolute Laplacian of luminance: pixel-scale grain raises it far more than real edges do.
+function grainOf(px, width, height) {
+  let sum = 0;
+  for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
+    const at = (y * width + x) * 4;
+    sum += Math.abs(4 * luma(px, at) - luma(px, at - 4) - luma(px, at + 4) - luma(px, at - width * 4) - luma(px, at + width * 4));
+  }
+  return sum / ((width - 2) * (height - 2));
+}
 function closeShare(a, b, limit) {
   let close = 0;
   for (let i = 0; i < a.length; i += 4) {
@@ -268,7 +277,8 @@ async function kaleidoscopeInputs(entry, modules, config) {
     const rendered = {};
     for (const [name, project] of Object.entries(pictures)) {
       await studio.prepare(project);
-      const stats = pictureStats(frame(project, TAU * .2));
+      const px = frame(project, TAU * .2);
+      const stats = { ...pictureStats(px), grain: grainOf(px, INPUT_W, INPUT_H) };
       rendered[name] = stats;
       if (!(stats.mean > .01 && stats.deviation > .01)) throw new Error(`${name} rendered empty: ${JSON.stringify(stats)}`);
       await save(name, project);
@@ -342,6 +352,26 @@ async function kaleidoscopeInputs(entry, modules, config) {
       if (!(midLoop > .05)) throw new Error(`Feedback loop ${name} does not move: ${JSON.stringify(loops[name])}`);
     }
 
+    // Echo modulated down to 0 stays on the clear ground: no opaque flash at the clamp.
+    const held = value => { const layer = kLayer({ input: 3, echo: .3, sourceDrift: .4 }); layer.modulations.echo = { kind: 'sine', cycles: 1, phase: 0, amount: 0, points: [], range: { min: value, max: value } }; return projectOf([layer]); };
+    const atZero = held(0), atSmall = held(.001);
+    await studio.prepare(atZero);
+    const zeroPx = frame(atZero, TAU * .2);
+    await studio.prepare(atSmall);
+    const echoZero = { maxDifference: largestDifference(zeroPx, frame(atSmall, TAU * .2)) };
+    const swinging = kLayer({ input: 3, echo: .3, sourceDrift: .4 });
+    swinging.modulations.echo = { kind: 'sine', cycles: 1, phase: 0, amount: .8, points: [] };
+    const swing = projectOf([swinging]);
+    await studio.prepare(swing);
+    let lastMean = pictureStats(frame(swing, 0)).mean;
+    echoZero.largestMeanStep = 0;
+    for (let i = 1; i <= LOOP_FRAMES; i++) {
+      const mean = pictureStats(frame(swing, (i % LOOP_FRAMES) / LOOP_FRAMES * TAU)).mean;
+      echoZero.largestMeanStep = Math.max(echoZero.largestMeanStep, Math.abs(mean - lastMean));
+      lastMean = mean;
+    }
+    if (!(echoZero.maxDifference < .005) || !(echoZero.largestMeanStep < .03)) throw new Error(`Echo 0 flashes: ${JSON.stringify(echoZero)}`);
+
     // Energy, from a full-white history at the highest gain. With a held motif the map is monotone,
     // so each frame must be no brighter than the one before; a moving motif must stay under the seed.
     const energy = {};
@@ -386,7 +416,7 @@ async function kaleidoscopeInputs(entry, modules, config) {
 
     const shaderWarnings = logs.filter(line => /shader|program|glsl|feedback loop/i.test(line));
     if (shaderWarnings.length) throw new Error(`Shader warnings: ${shaderWarnings.join(' | ')}`);
-    return { id: entry.id, title: entry.title, rendered, imageVsMotif, fallbacks, emptyMax, fits, belowLifetime, loops, energy, branchCut, shaderWarnings: 0 };
+    return { id: entry.id, title: entry.title, rendered, imageVsMotif, fallbacks, emptyMax, fits, belowLifetime, loops, echoZero, energy, branchCut, shaderWarnings: 0 };
   } finally {
     console.warn = original.warn; console.error = original.error;
     studio.renderer.setRenderTarget(null);

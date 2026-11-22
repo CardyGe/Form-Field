@@ -764,7 +764,9 @@ export class StudioRenderer {
       this.kaleidoscope ??= new KaleidoscopeRenderer();
       const asset = layer.image ? this.assets.get(this.assetKey(layer.image.dataUrl, false)) : undefined;
       const picture = asset?.texture.image ? asset.texture : null;
-      const mode = kaleidoscopeInputMode(layer, { image: picture !== null, hasBelow: this.belowInput !== null });
+      // Inside a feedback step the ground stays clear even at echo 0, so modulated echo never flashes it.
+      const folding = this.feedbackHistory !== null && kaleidoscopeInput(layer.params) === KALEIDOSCOPE_INPUT.feedback;
+      const mode = folding ? 'feedback' : kaleidoscopeInputMode(layer, { image: picture !== null, hasBelow: this.belowInput !== null });
       this.kaleidoscope.draw({ layer, phase, width: this.width, height: this.height, target: this.source,
         draw: (m, t) => this.draw(m, t), mode, imageFit: layer.image?.fit,
         input: mode === 'image' ? picture : mode === 'below' ? this.belowInput : null,

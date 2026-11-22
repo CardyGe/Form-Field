@@ -279,10 +279,29 @@ vec4 kImage(vec2 p, vec2 dx, vec2 dy) {
   return color * (uKImageFit.x > 1. ? inside.x : 1.) * (uKImageFit.y > 1. ? inside.y : 1.);
 }
 
-// The history has no mip chain, so it is read at level 0 with linear filtering.
-vec4 kHistory(vec2 p) {
+// Zero-mean offsets inside the unit footprint, equally weighted so the feedback gain is unchanged.
+const vec2 K_HISTORY_TAPS[8] = vec2[8](vec2(1., -3.), vec2(-1., 3.), vec2(5., 1.), vec2(-3., -5.), vec2(-5., 5.), vec2(-7., -1.), vec2(3., 7.), vec2(7., -7.));
+// The widest spread in picture units, so the centre of a spiral stays a local average.
+const float K_HISTORY_RADIUS = .08;
+
+// The history has no mip chain, so minification is filtered by level-0 linear taps across the
+// mapped footprint. Taps go through the triangle wave, so they stay correct across a mirror.
+vec4 kHistory(vec2 p, vec2 dx, vec2 dy) {
   vec2 slope;
-  return textureLod(uKHistory, kPictureUv(p, slope), 0.);
+  vec2 uv = kPictureUv(p, slope);
+  vec2 texels = vec2(textureSize(uKHistory, 0));
+  float reach = max(length(dx * slope), length(dy * slope));
+  float size = max(length(dx * slope * texels), length(dy * slope * texels));
+  // At one texel or less a single linear tap is already right, and repeated blur would soften echoes.
+  if (size <= 1.) return textureLod(uKHistory, uv, 0.);
+  float spread = (size - 1.) / size * min(1., K_HISTORY_RADIUS / reach) / 16.;
+  vec4 sum = vec4(0.);
+  for (int i = 0; i < 8; i++) {
+    vec2 offset = K_HISTORY_TAPS[i] * spread;
+    vec2 unused;
+    sum += textureLod(uKHistory, kPictureUv(p + dx * offset.x + dy * offset.y, unused), 0.);
+  }
+  return sum / 8.;
 }
 
 vec4 kaleidoscopeColor(vec2 frame, vec2 dx, vec2 dy) {
@@ -303,7 +322,7 @@ vec4 kaleidoscopeColor(vec2 frame, vec2 dx, vec2 dy) {
   p = kWarpAfter(p, dx, dy);
   if (uKFeedback > .5) {
     vec4 motif = kMotif(p, dx, dy);
-    return motif + (1. - motif.a) * uKGain * kHistory(p);
+    return motif + (1. - motif.a) * uKGain * kHistory(p, dx, dy);
   }
   return uKHasImage > .5 ? kImage(p, dx, dy) : kMotif(p, dx, dy);
 }
