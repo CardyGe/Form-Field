@@ -52,7 +52,7 @@ test('stateEnds has one rising value per phrase state, ending at exactly 1', () 
 
 test('scoreQuality reports each broken hard limit', () => {
   const good = compose(11, DEFAULTS);
-  const ring = { group: 'ring', zone: 0, radius: 0.2, angle: 0, length: Math.PI * 2, weight: 1, colour: 0, enter: 0, exit: 1, slot: 0 } as const;
+  const ring = { group: 'ring', zone: 0, radius: 0.2, angle: 0, length: Math.PI * 2, weight: 1, colour: 0, enter: 0, exit: 1, slot: 0, shape: 'dot' } as const;
   const failures = (elements: typeof good.elements, stateEnds = good.stateEnds) => scoreQuality({ ...good, elements, stateEnds }).hardFailures.length;
   assert.ok(failures(good.elements.filter((e) => e.group !== 'hero')) > 0, 'no hero');
   assert.ok(failures([...good.elements, ring, { ...ring, radius: 0.205 }]) > 0, 'near-tangent rings');

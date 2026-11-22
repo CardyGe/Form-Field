@@ -95,10 +95,10 @@ function composeCandidate(seed: number, random: Random, params: ComposeParams): 
   };
 
   const elements: ScoreElement[] = [];
-  const add = (group: ElementGroup, zone: number, radius: number, angle: number, length: number, weight: number, colour: number, slot: number) => {
+  const add = (group: ElementGroup, zone: number, radius: number, angle: number, length: number, weight: number, colour: number, slot: number, shape: ScoreElement['shape'] = 'dot') => {
     // Collapse runs outside-in. The hub survives Rest as the point that becomes the next Seed.
     const exit = group === 'hub' ? 1 : collapseStart + (collapseEnd - collapseStart) * 0.8 * (1 - clamp(radius / OUTER_RADIUS, 0, 1));
-    elements.push({ group, zone, radius, angle: wrap(angle), length, weight, colour, enter: enterFor[group](slot), exit, slot });
+    elements.push({ group, zone, radius, angle: wrap(angle), length, weight, colour, enter: enterFor[group](slot), exit, slot, shape });
   };
 
   add('hero', heroZone, heroRadius, axis, TAU, 6 + random() * 4, 1, 0);
@@ -127,10 +127,10 @@ function composeCandidate(seed: number, random: Random, params: ComposeParams): 
   let nodes = 0;
   const density = clamp(finite(params.nodeDensity, 0.5), 0, 1);
   const squareShare = clamp(finite(params.latticeType, 0.35), 0, 1);
-  const addNode = (zone: number, radius: number, angle: number, slot: number) => {
+  const addNode = (zone: number, radius: number, angle: number, slot: number, shape: ScoreElement['shape']) => {
     if (nodes >= MAX_NODES) return;
     nodes++;
-    add('node', zone, radius, angle, 0.005, LINE.hair, zone === accentZone && slot % 3 === 0 ? 1 : 0, slot);
+    add('node', zone, radius, angle, 0.005, LINE.hair, zone === accentZone && slot % 3 === 0 ? 1 : 0, slot, shape);
   };
 
   roles.forEach((role, zone) => {
@@ -162,7 +162,7 @@ function composeCandidate(seed: number, random: Random, params: ComposeParams): 
           const radius = Math.hypot(x, y) * pitch;
           const angle = wrap(Math.atan2(y, x));
           if (radius < inner + width * 0.12 || radius > outer - width * 0.12 || angle >= sector) continue;
-          for (let copy = 0; copy < symmetry; copy++) addNode(zone, radius, axis + angle + copy * sector, nodeSlot + (Math.abs(x) + Math.abs(y)) % 4);
+          for (let copy = 0; copy < symmetry; copy++) addNode(zone, radius, axis + angle + copy * sector, nodeSlot + (Math.abs(x) + Math.abs(y)) % 4, 'square');
         }
         nodeSlot += 4;
       } else {
@@ -170,7 +170,7 @@ function composeCandidate(seed: number, random: Random, params: ComposeParams): 
         const perRow = symmetry * Math.max(1, Math.round((12 + density * 36) / symmetry));
         for (let row = 0; row < rows; row++) {
           const radius = between(inner, outer, (row + 1) / (rows + 1));
-          for (let i = 0; i < perRow; i++) addNode(zone, radius, axis + ((i + (row % 2) * 0.5) * TAU) / perRow, nodeSlot);
+          for (let i = 0; i < perRow; i++) addNode(zone, radius, axis + ((i + (row % 2) * 0.5) * TAU) / perRow, nodeSlot, 'dot');
           nodeSlot++;
         }
       }
