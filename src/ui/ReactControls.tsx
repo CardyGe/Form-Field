@@ -6,7 +6,7 @@ import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'r
 import type { MeterStore } from '../react/meter';
 import type { ReactivityEngine } from '../react/engine';
 import { listAudioInputs, TEST_TONE } from '../react/audio';
-import { BPM_RANGE, type TempoSource } from '../react/tempo';
+import { BPM_RANGE, type SavedTempoSource } from '../react/tempo';
 import { SOUND_SIGNALS, signalLabel, type Signals } from '../react/signals';
 import type { Link } from '../react/links';
 import { startLearning, stopLearning, stopLearningFor, useLearning } from './react-learn';
@@ -17,7 +17,7 @@ function useEngine(engine: ReactivityEngine | null): void {
   useEffect(() => engine ? engine.onChange(bump) : undefined, [engine]);
 }
 
-const TEMPO_LABELS: Record<TempoSource, string> = { beat: 'Follow the beat', tap: 'Tap', midi: 'MIDI clock', fixed: 'Fixed' };
+const TEMPO_LABELS: Record<SavedTempoSource, string> = { beat: 'Follow the beat', tap: 'Tap', midi: 'MIDI clock', fixed: 'Fixed' };
 
 function audioLine(engine: ReactivityEngine): string {
   const s = engine.audio.status;
@@ -78,8 +78,8 @@ export function ReactDevices({ engine, meter, onStart, layout = 'column', audioO
       <i className={`react-light ${midiActive ? 'on' : ''}`} title="Lights when a MIDI message arrives" /></label>
     {p.midi && <p className={`react-status ${midi.state === 'unavailable' ? 'warn' : ''}`}>{midi.state === 'on' ? (midi.devices.length ? midi.devices.join(', ') : 'No MIDI device connected') : midi.state === 'unavailable' ? `MIDI is unavailable: ${midi.reason}` : 'Starting…'}</p>}
     <div className="react-tempo">
-      <label className="map-field">Tempo<select aria-label="Tempo source" value={p.tempo} onChange={e => engine.setPrefs({ tempo: e.target.value as TempoSource })}>
-        {(Object.keys(TEMPO_LABELS) as TempoSource[]).map(k => <option key={k} value={k}>{TEMPO_LABELS[k]}</option>)}</select></label>
+      <label className="map-field">Tempo<select aria-label="Tempo source" value={p.tempo} onChange={e => engine.setPrefs({ tempo: e.target.value as SavedTempoSource })}>
+        {(Object.keys(TEMPO_LABELS) as SavedTempoSource[]).map(k => <option key={k} value={k}>{TEMPO_LABELS[k]}</option>)}</select></label>
       {p.tempo === 'fixed'
         ? <label className="map-field">BPM<input aria-label="BPM" className="narrow" type="number" min={BPM_RANGE.min} max={BPM_RANGE.max} defaultValue={Math.round(p.bpm)} key={p.bpm}
             onBlur={e => { const v = Number(e.target.value); if (Number.isFinite(v)) engine.setPrefs({ bpm: Math.min(BPM_RANGE.max, Math.max(BPM_RANGE.min, v)) }); }}

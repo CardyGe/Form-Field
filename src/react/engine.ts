@@ -5,12 +5,12 @@
  */
 import { AutoGain } from './features';
 import { BeatDetector } from './beat';
-import { TempoClock, type TempoSource } from './tempo';
+import { TempoClock, type SavedTempoSource } from './tempo';
 import { AudioInput, TEST_TONE, type AudioStatus } from './audio';
 import { MidiInput, type MidiStatus } from './midi';
 import type { Signals } from './signals';
 
-export interface ReactPrefs { audioDevice: string | null; midi: boolean; tempo: TempoSource; bpm: number }
+export interface ReactPrefs { audioDevice: string | null; midi: boolean; tempo: SavedTempoSource; bpm: number }
 const PREFS_KEY = 'reactivity';
 const DEFAULT_PREFS: ReactPrefs = { audioDevice: null, midi: false, tempo: 'beat', bpm: 120 };
 
@@ -21,7 +21,7 @@ function loadPrefs(): ReactPrefs {
     return {
       audioDevice: typeof raw.audioDevice === 'string' ? raw.audioDevice : null,
       midi: raw.midi === true,
-      tempo: (['beat', 'tap', 'midi', 'fixed'] as const).includes(raw.tempo as TempoSource) ? raw.tempo as TempoSource : 'beat',
+      tempo: (['beat', 'tap', 'midi', 'fixed'] as const).includes(raw.tempo as SavedTempoSource) ? raw.tempo as SavedTempoSource : 'beat',
       bpm: typeof raw.bpm === 'number' && Number.isFinite(raw.bpm) ? raw.bpm : 120,
     };
   } catch { return { ...DEFAULT_PREFS }; }
@@ -68,8 +68,9 @@ export class ReactivityEngine {
   setPrefs(change: Partial<ReactPrefs>): void {
     this.prefs = { ...this.prefs, ...change };
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs)); } catch { /* kept for this session */ }
-    if (change.tempo) this.tempo.setSource(change.tempo);
-    if (change.bpm !== undefined) this.tempo.setBpm(change.bpm);
+    // During a show the clock stays with the show; a saved change takes effect when it ends.
+    if (change.tempo && !this.show) this.tempo.setSource(change.tempo);
+    if (change.bpm !== undefined && !this.show) this.tempo.setBpm(change.bpm);
     if ('audioDevice' in change) void this.applyAudio();
     if ('midi' in change) { if (this.prefs.midi) void this.midi.start(); else this.midi.stop(); }
     this.changed();
@@ -87,7 +88,31 @@ export class ReactivityEngine {
     else await this.audio.start(this.prefs.audioDevice, this.allow);
   }
 
-  tap(): void { this.tempo.tap(performance.now() / 1000); if (this.prefs.tempo !== 'tap') this.setPrefs({ tempo: 'tap' }); }
+  tap(): void {
+    if (this.show) { this.showTap(); return; }
+    this.tempo.tap(performance.now() / 1000);
+    if (this.prefs.tempo !== 'tap') this.setPrefs({ tempo: 'tap' });
+  }
+
+  /** The tempo before the show, while one is running. None of the show controls write preferences. */
+  private show: { bpm: number } | null = null;
+  /** A show follows the music, unless the saved source is MIDI clock, which stays in charge. */
+  beginShowClock(): void {
+    if (this.show) return;
+    this.show = { bpm: this.tempo.bpm };
+    if (this.prefs.tempo !== 'midi') this.tempo.setSource('follow');
+  }
+  /** Back to the saved source and its tempo. The beat count carries on. */
+  endShowClock(): void {
+    if (!this.show) return;
+    const { bpm } = this.show;
+    this.show = null;
+    this.tempo.setSource(this.prefs.tempo);
+    if (this.prefs.tempo !== 'midi') this.tempo.setBpm(this.prefs.tempo === 'fixed' ? this.prefs.bpm : bpm);
+  }
+  showTap(): void { this.tempo.manualTap(performance.now() / 1000); }
+  followAgain(): void { this.tempo.resumeFollow(performance.now() / 1000); }
+  setBarStart(): void { this.tempo.setBarStart(performance.now() / 1000); }
 
   private run(): void {
     const loop = (now: number) => {
@@ -111,10 +136,11 @@ export class ReactivityEngine {
       out['audio.level'] = this.gains.level.update(sound.level, dt);
       const { onset } = this.beat.update(sound.bass, t);
       const beat = this.beat.state(t);
-      if (onset) this.tempo.detected(t, beat.bpm);
+      if (onset) { this.tempo.detected(t, beat.bpm); this.tempo.followOnset(t, beat.bpm); }
       out['beat.pulse'] = beat.pulse;
       out['beat.count'] = beat.count;
     }
+    this.tempo.followTick(t);
     const clock = this.tempo.advance(t);
     out['tempo.phase'] = clock.phase; out['tempo.beat'] = clock.beat; out['tempo.bpm'] = clock.bpm;
     Object.assign(out, this.midi.values);
