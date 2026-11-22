@@ -12,7 +12,11 @@ import { fullscreenVertex } from './shaders';
 import { sourceViewMatrix } from './source-view';
 
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
-export interface MeridianRuntime { list?: DisplayList; signals?: Readonly<Record<string, number>>; dt?: number }
+export interface MeridianRuntime {
+  list?: DisplayList; signals?: Readonly<Record<string, number>>; dt?: number;
+  /** The layer's values before animation. Structural values come from here, so a saved animation cannot rebuild the Score each frame. */
+  structure?: Readonly<Record<string, number>>;
+}
 
 const TAU = Math.PI * 2;
 const CAPACITY = 20000;
@@ -164,6 +168,11 @@ export class MeridianRenderer {
     for (let i = 0; i < ALL_KEYS.length; i++) {
       const value = source[ALL_KEYS[i]];
       live[ALL_KEYS[i]] = Number.isFinite(value) ? value : MERIDIAN_DEFAULTS[ALL_KEYS[i]];
+    }
+    const structure = runtime?.structure;
+    if (structure) for (let i = 0; i < STRUCTURAL.length; i++) {
+      const value = structure[STRUCTURAL[i]];
+      live[STRUCTURAL[i]] = Number.isFinite(value) ? value : MERIDIAN_DEFAULTS[STRUCTURAL[i]];
     }
     applyMacros(source, live);
 

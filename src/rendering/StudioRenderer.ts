@@ -20,7 +20,7 @@ import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
-import { MeridianRenderer } from './MeridianRenderer';
+import { MeridianRenderer, type MeridianRuntime } from './MeridianRenderer';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
@@ -172,6 +172,8 @@ export class StudioRenderer {
   private readonly liquidLayouts = new Map<string, THREE.DataTexture>();
   private scope: ScopeRenderer | null = null;
   private meridian: MeridianRenderer | null = null;
+  private readonly meridianRuntime: MeridianRuntime = {};
+  private readonly drawPass = (material: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget) => this.draw(material, output);
   /** Reduced-size stand-ins for `source` while the preview draws time slices. */
   private sliceSource: THREE.WebGLRenderTarget | null = null;
   private sliceSourceSmooth: THREE.WebGLRenderTarget | null = null;
@@ -730,7 +732,8 @@ export class StudioRenderer {
       this.draw(this.image, this.source);
     } else if (layer.kind === 'meridian') {
       this.meridian ??= new MeridianRenderer();
-      this.meridian.draw(this.renderer, layer, phase, this.width, this.height, this.source, (m, t) => this.draw(m, t));
+      this.meridianRuntime.structure = original.params;
+      this.meridian.draw(this.renderer, layer, phase, this.width, this.height, this.source, this.drawPass, this.meridianRuntime);
     } else {
       const u = this.sculptureUniforms;
       for(const [key,value] of Object.entries(SCULPTURE_SHAPE_DEFAULTS))u[`studio${key[0].toUpperCase()}${key.slice(1)}`].value=number(layer,key,value);

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PRESETS, applyFinish, applyPreset, createLayer, createProject, finishSupported, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { GLOW_KEYS } from '../src/core/finishing';
-import { bloomLevelSize, bloomWeights, glowActive, supportsGlow } from '../src/rendering/bloom';
+import { BloomPyramid, bloomLevelSize, bloomWeights, glowActive, supportsGlow } from '../src/rendering/bloom';
+import * as THREE from 'three';
 
 test('glow is off by default and older projects migrate without it', () => {
   const project = createProject();
@@ -89,4 +90,17 @@ test('variations never switch glow on, and keep an authored glow near where it w
     assert.ok(Math.abs(varied.params.glowThreshold - .8) <= .1201, `threshold ${varied.params.glowThreshold}`);
     assert.ok(Math.abs(varied.params.glowSize - .2) <= .1201, `size ${varied.params.glowSize}`);
   }
+});
+
+test('the bloom pyramid reuses its result and keeps every level size', () => {
+  const pyramid = new BloomPyramid(), source = new THREE.Texture(), sizes: [number, number][] = [];
+  const draw = (_material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => { sizes.push([target.width, target.height]); };
+  const first = pyramid.render(source, 1920, 1080, draw), textures = [...first];
+  const second = pyramid.render(source, 1920, 1080, draw);
+  assert.equal(second, first, 'one array, filled again');
+  assert.deepEqual(second, textures);
+  assert.equal(second.length, 5);
+  const expected = [0, 1, 2, 3, 4].flatMap(i => { const s = bloomLevelSize(i, 1920, 1080); return [[s.width, s.height], [s.width, s.height]]; });
+  assert.deepEqual(sizes, [...expected, ...expected]);
+  pyramid.dispose(); source.dispose();
 });
