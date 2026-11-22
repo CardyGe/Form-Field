@@ -12,6 +12,8 @@ export type MapMessage =
   /** One source's composition, sent once per revision. */
   | { type: 'source'; id: string; revision: number; project: Project }
   | { type: 'blackout'; on: boolean }
+  /** The wall's flash guard. Not saved: every launch starts with it on. */
+  | { type: 'flashGuard'; on: boolean }
   | { type: 'testGrid'; on: boolean }
   | { type: 'freeze'; on: boolean }
   | { type: 'identify'; shapeId: string | null }
@@ -109,6 +111,7 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && (value.fadeMs as number) >= 0 && (value.fadeMs as number) <= 30000));
     case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && (value.revision as number) >= 0 && plain(value.project);
     case 'blackout':
+    case 'flashGuard':
     case 'testGrid':
     case 'freeze': return typeof value.on === 'boolean';
     case 'identify': return idOrNull(value.shapeId);

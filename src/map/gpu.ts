@@ -10,6 +10,7 @@
  */
 import { STAGE_SIZE } from './show';
 import { IDENTITY, type H3 } from './homography';
+import { GUARD_COLUMNS, GUARD_MAX_STEP, GUARD_ROWS, flashGuardApplyGLSL, flashGuardGateGLSL, flashGuardStepGLSL } from '../rendering/flash-guard';
 
 const VERTEX = `#version 300 es
 in vec2 aUnit;
@@ -100,6 +101,29 @@ void main() {
   o = vec4(c.rgb, 1.);  // premultiplied over the black stage
 }`;
 
+/** Advances the flash guard's cells from the finished stage. */
+const GUARD = `#version 300 es
+precision highp float;
+out vec4 o;
+${flashGuardStepGLSL}
+void main() { o = flashGuardStep(gl_FragCoord.xy / vec2(${GUARD_COLUMNS}., ${GUARD_ROWS}.)); }`;
+
+/** One pixel saying how much of the screen is over its flash budget. */
+const GUARD_GATE = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform vec2 uStage;
+${flashGuardGateGLSL}
+void main() { o = flashGuardGate(); }`;
+
+/** The guarded stage: this frame, with held cells blended towards the last frame shown. */
+const GUARD_SHOW = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform vec2 uStage;
+${flashGuardApplyGLSL}
+void main() { o = flashGuardShow(gl_FragCoord.xy / uStage); }`;
+
 export interface Texture { tex: WebGLTexture; width: number; height: number }
 /** One shape to draw. Matrices are 3 × 3, row major, from stage pixels to the picture's 0..1 square. */
 export interface ShapeDraw {
@@ -136,6 +160,17 @@ export class Gpu {
   private copyFb!: WebGLFramebuffer;
   private drawFb!: WebGLFramebuffer;
   private blank!: Texture;
+  private guardP!: Program;
+  private guardShowP!: Program;
+  private guardGateP!: Program;
+  /** The screen-wide gate, one pixel, read from one and written to the other each frame. */
+  private guardGates: { tex: WebGLTexture; fb: WebGLFramebuffer }[] | null = null;
+  /** The last two guarded stages: index 0 is what the wall shows. */
+  private guardFrames: { tex: WebGLTexture; fb: WebGLFramebuffer }[] | null = null;
+  /** The flash guard's cells, read from one and written to the other each frame. Null if this card cannot hold them. */
+  private guardTargets: { tex: WebGLTexture; fb: WebGLFramebuffer }[] | null = null;
+  private guardFresh = true;
+  private guardShown = false;
   private readback: { buffer: WebGLBuffer; sync: WebGLSync } | null = null;
   private readbackBuffer: WebGLBuffer | null = null;
   /** Goes up whenever the context is set up again: a readback started before it will never arrive. */
@@ -173,6 +208,9 @@ export class Gpu {
     this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uLook', 'uAlpha', 'uDecor', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
     this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex']);
+    this.guardP = compile(GUARD, ['uRect', 'uStage', 'uGuardSource', 'uGuardLast', 'uGuardState', 'uGuardGate', 'uGuardSeconds', 'uGuardReset', 'uGuardEncoded']);
+    this.guardGateP = compile(GUARD_GATE, ['uRect', 'uStage', 'uGuardCells', 'uGuardGateLast', 'uGuardSeconds', 'uGuardReset']);
+    this.guardShowP = compile(GUARD_SHOW, ['uRect', 'uStage', 'uGuardImage', 'uGuardPrevious', 'uGuardCells', 'uGuardImageEncoded']);
     this.quad = gl.createVertexArray()!;
     gl.bindVertexArray(this.quad);
     const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -189,6 +227,20 @@ export class Gpu {
     ({ tex: this.previewTex, fb: this.previewFb } = target(PREVIEW.width, PREVIEW.height));
     this.copyFb = gl.createFramebuffer()!;
     this.drawFb = gl.createFramebuffer()!;
+    this.guardTargets = null; this.guardFrames = null; this.guardGates = null; this.guardFresh = true; this.guardShown = false;
+    if (gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float')) {
+      const floatTarget = (width: number, height: number) => {
+        const tex = this.texture();
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
+        const fb = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        return { tex, fb };
+      };
+      this.guardTargets = [floatTarget(GUARD_COLUMNS, GUARD_ROWS), floatTarget(GUARD_COLUMNS, GUARD_ROWS)];
+      this.guardGates = [floatTarget(1, 1), floatTarget(1, 1)];
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) { this.guardTargets = null; this.guardGates = null; }
+      else this.guardFrames = [target(STAGE_SIZE.width, STAGE_SIZE.height), target(STAGE_SIZE.width, STAGE_SIZE.height)];
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -302,9 +354,70 @@ export class Gpu {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  /** The stage to the canvas. inv: canvas pixels to stage pixels (the stage corners), or the identity. */
-  finish(inv: H3 = IDENTITY): void {
+  /** Whether the flash guard can run on this graphics card. */
+  get guardAvailable(): boolean { return this.guardTargets !== null; }
+
+  /** One flash-guard step from the finished stage. The next step after a pause starts afresh. */
+  private stepGuard(seconds: number): void {
+    const gl = this.gl, targets = this.guardTargets, frames = this.guardFrames, gates = this.guardGates;
+    if (!targets || !frames || !gates) { this.guardShown = false; return; }
+    const { program, u } = this.guardP;
+    gl.disable(gl.BLEND);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targets[1].fb);
+    gl.viewport(0, 0, GUARD_COLUMNS, GUARD_ROWS);
+    gl.useProgram(program);
+    gl.uniform4f(u.uRect, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.uniform2f(u.uStage, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.stageTex); gl.uniform1i(u.uGuardSource, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, targets[0].tex); gl.uniform1i(u.uGuardState, 1);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.guardFresh ? this.stageTex : frames[0].tex); gl.uniform1i(u.uGuardLast, 2);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, gates[0].tex); gl.uniform1i(u.uGuardGate, 3);
+    gl.uniform1f(u.uGuardSeconds, Number.isFinite(seconds) ? Math.max(0, Math.min(GUARD_MAX_STEP, seconds)) : 0);
+    gl.uniform1f(u.uGuardReset, this.guardFresh ? 1 : 0);
+    gl.uniform1f(u.uGuardEncoded, 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    targets.reverse();
+    // How much of the screen is over budget now decides whether the next frame holds anything.
+    const gate = this.guardGateP;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, gates[1].fb);
+    gl.viewport(0, 0, 1, 1);
+    gl.useProgram(gate.program);
+    gl.uniform4f(gate.u.uRect, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.uniform2f(gate.u.uStage, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.uniform1f(gate.u.uGuardSeconds, Number.isFinite(seconds) ? Math.max(0, Math.min(GUARD_MAX_STEP, seconds)) : 0);
+    gl.uniform1f(gate.u.uGuardReset, this.guardFresh ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.blank.tex);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, targets[0].tex); gl.uniform1i(gate.u.uGuardCells, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, gates[0].tex); gl.uniform1i(gate.u.uGuardGateLast, 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gates.reverse();
+    // The frame the audience sees, kept as the next frame's "last shown".
+    const show = this.guardShowP;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, frames[1].fb);
+    gl.viewport(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.useProgram(show.program);
+    gl.uniform4f(show.u.uRect, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.uniform2f(show.u.uStage, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.uniform1f(show.u.uGuardImageEncoded, 1);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.stageTex); gl.uniform1i(show.u.uGuardImage, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.guardFresh ? this.stageTex : frames[0].tex); gl.uniform1i(show.u.uGuardPrevious, 1);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, targets[0].tex); gl.uniform1i(show.u.uGuardCells, 2);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    frames.reverse();
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.blank.tex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.blank.tex);
+    gl.activeTexture(gl.TEXTURE0);
+    this.guardFresh = false; this.guardShown = true;
+  }
+
+  /**
+   * The stage to the canvas. inv: canvas pixels to stage pixels (the stage corners), or the identity.
+   * guardSeconds: time since the last drawn frame, for the flash guard; null turns the guard off for this frame.
+   */
+  finish(inv: H3 = IDENTITY, guardSeconds: number | null = null): void {
     const gl = this.gl;
+    if (guardSeconds === null) { this.guardFresh = true; this.guardShown = false; }
+    else this.stepGuard(guardSeconds);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     this.flat(inv, this.canvas.width, this.canvas.height);
@@ -318,7 +431,7 @@ export class Gpu {
     gl.uniform2f(u.uStage, STAGE_SIZE.width, STAGE_SIZE.height);
     gl.uniform2f(u.uOut, w, h);
     gl.uniformMatrix3fv(u.uInv, false, columns(inv));
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.stageTex); gl.uniform1i(u.uTex, 0);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.guardShown && this.guardFrames ? this.guardFrames[0].tex : this.stageTex); gl.uniform1i(u.uTex, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.enable(gl.BLEND);
   }

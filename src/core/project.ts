@@ -209,6 +209,7 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     { ...parameter('zoomFlight', 'Zoom flight', 0, 1, 0.01, 0, 'Motion'), description: 'Flies continuously into the pattern; each loop zooms one step deeper and fades into the next. 0 is off.' },
     { ...parameter('outside', 'Outside colour', 0, 1, 0.01, 0, 'Material'), description: 'Julia only: fills the space beyond the set with dim colour bands instead of black.' },
     { ...parameter('approach', 'Fly in', 0, 1, 0.01, 0, 'Camera'), description: 'Moves the camera inside the Mandelbox toward its folded core. 0 frames the whole box from outside.' },
+    { ...parameter('flySway', 'Fly-in sway', 0, 1, 0.01, 0, 'Camera'), description: 'Replaces the full orbit of Fly in with a gentle side-to-side sway. 0 keeps the full orbit.' },
     parameter('quality', 'Render quality', 0, 2, 1, 2, 'Material'),
     parameter('density', 'Color density', 0.25, 3, 0.01, 1, 'Material'),
     parameter('juliaReal', 'Julia real', -1.2, 0.4, 0.00001, -0.74543, 'Shape'),
@@ -454,7 +455,7 @@ export function readParameterDefinitions(kind: LayerKind): readonly Readonly<Par
 }
 
 const FRACTAL_ADDED_FIELDS = [
-  'zoomFlight', 'approach', 'outside', 'variant', 'quality', 'density', 'juliaReal', 'juliaImag',
+  'zoomFlight', 'approach', 'flySway', 'outside', 'variant', 'quality', 'density', 'juliaReal', 'juliaImag',
   'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth',
   'focalX', 'focalY', 'cutout', 'evolution', 'reveal', 'passage', 'depth', 'bank', 'position', 'autoTravel', 'afterglow',
 ];
@@ -521,7 +522,7 @@ function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const familySpecific: Record<string, number[]> = {
     juliaReal: [1], juliaImag: [1], trap: [1],
     boxScale: [2], boxRadius: [2], radial: [2], roughness: [2], lightAngle: [2],
-    lineWidth: [0, 1, 3], zoomFlight: [0, 1], approach: [2], outside: [1],
+    lineWidth: [0, 1, 3], zoomFlight: [0, 1], approach: [2], flySway: [2], outside: [1],
     morph: [0, 1, 2], reveal: [0, 1, 3], cutout: [0, 1, 3], passage: [2],
     depth: [2, 3], bank: [2, 3], position: [3], autoTravel: [3], afterglow: [3],
   };
@@ -569,9 +570,9 @@ export const PRESETS: Preset[] = [
   preset('fractal-molten-petals', 'Molten Petals', 'Petals folding open inside a moving lens.', 'fractal', MOLTEN, { evolution: 0, style: 0, variant: 1, scale: .7, detail: .85, fold: .65, symmetry: 10, dance: .7, lens: .7, colorRun: -1, neon: .15, glow: .75, density: 1.8 }),
   preset('fractal-woven-storm', 'Woven Storm', 'Crossing ribbons pulled into a storm.', 'fractal', ICE_FIRE, { evolution: 0, style: 0, variant: 2, scale: .95, detail: .8, symmetry: 6, dance: .8, swirl: .75, colorRun: 3, neon: .25, glow: .55, lineWidth: .8, density: 1.5 }),
   preset('fractal-melting-cathedral', 'Melting Cathedral', 'Folded architecture sliding like hot glass.', 'fractal', PSYCH_70S, { evolution: 0, style: 2, variant: 0, scale: 1.9, detail: .42, fold: 0, approach: .85, dance: .3, swirl: .3, melt: .75, colorRun: 1, neon: .1, relief: .8, glow: .8, density: 2.4, exposure: 1.9, contrast: .62 }),
-  preset('fractal-warp-core', 'Warp Core', 'A breathing machine seen through a heavy lens.', 'fractal', ELECTRIC_LIME, { evolution: 0, style: 2, variant: 2, scale: 2, detail: .42, fold: 0, approach: .85, dance: .55, lens: .85, colorRun: 2, neon: .15, relief: .85, glow: .8, density: 2.4, exposure: 1.6, contrast: .62 }),
+  preset('fractal-warp-core', 'Warp Core', 'A breathing machine seen through a heavy lens.', 'fractal', ELECTRIC_LIME, { evolution: 0, style: 2, variant: 2, scale: 2, detail: .42, fold: 0, approach: .85, flySway: .12, travel: .1, dance: .35, lens: .85, colorRun: 0, neon: .15, relief: .45, glow: .8, density: 2.4, exposure: 1.6, contrast: .62 }),
   preset('fractal-neon-vault', 'Neon Vault', 'Flying through sphere folds lit from inside.', 'fractal', VAPOR, { evolution: 0, style: 2, variant: 1, scale: 1.85, detail: .32, fold: .12, approach: .8, dance: .35, swirl: .25, colorRun: -1, neon: .15, relief: .85, glow: .9, density: 2.4, exposure: 1.6, contrast: .62 }),
-  preset('fractal-black-sun', 'Black Sun', 'A radial box fold pulsing around a dark core.', 'fractal', BLOOD_ORANGE, { evolution: 0, style: 2, variant: 0, radial: 1, symmetry: 8, scale: 1.9, detail: .42, fold: 0, approach: .85, dance: .5, swirl: .55, colorRun: 2, neon: .15, relief: .85, glow: .85, density: 2.4, exposure: 1.5, contrast: .62 }),
+  preset('fractal-black-sun', 'Black Sun', 'A radial box fold pulsing around a dark core.', 'fractal', BLOOD_ORANGE, { evolution: 0, style: 2, variant: 0, radial: 1, symmetry: 8, scale: 1.9, detail: .42, fold: 0, approach: .85, flySway: .12, travel: .1, dance: .35, swirl: .55, colorRun: 0, neon: .15, relief: .45, glow: .85, density: 2.4, exposure: 1.5, contrast: .62 }),
   preset('kaleido-acid-melt', 'Acid Melt', 'Neon rosette sagging and swirling like hot wax.', 'kaleidoscope', ACID_DRIP, { motif: 3, sectors: 6, motifScale: 1.8, lineWidth: 1.5, twist: .55, lens: .5, melt: .75 }),
   preset('kaleido-black-hole', 'Black Hole Bloom', 'Light lines bent into a pulsing gravity well.', 'kaleidoscope', ELECTRIC_LIME, { motif: 3, spiral: 1, spiralA: 3, spiralB: 2, spiralScale: 6, zoomCycles: 3, motifScale: 1, lineWidth: 1.3, twist: .7, lens: .9 }),
   preset('kaleido-ribbon-whirlpool', 'Ribbon Whirlpool', 'Woven strands dragged into a turning whirlpool.', 'kaleidoscope', BLOOD_ORANGE, { motif: 4, sectors: 7, motifScale: 2.6, lineWidth: 2.3, twist: .9, lens: .45 }),

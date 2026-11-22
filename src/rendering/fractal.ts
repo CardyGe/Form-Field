@@ -15,7 +15,7 @@ uniform float uAspect,uPhase,uSeed,uStyle,uScale,uDetail,uFold,uSymmetry,uTwist;
 uniform float uMorph,uTravel,uOffset,uRelief,uGlow,uContrast,uCameraYaw,uCameraPitch,uZoom;
 uniform float uVariant,uQuality,uDensity,uJuliaReal,uJuliaImag,uTrap,uLineWidth;
 uniform float uBoxScale,uBoxRadius,uRadial,uRoughness,uLightAngle,uExposure;
-uniform float uZoomFlight,uApproach,uOutside;
+uniform float uZoomFlight,uApproach,uFlySway,uOutside;
 uniform float uSwirl,uLens,uMelt,uDance,uNeon;
 uniform float uFocalX,uFocalY,uCutout,uReveal,uPassage,uDepth,uBank,uPosition,uAutoTravel,uAfterglow,uEvolution;
 // Extra magnification for Zoom flight; 1 leaves the plane unchanged.

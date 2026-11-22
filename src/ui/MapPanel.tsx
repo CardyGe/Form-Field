@@ -1,3 +1,4 @@
+import { FlashGuardButton } from './FlashGuardButton';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import { useMap, showReacts, type MapTool } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
@@ -741,6 +742,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
           : <button className="primary-button" disabled={!map.desktop || map.display === null} title="Show the stage on the chosen projector, full screen · On this screen it opens as a window you can move · Esc closes it" onClick={() => void map.openOutput()}>Open output</button>}
         <span className="divider" />
         <button className={`text-button live-toggle ${map.blackout ? 'on' : ''}`} aria-pressed={map.blackout} title="Black out the projector" onClick={() => map.setBlackout(!map.blackout)}><Icon name="eyeOff" size={16} /><span>Blackout</span></button>
+        <FlashGuardButton on={map.flashGuard} onChange={map.setFlashGuard} />
         <button className={`text-button live-toggle ${map.freeze ? 'on' : ''}`} aria-pressed={map.freeze} title="Hold the picture: the instruments stop where they are" onClick={() => map.setFreeze(!map.freeze)}><Icon name="pause" size={16} /><span>Freeze</span></button>
         <button className="text-button" aria-pressed={map.testGrid} title="Show a numbered grid and each shape's outline on the projector" onClick={() => map.setTestGrid(!map.testGrid)}><Icon name="grid" size={16} /><span>Test grid</span></button>
         <button className={`text-button live-toggle ${cornersMode ? 'on' : ''}`} aria-pressed={cornersMode} title="Fix a projector that was nudged: drag the four numbered corners (or use the arrow keys) until the picture lands where it did" onClick={() => { setCornersMode(!cornersMode); clearDrag(); }}><Icon name="focus" size={16} /><span>Stage corners</span></button>

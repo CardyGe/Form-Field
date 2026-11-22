@@ -151,6 +151,8 @@ export class MapCompositor {
   private fadeClock = 0;
   private drawnShapes = new Set<string>();
   private overlayFor: { show: PlayShow; options: string } | null = null;
+  /** When the flash guard last stepped; null while it is off. */
+  private guardClock: number | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
@@ -542,7 +544,11 @@ export class MapCompositor {
       const overlay = this.overlayPicture();
       if (overlay) gpu.layer(overlay);
     }
-    gpu.finish(this.corners);
+    // The wall's last step. The operator's own screen and the test grid are not part of the show picture.
+    const clock = performance.now();
+    const guarded = this.options.flashGuard !== false && !this.options.operator && !this.options.blackout && !this.options.testGrid;
+    gpu.finish(this.corners, guarded ? (this.guardClock === null ? 0 : (clock - this.guardClock) / 1000) : null);
+    this.guardClock = guarded ? clock : null;
     // A fade on a shape that is not being drawn (hidden, a Blocker, test grid, blackout) has nothing to show: it ends,
     // so a still show stops being redrawn.
     for (const id of [...this.fades.keys()]) if (!this.drawnShapes.has(id)) this.endFade(id);

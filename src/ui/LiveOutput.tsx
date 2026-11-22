@@ -24,6 +24,7 @@ export default function LiveOutput() {
     const off = bridge.onMessage(message => {
       if (message.type === 'settings') stage.apply(latest = validateLiveSettings(message.settings));
       else if (message.type === 'blackout') stage.renderer.blackout = message.on === true;
+      else if (message.type === 'flashGuard') stage.renderer.flashGuard = message.on !== false;
       else if (message.type === 'clear') stage.renderer.clear();
       else if (message.type === 'retry') stage.retry(latest);
       else if (message.type === 'signals') { if (acceptSignals(message.signals)) stage.renderer.signals = message.signals; }

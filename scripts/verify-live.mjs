@@ -314,6 +314,7 @@ try {
     for (const [surface,motion] of [['blades','sweep'],['scales','ricochet'],['weave','ripple']]) {
       const result = await page.evaluate(([surface,motion]) => {
         const { renderer } = window.live.make(s => { s.look = 'relief'; s.relief.surface = surface; s.relief.motion = motion; s.relief.size = 'nano'; });
+        renderer.flashGuard = false; // This compares exact artwork across instant redraws.
         window.live.run(32);
         function capture(palette) {
           renderer.settings.reliefPalette = palette;
@@ -416,7 +417,7 @@ try {
     assert.ok(r.before > .02, `nothing painted first (${r.before})`); assert.ok(r.after.max <= 5, `left ${r.after.max}/255`);
   });
   await check('paint: clear returns exactly the ground', async () => {
-    const r = await page.evaluate(() => { window.live.make(); window.live.run(120); const { renderer, source } = window.live.current; source.moving = false; window.live.run(40); renderer.clear(); renderer.frame(0); return window.live.painted(0, 0); });
+    const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.flashGuard = false; /* exact artwork, not the guard */ window.live.run(120); const { renderer, source } = window.live.current; source.moving = false; window.live.run(40); renderer.clear(); renderer.frame(0); return window.live.painted(0, 0); });
     assert.equal(r.max, 0);
   });
   await check('paint: white ground', async () => {

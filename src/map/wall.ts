@@ -57,6 +57,7 @@ export function applyMapMessage(state: WallState, value: unknown): WallState {
     }
     case 'freeze': return { ...state, freeze: message.on };
     case 'blackout': return { ...state, options: { ...state.options, blackout: message.on } };
+    case 'flashGuard': return { ...state, options: { ...state.options, flashGuard: message.on } };
     case 'testGrid': return { ...state, options: { ...state.options, testGrid: message.on } };
     case 'identify': return { ...state, options: { ...state.options, identifyId: message.shapeId } };
     case 'crosshair': return { ...state, options: { ...state.options, crosshair: message.point, selectedId: message.shapeId } };

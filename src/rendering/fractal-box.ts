@@ -89,7 +89,7 @@ float boxShadow(vec3 p,vec3 light,float epsilon) {
 vec4 traceBox(vec2 offset) {
   float size=uScale/1.7;
   float oldMotion=legacyCameraMotion();
-  float yaw=uCameraYaw+oldMotion*(uTravel*.25*sin(uPhase)+(uApproach>0.?uPhase:0.));
+  float yaw=uCameraYaw+oldMotion*(uTravel*.25*sin(uPhase)+(uApproach>0.?(uFlySway>0.?uFlySway*.7*sin(uPhase):uPhase):0.));
   float pitch=uCameraPitch+oldMotion*uTravel*.12*cos(uPhase);
   float radius=2.*length(boxLimits())/size+.01/size;
   float framing=radius+3.6/max(uZoom,.5)-oldMotion*uTravel*.35*cos(uPhase);

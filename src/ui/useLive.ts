@@ -23,6 +23,8 @@ export function useLive(onError: (message: string) => void) {
   const [displays, setDisplays] = useState<Display[]>([]);
   const [outputOpen, setOutputOpen] = useState(false);
   const [blackout, setBlackoutState] = useState(false);
+  // Not saved: every launch starts with the guard on.
+  const [flashGuard, setFlashGuardState] = useState(true);
   const [view, setView] = useState<'art' | 'tracking' | 'people'>('art');
   const [people, setPeople] = useState<{ status: PeopleStatus | null; roomCaptured: boolean }>({ status: null, roomCaptured: false });
   const [file, setFile] = useState<File | null>(null);
@@ -31,8 +33,8 @@ export function useLive(onError: (message: string) => void) {
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const stage = useRef<Stage | null>(null);
   const unsaved = useRef<LiveSettings | null>(null);
-  const latest = useRef({ settings, blackout, file });
-  latest.current = { settings, blackout, file };
+  const latest = useRef({ settings, blackout, file, flashGuard });
+  latest.current = { settings, blackout, file, flashGuard };
 
   // Saved settings, camera access and the list of displays, once.
   useEffect(() => {
@@ -68,6 +70,7 @@ export function useLive(onError: (message: string) => void) {
         const now = latest.current;
         if (now.settings) bridge.send({ type: 'settings', settings: now.settings });
         bridge.send({ type: 'blackout', on: now.blackout });
+        bridge.send({ type: 'flashGuard', on: now.flashGuard });
       }
     });
     const offState = bridge.onState(({ people: status, roomCaptured, ...state }) => { setSourceState(state as SourceState); setPeople({ status: status ?? null, roomCaptured: roomCaptured === true }); });
@@ -96,6 +99,7 @@ export function useLive(onError: (message: string) => void) {
     };
     const now = latest.current;
     made.renderer.blackout = now.blackout;
+    made.renderer.flashGuard = now.flashGuard;
     if (now.settings) made.apply(now.settings, now.file);
     const timer = setInterval(() => setFps(made.renderer.stats().fps), 1000);
     const peopleTimer = setInterval(() => { const r = made.peopleReport(); setPeople({ status: r.people, roomCaptured: r.roomCaptured }); }, 500);
@@ -145,6 +149,7 @@ export function useLive(onError: (message: string) => void) {
 
   const update = useCallback((change: (value: LiveSettings) => LiveSettings) => setSettings(value => value && validateLiveSettings(change(value))), []);
   const setBlackout = (on: boolean) => { setBlackoutState(on); if (stage.current) stage.current.renderer.blackout = on; if (outputOpen) bridge?.send({ type: 'blackout', on }); };
+  const setFlashGuard = (on: boolean) => { setFlashGuardState(on); if (stage.current) stage.current.renderer.flashGuard = on; if (outputOpen) bridge?.send({ type: 'flashGuard', on }); };
   const clear = () => { stage.current?.renderer.clear(); if (outputOpen) bridge?.send({ type: 'clear' }); };
   const openOutput = async () => {
     if (!settings || settings.display === null) return;
@@ -159,7 +164,7 @@ export function useLive(onError: (message: string) => void) {
   const retry = () => { if (settings) stage.current?.retry(settings, file); if (outputOpen) bridge?.send({ type: 'retry' }); };
   const chooseFile = (chosen: File) => { setFile(chosen); update(s => ({ ...s, source: { kind: 'file', deviceId: s.source.deviceId } })); };
 
-  return { settings: settings ?? defaultLiveSettings(), ready, access, update, sourceState, cameras, displays, outputOpen, blackout, setBlackout, clear,
+  return { settings: settings ?? defaultLiveSettings(), ready, access, update, sourceState, cameras, displays, outputOpen, blackout, setBlackout, flashGuard, setFlashGuard, clear,
     openOutput, closeOutput, view, setView, people, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge,
     engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen };
 }
