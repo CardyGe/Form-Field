@@ -10,7 +10,7 @@
  * colour and passes through, as in the colour split and Colour lag.
  */
 import type { Layer } from '../shared/types';
-import { slitActive } from './slitscan';
+import { medianTargetSize, previewSliceScale, sliceCount, slitActive } from './slitscan';
 
 export const TIME_ECHO = 1, TIME_MEDIAN = 2, TIME_DARKEST = 3, TIME_BRIGHTEST = 4;
 /** The most slices Median combines, which sizes the shader's sort arrays. */
@@ -36,6 +36,29 @@ export function timeTargetNeeds(layers: readonly Layer[]): TimeTargetNeeds {
     if ((shape >= 4.5 && shape < 5.5) || !!m.slitShape) needs.driver = true;
   }
   return needs;
+}
+
+export interface MedianPlan { width: number; height: number; depth: number }
+
+/**
+ * One size for the shared Median array across a frame, so layers of different
+ * lengths never reallocate it: the most slices and the largest slice size of any
+ * visible layer that can use Median. A modulated slice count can reach nine, and
+ * can fall to the fewest slices, which draw largest in the preview.
+ */
+export function medianFramePlan(layers: readonly Layer[], width: number, height: number, exporting: boolean): MedianPlan | null {
+  let depth = 0, scale = 0;
+  for (const layer of layers) {
+    if (!layer.visible || !slitActive(layer)) continue;
+    if (!layer.modulations.slitMode && timeMode(layer.params.slitMode) !== TIME_MEDIAN) continue;
+    const modulated = !!layer.modulations.slitSlices;
+    const count = sliceCount({ ...layer.params, slitMode: TIME_MEDIAN });
+    depth = Math.max(depth, modulated ? MEDIAN_DEPTH : count);
+    scale = Math.max(scale, previewSliceScale(modulated ? 3 : count));
+  }
+  if (!depth) return null;
+  const w = exporting ? width : Math.max(1, Math.round(width * scale)), h = exporting ? height : Math.max(1, Math.round(height * scale));
+  return { ...medianTargetSize(w, h, depth), depth };
 }
 
 export const timeGatherFragment = /* glsl */`
@@ -76,6 +99,8 @@ precision highp sampler2DArray;
 varying vec2 vUv;
 uniform sampler2DArray uLayers;
 uniform float uCount, uBounded;
+// The part of the shared array this layer's slices fill.
+uniform vec2 uFill;
 // How many slices red, green and blue remember.
 uniform vec3 uChannels;
 float middle(float v[${MEDIAN_DEPTH}], int n) {
@@ -93,7 +118,7 @@ void main() {
   float r[${MEDIAN_DEPTH}], g[${MEDIAN_DEPTH}], b[${MEDIAN_DEPTH}], a[${MEDIAN_DEPTH}];
   vec3 bound = vec3(0.), light = vec3(0.);
   for (int i = 0; i < count; i++) {
-    vec4 s = texture(uLayers, vec3(vUv, float(i)));
+    vec4 s = texture(uLayers, vec3(vUv * uFill, float(i)));
     r[i] = s.r; g[i] = s.g; b[i] = s.b; a[i] = s.a;
     vec3 keep = vec3(i < channels.r, i < channels.g, i < channels.b);
     if (s.a > .001) bound = max(bound, s.rgb / s.a * keep);

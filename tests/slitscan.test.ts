@@ -114,3 +114,9 @@ test('statistical time modes render no Brightness driver', () => {
   assert.equal(sliceSourceRenders({ params: { ...params, slitMode: 2 } }), 7);
   assert.equal(sliceSourceRenders({ params: { ...params, slitMode: 2, slitSlices: 12 } }), 9);
 });
+
+test('the time mode is rounded the same way when counting slices', () => {
+  assert.equal(sliceCount({ slitMode: 1.6, slitSlices: 12 }), 9);
+  assert.equal(sliceCount({ slitMode: 2.4, slitSlices: 4 }), 5);
+  assert.equal(sliceCount({ slitMode: 2.6, slitSlices: 12 }), 12);
+});

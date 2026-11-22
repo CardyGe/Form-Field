@@ -27,7 +27,7 @@ export function slitActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>
 /** Slices rendered per frame. Median needs an odd count of at most nine. */
 export function sliceCount(params: Record<string, number>): number {
   const count = Math.max(2, Math.round(params.slitSlices ?? 12));
-  return (params.slitMode ?? 0) === 2 ? Math.min(9, count | 1) : count;
+  return Math.round(params.slitMode ?? 0) === 2 ? Math.min(9, count | 1) : count;
 }
 
 /** Delay in frames of each slice, from now (0) to the full span. */
@@ -42,6 +42,11 @@ export function sliceSourceRenders(layer: Pick<Layer, 'params'>): number {
   const shape = layer.params.slitShape ?? 0;
   const delayMap = Math.round(layer.params.slitMode ?? 0) <= 0;
   return sliceDelays(layer).length + Number(delayMap && shape >= 4.5 && shape < 5.5);
+}
+
+/** The live preview draws slices smaller as they multiply, so together they cost about one and a half frames. */
+export function previewSliceScale(renders: number): number {
+  return Math.max(.25, Math.min(.5, Math.sqrt(1.5 / renders)));
 }
 
 /** Phase of a slice: back in time by default, forward in Future, wrapped to the loop. */

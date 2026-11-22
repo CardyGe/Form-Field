@@ -10,8 +10,8 @@ import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
-import { channelSliceCounts, echoWeights, medianTargetSize, slicePhase, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
-import { TIME_ECHO, TIME_MEDIAN, timeGatherFragment, timeMedianFragment, timeMode, timeTargetNeeds } from './time-stats';
+import { channelSliceCounts, echoWeights, previewSliceScale, slicePhase, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
+import { TIME_ECHO, TIME_MEDIAN, medianFramePlan, type MedianPlan, timeGatherFragment, timeMedianFragment, timeMode, timeTargetNeeds } from './time-stats';
 import { parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
@@ -210,6 +210,8 @@ export class StudioRenderer {
   private statLightTarget: THREE.WebGLRenderTarget | null = null;
   /** The Median slices. Allocated on first use, within the memory budget. */
   private medianTarget: THREE.WebGLArrayRenderTarget | null = null;
+  /** This frame's size for the Median array, the same for every layer. */
+  private medianPlan: MedianPlan | null = null;
   private readonly glowBright: THREE.ShaderMaterial;
   /** Glow finish: one bright-pass target and blur pyramid, shared by all layers. */
   private glow: { bright: THREE.WebGLRenderTarget; pyramid: BloomPyramid; streak: StreakBlur } | null = null;
@@ -384,7 +386,7 @@ export class StudioRenderer {
       mat.blendSrc = THREE.OneFactor; mat.blendDst = THREE.OneFactor;
     }
     this.timeMedian = material(timeMedianFragment, {
-      uLayers: { value: null }, uCount: { value: 3 }, uBounded: { value: 0 }, uChannels: { value: new THREE.Vector3(3, 3, 3) },
+      uLayers: { value: null }, uFill: { value: new THREE.Vector2(1, 1) }, uCount: { value: 3 }, uBounded: { value: 0 }, uChannels: { value: new THREE.Vector3(3, 3, 3) },
     });
     this.feedback = material(feedbackFragment, {
       uSource: { value: null }, uPrevious: { value: null }, uAspect: { value: 1 }, uZoom: { value: 1 }, uRotate: { value: 0 },
@@ -852,6 +854,7 @@ export class StudioRenderer {
     const total = frameCount(project);
     this.releaseFeedback(project);
     this.releaseTimeTargets(project);
+    this.medianPlan = medianFramePlan(project.layers, width, height, this.exporting);
     for (const original of project.layers) {
       if (!original.visible) continue;
       // Feedback layers advance in whole loop frames: every frame of the
@@ -1038,7 +1041,7 @@ export class StudioRenderer {
     // Exports draw every slice at full size.
     if (this.exporting) return this.slices(original, phase, total, duration);
     const width = this.width, height = this.height, source = this.source;
-    const scale = Math.max(.25, Math.min(.5, Math.sqrt(1.5 / sliceSourceRenders(evaluateLayer(original, phase)))));
+    const scale = previewSliceScale(sliceSourceRenders(evaluateLayer(original, phase)));
     // Solid geometry keeps its edge smoothing; shaders smooth their own edges.
     const solid = original.kind === 'sculpture' || original.kind === 'relief';
     let stand = solid ? this.sliceSourceSmooth : this.sliceSource;
@@ -1107,17 +1110,21 @@ export class StudioRenderer {
     const bounded = channels[0] !== count || channels[1] !== count;
     const sliceAt = (delay: number) => this.plainSource(original, slicePhase(phase, delay, total, direction), duration);
     if (mode === TIME_MEDIAN) {
-      const size = medianTargetSize(this.width, this.height, count);
+      const size = this.medianPlan;
+      if (!size) throw new Error('Median has no size for this frame.');
       let layers = this.medianTarget;
       if (!layers) {
-        layers = new THREE.WebGLArrayRenderTarget(size.width, size.height, count, {
+        layers = new THREE.WebGLArrayRenderTarget(size.width, size.height, size.depth, {
           type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false,
           minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false,
         });
         layers.texture.colorSpace = THREE.LinearSRGBColorSpace;
         this.medianTarget = layers;
-      } else if (layers.width !== size.width || layers.height !== size.height || layers.depth !== count) layers.setSize(size.width, size.height, count);
+      } else if (layers.width !== size.width || layers.height !== size.height || layers.depth !== size.depth) layers.setSize(size.width, size.height, size.depth);
       setWrap(layers, this.tiling);
+      // A shorter layer fills a corner pixel for pixel; one above the budget fills it all, scaled.
+      const fillWidth = Math.min(this.width, layers.width), fillHeight = Math.min(this.height, layers.height);
+      layers.viewport.set(0, 0, fillWidth, fillHeight);
       delays.forEach((delay, index) => {
         this.copy.uniforms.uImage.value = sliceAt(delay);
         this.quad.material = this.copy;
@@ -1126,6 +1133,7 @@ export class StudioRenderer {
       });
       const u = this.timeMedian.uniforms;
       u.uLayers.value = layers.texture; u.uCount.value = count; u.uBounded.value = Number(bounded);
+      (u.uFill.value as THREE.Vector2).set(fillWidth / layers.width, fillHeight / layers.height);
       (u.uChannels.value as THREE.Vector3).fromArray(channels);
       const output = this.slitTargets![0];
       this.draw(this.timeMedian, output);

@@ -913,12 +913,12 @@ const CHECKS = [
           await R.prepare(p); while (gl.getError());
           const png = await R.exportPNG(p, .9, 3840, 2160, 2), error = gl.getError(), view = new DataView(png.buffer, png.byteOffset);
           const t = R.medianTarget;
-          return { error, size: [view.getUint32(16), view.getUint32(20)], target: [t.width, t.height, t.depth], bytes: t.width * t.height * t.depth * 8, limit: R.maxTargetSize };
+          return { error, size: [view.getUint32(16), view.getUint32(20)], target: [t.width, t.height, t.depth], want: q.m.medianTargetSize(7680, 4320, 9), bytes: t.width * t.height * t.depth * 8, limit: R.maxTargetSize };
         } finally { R.dispose(); }
       });
       if (r.skipped) return { ok: true, skipped: true, detail: `2x 4K needs 7680x4320 and this GPU allows ${r.limit}` };
-      const ok = r.error === 0 && r.size[0] === 3840 && r.size[1] === 2160 && r.bytes <= 768 * 1024 * 1024;
-      return { ok, detail: `PNG ${r.size.join('x')}, GL error ${r.error}, Median target ${r.target.join('x')} = ${(r.bytes / 1024 / 1024).toFixed(1)} MiB (budget 768), GPU limit ${r.limit}` };
+      const ok = r.error === 0 && r.size[0] === 3840 && r.size[1] === 2160 && r.target[0] === r.want.width && r.target[1] === r.want.height && r.target[2] === 9 && r.bytes <= 768 * 1024 * 1024;
+      return { ok, detail: `PNG ${r.size.join('x')}, GL error ${r.error}, Median target ${r.target.join('x')} (want ${r.want.width}x${r.want.height}x9) = ${(r.bytes / 1024 / 1024).toFixed(1)} MiB (budget 768), GPU limit ${r.limit}` };
     },
   },
   {
@@ -928,6 +928,7 @@ const CHECKS = [
     run: async ({ page }) => {
       const r = await page.evaluate(async () => {
         const q = window.ct, canvas = document.createElement('canvas'), R = new q.m.StudioRenderer(canvas);
+        try {
         const frame = async (...layers) => { const p = q.project(layers); await R.prepare(p); await R.exportPNG(p, .9, 320, 180); };
         const slit = params => q.layer('surface', null, { slitShift: 1, slitSpan: 30, slitSlices: 5, ...params });
         const keys = ['medianTarget', 'statBoundTarget', 'statLightTarget', 'lensTarget', 'slitBoundTarget', 'slitLagTarget', 'slitDriverTarget'];
@@ -944,6 +945,28 @@ const CHECKS = [
         let reallocated = 0; R.medianTarget.addEventListener('dispose', () => { reallocated++; });
         await sized(3); out.repeat = reallocated;
         out.nine = await sized(9); out.changed = reallocated; out.nineWant = q.m.medianTargetSize(5120, 2880, 9);
+        // Median layers of different lengths share one array, sized once for the whole frame.
+        const median = slices => slit({ slitMode: 2, slitSlices: slices });
+        const changing = (base = 5) => { const l = median(base); l.modulations.slitSlices = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: 3, max: 9 } }; return l; };
+        const steady = async (layers, draw, phases) => {
+          const p = q.project(layers); await R.prepare(p); await draw(p, phases[0]);
+          const t = R.medianTarget; let count = 0; const on = () => { count++; }; t.addEventListener('dispose', on);
+          for (const phase of phases.slice(1)) await draw(p, phase);
+          t.removeEventListener('dispose', on);
+          return { reallocated: count, kept: t === R.medianTarget, depth: t.depth };
+        };
+        const previewDraw = (p, phase) => R.render(p, phase, 960, 540), exportDraw = (p, phase) => R.exportPNG(p, phase, 960, 540);
+        out.shared = [
+          ['preview', await steady([median(3), median(9)], previewDraw, [.9, 1.1, 1.3])], ['export', await steady([median(3), median(9)], exportDraw, [.9, 1.1, 1.3])],
+          ['modulated preview', await steady([median(3), changing()], previewDraw, [.3, 1.5, 3, 4.5])], ['modulated export', await steady([median(3), changing()], exportDraw, [.3, 1.5, 3, 4.5])],
+        ];
+        // Nine slices now can be three later, which draw largest: the array must already fit them.
+        const roomy = q.project([changing(9)]); await R.prepare(roomy); R.render(roomy, 4.7, 960, 540); out.modulatedWidth = R.medianTarget.width;
+        // A shorter Median layer sharing the array must not change how a longer one samples it.
+        const linear = () => { const t = R.linearOutput, d = new Uint16Array(t.width * t.height * 4); R.renderer.readRenderTargetPixels(t, 0, 0, t.width, t.height, d); return d; };
+        const alone = q.project([median(9)]); await R.prepare(alone); R.render(alone, .9, 960, 540); const single = linear();
+        const paired = q.project([median(3), median(9)]); await R.prepare(paired); R.render(paired, .9, 960, 540); const both = linear();
+        out.samplingOff = 0; for (let i = 0; i < single.length; i++) if (single[i] !== both[i]) out.samplingOff++;
         await frame(q.layer('surface'));
         await frame(slit({ slitMode: 1, slitShape: 5, slitChroma: 1 })); out.echo = held();
         await frame(slit({ slitMode: 3, slitShape: 5, slitChroma: 1, slitReach: .4 })); out.reach = held();
@@ -956,14 +979,16 @@ const CHECKS = [
         await frame(slit({ slitMode: 2, slitReach: .4 }), slit({ slitMode: 1, slitReach: .4 }), slit({ slitShape: 5, slitChroma: 1, gradMix: 1, gradPalette: 1 }));
         const closed = watch(); R.dispose(); out.closed = [...closed]; out.left = held();
         return { ...out, keys };
+        } finally { R.dispose(); }
       });
       const same = (a, b) => [...a].sort().join() === [...b].sort().join();
       const array = t => `${t.width}x${t.height}x${t.depth} = ${(t.bytes / 1024 / 1024).toFixed(1)} MiB`;
       const sizing = r.three.width === 5120 && r.three.height === 2880 && r.three.depth === 3 && r.repeat === 0 && r.changed > 0 &&
         r.nine.depth === 9 && r.nine.width === r.nineWant.width && r.nine.height === r.nineWant.height && r.nine.width < 5120 && r.nine.bytes <= 768 * 1024 * 1024;
-      const ok = sizing && r.preview.every(e => e === 0) && same(r.echo, []) && same(r.reach, ['statBoundTarget', 'statLightTarget']) && same(r.median, ['medianTarget']) &&
+      const shared = r.shared.every(([, row]) => row.reallocated === 0 && row.kept && row.depth === 9) && r.samplingOff === 0 && r.modulatedWidth === 480;
+      const ok = sizing && shared && r.preview.every(e => e === 0) && same(r.echo, []) && same(r.reach, ['statBoundTarget', 'statLightTarget']) && same(r.median, ['medianTarget']) &&
         same(r.delay, ['lensTarget', 'slitBoundTarget', 'slitLagTarget', 'slitDriverTarget']) && same(r.all, r.keys) && !r.after.length && same(r.released, r.keys) && same(r.closed, r.keys) && !r.left.length;
-      return { ok, detail: `5120x2880 Median: 3 slices ${array(r.three)}, same again reallocates ${r.repeat} times, 9 slices ${array(r.nine)} (budget 768 MiB); preview GL errors ${r.preview}; Echo holds [${r.echo}]; Darkest with reach [${r.reach}]; Median [${r.median}]; delay map [${r.delay}]; all in use ${r.all.length}/${r.keys.length}; after they stop [${r.after}], released ${r.released.length}; dispose released ${r.closed.length}, left [${r.left}]` };
+      return { ok, detail: `5120x2880 Median: 3 slices ${array(r.three)}, same again reallocates ${r.repeat} times, 9 slices ${array(r.nine)} (budget 768 MiB); shared array reallocations ${r.shared.map(([name, row]) => `${name} ${row.reallocated} (depth ${row.depth})`).join(', ')}; values changed by sharing ${r.samplingOff}; modulated slices keep a ${r.modulatedWidth}-wide preview array (want 480); preview GL errors ${r.preview}; Echo holds [${r.echo}]; Darkest with reach [${r.reach}]; Median [${r.median}]; delay map [${r.delay}]; all in use ${r.all.length}/${r.keys.length}; after they stop [${r.after}], released ${r.released.length}; dispose released ${r.closed.length}, left [${r.left}]` };
     },
   },
 ];
