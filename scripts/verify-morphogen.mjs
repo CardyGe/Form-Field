@@ -220,13 +220,14 @@ try {
       const texture = gpu.upload(source, null), gl = canvas.getContext('webgl2'), pixel = new Uint8Array(4);
       const draw = () => { gpu.begin(); gpu.layer(texture); gpu.finish(); gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(320, 180, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); return pixel[0]; };
       const plain = draw(); gpu.setOutputCorrection(.25, 1); const dimmed = draw();
-      gpu.requestFlashProbe(); let probe = null; for (let i = 0; i < 200 && !probe; i++) { await new Promise(done => setTimeout(done, 5)); probe = gpu.collectFlashProbe(); }
+      gpu.requestFlashProbe(1); const second = gpu.requestFlashProbe(2); let probe = null; for (let i = 0; i < 200 && !probe; i++) { await new Promise(done => setTimeout(done, 5)); probe = gpu.collectFlashProbe(); }
       gpu.setOutputCorrection(1, 1); const restored = draw();
-      return { plain, dimmed, restored, probeSize: probe?.length, probeValue: probe?.[0] };
+      return { plain, dimmed, restored, second, probeTime: probe?.time, probeSize: probe?.pixels.length, probeValue: probe?.pixels[0] };
     });
     console.log('wall correction', JSON.stringify(r));
     assert.equal(r.plain, 255); assert.equal(r.restored, 255);
     assert.ok(Math.abs(r.dimmed - 136) <= 3, `dimmed to ${r.dimmed}`);
+    assert.equal(r.second, true, 'a second probe could not be in flight'); assert.equal(r.probeTime, 1);
     assert.equal(r.probeSize, 64 * 36 * 4); assert.equal(r.probeValue, 255);
   });
   await check('changing simulation size keeps the pattern and its stripe width', async () => {
@@ -292,6 +293,31 @@ try {
       for (const other of means) assert.ok(Math.hypot(r.mean[0] - other[0], r.mean[1] - other[1], r.mean[2] - other[2]) > 8, `${r.name} is too close to another look`);
       means.push(r.mean);
     }
+  });
+  await check('Live output limits a flashing look and a recovery keeps the performance', async () => {
+    const r = await page.evaluate(async () => {
+      const { m } = window.t, canvas = document.createElement('canvas'), live = new m.LiveRenderer(canvas, { element: null, frameId: 0 }, undefined, { limitFlashes: true });
+      const firstReady = live.lookReady, base = { ...m.defaultLiveSettings(), look: 'morphogen' };
+      live.settings = base;
+      for (let i = 0; i < 130; i++) live.frame(1 / 60);
+      const readyAfter = live.lookReady, play = live.morphogenPlay, gl = canvas.getContext('webgl2'), means = [];
+      // Flash limits are defined in linear light, so the picture is measured there.
+      const linear = v => { v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; };
+      const mean = () => { const w = canvas.width, h = canvas.height, p = new Uint8Array(w * h * 4); gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, p); let s = 0, n = 0; for (let i = 0; i < p.length; i += 64) { s += .2126 * linear(p[i]) + .7152 * linear(p[i + 1]) + .0722 * linear(p[i + 2]); n++; } return s / n; };
+      for (let n = 0; n < 180; n++) {
+        live.settings = { ...base, morphogen: { ...base.morphogen, exposure: Math.floor(n / 3) % 2 ? .25 : 2 } };
+        live.frame(1 / 60); means.push(mean()); await new Promise(done => setTimeout(done));
+      }
+      const late = means.slice(90), swing = Math.max(...late) - Math.min(...late), early = means.slice(0, 12), earlySwing = Math.max(...early) - Math.min(...early);
+      const lose = gl.getExtension('WEBGL_lose_context'); lose.loseContext(); await new Promise(done => setTimeout(done, 60)); live.frame(1 / 60); lose.restoreContext(); await new Promise(done => setTimeout(done, 60));
+      live.settings = base; live.frame(1 / 60);
+      const kept = live.morphogenPlay === play; live.dispose();
+      return { firstReady, readyAfter, earlySwing, swing, kept };
+    });
+    console.log('live output', JSON.stringify(r));
+    assert.equal(r.firstReady, false, 'reported ready before any look existed'); assert.equal(r.readyAfter, true);
+    assert.ok(r.earlySwing > .2, `test did not flash: ${r.earlySwing}`); assert.ok(r.swing < .1, `not limited: ${r.earlySwing} to ${r.swing}`);
+    assert.equal(r.kept, true, 'recovery lost the performance');
   });
   await check('camera movement pushes the stripes', async () => {
     const r = await page.evaluate(() => {

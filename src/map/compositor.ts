@@ -348,7 +348,11 @@ export class MapCompositor {
     }
     // Live's newest picture, once for every shape that plays it.
     // A Live whose own graphics context was lost is made again; meanwhile its shapes play their fill.
-    if (this.live?.broken) { this.live.dispose(); this.live = null; this.dirty = true; this.updateLive(); }
+    if (this.live?.broken) {
+      const play = this.live.morphogenPlay;
+      this.live.dispose(); this.live = null; this.dirty = true; this.updateLive();
+      if (this.live) (this.live as LiveSlot).morphogenPlay = play;
+    }
     if (this.live) {
       if (!this.frozen) this.live.setSignals(this.signals);
       this.liveTexture = this.live.frame();
@@ -371,15 +375,14 @@ export class MapCompositor {
 
   /** Reads the finished wall without waiting and corrects later frames. A correction that changes redraws the stage. */
   private limitFlashes(now: number, drawn: boolean): void {
-    if (this.frozen) return;
-    const probe = this.gpu.collectFlashProbe();
-    if (probe) {
-      const next = this.flashLimiter.push(probe, FLASH_PROBE.width, FLASH_PROBE.height, now / 1000);
+    for (let probe = this.gpu.collectFlashProbe(); probe; probe = this.gpu.collectFlashProbe()) {
+      const next = this.flashLimiter.push(probe.pixels, FLASH_PROBE.width, FLASH_PROBE.height, probe.time);
       if (next.gain !== this.flashCorrection.gain || next.redScale !== this.flashCorrection.redScale) {
         this.flashCorrection = next; this.gpu.setOutputCorrection(next.gain, next.redScale); this.dirty = true;
       }
     }
-    if (drawn || this.flashCorrection.gain < 1 || this.flashCorrection.redScale < 1) this.gpu.requestFlashProbe();
+    // Keeps reading while dimmed, including under Freeze, so a steady picture always recovers.
+    if (drawn || this.flashCorrection.gain < 1 || this.flashCorrection.redScale < 1) this.gpu.requestFlashProbe(now / 1000);
   }
 
   stats(): CompositorStats {

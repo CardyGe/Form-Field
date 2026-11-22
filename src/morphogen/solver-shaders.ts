@@ -11,7 +11,7 @@ void main(){vec2 c=floor(gl_FragCoord.xy);gl_FragColor=vec4(hash(c,uSeed)-.5,has
  * Types: 0 radial, 1 spiral, 2 swirl, 3 parallel, 4 two opposed poles, 5 organic curl.
  */
 export const directorFragment = header + /* glsl */`
-uniform float uType,uMix,uSpiral,uCurlAmount,uCurlScale,uTime,uAspect;uniform vec2 uCentre;
+uniform sampler2D uPrevious;uniform float uBlend,uType,uMix,uSpiral,uCurlAmount,uCurlScale,uTime,uAspect;uniform vec2 uCentre;
 const float PI=3.14159265;
 float potential(vec2 p){float t=uTime;return sin(p.x*1.1+.7*sin(p.y*.9+t*.31)+t*.13)*cos(p.y*1.3-.6*sin(p.x*.8-t*.23))+.5*sin(p.x*2.3-p.y*1.7+1.3*cos(p.y*1.1+t*.19)-t*.17);}
 float curlAngle(vec2 p){const float e=.01;return atan(-(potential(p+vec2(e,0.))-potential(p-vec2(e,0.))),potential(p+vec2(0.,e))-potential(p-vec2(0.,e)));}
@@ -24,7 +24,8 @@ void main(){
  if(type==5.)base=organic;
  base+=uSpiral*PI*.5+uCurlAmount*potential(p*uCurlScale)*.9;
  vec2 chosen=vec2(cos(2.*base),sin(2.*base)),curl=vec2(cos(2.*organic),sin(2.*organic));
- gl_FragColor=vec4(mix(chosen,curl,type==5.?0.:uMix*.6),0.,1.);
+ // Eases toward the new field, so a change of flow type turns the stripes instead of cutting them.
+ gl_FragColor=vec4(mix(texture2D(uPrevious,vUv).rg,mix(chosen,curl,type==5.?0.:uMix*.6),uBlend),0.,1.);
 }`;
 
 /** Catmull-Rom sampling of the state: it keeps stripes crisp when they are moved or resized. */

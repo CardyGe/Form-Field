@@ -43,7 +43,9 @@ export class MidimixMode {
     const solo = (signals[this.map.solo] ?? 0) > 0;
     if (this.rose(signals, this.map.sendAll) && solo) {
       this.active = !this.active;
+      // A knob moved while away must pass through the playing value again before it takes over.
       this.caught.clear();
+      this.knobs.clear();
     }
     // An on-screen slider that moves takes its macro back from the knob.
     for (const key of MACROS) if (this.lastCurrent && current[key] !== this.lastCurrent[key]) { this.owned.delete(key); this.caught.delete(key); }

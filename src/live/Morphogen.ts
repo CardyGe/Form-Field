@@ -1,20 +1,18 @@
-/** Morphogen as a Live look: hands the room's movement to the engine and shows its picture. */
+/** Morphogen as a Live look: hands the room's movement to the engine, and plays what the performer and MIDImix ask for. */
 import type * as THREE from 'three';
 import type { Look, TrackingFeed } from './look';
 import type { Passes } from './passes';
 import type { LiveSettings } from './settings';
 import { MorphEngine } from '../morphogen/engine';
-import { macrosFrom } from '../morphogen/macros';
-import { MorphPerformer } from '../morphogen/performer';
-import { MIDIMIX_MAP } from '../morphogen/midimix-map';
-import { MidimixMode, type MidimixView } from '../morphogen/midimix-mode';
+import { MACROS, macrosFrom, type MacroKey } from '../morphogen/macros';
+import type { MidimixView } from '../morphogen/midimix-mode';
+import { MorphogenPlay } from '../morphogen/play';
 
 export class Morphogen implements Look {
   private readonly engine: MorphEngine;
-  private readonly performer = new MorphPerformer();
-  private cue: LiveSettings['morphogenCue'] | null = null;
-  private readonly mode = new MidimixMode(MIDIMIX_MAP, this.performer);
+  private play = new MorphogenPlay();
   private signals: Record<string, number> = {};
+  private operator: LiveSettings | null = null;
   private view: MidimixView | null = null;
 
   constructor(passes: Passes, width: number, height: number) { this.engine = new MorphEngine(passes, width, height); }
@@ -26,25 +24,31 @@ export class Morphogen implements Look {
     return { active: this.view?.active ?? false, look: lights && lights.amber.includes(true) ? lights.amber.indexOf(true) : null, queued: lights?.queued ?? null };
   }
 
-  setSignals(signals: Record<string, number>): void { this.signals = signals; }
+  adoptPlay(play: MorphogenPlay): void { this.play = play; }
+
+  /** `operator` is the settings as set, before sound and MIDI links move them. */
+  setSignals(signals: Record<string, number>, operator: LiveSettings): void { this.signals = signals; this.operator = operator; }
 
   step(seconds: number, time: number, feed: TrackingFeed, settings: LiveSettings): void {
+    const operator = (this.operator ?? settings).morphogen, modulated = settings.morphogen;
     this.followCue(settings.morphogenCue);
-    this.view = this.mode.update(this.signals, seconds, macrosFrom(settings.morphogen));
-    const played = this.performer.frame(seconds, settings.morphogen, this.view.macros);
+    this.view = this.play.mode.update(this.signals, seconds, macrosFrom(operator));
+    // A sound link on a macro moves it around wherever the knob or slider has put it.
+    const macros = Object.fromEntries(MACROS.map(key => [key, Math.max(0, Math.min(1, this.view!.macros[key] + modulated[key] - operator[key]))])) as Record<MacroKey, number>;
+    const played = this.play.performer.frame(seconds, operator, macros, modulated);
     this.engine.step(seconds, time, played.params, { flow: feed.flow, people: feed.peopleReady ? feed.people : null, ...played.input });
   }
 
   /** Fires each move once. Counters already set when the look opens are history, not new moves. */
   private followCue(next: LiveSettings['morphogenCue']): void {
-    const last = this.cue;
-    this.cue = next;
-    if (!last) { this.performer.hold(next.hold); return; }
-    if (next.hold !== last.hold) this.performer.hold(next.hold);
-    if (next.cue !== last.cue) this.performer.morphTo(next.look, next.seconds);
-    if (next.mutate !== last.mutate) this.performer.mutate(next.mutate);
-    if (next.undo !== last.undo) this.performer.undo();
-    if (next.scramble !== last.scramble) this.performer.scramble();
+    const last = this.play.cue, performer = this.play.performer;
+    this.play.cue = next;
+    if (!last) { performer.hold(next.hold); return; }
+    if (next.hold !== last.hold) performer.hold(next.hold);
+    if (next.cue !== last.cue) performer.morphTo(next.look, next.seconds);
+    if (next.mutate !== last.mutate) performer.mutate(next.mutate);
+    if (next.undo !== last.undo) performer.undo();
+    if (next.scramble !== last.scramble) performer.scramble();
   }
 
   resize(width: number, height: number): void { this.engine.resize(width, height); }

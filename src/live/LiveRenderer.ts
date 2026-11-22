@@ -15,6 +15,8 @@ import { Tracking, FLOW_SIZE } from './Tracking';
 import { Paint } from './Paint';
 import { Signal } from './Signal';
 import { Morphogen } from './Morphogen';
+import { MorphogenPlay } from '../morphogen/play';
+import { FlashLimiter } from '../map/flash-limiter';
 import { Smoke } from './Smoke';
 import { Relief } from './Relief';
 import type { Look } from './look';
@@ -41,10 +43,11 @@ void main() {
 }`;
 
 const finalFragment = /* glsl */`
-uniform sampler2D uImage; uniform float uBlackout, uEncode;
+uniform sampler2D uImage; uniform float uBlackout, uEncode, uGain, uRedScale;
 vec3 encode(vec3 c) { c = clamp(c, 0., 1.); return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }
 void main() {
   vec3 c = texture2D(uImage, vUv).rgb;
+  if (uEncode > .5 && (uGain < 1. || uRedScale < 1.)) c = (vec3(dot(c, vec3(.2126, .7152, .0722))) * (1. - uRedScale) + c * uRedScale) * uGain;
   gl_FragColor = vec4(mix(c, encode(c), uEncode) * (1. - uBlackout), 1.);
 }`;
 
@@ -68,6 +71,12 @@ export class LiveRenderer {
   private look: Look | null = null;
   private signalSource: FrameSource['element'] = null;
   private lookKind: LiveSettings['look'] | null = null;
+  /** What is being performed on Morphogen. It outlives the GPU look. */
+  morphogenPlay = new MorphogenPlay();
+  private flashLimiter: FlashLimiter | null = null;
+  private flashTarget: THREE.WebGLRenderTarget | null = null;
+  private flashPending = 0;
+  private flashRead = -1;
   private readonly black: THREE.DataTexture;
   private scratch: THREE.WebGLRenderTarget;
   private width = 0;
@@ -84,7 +93,7 @@ export class LiveRenderer {
   framesDrawn = 0;
 
   /** preserveDrawingBuffer: keep the picture after it is shown, so Map's compositor can copy this canvas (Live in Map). */
-  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource, makeProvider?: () => MaskProvider, options: { preserveDrawingBuffer?: boolean } = {}) {
+  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource, makeProvider?: () => MaskProvider, options: { preserveDrawingBuffer?: boolean; limitFlashes?: boolean } = {}) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: options.preserveDrawingBuffer === true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(1);
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
@@ -92,7 +101,12 @@ export class LiveRenderer {
     this.renderer.autoClear = false;
     try { this.passes = new Passes(this.renderer); } catch (error) { this.renderer.dispose(); throw error; }
     this.black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); this.black.needsUpdate = true;
-    this.final = this.passes.material(finalFragment, { uImage: { value: this.black }, uBlackout: { value: 0 }, uEncode: { value: 1 } });
+    this.final = this.passes.material(finalFragment, { uImage: { value: this.black }, uBlackout: { value: 0 }, uEncode: { value: 1 }, uGain: { value: 1 }, uRedScale: { value: 1 } });
+    if (options.limitFlashes) {
+      this.flashLimiter = new FlashLimiter();
+      this.flashTarget = new THREE.WebGLRenderTarget(64, 36, { type: THREE.UnsignedByteType, depthBuffer: false, stencilBuffer: false });
+      this.flashTarget.texture.colorSpace = THREE.NoColorSpace;
+    }
     this.tracking = new Tracking(this.passes, makeProvider);
     this.trackingView = this.passes.material(trackingViewFragment, { uCamera: { value: null }, uFlow: { value: null }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
     this.scratch = this.passes.target(1, 1);
@@ -101,10 +115,28 @@ export class LiveRenderer {
     canvas.addEventListener('webglcontextrestored', this.restartLook);
   }
 
+  /** The artwork window's flash protection. In Map, the wall's own limiter does this job instead. */
+  private limitFlashes(): void {
+    if (!this.flashLimiter || !this.flashTarget) return;
+    if (this.flashPending >= 6) return;
+    const u = this.final.uniforms, gain = u.uGain.value, redScale = u.uRedScale.value, blackout = u.uBlackout.value, taken = this.time, pixels = new Uint8Array(64 * 36 * 4);
+    u.uGain.value = 1; u.uRedScale.value = 1; u.uBlackout.value = 0;
+    this.passes.draw(this.final, this.flashTarget);
+    u.uGain.value = gain; u.uRedScale.value = redScale; u.uBlackout.value = blackout;
+    this.renderer.setRenderTarget(null);
+    this.flashPending++;
+    this.renderer.readRenderTargetPixelsAsync(this.flashTarget, 0, 0, 64, 36, pixels).then(() => {
+      if (this.disposed || !this.flashLimiter || taken < this.flashRead) return;
+      this.flashRead = taken;
+      const c = this.flashLimiter.push(pixels, 64, 36, taken);
+      u.uGain.value = c.gain; u.uRedScale.value = c.redScale;
+    }).catch(() => {}).finally(() => { this.flashPending--; });
+  }
+
   private readonly restartLook = () => { this.look?.dispose(); this.look = null; this.lookKind = null; };
 
   /** False while the look is still forming its first picture. */
-  get lookReady(): boolean { return this.look?.ready ?? true; }
+  get lookReady(): boolean { return !!this.look && this.lookKind === this.settings.look && (this.look.ready ?? true); }
   /** Morphogen mode on the MIDImix, when the look on screen has one. */
   get midimix(): { active: boolean; look: number | null; queued: number | null } | null { return this.look?.midimix ?? null; }
 
@@ -135,13 +167,16 @@ export class LiveRenderer {
     if (this.lookKind !== this.settings.look) {
       // Switching looks starts the new one fresh; each keeps its own settings.
       this.look?.dispose();
+      // Choosing another look ends the performance; a graphics recovery (no previous kind) carries it across.
+      if (this.lookKind !== null) this.morphogenPlay = new MorphogenPlay();
       this.look = new looks[this.settings.look](this.passes, this.width, this.height);
+      this.look.adoptPlay?.(this.morphogenPlay);
       this.lookKind = this.settings.look;
     }
     if (!this.look) return;
     if (this.settings.look === 'signal' && this.signalSource !== this.source.element) this.look.clear();
     this.signalSource = this.source.element;
-    this.look.setSignals?.(this.signals);
+    this.look.setSignals?.(this.signals, this.settings);
     this.look.step(step, this.time, this.tracking, settings);
     let image: THREE.Texture = this.look.output, encode = 1;
     if (this.view === 'tracking') {
@@ -162,6 +197,7 @@ export class LiveRenderer {
     this.final.uniforms.uEncode.value = encode;
     this.final.uniforms.uBlackout.value = this.blackout ? 1 : 0;
     this.passes.draw(this.final, null);
+    if (encode === 1) this.limitFlashes();
     this.framesDrawn++;
     this.counted.frames++;
   }
@@ -213,6 +249,7 @@ export class LiveRenderer {
     if (this.disposed) return;
     this.stop(); this.disposed = true;
     this.canvas.removeEventListener('webglcontextrestored', this.restartLook);
+    this.flashTarget?.dispose();
     for (const item of [this.final, this.trackingView, this.tracking, this.black, this.scratch]) item.dispose();
     this.peopleView?.dispose();
     this.look?.dispose();

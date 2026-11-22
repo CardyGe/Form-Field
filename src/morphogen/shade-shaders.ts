@@ -3,7 +3,7 @@ const header = /* glsl */`precision highp float;precision highp int;precision hi
 /** Height to liquid metal: form lens, relief normal, palette, thin film, studio reflections and clear coat. Output is HDR linear. */
 export const shadeFragment = header + /* glsl */`
 uniform sampler2D uState;uniform vec3 uStops[5];uniform vec2 uFormPos,uOut;
-uniform float uAspect,uFormType,uFormSize,uFormSoft,uRefraction,uDepth,uBevel,uSharp,uWavelength,uRough,uMetal,uCoat,uLightAngle,uEnvRotate;
+uniform float uFormStrength,uAspect,uFormType,uFormSize,uFormSoft,uRefraction,uDepth,uBevel,uSharp,uWavelength,uRough,uMetal,uCoat,uLightAngle,uEnvRotate;
 uniform float uIrid,uFilm,uFilmVary,uFilmIor,uColourShift,uZones,uSaturation,uExposure,uChroma,uTime,uShimmer;
 const float PI=3.14159265;
 
@@ -40,7 +40,7 @@ void main(){
  float soft=uFormSoft+px,mask=0.,dome=0.;
  if(type==1.||type==3.){mask=1.-smoothstep(R-soft,R+soft,d);float t=clamp(d/R,0.,.985);dome=t/sqrt(1.-t*t);}
  else if(type==2.){float mid=R*.78,half_=R*.24,t=clamp((d-mid)/half_,-.985,.985);mask=1.-smoothstep(half_-soft,half_+soft,abs(d-mid));dome=t/sqrt(1.-t*t);}
- dome=min(dome,3.2);
+ mask*=uFormStrength;dome=min(dome,3.2)*uFormStrength;
  vec2 radial=q/max(d,1e-4);
  vec2 uv=clamp(vUv-radial*dome*mask*uRefraction*.055/scale,vec2(0.),vec2(1.));
  vec2 v,dx,dy;field(uv,v,dx,dy);
@@ -77,7 +77,7 @@ void main(){
  colour*=mix(.42,1.,smoothstep(-1.,.3,shaped));
  if(type>0.){
   float outside=1.-mask,edge=type==2.?abs(d-R*.78)-R*.24:d-R;
-  colour*=1.-outside*.5*smoothstep(.2,0.,edge);
+  colour*=1.-outside*.5*uFormStrength*smoothstep(.2,0.,edge);
   colour+=mask*smoothstep(-.09,0.,edge)*mix(albedo,vec3(1.),.55)*.34;
  }
  float grey=dot(colour,vec3(.2126,.7152,.0722));

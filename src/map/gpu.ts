@@ -128,6 +128,7 @@ type Program = { program: WebGLProgram; u: Record<string, WebGLUniformLocation |
 const PREVIEW = { width: 960, height: 540 };
 /** The small uncorrected copy of the wall that the flash limiter reads each frame. */
 export const FLASH_PROBE = { width: 64, height: 36 };
+const FLASH_PROBES = 6;
 
 /** Row major to the column-major order WebGL reads. */
 const columns = (m: H3) => new Float32Array([m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]);
@@ -146,8 +147,8 @@ export class Gpu {
   private drawFb!: WebGLFramebuffer;
   private blank!: Texture;
   private readback: { buffer: WebGLBuffer; sync: WebGLSync } | null = null;
-  private flashRead: { sync: WebGLSync } | null = null;
-  private flashBuffer: WebGLBuffer | null = null;
+  private flashReads: { sync: WebGLSync; buffer: WebGLBuffer; time: number }[] = [];
+  private flashBuffers: WebGLBuffer[] = [];
   private flashFb!: WebGLFramebuffer;
   private correction = { gain: 1, redScale: 1 };
   private readbackBuffer: WebGLBuffer | null = null;
@@ -211,7 +212,7 @@ export class Gpu {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
     this.blank = { tex: blank, width: 1, height: 1 };
     this.readback = null; this.readbackBuffer = null;
-    this.flashRead = null; this.flashBuffer = null;
+    this.flashReads = []; this.flashBuffers = [];
     this.generation++;
   }
 
@@ -328,38 +329,41 @@ export class Gpu {
   /** The flash limiter's correction, applied to everything that leaves the stage. */
   setOutputCorrection(gain: number, redScale: number): void { this.correction = { gain, redScale }; }
 
-  /** Starts reading a tiny uncorrected copy of the stage, unless one is on its way. Never waits. */
-  requestFlashProbe(): boolean {
-    if (this.flashRead) return false;
+  /** Starts reading a tiny uncorrected copy of the stage. Several can be on their way, so a slow fence never skips frames. */
+  requestFlashProbe(time = 0): boolean {
+    if (this.flashReads.length >= FLASH_PROBES) return false;
     const gl = this.gl, { width, height } = FLASH_PROBE;
+    const buffer = this.flashBuffers.pop() ?? gl.createBuffer();
+    if (!buffer) return false;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.flashFb);
     gl.viewport(0, 0, width, height);
     this.flat(IDENTITY, width, height, false);
-    this.flashBuffer ??= gl.createBuffer();
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.flashBuffer);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
     gl.bufferData(gl.PIXEL_PACK_BUFFER, width * height * 4, gl.STREAM_READ);
     gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-    if (!sync) return false;
-    this.flashRead = { sync };
+    if (!sync) { this.flashBuffers.push(buffer); return false; }
+    this.flashReads.push({ sync, buffer, time });
     gl.flush();
     return true;
   }
 
-  /** The probe's pixels once the graphics card has finished them; null while still on the way. Never waits. */
-  collectFlashProbe(): Uint8Array | null {
-    if (!this.flashRead) return null;
-    const gl = this.gl, { sync } = this.flashRead, state = gl.clientWaitSync(sync, 0, 0);
+  /** The oldest finished probe and when it was taken; null while none is ready. Never waits. */
+  collectFlashProbe(): { pixels: Uint8Array; time: number } | null {
+    const read = this.flashReads[0];
+    if (!read) return null;
+    const gl = this.gl, state = gl.clientWaitSync(read.sync, 0, 0);
     if (state !== gl.ALREADY_SIGNALED && state !== gl.CONDITION_SATISFIED) return null;
-    gl.deleteSync(sync);
-    this.flashRead = null;
-    const bytes = new Uint8Array(FLASH_PROBE.width * FLASH_PROBE.height * 4);
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.flashBuffer);
-    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, bytes);
+    gl.deleteSync(read.sync);
+    this.flashReads.shift();
+    const pixels = new Uint8Array(FLASH_PROBE.width * FLASH_PROBE.height * 4);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, read.buffer);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixels);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    return bytes;
+    this.flashBuffers.push(read.buffer);
+    return { pixels, time: read.time };
   }
 
   private flat(inv: H3, w: number, h: number, corrected = true): void {

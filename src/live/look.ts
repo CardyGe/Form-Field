@@ -9,6 +9,7 @@
 import type * as THREE from 'three';
 import type { LiveSettings } from './settings';
 import type { PeopleStatus } from './MaskProvider';
+import type { MorphogenPlay } from '../morphogen/play';
 
 export interface TrackingFeed {
   /** The camera image after mirroring, up to 1280 × 720. Stored as it arrives (sRGB values). */
@@ -33,7 +34,9 @@ export interface Look {
   /** False while a look is still forming its first picture. Looks without this are ready at once. */
   readonly ready?: boolean;
   /** This frame's sound, tempo and MIDI, for a look that is played directly. */
-  setSignals?(signals: Record<string, number>): void;
+  setSignals?(signals: Record<string, number>, operator: LiveSettings): void;
+  /** Hands the look the performance that should survive it being rebuilt. */
+  adoptPlay?(play: MorphogenPlay): void;
   /** What the operator should see about how the look is being played. */
   readonly midimix?: { active: boolean; look: number | null; queued: number | null };
   resize(width: number, height: number): void;

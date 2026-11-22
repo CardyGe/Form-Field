@@ -10,6 +10,7 @@ import { usesCamera, usesPeople, type LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { Signals } from '../react/signals';
 import type { Gpu, Texture } from './gpu';
+import type { MorphogenPlay } from '../morphogen/play';
 import { liveReadiness, type LiveReadiness } from './liveReady';
 
 /** Live draws at this shape whatever its quality. */
@@ -60,6 +61,10 @@ export class LiveSlot {
   clear(): void { this.stage.renderer.clear(); }
   captureRoom(): void { this.stage.renderer.captureRoom(); }
   retry(settings: LiveSettings): void { this.stage.retry(settings.source.kind === 'file' ? { ...settings, source: { kind: 'test', deviceId: settings.source.deviceId } } : settings); }
+
+  /** What is being performed, carried across a rebuilt Live. */
+  get morphogenPlay(): MorphogenPlay { return this.stage.renderer.morphogenPlay; }
+  set morphogenPlay(play: MorphogenPlay) { this.stage.renderer.morphogenPlay = play; }
 
   /** Morphogen mode on the MIDImix, for the operator's screen. */
   get midimix(): { active: boolean; look: number | null; queued: number | null } | null { return this.stage.renderer.midimix; }

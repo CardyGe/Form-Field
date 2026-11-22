@@ -1,6 +1,6 @@
 import { MORPH_LOOKS } from './looks';
 import { applyMacros, type MacroKey } from './macros';
-import { MORPH_CONTROLS, type MorphKey, type MorphParams } from './params';
+import { MORPH_CONTROLS, validateMorphParams, type MorphKey, type MorphParams } from './params';
 import type { MorphInput } from './solver';
 
 type Overlay = Partial<MorphParams>;
@@ -71,7 +71,8 @@ export class MorphPerformer {
     this.begin(MUTATE_SECONDS);
   }
 
-  frame(seconds: number, base: MorphParams, macros: Record<MacroKey, number>): { params: MorphParams; input: Pick<MorphInput, 'impulse' | 'seedBurst'> } {
+  /** `base` is what the operator set. `modulated` is the same with sound and MIDI links applied, which move around the look. */
+  frame(seconds: number, base: MorphParams, macros: Record<MacroKey, number>, modulated: MorphParams = base): { params: MorphParams; input: Pick<MorphInput, 'impulse' | 'seedBurst'> } {
     if (this.pendingMutation !== null) { this.applyMutation(base, this.pendingMutation); this.pendingMutation = null; }
     const target = this.target(base);
     let shown = target;
@@ -87,7 +88,13 @@ export class MorphPerformer {
     this.shown = shown;
     const energy = this.energy;
     this.energy = Math.max(0, this.energy - seconds / SCRAMBLE_SECONDS);
-    const stirred = energy > 0 ? { ...shown, flowSpeed: shown.flowSpeed + energy * .35, surge: shown.surge + energy * .4 } : shown;
+    let linked = shown;
+    if (modulated !== base) {
+      linked = { ...shown };
+      for (const c of MORPH_CONTROLS) if (c.step < 1) linked[c.key] += modulated[c.key] - base[c.key];
+      linked = validateMorphParams(linked);
+    }
+    const stirred = energy > 0 ? { ...linked, flowSpeed: linked.flowSpeed + energy * .35, surge: linked.surge + energy * .4 } : linked;
     const played = applyMacros(stirred, macros);
     const params = energy > 0 && played === stirred ? { ...played, flowSpeed: Math.min(1, played.flowSpeed), surge: Math.min(1, played.surge) } : played;
     return { params: this.held ? { ...params, speed: 0 } : params, input: { impulse: energy, seedBurst: energy * .7 } };

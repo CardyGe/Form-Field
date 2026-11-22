@@ -3,11 +3,12 @@ import type { MorphParams } from './params';
 import type { GpuPasses } from './solver';
 import { formAt } from './forms';
 import { MORPH_PALETTES } from './palettes';
+import { FormFader, StopFader } from './transitions';
 import { blurFragment, brightFragment, finishFragment, shadeFragment } from './shade-shaders';
 
-const linearStops = (index: number) => MORPH_PALETTES[Math.max(0, Math.min(MORPH_PALETTES.length - 1, Math.round(index)))].stops.map(hex => {
+const linearStops = (index: number): number[][] => MORPH_PALETTES[Math.max(0, Math.min(MORPH_PALETTES.length - 1, Math.round(index)))].stops.map(hex => {
   const c = new THREE.Color().setStyle(hex, THREE.SRGBColorSpace);
-  return new THREE.Vector3(c.r, c.g, c.b);
+  return [c.r, c.g, c.b];
 });
 
 /** Turns the stripe field into the finished picture at output size. */
@@ -21,6 +22,9 @@ export class MorphShade {
   private readonly finish: THREE.ShaderMaterial;
   private palette = -1;
   private bloomLevel = 1;
+  private lastTime: number | null = null;
+  private stops: StopFader | null = null;
+  private formFader: FormFader | null = null;
 
   constructor(private readonly passes: GpuPasses, private width: number, private height: number) {
     this.surface = passes.pair(width, height, {});
@@ -28,7 +32,7 @@ export class MorphShade {
     this.result = passes.pair(width, height, {});
     const number = (...keys: string[]) => Object.fromEntries(keys.map(k => [k, { value: 0 }]));
     this.shade = passes.material(shadeFragment, {
-      uState: { value: null }, uStops: { value: linearStops(0) }, uFormPos: { value: new THREE.Vector2() }, uOut: { value: new THREE.Vector2(width, height) },
+      uState: { value: null }, uStops: { value: Array.from({ length: 5 }, () => new THREE.Vector3()) }, uFormStrength: { value: 1 }, uFormPos: { value: new THREE.Vector2() }, uOut: { value: new THREE.Vector2(width, height) },
       ...number('uAspect', 'uFormType', 'uFormSize', 'uFormSoft', 'uRefraction', 'uDepth', 'uBevel', 'uSharp', 'uWavelength', 'uRough', 'uMetal', 'uCoat', 'uLightAngle', 'uEnvRotate', 'uIrid', 'uFilm', 'uFilmVary', 'uFilmIor', 'uColourShift', 'uZones', 'uSaturation', 'uExposure', 'uChroma', 'uTime', 'uShimmer'),
     });
     this.bright = passes.material(brightFragment, { uImage: { value: null }, uTexel: { value: new THREE.Vector2() } });
@@ -40,12 +44,20 @@ export class MorphShade {
 
   draw(state: THREE.Texture, params: MorphParams, time: number, finish: { widthScale: number; fade: number; bloom: boolean } = { widthScale: 1, fade: 1, bloom: true }): void {
     const u = this.shade.uniforms;
-    if (this.palette !== params.palette) { u.uStops.value = linearStops(params.palette); this.palette = params.palette; }
+    const seconds = this.lastTime === null ? 0 : Math.max(0, Math.min(.1, time - this.lastTime));
+    this.lastTime = time;
+    if (!this.stops) { this.stops = new StopFader(linearStops(params.palette)); this.palette = params.palette; }
+    else if (this.palette !== params.palette) { this.stops.set(linearStops(params.palette)); this.palette = params.palette; }
+    this.stops.advance(seconds).forEach((stop, i) => (u.uStops.value as THREE.Vector3[])[i].set(stop[0], stop[1], stop[2]));
+    this.formFader ??= new FormFader(params.formType);
+    this.formFader.set(params.formType);
+    const shownForm = this.formFader.advance(seconds);
+    u.uFormStrength.value = shownForm.strength;
     u.uState.value = state; u.uAspect.value = this.width / this.height; (u.uOut.value as THREE.Vector2).set(this.width, this.height);
     const form = formAt(params, time);
     (u.uFormPos.value as THREE.Vector2).set(form.x, form.y);
     const values: Record<string, number> = {
-      uFormType: params.formType, uFormSize: params.formSize, uFormSoft: params.formSoft, uRefraction: params.refraction, uDepth: params.depth, uBevel: params.bevel,
+      uFormType: shownForm.type, uFormSize: params.formSize, uFormSoft: params.formSoft, uRefraction: params.refraction, uDepth: params.depth, uBevel: params.bevel,
       uSharp: params.lineSharp, uWavelength: params.wavelength * finish.widthScale, uRough: params.roughness, uMetal: params.metal, uCoat: params.clearcoat, uLightAngle: params.lightAngle,
       uEnvRotate: params.envRotate, uIrid: params.irid, uFilm: params.filmNm, uFilmVary: params.filmVary, uFilmIor: params.filmIor, uColourShift: params.colourShift,
       uZones: params.colourZones, uSaturation: params.saturation, uExposure: params.exposure, uChroma: params.chroma, uTime: time, uShimmer: params.shimmer,
