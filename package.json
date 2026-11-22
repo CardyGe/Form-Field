@@ -1,6 +1,6 @@
 {
   "name": "form-and-field",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "description": "A local visual instrument studio for seamless 2D and 3D media.",
   "type": "module",
