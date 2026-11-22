@@ -239,6 +239,8 @@ export class StudioRenderer {
     uBendAmount: { value: 0 }, uBendField: { value: 0 }, uBendScale: { value: 3 }, uBendDirection: { value: new THREE.Vector2(1, 0) },
     uBendTurn: { value: 0 }, uBendDetail: { value: 3 }, uBendFalloff: { value: .5 }, uBendChroma: { value: 0 }, uBendCount: { value: 1 },
     uBendPoints: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
+    uLiquidAmount: { value: 0 }, uLiquidStyle: { value: 0 }, uLiquidScale: { value: 2 }, uLiquidSteps: { value: 6 }, uLiquidDetail: { value: 3 },
+    uLiquidTurn: { value: 0 }, uLiquidTrail: { value: 0 }, uLiquidChroma: { value: 0 }, uLiquidDrift: { value: new THREE.Vector2(1, 0) },
   });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
@@ -949,8 +951,8 @@ export class StudioRenderer {
   warpSource(original: Layer, layer: Layer, source: THREE.Texture, _below: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
     if (!warpActive(original)) return source;
     // A modulated amount can rest at zero, where there is nothing to do.
-    const amount = number(layer, 'bendAmount', 0);
-    if (amount <= 0) return source;
+    const amount = Math.max(0, number(layer, 'bendAmount', 0)), liquid = Math.max(0, number(layer, 'liquidAmount', 0));
+    if (amount <= 0 && liquid <= 0) return source;
     this.warpTarget ??= target();
     const output = this.warpTarget;
     if (output.width !== width || output.height !== height) output.setSize(width, height);
@@ -968,6 +970,16 @@ export class StudioRenderer {
     u.uBendFalloff.value = number(layer, 'bendFalloff', .5); u.uBendChroma.value = number(layer, 'bendChroma', 0);
     u.uBendCount.value = points.length;
     points.forEach((point, i) => (u.uBendPoints.value as THREE.Vector3[])[i].set(point.x, point.y, point.polarity));
+    const style = Math.round(number(layer, 'liquidStyle', 0)), drift = seed * 2.39996;
+    u.uLiquidAmount.value = liquid; u.uLiquidStyle.value = style; u.uLiquidScale.value = number(layer, 'liquidScale', 2);
+    u.uLiquidSteps.value = Math.min(16, Math.max(1, Math.round(number(layer, 'liquidSteps', 6))));
+    u.uLiquidDetail.value = Math.min(5, Math.max(1, Math.round(number(layer, 'liquidDetail', 3))));
+    // Whole cycles only, so the loop closes.
+    u.uLiquidTurn.value = Math.round(number(layer, 'liquidCycles', 1)) * phase;
+    // The trail control belongs to Flow, so a value left from Flow never shows on another style.
+    u.uLiquidTrail.value = style === 1 ? number(layer, 'liquidTrail', 0) : 0;
+    u.uLiquidChroma.value = number(layer, 'liquidChroma', 0);
+    (u.uLiquidDrift.value as THREE.Vector2).set(Math.cos(drift), Math.sin(drift));
     this.draw(this.warp, output);
     return output.texture;
   }

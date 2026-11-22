@@ -18,6 +18,7 @@ const baseline = option('baseline');
 const only = option('only')?.split(',').map(s => s.trim()).filter(Boolean);
 const out = path.join(root, 'work/warp');
 const FIELDS = ['Waves', 'Noise', 'Ripple', 'Magnetic', 'Plasma'];
+const STYLES = ['Swirl', 'Flow', 'Ridge', 'Vortex', 'Chaos'];
 // A clamped edge repeats one source pixel along the push. The test picture never holds still this long.
 const STREAK_LIMIT = 48;
 // Measured on mirrored reads: at most .91x the unwarped edge colour. Clamped reads reach 1.47x on the mildest field.
@@ -29,6 +30,7 @@ const loopVerdict = (r, limit = .1) => ({
   detail: `0/TAU ${r.literal ? 'match' : 'differ'}, seam ${r.seam.toFixed(4)} (limit ${limit})`,
 });
 const NO_EFFECT = 'Warp does not change the render. ';
+const NO_LIQUID = 'Liquid does not change the render. ';
 
 const CHECKS = [
   {
@@ -114,12 +116,7 @@ const CHECKS = [
           // A busy picture, so a warp that moves by the wrong distance shows on every field.
           const p = () => q.project([q.rich({ bendAmount: .3, bendField: f, bendChroma: .3 })]);
           const small = await q.px(p()), big = await q.px(p(), .9, 1920, 1080);
-          const reduced = new Uint8ClampedArray(small.length);
-          for (let y = 0; y < 540; y++) for (let x = 0; x < 960; x++) for (let c = 0; c < 4; c++) {
-            const at = (X, Y) => big[(Y * 1920 + X) * 4 + c];
-            reduced[(y * 960 + x) * 4 + c] = (at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1)) / 4;
-          }
-          rows.push({ difference: q.difference(small, reduced), moved: q.difference(plain, small) });
+          rows.push({ difference: q.difference(small, q.halved(big, 960, 540)), moved: q.difference(plain, small) });
         }
         return rows;
       }, FIELDS.length);
@@ -134,25 +131,7 @@ const CHECKS = [
       const rows = await page.evaluate(async ([count, limit]) => {
         const q = window.wq, W = 960, H = 540, scene = params => { const p = q.project([q.rimmed(params)], true); p.highlights = 'exact'; return p; };
         const plain = await q.px(scene({})), rows = [];
-        const rim = (px, i) => px[i] > 200 && px[i + 1] < 40 && px[i + 2] > 200;
-        const measure = px => {
-          let area = 0, line = 0, longest = 0;
-          const walk = (outer, inner, at) => {
-            for (let a = 0; a < outer; a++) {
-              let hits = 0, run = 1, last = -1;
-              for (let b = 0; b < inner; b++) {
-                const i = at(a, b) * 4;
-                if (rim(px, i)) { hits++; run = 1; last = -1; continue; }
-                const key = px[i] | px[i + 1] << 8 | px[i + 2] << 16;
-                run = key === last ? run + 1 : 1; last = key; longest = Math.max(longest, run);
-              }
-              line = Math.max(line, hits / inner);
-            }
-          };
-          for (let i = 0; i < px.length; i += 4) if (rim(px, i)) area++;
-          walk(H, W, (y, x) => y * W + x); walk(W, H, (x, y) => y * W + x);
-          return { area: area / (W * H), line, longest };
-        };
+        const measure = px => q.edgeStats(px, W, H);
         const base = measure(plain);
         for (let f = 0; f < count; f++) {
           const px = await q.px(scene({ bendAmount: 1, bendField: f }));
@@ -259,6 +238,218 @@ const CHECKS = [
       return { ok, detail: `${r.moved <= 1 ? NO_EFFECT : ''}seek ${r.same ? 'byte-identical' : 'differs'}; against echo bent once ${r.toOnce.toFixed(3)} (limit 2), bent twice ${r.toTwice.toFixed(3)}, moved ${r.moved.toFixed(2)}` };
     },
   },
+  {
+    name: 'liquid-styles',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async count => {
+        const q = window.wq, plain = await q.px(q.project([q.rich()])), shots = [];
+        for (let s = 0; s < count; s++) shots.push(await q.px(q.project([q.rich({ liquidAmount: .3, liquidStyle: s })])));
+        const moved = shots.map(x => q.difference(plain, x));
+        let closest = Infinity;
+        for (let a = 0; a < count; a++) for (let b = a + 1; b < count; b++) closest = Math.min(closest, q.difference(shots[a], shots[b]));
+        return { moved, closest };
+      }, STYLES.length);
+      const ok = r.moved.every(v => v > 3) && r.closest > 3;
+      return { ok, detail: `${r.moved.some(v => v <= 3) ? NO_LIQUID : ''}moved ${r.moved.map((v, i) => `${STYLES[i]} ${v.toFixed(2)}`).join(', ')}; closest pair ${r.closest.toFixed(2)} (limits 3)` };
+    },
+  },
+  {
+    name: 'liquid-steps',
+    // More steps follow the curved path more closely, so each extra step changes less.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, at = steps => q.px(q.project([q.smooth({ liquidAmount: .8, liquidSteps: steps })]));
+        const [one, two, fifteen, sixteen] = [await at(1), await at(2), await at(15), await at(16)];
+        return { far: q.difference(one, sixteen), early: q.difference(one, two), late: q.difference(fifteen, sixteen) };
+      });
+      // A quarter, not merely smaller: steps that each travel the full distance still shrink a little, and never settle.
+      return { ok: r.far > 1 && r.late < r.early / 4, detail: `1 vs 16 ${r.far.toFixed(3)} (over 1); 1 vs 2 ${r.early.toFixed(3)}, 15 vs 16 ${r.late.toFixed(3)} (under a quarter of it)` };
+    },
+  },
+  {
+    name: 'liquid-area',
+    // A field that pinches gathers some colours and loses others, so the picture's mean moves. Measured: these two
+    // pictures shift by under 1 on Swirl and by 5 to 7 on the same field left unturned, which does pinch.
+    // Large soft patches are no use here: their mean moves more from picture crossing the frame edge than from pinching.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, mean = px => { let sum = 0; for (let i = 0; i < px.length; i += 4) sum += (px[i] + px[i + 1] + px[i + 2]) / 3; return sum / (px.length / 4); };
+        const shifts = [];
+        for (const picture of [q.smooth, q.rich]) {
+          const plain = mean(await q.px(q.project([picture()])));
+          for (const phase of [.9, 2.4, 4.1]) shifts.push(Math.abs(mean(await q.px(q.project([picture({ liquidAmount: .5, liquidStyle: 0 })]), phase)) - plain));
+        }
+        const moved = q.difference(await q.px(q.project([q.smooth()])), await q.px(q.project([q.smooth({ liquidAmount: .5, liquidStyle: 0 })])));
+        return { worst: Math.max(...shifts), moved };
+      });
+      return { ok: r.moved > 1 && r.worst <= 3, detail: `${r.moved <= 1 ? NO_LIQUID : ''}mean brightness shift ${r.worst.toFixed(3)} of 255 (limit 3), moved ${r.moved.toFixed(2)}` };
+    },
+  },
+  {
+    name: 'liquid-engage',
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, plain = await q.px(q.project([q.smooth()])), rows = [];
+        for (let s = 0; s < count; s++) {
+          const tiny = await q.px(q.project([q.smooth({ liquidAmount: .0001, liquidStyle: s, liquidChroma: .5, liquidTrail: .5 })]));
+          const full = await q.px(q.project([q.smooth({ liquidAmount: .5, liquidStyle: s })]));
+          rows.push({ mean: q.difference(plain, tiny), moved: q.difference(plain, full) });
+        }
+        return rows;
+      }, STYLES.length);
+      const ok = rows.every(r => r.mean < 1 && r.moved > 1);
+      return { ok, detail: `${rows.some(r => r.moved <= 1) ? NO_LIQUID : ''}${rows.map((r, i) => `${STYLES[i]} ${r.mean.toFixed(4)} (full ${r.moved.toFixed(2)})`).join(', ')} (limit 1)` };
+    },
+  },
+  {
+    name: 'liquid-loop',
+    // Cycles 1.5 is deliberately not whole: the renderer must round it, or the seam opens.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, plain = await q.shot(q.project([q.smooth()]), 0), rows = [];
+        for (let s = 0; s < count; s++) {
+          const p = q.project([q.smooth({ liquidAmount: .3, liquidStyle: s, liquidCycles: 1.5, liquidChroma: .3, liquidTrail: .5 })]);
+          rows.push({ ...await q.loop(p), moved: !q.same(await q.shot(p, 0), plain) });
+        }
+        return rows;
+      }, STYLES.length);
+      const verdicts = rows.map(r => loopVerdict(r));
+      return { ok: rows.every((r, i) => r.moved && verdicts[i].ok), detail: `${rows.some(r => !r.moved) ? NO_LIQUID : ''}${verdicts.map((v, i) => `${STYLES[i]} ${v.detail}`).join('; ')}` };
+    },
+  },
+  {
+    name: 'liquid-scale',
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, plain = await q.px(q.project([q.rich()])), rows = [];
+        for (let s = 0; s < count; s++) {
+          const p = () => q.project([q.rich({ liquidAmount: .3, liquidStyle: s, liquidChroma: .3, liquidTrail: .5 })]);
+          const small = await q.px(p()), big = await q.px(p(), .9, 1920, 1080);
+          rows.push({ difference: q.difference(small, q.halved(big, 960, 540)), moved: q.difference(plain, small) });
+        }
+        return rows;
+      }, STYLES.length);
+      return { ok: rows.every(r => r.moved > 1 && r.difference < 2), detail: `${rows.some(r => r.moved <= 1) ? NO_LIQUID : ''}${rows.map((r, i) => `${STYLES[i]} ${r.difference.toFixed(3)}`).join(', ')} (limit 2)` };
+    },
+  },
+  {
+    name: 'liquid-edge',
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, W = 960, H = 540, scene = params => { const p = q.project([q.rimmed(params)], true); p.highlights = 'exact'; return p; };
+        const plain = await q.px(scene({})), base = q.edgeStats(plain, W, H), rows = [];
+        for (let s = 0; s < count; s++) {
+          const px = await q.px(scene({ liquidAmount: 1, liquidStyle: s, liquidSteps: 8 }));
+          let gaps = 0; for (let i = 3; i < px.length; i += 4) if (px[i] !== 255) gaps++;
+          rows.push({ gaps, ...q.edgeStats(px, W, H), moved: q.difference(plain, px), baseArea: base.area });
+        }
+        return rows;
+      }, STYLES.length);
+      const ok = rows.every(r => r.moved > 3 && r.gaps === 0 && r.longest < STREAK_LIMIT && r.area < r.baseArea * RIM_AREA_LIMIT && r.line < .5);
+      return { ok, detail: `${rows.some(r => r.moved <= 3) ? NO_LIQUID : ''}edge colour covers ${(rows[0].baseArea * 100).toFixed(2)}% unwarped; ${rows.map((r, i) => `${STYLES[i]} gaps ${r.gaps} edge ${(r.area * 100).toFixed(2)}% line ${(r.line * 100).toFixed(0)}% run ${r.longest}`).join(', ')} (limits ${RIM_AREA_LIMIT}x area, 50% of a line, run < ${STREAK_LIMIT})` };
+    },
+  },
+  {
+    name: 'liquid-trail',
+    // Seven steps put a trail sample on every step. A shorter run with the same step size stops exactly at
+    // that point of the path, so the trail must equal those renders averaged with falling weights.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, amount = .5, steps = 7, falloff = .8;
+        const read = async params => { await q.shot(q.project([q.smooth({ liquidStyle: 1, ...params })]), .9, W, H); return q.linear(W, H); };
+        const stops = [];
+        for (let k = 0; k <= steps; k++) stops.push(await read({ liquidAmount: k ? amount * k / steps : 1e-9, liquidSteps: Math.max(1, k) }));
+        const expected = new Float32Array(stops[0].length);
+        let total = 0;
+        stops.forEach((stop, k) => { const w = falloff ** (steps - k); total += w; for (let i = 0; i < stop.length; i++) expected[i] += stop[i] * w; });
+        for (let i = 0; i < expected.length; i++) expected[i] /= total;
+        const trail = await read({ liquidAmount: amount, liquidSteps: steps, liquidTrail: 1 });
+        const gap = (a, b) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum / a.length; };
+        // Trail belongs to Flow: on another style the control is hidden, so it must not change the picture.
+        const other = await read({ liquidStyle: 0, liquidAmount: amount, liquidSteps: steps, liquidTrail: 1 });
+        const otherPlain = await read({ liquidStyle: 0, liquidAmount: amount, liquidSteps: steps });
+        return { error: gap(trail, expected), moved: gap(trail, stops[steps]), hidden: gap(other, otherPlain) };
+      });
+      const ok = r.moved > .005 && r.error < r.moved / 10 && r.hidden === 0;
+      return { ok, detail: `${r.moved <= .005 ? 'Trail has no effect. ' : ''}against the weighted path ${r.error.toFixed(5)}, trail moved ${r.moved.toFixed(5)} (limit a tenth of that); on Swirl ${r.hidden.toFixed(5)} (must be 0)` };
+    },
+  },
+  {
+    name: 'liquid-light',
+    // Feeds the pass floats directly, with trail and fringe both on. Straight colour is the same over-range white
+    // across a soft ramp, so the brightest straight colour read is 4 and anything above it was invented.
+    // Over-range light must survive, and uncovered light must pass.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, straight = [4, 4, 4];
+        const params = { liquidAmount: .35, liquidStyle: 1, liquidTrail: 1, liquidChroma: 1, liquidSteps: 8 };
+        const pass = fill => {
+          const data = new Float32Array(W * H * 4);
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) data.set(fill(x / W, y / H), (y * W + x) * 4);
+          const texture = new q.m.DataTexture(data, W, H, q.m.RGBAFormat, q.m.FloatType); texture.needsUpdate = true;
+          const layer = q.rich(params);
+          q.renderer.warpSource(layer, layer, texture, texture, .9, W, H);
+          const out = q.linear(W, H); texture.dispose();
+          return out;
+        };
+        const covered = pass((u, v) => { const a = .5 + .5 * Math.sin(u * 40) * Math.cos(v * 23); return [straight[0] * a, straight[1] * a, straight[2] * a, a]; });
+        let over = 0, peak = 0;
+        for (let i = 0; i < covered.length; i += 4) {
+          peak = Math.max(peak, covered[i]);
+          if (covered[i + 3] > .01 && (covered[i] / covered[i + 3] > straight[0] * 1.01 || covered[i + 1] / covered[i + 3] > straight[1] * 1.01 || covered[i + 2] / covered[i + 3] > straight[2] * 1.01)) over++;
+        }
+        const light = pass(() => [.5, .25, .75, 0]);
+        let lost = 0;
+        for (let i = 0; i < light.length; i += 4) if (Math.abs(light[i] - .5) > .01 || Math.abs(light[i + 1] - .25) > .01 || Math.abs(light[i + 2] - .75) > .01 || light[i + 3] !== 0) lost++;
+        return { over, peak, lost };
+      });
+      return { ok: r.over === 0 && r.peak > 3 && r.lost === 0, detail: `${r.over} pixels above the source's straight colour; peak ${r.peak.toFixed(2)} (over 3); uncovered light changed on ${r.lost} pixels` };
+    },
+  },
+  {
+    name: 'liquid-fringe',
+    // Liquid moves almost nothing here while Warp moves a lot, so a fringe built on total movement would show.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, at = params => q.px(q.project([q.rich({ liquidStyle: 0, ...params })]));
+        const own = q.difference(await at({ liquidAmount: .2 }), await at({ liquidAmount: .2, liquidChroma: 1 }));
+        const bent = { bendAmount: .6, bendField: 1, liquidAmount: 1e-5 };
+        const borrowed = q.difference(await at(bent), await at({ ...bent, liquidChroma: 1 }));
+        return { own, borrowed };
+      });
+      return { ok: r.own > 1 && r.borrowed < .1, detail: `${r.own <= 1 ? 'Colour fringe has no effect. ' : ''}own movement ${r.own.toFixed(3)} (over 1); with Warp's movement only ${r.borrowed.toFixed(4)} (limit .1)` };
+    },
+  },
+  {
+    name: 'liquid-sparkle',
+    // Same measure as warp-sparkle, on plain Swirl and on Flow's trail, whose tail reads are the cheap ones.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, W = 3840, H = 2160, url = await q.checkerUrl(W, H), rows = [];
+        const plain = await q.shot(q.project([q.image(url, {}, 'checker', W, H)]), .9, W, H);
+        for (const look of [{ liquidStyle: 0 }, { liquidStyle: 1, liquidTrail: 1 }]) {
+          const scene = () => q.project([q.image(url, { liquidAmount: .22, liquidScale: 7, liquidDetail: 4, liquidCycles: 1, ...look }, 'checker', W, H)]);
+          if (q.same(plain, await q.shot(scene(), .9, W, H))) { rows.push({ moved: false }); continue; }
+          const energy = async () => {
+            const phases = [.9, .92, .94, .96];
+            let sum = 0, previous = await q.px(scene(), phases[0], W, H);
+            for (const phase of phases.slice(1)) { const next = await q.px(scene(), phase, W, H); sum += q.highFrequency(previous, next, W, H); previous = next; }
+            return sum / (phases.length - 1);
+          };
+          const filtered = await energy();
+          const mat = q.renderer.warp, source = mat.fragmentShader, single = source.replace('const int WARP_TAPS = 4;', 'const int WARP_TAPS = 1;');
+          if (single === source) throw new Error('WARP_TAPS constant not found');
+          mat.fragmentShader = single; mat.needsUpdate = true;
+          let tap;
+          try { tap = await energy(); } finally { mat.fragmentShader = source; mat.needsUpdate = true; }
+          rows.push({ moved: true, filtered, tap });
+        }
+        return rows;
+      });
+      const names = ['Swirl', 'Flow with trail'];
+      return { ok: rows.every(r => r.moved && r.filtered < r.tap / 2), detail: rows.map((r, i) => r.moved ? `${names[i]} ${r.filtered.toFixed(3)} against single tap ${r.tap.toFixed(3)}, ratio ${(r.filtered / r.tap).toFixed(3)}` : `${names[i]}: ${NO_LIQUID}`).join('; ') + ' (limit .5)' };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -268,7 +459,8 @@ await fs.mkdir(out, { recursive: true });
 const bundle = (dir, file) => build({
   stdin: { contents: `export {StudioRenderer} from './src/rendering/StudioRenderer';
 export {createProject,createLayer,applyPreset,PRESETS} from './src/core/project';
-export {encodePNG} from './src/rendering/png';`, resolveDir: dir, loader: 'ts' },
+export {encodePNG} from './src/rendering/png';
+export {DataTexture,RGBAFormat,FloatType} from 'three';`, resolveDir: dir, loader: 'ts' },
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
@@ -362,7 +554,46 @@ try {
       const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
       return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
     };
-    window.wq = { m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop };
+    // A 2x frame averaged down to compare with a 1x frame.
+    const halved = (big, W, H) => {
+      const reduced = new Uint8ClampedArray(W * H * 4);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 4; c++) {
+        const at = (X, Y) => big[(Y * 2 * W + X) * 4 + c];
+        reduced[(y * W + x) * 4 + c] = (at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1)) / 4;
+      }
+      return reduced;
+    };
+    // How much of the magenta rim shows, on the fullest line, and the longest run of one repeated colour.
+    const edgeStats = (px, W, H) => {
+      const rim = i => px[i] > 200 && px[i + 1] < 40 && px[i + 2] > 200;
+      let area = 0, line = 0, longest = 0;
+      const walk = (outer, inner, at) => {
+        for (let a = 0; a < outer; a++) {
+          let hits = 0, run = 1, last = -1;
+          for (let b = 0; b < inner; b++) {
+            const i = at(a, b) * 4;
+            if (rim(i)) { hits++; run = 1; last = -1; continue; }
+            const key = px[i] | px[i + 1] << 8 | px[i + 2] << 16;
+            run = key === last ? run + 1 : 1; last = key; longest = Math.max(longest, run);
+          }
+          line = Math.max(line, hits / inner);
+        }
+      };
+      for (let i = 0; i < px.length; i += 4) if (rim(i)) area++;
+      walk(H, W, (y, x) => y * W + x); walk(W, H, (x, y) => y * W + x);
+      return { area: area / (W * H), line, longest };
+    };
+    // The warp pass's own output in linear light, before any later pass.
+    const fromHalf = h => {
+      const sign = h >> 15 ? -1 : 1, e = h >> 10 & 31, f = h & 1023;
+      return e === 0 ? sign * f * 2 ** -24 : e === 31 ? (f ? NaN : sign * Infinity) : sign * (1 + f / 1024) * 2 ** (e - 15);
+    };
+    const linear = (W, H) => {
+      const raw = new Uint16Array(W * H * 4);
+      renderer.renderer.readRenderTargetPixels(renderer.warpTarget, 0, 0, W, H, raw);
+      return Float32Array.from(raw, fromHalf);
+    };
+    window.wq = { m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
   }, !!baseline);
 
   for (const check of selected) {
