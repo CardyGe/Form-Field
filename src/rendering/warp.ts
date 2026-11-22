@@ -86,7 +86,11 @@ uniform int uLiquidStyle, uLiquidSteps, uLiquidDetail;
 uniform vec2 uLumaDirection;
 uniform float uLumaAmount, uLumaThreshold, uLumaSoft, uLumaChroma;
 uniform int uLumaSource, uLumaChannel, uLumaMode;
+uniform vec2 uPolarCentre;
+uniform float uPolarAmount, uPolarTwist, uMirrorAmount, uMirrorTurn;
+uniform int uPolarMode, uMirrorMode, uMirrorSegments;
 const float TAU = 6.28318530718;
+const float PI = 3.14159265359;
 const int WARP_TAPS = 4;
 const int TRAIL_SAMPLES = 8;
 
@@ -311,10 +315,85 @@ vec2 lumaUv(vec2 uv) {
   return uv + move;
 }
 
-/** Where this pixel reads from. Warps compose here in order: Mirror, Polar, Warp, Liquid, Luma. */
-vec2 warpedUv(vec2 uv) {
+/** How the position leaving Mirror and Polar changes per screen pixel, worked out by hand. A screen derivative of a
+ * folded or wrapped position is wrong on the pixels that straddle the line, so these stages never take one. */
+vec2 readDx, readDy;
+/** The position leaving Mirror and Polar. Later warps are smooth moves from here, so their derivatives are safe. */
+vec2 readBase;
+
+vec2 rotated(vec2 p, float angle) {
+  float c = cos(angle), s = sin(angle);
+  return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+/** The shader's copy of foldAngle above: folds an angle into one mirrored wedge. */
+float foldAngle(float angle, float segments) {
+  float wedge = TAU / max(1., segments), a = mod(angle, wedge);
+  return min(a, wedge - a);
+}
+
+/** Folds about the frame centre, in frame-height units so a wedge is a true angle at any frame shape. The mirror lines
+ * turn and the picture stays put. Left-right keeps the left half and Top-bottom the top half. */
+vec2 mirrorUv(vec2 uv) {
+  vec2 frame = vec2(uAspect, 1.), p = rotated((uv - .5) * frame, -uMirrorTurn);
+  vec2 ax = rotated(readDx * frame, -uMirrorTurn), ay = rotated(readDy * frame, -uMirrorTurn);
+  if (uMirrorMode == 3) {
+    float r = length(p), wedge = TAU / float(uMirrorSegments), angle = r > 0. ? atan(p.y, p.x) : 0.;
+    float folded = foldAngle(angle, float(uMirrorSegments)), side = mod(angle, wedge) > wedge * .5 ? -1. : 1.;
+    vec2 e = r > 0. ? p / r : vec2(1., 0.), t = vec2(-e.y, e.x);
+    vec2 E = vec2(cos(folded), sin(folded)), T = side * vec2(-E.y, E.x);
+    ax = E * dot(e, ax) + T * dot(t, ax);
+    ay = E * dot(e, ay) + T * dot(t, ay);
+    p = E * r;
+  } else {
+    vec2 flip = vec2(uMirrorMode != 1 && p.x > 0. ? -1. : 1., uMirrorMode != 0 && p.y < 0. ? -1. : 1.);
+    p *= flip; ax *= flip; ay *= flip;
+  }
+  readDx = rotated(ax, uMirrorTurn) / frame;
+  readDy = rotated(ay, uMirrorTurn) / frame;
+  return rotated(p, uMirrorTurn) / frame + .5;
+}
+
+/** Moves from the plain position toward a polar one. Radius and angle are in frame-height units around the centre, and
+ * the radius reaches 1 at the corner furthest from it. To circle runs across the picture and back as the angle goes
+ * round, so the two ends of the turn meet on the same column and there is no seam, at any amount. */
+vec2 polarUv(vec2 uv) {
+  vec2 frame = vec2(uAspect, 1.), ax = readDx * frame, ay = readDy * frame, target, tx, ty;
+  float reach = length(.5 * frame + abs(uPolarCentre));
+  if (uPolarMode == 0) {
+    vec2 p = (uv - .5) * frame - uPolarCentre;
+    // The floor keeps the footprint finite at the centre, where every angle meets.
+    float r = length(p), safe = max(r, .5 / uResolution.y);
+    float angle = (r > 0. ? atan(p.x, p.y) : 0.) + TAU * uPolarTwist * r / reach;
+    float wrapped = mod(angle + PI, TAU) - PI, side = wrapped < 0. ? -1. : 1.;
+    vec2 outward = p / safe, around = vec2(p.y, -p.x) / (safe * safe);
+    float rx = dot(outward, ax), ry = dot(outward, ay);
+    float turnX = dot(around, ax) + TAU * uPolarTwist * rx / reach, turnY = dot(around, ay) + TAU * uPolarTwist * ry / reach;
+    target = vec2(abs(wrapped) / PI, r / reach);
+    tx = vec2(side * turnX / PI, rx / reach);
+    ty = vec2(side * turnY / PI, ry / reach);
+  } else {
+    // Unroll: across the frame is the angle and up the frame is the radius.
+    float r = uv.y * reach, angle = (uv.x - .5) * TAU + TAU * uPolarTwist * uv.y;
+    vec2 outward = vec2(sin(angle), cos(angle)), around = vec2(cos(angle), -sin(angle));
+    target = (uPolarCentre + r * outward) / frame + .5;
+    tx = (outward * reach * readDx.y + around * r * TAU * (readDx.x + uPolarTwist * readDx.y)) / frame;
+    ty = (outward * reach * readDy.y + around * r * TAU * (readDy.x + uPolarTwist * readDy.y)) / frame;
+  }
+  readDx = mix(readDx, tx, uPolarAmount);
+  readDy = mix(readDy, ty, uPolarAmount);
+  return mix(uv, target, uPolarAmount);
+}
+
+/** Where this pixel reads from. Warps compose here in order: Mirror, Polar, Warp, Liquid, Luma.
+ * Not folded is the plain side of Mirror's crossfade. */
+vec2 warpedUv(vec2 uv, bool folded) {
   vec2 frame = vec2(uAspect, 1.), warped = uv;
   warpFringe = vec2(0.);
+  readDx = dFdx(uv); readDy = dFdy(uv);
+  if (folded) warped = mirrorUv(warped);
+  if (uPolarAmount > 0.) warped = polarUv(warped);
+  readBase = warped;
   // Warp: amount 1 moves a pixel at most half the frame height.
   if (uBendAmount > 0.) {
     vec2 move = bendField((warped - .5) * frame) * uBendAmount * .5 / frame;
@@ -370,9 +449,16 @@ void addTail(vec2 uv, vec2 footprint, float weight, inout Gathered sum, inout fl
   sum.covered += t.covered; sum.light += t.light; sum.alpha += t.alpha;
 }
 
-void main() {
-  vec2 warped = warpedUv(vUv);
-  vec2 footprint = fwidth(warped) * uResolution;
+/** Texels this position covers per screen pixel: the worked-out Mirror and Polar change plus the later warps' move. */
+vec2 footprintOf(vec2 at) {
+  vec2 move = at - readBase;
+  return (abs(readDx + dFdx(move)) + abs(readDy + dFdy(move))) * uResolution;
+}
+
+/** One complete filtered read of the layer, folded by Mirror or not. */
+void picture(bool folded) {
+  vec2 warped = warpedUv(vUv, folded);
+  vec2 footprint = footprintOf(warped);
   float peak = 0.;
   // Every trail sample takes the same filtered read, so the most a squeezed, fringed pixel can read is
   // 3 * 8 * 4 = 96. An unsqueezed pixel reads once per sample: 8, or 24 with fringe.
@@ -383,7 +469,7 @@ void main() {
   if (fringed) { r = readAt(warped + warpFringe, footprint, head, peak); b = readAt(warped - warpFringe, footprint, head, peak); }
   float tailPeak = 0.;
   for (int i = 1; i < trailCount; i++) {
-    vec2 at = warped + trailOffset[i], spread = fwidth(at) * uResolution;
+    vec2 at = warped + trailOffset[i], spread = footprintOf(at);
     addTail(at, spread, trailWeight[i], g, tailPeak);
     if (fringed) { addTail(at + warpFringe, spread, trailWeight[i], r, tailPeak); addTail(at - warpFringe, spread, trailWeight[i], b, tailPeak); }
   }
@@ -399,5 +485,16 @@ void main() {
     covered = min(vec3(r.covered.r, g.covered.g, b.covered.b), max(room, vec3(0.)));
   }
   gl_FragColor = vec4(covered + light, g.alpha);
+}
+
+/** Mirror's amount crossfades two complete reads, each already filtered and bounded. Premultiplied mixing adds no light.
+ * At 0 only the plain read runs and at 1 only the mirrored one. */
+void main() {
+  picture(uMirrorAmount > 0.);
+  if (uMirrorAmount > 0. && uMirrorAmount < 1.) {
+    vec4 mirroredPicture = gl_FragColor;
+    picture(false);
+    gl_FragColor = mix(gl_FragColor, mirroredPicture, uMirrorAmount);
+  }
 }
 `;

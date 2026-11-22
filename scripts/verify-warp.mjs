@@ -34,6 +34,16 @@ const NO_LIQUID = 'Liquid does not change the render. ';
 const NO_LUMA = 'Luma Warp does not change the render. ';
 const LUMA_MODES = ['Push', 'Edges', 'Contours'];
 const LUMA_CHANNELS = ['Brightness', 'Red', 'Green', 'Blue', 'Saturation'];
+const POLAR_NAMES = ['To circle', 'Unroll'];
+const MIRROR_NAMES = ['Left-right', 'Top-bottom', 'Four-way', 'Kaleidoscope'];
+const lumaStageVerdict = r => ({
+  ok: r.staged > 1 && r.dark > .1 && r.bright > .1 && r.self < .002 && r.selfBright > .3,
+  detail: `${r.staged <= 1 ? 'The stage does not change the render. ' : ''}moved where the staged read is dark ${(r.self * 100).toFixed(3)}% (limit .2%), where bright ${(r.selfBright * 100).toFixed(1)}% (over 30%); picture is ${(r.dark * 100).toFixed(0)}% dark, ${(r.bright * 100).toFixed(0)}% bright (each over 10%)`,
+});
+const fringeStageVerdict = r => ({
+  ok: r.alone < 1e-6 && r.stacked > .001 && r.off < .0005,
+  detail: `fringe from the stage alone ${r.alone.toExponential(1)} (must be 0); stacked Warp fringe ${r.stacked.toFixed(4)} (over .001), off Warp's own movement by ${r.off.toFixed(5)} (limit .0005)`,
+});
 
 const CHECKS = [
   {
@@ -786,6 +796,295 @@ const CHECKS = [
       return { ok, detail: `${rows.some(r => r.moved <= 3) ? NO_LUMA : ''}edge colour covers ${(rows[0].baseArea * 100).toFixed(2)}% unwarped; ${rows.map((r, i) => `${LUMA_MODES[i]} gaps ${r.gaps} edge ${(r.area * 100).toFixed(2)}% line ${(r.line * 100).toFixed(0)}% run ${r.longest}`).join(', ')} (limits ${RIM_AREA_LIMIT}x area, 50% of a line, run < ${STREAK_LIMIT})` };
     },
   },
+  {
+    name: 'polar-modes',
+    // The read position itself, so "between" is exact: amount .5 must be the midpoint of plain and full.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, plain = await q.px(q.project([q.rich()])), rows = [], shots = [];
+        for (const mode of [0, 1]) {
+          const full = await q.px(q.project([q.rich({ polarAmount: 1, polarMode: mode })]));
+          shots.push(full);
+          const at = amount => q.probe('vec4(warped, 0., 1.)', { polarAmount: amount, polarMode: mode });
+          const none = q.probe('vec4(vUv, 0., 1.)', { polarAmount: 1, polarMode: mode }), whole = at(1), half = at(.5);
+          let gap = 0;
+          for (let i = 0; i < half.length; i += 4) gap = Math.max(gap, Math.abs(half[i] - (none[i] + whole[i]) / 2), Math.abs(half[i + 1] - (none[i + 1] + whole[i + 1]) / 2));
+          rows.push({ moved: q.difference(plain, full), gap });
+        }
+        return { rows, apart: q.difference(shots[0], shots[1]) };
+      });
+      const ok = rows.rows.every(r => r.moved > 3 && r.gap < .003) && rows.apart > 3;
+      return { ok, detail: `${rows.rows.map((r, i) => `${POLAR_NAMES[i]} moved ${r.moved.toFixed(2)}, off the midpoint ${r.gap.toFixed(5)}`).join('; ')}; modes differ ${rows.apart.toFixed(2)} (limits 3 and .003)` };
+    },
+  },
+  {
+    name: 'polar-seam',
+    // The wrap angle is a vertical line through the centre. Each frame shape, plain and twisted.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, rows = [];
+        for (const [W, H] of [[960, 540], [720, 900]]) for (const polarTwist of [0, .5]) for (const polarAmount of [1, .6]) {
+          const px = await q.px(q.project([q.smooth({ polarAmount, polarTwist })]), .9, W, H);
+          const moved = q.difference(px, await q.px(q.project([q.smooth()]), .9, W, H));
+          const step = (x, y0, y1) => { let sum = 0; for (let y = y0; y < y1; y++) for (let c = 0; c < 3; c++) sum += Math.abs(px[(y * W + x) * 4 + c] - px[(y * W + x + 1) * 4 + c]); return sum / (y1 - y0) / 3; };
+          const mid = W / 2 - 1;
+          for (const [y0, y1] of [[8, (H >> 1) - 24], [(H >> 1) + 24, H - 8]]) {
+            const around = [-6, -5, -4, -3, 3, 4, 5, 6].map(d => step(mid + d, y0, y1));
+            rows.push({ W, H, polarTwist, polarAmount, moved, seam: step(mid, y0, y1), near: around.reduce((a, b) => a + b) / around.length });
+          }
+        }
+        return rows;
+      });
+      const worst = rows.reduce((a, r) => (r.seam / Math.max(r.near, .05) > a.seam / Math.max(a.near, .05) ? r : a));
+      const ok = rows.every(r => r.moved > 1 && r.seam <= Math.max(r.near, .05) * 1.25);
+      return { ok, detail: `${rows.some(r => r.moved <= 1) ? 'Polar does not change the render. ' : ''}worst ${worst.W}x${worst.H} twist ${worst.polarTwist} amount ${worst.polarAmount}: step ${worst.seam.toFixed(3)} against neighbours ${worst.near.toFixed(3)} (limit 1.25x)` };
+    },
+  },
+  {
+    name: 'polar-engage',
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, rows = [], zero = new Float32Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) zero.set(q.smoothFill((x + .5) / W, (y + .5) / H), (y * W + x) * 4);
+        for (const mode of [0, 1]) {
+          const tiny = q.feed({ polarAmount: 1e-4, polarMode: mode, polarTwist: 1 }, q.smoothFill);
+          const full = q.feed({ polarAmount: 1, polarMode: mode }, q.smoothFill);
+          rows.push({ tiny: q.worst(zero, tiny), full: q.worst(zero, full) });
+        }
+        return rows;
+      });
+      return { ok: rows.every(r => r.tiny < .001 && r.full > .01), detail: `${rows.map((r, i) => `${POLAR_NAMES[i]} ${r.tiny.toFixed(6)} (full ${r.full.toFixed(3)})`).join(', ')} (limit .001)` };
+    },
+  },
+  {
+    name: 'polar-shape',
+    // The radius must be true distance in frame heights at any frame shape. Centre X is a share of frame height. Centre Y
+    // must go the way a layer's Y does, measured from a real moved layer rather than assumed.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, rows = [];
+        for (const [W, H] of [[960, 540], [720, 900]]) for (const [cx, cy] of [[0, 0], [.2, .15]]) {
+          const out = q.probe('vec4(warped, 0., 1.)', { polarAmount: 1, polarCentreX: cx, polarCentreY: cy }, W, H), a = W / H;
+          const reach = Math.hypot(a / 2 + Math.abs(cx), .5 + Math.abs(cy));
+          let radial = 0;
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const want = Math.hypot(((x + .5) / W - .5) * a - cx, (y + .5) / H - .5 + cy) / reach;
+            radial = Math.max(radial, Math.abs(out[(y * W + x) * 4 + 1] - want));
+          }
+          // Bright along the foot of the picture, which wrapping gathers at the circle's centre.
+          const px = await q.px(q.project([q.image(await q.headUrl(W, H), { polarAmount: 1, polarCentreX: cx, polarCentreY: cy }, `head-${W}`, W, H)]), .9, W, H);
+          const moved = q.discLayer(0); moved.transform = { ...moved.transform, x: cx, y: cy };
+          const placed = q.brightCentre(await q.px(q.project([moved]), .9, W, H), W, H, 128);
+          const seen = q.brightCentre(px, W, H, 235);
+          rows.push({ W, H, radial, dx: seen.x - cx, dy: seen.y - placed.y });
+        }
+        return rows;
+      });
+      const ok = rows.every(r => r.radial < .003 && Math.abs(r.dx) < .02 && Math.abs(r.dy) < .02);
+      return { ok, detail: `${rows.map(r => `${r.W}x${r.H} radius off ${r.radial.toFixed(5)}, centre off ${r.dx.toFixed(3)},${r.dy.toFixed(3)}`).join('; ')} (limits .003 and .02)` };
+    },
+  },
+  {
+    name: 'polar-footprint',
+    // An odd half-width puts the wrap line inside a 2x2 shading block, where a derivative of the folded coordinate is
+    // wrong. The footprint across the wrap must match the columns either side of it.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, W = 962, H = 542, rows = [];
+        for (const polarAmount of [1, .6]) {
+          const out = q.probe('vec4(footprint, 0., 1.)', { polarAmount }, W, H);
+          const mid = W / 2 - 1;
+          let worst = 0;
+          for (let y = 12; y < H - 12; y++) {
+            if (Math.abs(y - H / 2) < 40) continue;
+            for (const c of [0, 1]) {
+              const at = x => out[(y * W + x) * 4 + c];
+              // Part way, the position has a true kink at the wrap, so each column is compared with its own side.
+              for (const [x, near] of [[mid, (at(mid - 2) + at(mid - 3)) / 2], [mid + 1, (at(mid + 3) + at(mid + 4)) / 2]]) worst = Math.max(worst, Math.abs(at(x) - near) / Math.max(near, .05));
+            }
+          }
+          rows.push({ polarAmount, worst });
+        }
+        return rows;
+      });
+      return { ok: rows.every(r => r.worst < .25), detail: `${rows.map(r => `amount ${r.polarAmount}: footprint at the wrap differs from its neighbours by ${(r.worst * 100).toFixed(1)}%`).join('; ')} (limit 25%)` };
+    },
+  },
+  {
+    name: 'polar-luma',
+    // This layer's driver is read where Polar put the pixel. Red marks the right half of the source, so a pixel whose
+    // Polar read is dark has no driver and must not move, wherever it sits on screen.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => q_lumaStage(window.wq, { polarAmount: 1 }));
+      return lumaStageVerdict(r);
+    },
+  },
+  {
+    name: 'polar-fringe',
+    // Polar's own movement is large and must add nothing. A Warp fringe on top is exactly Warp's own movement.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => q_fringeStage(window.wq, { polarAmount: 1 }));
+      return fringeStageVerdict(r);
+    },
+  },
+  {
+    name: 'mirror-symmetry',
+    // A busy picture for the flips, in a wide and a tall frame. A smooth one for the turn, which has to be resampled.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, flips = [], turns = [];
+        for (const [W, H] of [[960, 540], [720, 900]]) {
+          for (const [mode, h, v] of [[0, true, false], [1, false, true], [2, true, true]]) {
+            const px = await q.px(q.project([q.rich({ mirrorAmount: 1, mirrorMode: mode })]), .9, W, H);
+            const plain = await q.px(q.project([q.rich()]), .9, W, H);
+            let worst = 0, kept = 0;
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) {
+              const a = px[(y * W + x) * 4 + c];
+              if (h) worst = Math.max(worst, Math.abs(a - px[(y * W + W - 1 - x) * 4 + c]));
+              if (v) worst = Math.max(worst, Math.abs(a - px[((H - 1 - y) * W + x) * 4 + c]));
+              // The left and top of the picture are the parts kept.
+              if ((!h || x < W / 2 - 2) && (!v || y < H / 2 - 2)) kept = Math.max(kept, Math.abs(a - plain[(y * W + x) * 4 + c]));
+            }
+            flips.push({ W, H, mode, worst, kept, moved: q.difference(plain, px) });
+          }
+          const px = await q.px(q.project([q.smooth({ mirrorAmount: 1, mirrorMode: 3, mirrorSegments: 6 })]), .9, W, H);
+          const plain = await q.px(q.project([q.smooth()]), .9, W, H);
+          const side = Math.min(W, H), radius = side * .46, cos = Math.cos(Math.PI / 3), sin = Math.sin(Math.PI / 3);
+          const read = (x, y, c) => {
+            const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, at = (X, Y) => px[(Y * W + X) * 4 + c];
+            return at(x0, y0) * (1 - fx) * (1 - fy) + at(x0 + 1, y0) * fx * (1 - fy) + at(x0, y0 + 1) * (1 - fx) * fy + at(x0 + 1, y0 + 1) * fx * fy;
+          };
+          let worst = 0;
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const dx = x + .5 - W / 2, dy = y + .5 - H / 2;
+            if (Math.hypot(dx, dy) > radius) continue;
+            const tx = cos * dx - sin * dy + W / 2 - .5, ty = sin * dx + cos * dy + H / 2 - .5;
+            for (let c = 0; c < 3; c++) worst = Math.max(worst, Math.abs(px[(y * W + x) * 4 + c] - read(tx, ty, c)));
+          }
+          turns.push({ W, H, worst, moved: q.difference(plain, px) });
+        }
+        return { flips, turns };
+      });
+      const ok = r.flips.every(f => f.worst <= 2 && f.kept <= 2 && f.moved > 1) && r.turns.every(t => t.worst <= 4 && t.moved > 1);
+      return { ok, detail: `${r.flips.map(f => `${f.W}x${f.H} ${MIRROR_NAMES[f.mode]} ${f.worst} (kept side off ${f.kept})`).join(', ')} (limit 2); ${r.turns.map(t => `${t.W}x${t.H} Kaleidoscope turn ${t.worst.toFixed(2)}`).join(', ')} (limit 4)` };
+    },
+  },
+  {
+    name: 'mirror-turns',
+    // 1.5 is deliberately not whole: the renderer must round it, or the seam opens.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, rows = [];
+        for (let mode = 0; mode < count; mode++) for (const mirrorTurns of [2, 1.5]) {
+          const p = q.project([q.smooth({ mirrorAmount: 1, mirrorMode: mode, mirrorTurns })]);
+          const still = await q.shot(q.project([q.smooth({ mirrorAmount: 1, mirrorMode: mode })]), 1.1);
+          rows.push({ mode, mirrorTurns, ...await q.loop(p), moved: !q.same(await q.shot(p, 1.1), still) });
+        }
+        return rows;
+      }, MIRROR_NAMES.length);
+      const verdicts = rows.map(r => loopVerdict(r));
+      return { ok: rows.every((r, i) => r.moved && verdicts[i].ok), detail: `${rows.some(r => !r.moved) ? 'Turns do not move the mirror. ' : ''}${verdicts.map((v, i) => `${MIRROR_NAMES[rows[i].mode]} ${rows[i].mirrorTurns} turns ${v.detail}`).join('; ')}` };
+    },
+  },
+  {
+    name: 'mirror-engage',
+    // Judged at the pass against the source. Half way must be the plain and mirrored pictures mixed evenly.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, W = 960, H = 540, rows = [], zero = new Float32Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) zero.set(q.smoothFill((x + .5) / W, (y + .5) / H), (y * W + x) * 4);
+        for (let mode = 0; mode < count; mode++) {
+          const tiny = q.feed({ mirrorAmount: 1e-4, mirrorMode: mode }, q.smoothFill);
+          const full = q.feed({ mirrorAmount: 1, mirrorMode: mode }, q.smoothFill);
+          const half = q.feed({ mirrorAmount: .5, mirrorMode: mode }, q.smoothFill);
+          let mix = 0;
+          for (let i = 0; i < half.length; i++) mix = Math.max(mix, Math.abs(half[i] - (zero[i] + full[i]) / 2));
+          rows.push({ tiny: q.worst(zero, tiny), full: q.worst(zero, full), mix });
+        }
+        return rows;
+      }, MIRROR_NAMES.length);
+      return { ok: rows.every(r => r.tiny < .001 && r.full > .01 && r.mix < .002), detail: `${rows.map((r, i) => `${MIRROR_NAMES[i]} ${r.tiny.toFixed(6)} (full ${r.full.toFixed(3)}, off the even mix ${r.mix.toFixed(5)})`).join(', ')} (limits .001 and .002)` };
+    },
+  },
+  {
+    name: 'mirror-footprint',
+    // A fold only reflects, so a pixel always covers the same area: the two footprint axes sum to at least 2 texels.
+    // An odd half-size puts the fold inside a 2x2 shading block, where a derivative of the folded coordinate collapses.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, W = 962, H = 542, rows = [];
+        for (let mode = 0; mode < count; mode++) for (const mirrorAngle of [0, 17]) {
+          const out = q.probe('vec4(footprint, 0., 1.)', { mirrorAmount: 1, mirrorMode: mode, mirrorAngle }, W, H);
+          let low = Infinity, collapsed = 0;
+          for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
+            if (Math.hypot(x + .5 - W / 2, y + .5 - H / 2) < 3) continue;
+            const sum = out[(y * W + x) * 4] + out[(y * W + x) * 4 + 1];
+            low = Math.min(low, sum); if (sum < 1.95) collapsed++;
+          }
+          rows.push({ mode, mirrorAngle, low, collapsed });
+        }
+        return rows;
+      }, MIRROR_NAMES.length);
+      return { ok: rows.every(r => r.collapsed === 0), detail: `${rows.map(r => `${MIRROR_NAMES[r.mode]} ${r.mirrorAngle}deg low ${r.low.toFixed(3)}, collapsed ${r.collapsed}`).join(', ')} (limit 1.95)` };
+    },
+  },
+  {
+    name: 'mirror-luma',
+    // The kept wedge straddles the middle of the source, so its picture holds both red and dark, each carried to new
+    // places on screen. A driver read at the unfolded pixel would move the dark parts.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => q_lumaStage(window.wq, { mirrorAmount: 1, mirrorMode: 3, mirrorSegments: 5, mirrorAngle: 72 }));
+      return lumaStageVerdict(r);
+    },
+  },
+  {
+    name: 'mirror-fringe',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => q_fringeStage(window.wq, { mirrorAmount: 1, mirrorMode: 3 }));
+      return fringeStageVerdict(r);
+    },
+  },
+  {
+    name: 'mirror-full',
+    // The plain read is poisoned with NaN, which survives a mix at weight 0. At amount 1 it must not run at all.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, mat = q.renderer.warp, source = mat.fragmentShader, marker = 'void picture(bool folded) {';
+        const poisoned = source.replace(marker, `${marker}\n  if (!folded) { float none = uMirrorAmount - uMirrorAmount; gl_FragColor = vec4(none / none); return; }`);
+        if (poisoned === source) throw new Error('picture() not found');
+        const bad = out => { let n = 0; for (let i = 0; i < out.length; i++) if (!Number.isFinite(out[i])) n++; return n; };
+        mat.fragmentShader = poisoned; mat.needsUpdate = true;
+        let full, half;
+        try { full = bad(q.feed({ mirrorAmount: 1, mirrorMode: 2 }, q.smoothFill)); half = bad(q.feed({ mirrorAmount: .5, mirrorMode: 2 }, q.smoothFill)); }
+        finally { mat.fragmentShader = source; mat.needsUpdate = true; }
+        return { full, half };
+      });
+      return { ok: r.full === 0 && r.half > 0, detail: `poisoned plain read shows on ${r.full} values at amount 1 (must be 0), ${r.half} at amount .5 (must show, or this check proves nothing)` };
+    },
+  },
+  {
+    name: 'mirror-light',
+    // Over-range light across a soft ramp, Warp fringe on, part way through the crossfade. Nothing may exceed the
+    // source's straight colour, over-range light must survive, and uncovered light must pass.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, params = { mirrorAmount: .5, mirrorMode: 3, bendAmount: .2, bendChroma: 1 };
+        const ramp = (u, v) => { const a = .5 + .5 * Math.sin(u * 40) * Math.cos(v * 23); return [4 * a, 4 * a, 4 * a, a]; };
+        const covered = q.feed(params, ramp), unmirrored = q.feed({ ...params, mirrorAmount: 0 }, ramp);
+        const moved = q.worst(covered, unmirrored);
+        let over = 0, peak = 0;
+        for (let i = 0; i < covered.length; i += 4) {
+          peak = Math.max(peak, covered[i]);
+          if (covered[i + 3] > .01 && Math.max(covered[i], covered[i + 1], covered[i + 2]) / covered[i + 3] > 4 * 1.01) over++;
+        }
+        const light = q.feed(params, () => [.5, .25, .75, 0]);
+        let lost = 0;
+        for (let i = 0; i < light.length; i += 4) if (Math.abs(light[i] - .5) > .01 || Math.abs(light[i + 1] - .25) > .01 || Math.abs(light[i + 2] - .75) > .01 || light[i + 3] !== 0) lost++;
+        return { over, peak, lost, moved };
+      });
+      return { ok: r.moved > .1 && r.over === 0 && r.peak > 3 && r.lost === 0, detail: `${r.moved <= .1 ? 'Mirror does not change the pass. ' : ''}${r.over} pixels above the source's straight colour; peak ${r.peak.toFixed(2)} (over 3); uncovered light changed on ${r.lost} pixels` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -983,7 +1282,51 @@ try {
       for (let y = H * .3 | 0; y < H * .6; y++) for (let x = W * .3 | 0; x < W * .7; x++) { sum += out[(y * W + x) * 4 + 1] - (y + .5) / H; n++; }
       return sum / n;
     };
-    window.wq = { m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
+    const smoothFill = (u, v) => [.5 + .3 * Math.sin(3 * u + .4), .5 + .3 * Math.cos(4 * v - .7), .5 + .2 * Math.sin(2 * u + 3 * v), 1];
+    const worst = (a, b) => { let most = 0; for (let i = 0; i < a.length; i++) most = Math.max(most, Math.abs(a[i] - b[i])); return most; };
+    // Runs the pass with its output replaced by a GLSL expression, to read a value the shader worked out.
+    const probe = (expression, params, W = 960, H = 540, fill = smoothFill) => {
+      const mat = renderer.warp, source = mat.fragmentShader, patched = source.replace('gl_FragColor = vec4(covered + light, g.alpha);', `gl_FragColor = ${expression};`);
+      if (patched === source) throw new Error('warp output not found');
+      mat.fragmentShader = patched; mat.needsUpdate = true;
+      try { return feed(params, fill, undefined, W, H); } finally { mat.fragmentShader = source; mat.needsUpdate = true; }
+    };
+    // Bright at the foot of the picture, dark at its top, at the frame's own shape so it fills the frame.
+    // These test pictures are written bottom row first.
+    const headUrl = (W, H) => dataUrl(W, H, (x, y) => { const v = Math.round(255 * (.5 - y)); return [v, v, v, 255]; });
+    // Where the bright part of a picture sits, in frame heights from the frame's centre.
+    const brightCentre = (px, W, H, floor) => {
+      let sum = 0, sx = 0, sy = 0;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = px[(y * W + x) * 4]; if (v > floor) { sum += v; sx += v * x; sy += v * y; } }
+      return { x: (sx / sum + .5 - W / 2) / H, y: (sy / sum + .5 - H / 2) / H };
+    };
+    // Luma on this layer, on top of an earlier stage: the driver must come from where that stage put the pixel.
+    window.q_lumaStage = async (q, stage) => {
+      const plain = await q.px(q.project([q.halfRed()]));
+      const staged = await q.px(q.project([q.halfRed(stage)]));
+      const driven = await q.px(q.project([q.halfRed({ ...stage, lumaWarpAmount: .25, lumaWarpChannel: 1, lumaWarpSoft: 0 })]));
+      let dark = 0, moved = 0, bright = 0, brightMoved = 0;
+      const W = 960, H = 540;
+      // Dark means clear of the red edge by three pixels: a filtered read on the edge holds some driver, and every
+      // wedge repeats that edge.
+      const clear = (x, y) => { for (let b = -3; b <= 3; b++) for (let a = -3; a <= 3; a++) { const X = x + a, Y = y + b; if (X >= 0 && Y >= 0 && X < W && Y < H && staged[(Y * W + X) * 4] >= 10) return false; } return true; };
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4, changed = Math.abs(staged[i + 1] - driven[i + 1]) > 3;
+        if (staged[i] < 10) { if (clear(x, y)) { dark++; if (changed) moved++; } }
+        else if (staged[i] > 200) { bright++; if (changed) brightMoved++; }
+      }
+      return { staged: q.difference(plain, staged), self: moved / Math.max(dark, 1), selfBright: brightMoved / Math.max(bright, 1), dark: dark / (staged.length / 4), bright: bright / (staged.length / 4) };
+    };
+    // The stage's fringe alone, then a Warp fringe on top measured against Warp's own move from the same position.
+    window.q_fringeStage = (q, stage) => {
+      const bend = { bendAmount: .3, bendField: 0, bendChroma: 1 };
+      const alone = q.probe('vec4(length(warpFringe), 0., 0., 1.)', stage);
+      const stacked = q.probe('vec4(length(warpFringe), length(warpFringe - bendField((readBase - .5) * vec2(uAspect, 1.)) * uBendAmount * .5 / vec2(uAspect, 1.) * uBendChroma * .08), 0., 1.)', { ...stage, ...bend });
+      let most = 0, size = 0, off = 0;
+      for (let i = 0; i < alone.length; i += 4) { most = Math.max(most, alone[i]); size = Math.max(size, stacked[i]); off = Math.max(off, stacked[i + 1]); }
+      return { alone: most, stacked: size, off };
+    };
+    window.wq = { smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
   }, !!baseline);
 
   for (const check of selected) {

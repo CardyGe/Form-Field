@@ -243,6 +243,8 @@ export class StudioRenderer {
     uLiquidTurn: { value: 0 }, uLiquidTrail: { value: 0 }, uLiquidChroma: { value: 0 }, uLiquidDrift: { value: new THREE.Vector2(1, 0) },
     uBelow: { value: null }, uLumaAmount: { value: 0 }, uLumaSource: { value: 0 }, uLumaChannel: { value: 0 }, uLumaMode: { value: 0 },
     uLumaDirection: { value: new THREE.Vector2(0, 1) }, uLumaThreshold: { value: 0 }, uLumaSoft: { value: .2 }, uLumaChroma: { value: 0 },
+    uPolarAmount: { value: 0 }, uPolarMode: { value: 0 }, uPolarCentre: { value: new THREE.Vector2() }, uPolarTwist: { value: 0 },
+    uMirrorAmount: { value: 0 }, uMirrorMode: { value: 0 }, uMirrorSegments: { value: 6 }, uMirrorTurn: { value: 0 },
   });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
@@ -954,7 +956,8 @@ export class StudioRenderer {
     if (!warpActive(original)) return source;
     // A modulated amount can rest at zero, where there is nothing to do.
     const amount = Math.max(0, number(layer, 'bendAmount', 0)), liquid = Math.max(0, number(layer, 'liquidAmount', 0)), luma = Math.max(0, number(layer, 'lumaWarpAmount', 0));
-    if (amount <= 0 && liquid <= 0 && luma <= 0) return source;
+    const polar = Math.min(1, Math.max(0, number(layer, 'polarAmount', 0))), mirror = Math.min(1, Math.max(0, number(layer, 'mirrorAmount', 0)));
+    if (amount <= 0 && liquid <= 0 && luma <= 0 && polar <= 0 && mirror <= 0) return source;
     this.warpTarget ??= target();
     const output = this.warpTarget;
     if (output.width !== width || output.height !== height) output.setSize(width, height);
@@ -989,6 +992,14 @@ export class StudioRenderer {
     (u.uLumaDirection.value as THREE.Vector2).set(Math.cos(lumaAngle), Math.sin(lumaAngle));
     u.uLumaThreshold.value = number(layer, 'lumaWarpThreshold', 0); u.uLumaSoft.value = number(layer, 'lumaWarpSoft', .2);
     u.uLumaChroma.value = number(layer, 'lumaWarpChroma', 0);
+    // Positive Y is down the screen, the same as a layer's position.
+    u.uPolarAmount.value = polar; u.uPolarMode.value = Math.round(number(layer, 'polarMode', 0));
+    (u.uPolarCentre.value as THREE.Vector2).set(number(layer, 'polarCentreX', 0), -number(layer, 'polarCentreY', 0));
+    u.uPolarTwist.value = number(layer, 'polarTwist', 0);
+    u.uMirrorAmount.value = mirror; u.uMirrorMode.value = Math.round(number(layer, 'mirrorMode', 0));
+    u.uMirrorSegments.value = Math.max(2, Math.round(number(layer, 'mirrorSegments', 6)));
+    // Whole turns only, so the loop closes.
+    u.uMirrorTurn.value = number(layer, 'mirrorAngle', 0) * Math.PI / 180 + Math.round(number(layer, 'mirrorTurns', 0)) * phase;
     this.draw(this.warp, output);
     return output.texture;
   }
