@@ -59,6 +59,15 @@ export function loopOffset(phase: number, cycles: number): [number, number] {
 }
 
 /**
+ * How strongly a tone drives Luma Warp: nothing up to the threshold, then rising to 1 at full tone.
+ * Single precision, the same as the shader, so a value lands on the same number in both.
+ */
+export function lumaDriver(value: number, threshold: number): number {
+  if (value <= threshold || threshold >= 1) return 0;
+  return Math.fround(Math.min(1, (value - threshold) / (1 - threshold)));
+}
+
+/**
  * The shared warp pass. Every warp adds to `warpedUv`, the one place a pixel's read position is decided,
  * so filtering, mirrored edges and colour fringes work the same for all of them.
  * Non-graphic sources are already in frame coordinates, so `vUv` is both the frame and the source position.
@@ -66,7 +75,7 @@ export function loopOffset(phase: number, cycles: number): [number, number] {
 export const warpFragment = /* glsl */`
 precision highp float;
 varying vec2 vUv;
-uniform sampler2D uSource;
+uniform sampler2D uSource, uBelow;
 uniform vec2 uResolution, uBendDirection;
 uniform float uAspect, uSeed, uBendAmount, uBendScale, uBendFalloff, uBendChroma, uBendTurn;
 uniform int uBendField, uBendDetail, uBendCount;
@@ -74,6 +83,9 @@ uniform vec3 uBendPoints[8];
 uniform vec2 uLiquidDrift;
 uniform float uLiquidAmount, uLiquidScale, uLiquidTurn, uLiquidTrail, uLiquidChroma;
 uniform int uLiquidStyle, uLiquidSteps, uLiquidDetail;
+uniform vec2 uLumaDirection;
+uniform float uLumaAmount, uLumaThreshold, uLumaSoft, uLumaChroma;
+uniform int uLumaSource, uLumaChannel, uLumaMode;
 const float TAU = 6.28318530718;
 const int WARP_TAPS = 4;
 const int TRAIL_SAMPLES = 8;
@@ -246,6 +258,59 @@ vec2 liquidUv(vec2 uv) {
   return p / frame + .5;
 }
 
+vec2 mirrored(vec2 uv);
+
+/** The driver at one position: the chosen channel in perceptual tone, rescaled above the threshold, then weighted by
+ * coverage so a soft edge fades out. Colour is premultiplied, so it is made straight first. Uncovered pixels give 0. */
+float lumaRead(vec2 at) {
+  vec4 s = uLumaSource == 1 ? texture2D(uBelow, mirrored(at)) : texture2D(uSource, mirrored(at));
+  if (s.a <= .001) return 0.;
+  vec3 c = clamp(s.rgb / s.a, 0., 1.);
+  float tone;
+  if (uLumaChannel == 0) tone = pow(dot(c, vec3(.2126, .7152, .0722)), 1. / 2.2);
+  else if (uLumaChannel == 4) {
+    vec3 p = pow(c, vec3(1. / 2.2));
+    float high = max(p.r, max(p.g, p.b));
+    tone = high > 0. ? (high - min(p.r, min(p.g, p.b))) / high : 0.;
+  } else tone = pow(uLumaChannel == 1 ? c.r : uLumaChannel == 2 ? c.g : c.b, 1. / 2.2);
+  float driven = tone <= uLumaThreshold ? 0. : min(1., (tone - uLumaThreshold) / (1. - uLumaThreshold));
+  return driven * min(s.a, 1.);
+}
+
+/** The blurred driver in x and its slope per frame height in yz, from one symmetric nine-read kernel.
+ * The slope needs some reach even at softness 0, and the value eases onto the centre read below that reach. */
+vec3 lumaField(vec2 at) {
+  float blur = uLumaSoft * .03, reach = max(blur, .002), centre = lumaRead(at);
+  if (uLumaMode == 0 && blur <= 0.) return vec3(centre, 0., 0.);
+  vec2 unit = reach / vec2(uAspect, 1.);
+  float sum = centre * 4.;
+  vec2 slope = vec2(0.);
+  for (int i = 0; i < 8; i++) {
+    vec2 p = i == 0 ? vec2(1., 0.) : i == 1 ? vec2(-1., 0.) : i == 2 ? vec2(0., 1.) : i == 3 ? vec2(0., -1.)
+      : i == 4 ? vec2(.5, .5) : i == 5 ? vec2(-.5, .5) : i == 6 ? vec2(.5, -.5) : vec2(-.5, -.5);
+    float weight = i < 4 ? 1. : 2., d = lumaRead(at + p * unit) * weight;
+    sum += d; slope += d * p;
+  }
+  return vec3(mix(centre, sum / 16., clamp(blur / .002, 0., 1.)), slope / (4. * reach));
+}
+
+/** Luma moves the read position by the driver. This layer's driver is read where earlier warps already put the pixel;
+ * the layer below is not bent by them, so it is read at the pixel itself. Neither reads Luma's own result. */
+vec2 lumaUv(vec2 uv) {
+  vec2 frame = vec2(uAspect, 1.);
+  vec3 field = lumaField(uLumaSource == 1 ? vUv : uv);
+  vec2 along = uLumaDirection * field.x;
+  if (uLumaMode != 0) {
+    // A full-tone change across a tenth of the frame nears full strength. The length stays under 1 and eases through 0.
+    vec2 slope = field.yz * .1;
+    slope /= sqrt(1. + dot(slope, slope));
+    along = uLumaMode == 1 ? slope : vec2(-slope.y, slope.x);
+  }
+  vec2 move = along * uLumaAmount * .5 / frame;
+  warpFringe += move * uLumaChroma * .08;
+  return uv + move;
+}
+
 /** Where this pixel reads from. Warps compose here in order: Mirror, Polar, Warp, Liquid, Luma. */
 vec2 warpedUv(vec2 uv) {
   vec2 frame = vec2(uAspect, 1.), warped = uv;
@@ -257,6 +322,7 @@ vec2 warpedUv(vec2 uv) {
     warpFringe += move * uBendChroma * .08;
   }
   if (uLiquidAmount > 0.) warped = liquidUv(warped);
+  if (uLumaAmount > 0.) warped = lumaUv(warped);
   return warped;
 }
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, WARP_KEYS } from '../src/core/finishing';
 import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { layerTileBlocker } from '../src/core/tile-edges';
-import { foldAngle, loopOffset, warpActive, warpPoints } from '../src/rendering/warp';
+import { foldAngle, loopOffset, lumaDriver, warpActive, warpPoints } from '../src/rendering/warp';
 import { FINISH_EFFECTS } from '../src/ui/finish-rack';
 
 const allKeys = [...WARP_KEYS, ...LIQUID_KEYS, ...LUMA_WARP_KEYS, ...POLAR_KEYS, ...MIRROR_KEYS];
@@ -57,6 +57,16 @@ test('variations never switch a warp on or change its choices', () => {
       for (const key of allKeys) assert.equal(varied.params[key], layer.params[key], `${preset.id} ${key}`);
     }
   }
+});
+test('the luma driver rescales above its threshold', () => {
+  assert.equal(lumaDriver(.5, 0), .5);
+  assert.equal(lumaDriver(.2, .4), 0);
+  assert.equal(lumaDriver(.7, .4), .5);
+  assert.equal(lumaDriver(1, 1), 0);
+});
+test('the luma driver stays in range past full tone', () => {
+  assert.equal(lumaDriver(2, 1), 0);
+  assert.equal(lumaDriver(2, .5), 1);
 });
 test('every warp key belongs to one Finish effect in the Warp group', () => {
   const ids = FINISH_EFFECTS.filter(item => item.group === 'Warp').map(item => item.id);

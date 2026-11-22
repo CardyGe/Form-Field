@@ -31,6 +31,9 @@ const loopVerdict = (r, limit = .1) => ({
 });
 const NO_EFFECT = 'Warp does not change the render. ';
 const NO_LIQUID = 'Liquid does not change the render. ';
+const NO_LUMA = 'Luma Warp does not change the render. ';
+const LUMA_MODES = ['Push', 'Edges', 'Contours'];
+const LUMA_CHANNELS = ['Brightness', 'Red', 'Green', 'Blue', 'Saturation'];
 
 const CHECKS = [
   {
@@ -501,6 +504,267 @@ const CHECKS = [
       return { ok: r.jump < .1 && r.full > 1, detail: `largest change from Trail 0 to .001: ${r.jump.toFixed(4)} (limit .1); to Trail 1: ${r.full.toFixed(2)} (over 1)` };
     },
   },
+  {
+    name: 'luma-modes',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async count => {
+        const q = window.wq, plain = await q.px(q.project([q.rich()])), shots = [];
+        for (let mode = 0; mode < count; mode++) shots.push(await q.px(q.project([q.rich({ lumaWarpAmount: .25, lumaWarpMode: mode })])));
+        const moved = shots.map(s => q.difference(plain, s));
+        let closest = Infinity;
+        for (let a = 0; a < count; a++) for (let b = a + 1; b < count; b++) closest = Math.min(closest, q.difference(shots[a], shots[b]));
+        return { moved, closest };
+      }, LUMA_MODES.length);
+      const ok = r.moved.every(v => v > 3) && r.closest > 3;
+      return { ok, detail: `${r.moved.some(v => v <= 3) ? NO_LUMA : ''}moved ${r.moved.map((v, i) => `${LUMA_MODES[i]} ${v.toFixed(2)}`).join(', ')}; closest pair ${r.closest.toFixed(2)} (limits 3)` };
+    },
+  },
+  {
+    name: 'luma-channels',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async count => {
+        const q = window.wq, plain = await q.px(q.project([q.bars()])), shots = [];
+        for (let channel = 0; channel < count; channel++) shots.push(await q.px(q.project([q.bars({ lumaWarpAmount: .25, lumaWarpChannel: channel })])));
+        const moved = shots.map(s => q.difference(plain, s));
+        let closest = Infinity;
+        for (let a = 0; a < count; a++) for (let b = a + 1; b < count; b++) closest = Math.min(closest, q.difference(shots[a], shots[b]));
+        return { moved, closest };
+      }, LUMA_CHANNELS.length);
+      const ok = r.moved.every(v => v > 1) && r.closest > 1;
+      return { ok, detail: `${r.moved.some(v => v <= 1) ? NO_LUMA : ''}moved ${r.moved.map((v, i) => `${LUMA_CHANNELS[i]} ${v.toFixed(2)}`).join(', ')}; closest pair ${r.closest.toFixed(2)} (limits 1)` };
+    },
+  },
+  {
+    name: 'luma-below',
+    // The top layer is opaque, so any change comes from its own pixels being moved by the shape underneath.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, drive = { lumaWarpAmount: .3, lumaWarpSource: 1 };
+        const plain = await q.px(q.project([q.disc(0), q.rich()]));
+        const left = await q.px(q.project([q.disc(0), q.rich(drive)]));
+        const right = await q.px(q.project([q.disc(.45), q.rich(drive)]));
+        const zones = q.discZones(plain, left, W, H, 0);
+        return { ...zones, changedBy: q.difference(left, right) };
+      });
+      const ok = r.inside > .5 && r.outside < .001 && r.changedBy > 1;
+      return { ok, detail: `${r.inside <= .5 ? NO_LUMA : ''}changed inside the shape ${(r.inside * 100).toFixed(1)}% (over 50%), outside ${(r.outside * 100).toFixed(3)}% (limit .1%); moving the shape changes the top by ${r.changedBy.toFixed(2)} (over 1)` };
+    },
+  },
+  {
+    name: 'luma-bottom',
+    // A hidden layer draws nothing, so a layer above it is still the bottom of the picture.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, drive = { lumaWarpAmount: .6, lumaWarpSource: 1 };
+        const plain = await q.px(q.project([q.rich()]));
+        const alone = await q.px(q.project([q.rich(drive)]));
+        const hidden = q.disc(0); hidden.visible = false;
+        const over = await q.px(q.project([hidden, q.rich(drive)]));
+        const control = await q.px(q.project([q.disc(0), q.rich(drive)]));
+        return { alone: q.difference(plain, alone), over: q.difference(plain, over), control: q.difference(plain, control) };
+      });
+      return { ok: r.alone < 1 && r.over < 1 && r.control > 1, detail: `alone ${r.alone.toFixed(4)}, over a hidden layer ${r.over.toFixed(4)} (limit 1); with a real layer below ${r.control.toFixed(2)} (over 1)` };
+    },
+  },
+  {
+    name: 'luma-order',
+    // The layer below animates. A top layer reading any other frame's composite would depend on what was drawn before.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, scene = () => q.project([q.moving(), q.rich({ lumaWarpAmount: .3, lumaWarpSource: 1 })]);
+        await q.shot(scene(), .3); await q.shot(scene(), .6);
+        const sequence = await q.shot(scene(), .9);
+        await q.shot(scene(), 4.4);
+        const sought = await q.shot(scene(), .9);
+        const other = await q.shot(scene(), 2.2);
+        const [a, b] = await Promise.all([sequence, other].map(q.pixels));
+        return { same: q.same(sequence, sought), follows: q.difference(a, b) };
+      });
+      return { ok: r.same && r.follows > 1, detail: `after a seek ${r.same ? 'byte-identical' : 'differs'}; another frame differs by ${r.follows.toFixed(2)} (over 1)` };
+    },
+  },
+  {
+    name: 'luma-read',
+    // Luma composes after Warp. This layer is read where Warp has already moved the pixel. The layer below is read at
+    // the pixel itself, because it is not bent by this layer's Warp. Pixels with no driver must not move.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, bend = { bendAmount: .35, bendField: 0, bendScale: 2 };
+        const bentHalf = await q.px(q.project([q.halfRed(bend)]));
+        const lumaHalf = await q.px(q.project([q.halfRed({ ...bend, lumaWarpAmount: .25, lumaWarpChannel: 1, lumaWarpSoft: 0 })]));
+        let dark = 0, moved = 0, bright = 0, brightMoved = 0;
+        for (let i = 0; i < bentHalf.length; i += 4) {
+          const changed = Math.abs(bentHalf[i + 1] - lumaHalf[i + 1]) > 3;
+          if (bentHalf[i] < 10) { dark++; if (changed) moved++; }
+          else if (bentHalf[i] > 200) { bright++; if (changed) brightMoved++; }
+        }
+        const plain = await q.px(q.project([q.disc(0), q.rich(bend)]));
+        const driven = await q.px(q.project([q.disc(0), q.rich({ ...bend, lumaWarpAmount: .3, lumaWarpSource: 1 })]));
+        return { self: moved / dark, selfBright: brightMoved / bright, ...q.discZones(plain, driven, W, H, 0) };
+      });
+      const ok = r.self < .002 && r.selfBright > .3 && r.inside > .5 && r.outside < .001;
+      return { ok, detail: `this layer: moved where the bent read is dark ${(r.self * 100).toFixed(3)}% (limit .2%), where bright ${(r.selfBright * 100).toFixed(1)}% (over 30%); layer below: inside the shape ${(r.inside * 100).toFixed(1)}% (over 50%), outside ${(r.outside * 100).toFixed(3)}% (limit .1%)` };
+    },
+  },
+  {
+    name: 'luma-driver',
+    // The source is a ramp equal to its own height, so output minus height is exactly how far the pixel moved.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, amount = .4, tone = v => v ** (1 / 2.2);
+        const cases = [
+          { name: 'half-covered white', below: [.5, .5, .5, .5], channel: 0, driver: .5 },
+          { name: 'half-covered red, Red', below: [.5, 0, 0, .5], channel: 1, driver: .5 },
+          { name: 'opaque linear .25', below: [.25, .25, .25, 1], channel: 0, driver: tone(.25) },
+          { name: 'opaque blue, Saturation', below: [0, 0, .5, 1], channel: 4, driver: 1 },
+          { name: 'uncovered light', below: [.8, .8, .8, 0], channel: 0, driver: 0 },
+          { name: 'linear .25 over threshold .4', below: [.25, .25, .25, 1], channel: 0, threshold: .4, driver: (tone(.25) - .4) / .6 },
+        ];
+        return cases.map(c => {
+          const moved = q.rampMove({ lumaWarpAmount: amount, lumaWarpSource: 1, lumaWarpChannel: c.channel, lumaWarpThreshold: c.threshold ?? 0, lumaWarpAngle: 90, lumaWarpSoft: 0 }, c.below);
+          return { name: c.name, moved, want: amount * .5 * c.driver };
+        });
+      });
+      return { ok: rows.every(r => Math.abs(r.moved - r.want) < .004), detail: `${rows.map(r => `${r.name} ${r.moved.toFixed(4)} (want ${r.want.toFixed(4)})`).join(', ')} (limit .004)` };
+    },
+  },
+  {
+    name: 'luma-soft',
+    // A hard step in the layer below, white above mid-height. At softness 1 the blur reaches .03 of the frame height:
+    // .04 away the driver is settled, and .02 away it is still partly blurred.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, amount = .2;
+        const out = q.feed({ lumaWarpAmount: amount, lumaWarpSource: 1, lumaWarpAngle: 90, lumaWarpSoft: 1 }, (u, v) => [v, v, v, 1], (u, v) => v > .5 ? [1, 1, 1, 1] : [0, 0, 0, 1]);
+        const driver = offset => { const y = Math.round((.5 + offset) * H - .5), i = (y * W + (W >> 1)) * 4; return (out[i + 1] - (y + .5) / H) / (amount * .5); };
+        return { far: driver(.04), near: driver(.02), under: driver(-.04) };
+      });
+      return { ok: r.far > .98 && r.near > .5 && r.near < .98 && Math.abs(r.under) < .02, detail: `driver .04 above the step ${r.far.toFixed(3)} (over .98), .02 above ${r.near.toFixed(3)} (between .5 and .98), .04 below ${r.under.toFixed(3)} (under .02)` };
+    },
+  },
+  {
+    name: 'luma-fringe',
+    // Luma moves almost nothing here while Warp moves a lot, so a fringe built on total movement would show.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, at = params => q.px(q.project([q.rich(params)]));
+        const own = q.difference(await at({ lumaWarpAmount: .2 }), await at({ lumaWarpAmount: .2, lumaWarpChroma: 1 }));
+        const bent = { bendAmount: .6, bendField: 1, lumaWarpAmount: 1e-5 };
+        const borrowed = q.difference(await at(bent), await at({ ...bent, lumaWarpChroma: 1 }));
+        return { own, borrowed };
+      });
+      return { ok: r.own > 1 && r.borrowed < .1, detail: `${r.own <= 1 ? 'Colour fringe has no effect. ' : ''}own movement ${r.own.toFixed(3)} (over 1); with Warp's movement only ${r.borrowed.toFixed(4)} (limit .1)` };
+    },
+  },
+  {
+    name: 'luma-light',
+    // Straight colour is the same over-range white across a soft ramp, so anything above 4 was invented by the fringe.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, params = { lumaWarpAmount: .35, lumaWarpMode: 1, lumaWarpChroma: 1 };
+        const covered = q.feed(params, (u, v) => { const a = .5 + .5 * Math.sin(u * 40) * Math.cos(v * 23); return [4 * a, 4 * a, 4 * a, a]; });
+        let over = 0, peak = 0;
+        for (let i = 0; i < covered.length; i += 4) {
+          peak = Math.max(peak, covered[i]);
+          if (covered[i + 3] > .01 && Math.max(covered[i], covered[i + 1], covered[i + 2]) / covered[i + 3] > 4 * 1.01) over++;
+        }
+        const light = q.feed(params, () => [.5, .25, .75, 0]);
+        let lost = 0;
+        for (let i = 0; i < light.length; i += 4) if (Math.abs(light[i] - .5) > .01 || Math.abs(light[i + 1] - .25) > .01 || Math.abs(light[i + 2] - .75) > .01 || light[i + 3] !== 0) lost++;
+        return { over, peak, lost, size: W * H };
+      });
+      return { ok: r.over === 0 && r.peak > 3 && r.lost === 0, detail: `${r.over} pixels above the source's straight colour; peak ${r.peak.toFixed(2)} (over 3); uncovered light changed on ${r.lost} pixels` };
+    },
+  },
+  {
+    name: 'luma-engage',
+    // Judged at the warp pass on a smooth source, in every mode and from both drivers, against the source itself:
+    // measured against another Luma render, a jump present at every amount would cancel out.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, rows = [], fill = (u, v) => [.5 + .3 * Math.sin(3 * u + .4), .5 + .3 * Math.cos(4 * v - .7), .5 + .2 * Math.sin(2 * u + 3 * v), 1];
+        const below = (u, v) => [.5 + .4 * Math.sin(5 * u), .5 + .4 * Math.cos(4 * v), .5, 1];
+        const worst = (a, b) => { let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; };
+        const W = 960, H = 540, zero = new Float32Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) zero.set(fill((x + .5) / W, (y + .5) / H), (y * W + x) * 4);
+        for (let mode = 0; mode < count; mode++) for (const source of [0, 1]) {
+          const base = { lumaWarpMode: mode, lumaWarpSource: source, lumaWarpChroma: .5 };
+          const tiny = q.feed({ ...base, lumaWarpAmount: 1e-4 }, fill, below);
+          const full = q.feed({ ...base, lumaWarpAmount: 1 }, fill, below);
+          rows.push({ mode, source, tiny: worst(zero, tiny), full: worst(zero, full) });
+        }
+        return rows;
+      }, LUMA_MODES.length);
+      const ok = rows.every(r => r.tiny < .001 && r.full > .01);
+      return { ok, detail: `${rows.some(r => r.full <= .01) ? NO_LUMA : ''}${rows.map(r => `${LUMA_MODES[r.mode]}/${r.source ? 'below' : 'this'} ${r.tiny.toFixed(6)} (full ${r.full.toFixed(3)})`).join(', ')} (limit .001)` };
+    },
+  },
+  {
+    name: 'luma-loop',
+    // Luma has no motion of its own: it follows its driver, so the animated layer below must carry it round the loop.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, plain = await q.shot(q.project([q.moving(), q.smooth()]), 0), rows = [];
+        for (let mode = 0; mode < count; mode++) {
+          const p = q.project([q.moving(), q.smooth({ lumaWarpAmount: .3, lumaWarpSource: 1, lumaWarpMode: mode, lumaWarpChroma: .3 })]);
+          rows.push({ ...await q.loop(p), moved: !q.same(await q.shot(p, 0), plain) });
+        }
+        return rows;
+      }, LUMA_MODES.length);
+      const verdicts = rows.map(r => loopVerdict(r));
+      return { ok: rows.every((r, i) => r.moved && verdicts[i].ok), detail: `${rows.some(r => !r.moved) ? NO_LUMA : ''}${verdicts.map((v, i) => `${LUMA_MODES[i]} ${v.detail}`).join('; ')}` };
+    },
+  },
+  {
+    name: 'luma-scale',
+    // The move itself is compared on the busy picture, in shares of frame height. Edges and Contours fold that picture
+    // so tightly that a 1x frame cannot resolve it (1x against 2x 5.7, 2x against 4x 1.9, with the same move), so their
+    // picture comparison uses the smooth source. Push is compared on the busy picture.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, W = 960, H = 540, mat = q.renderer.warp, source = mat.fragmentShader, rows = [];
+        const probe = source.replace('gl_FragColor = vec4(covered + light, g.alpha);', 'gl_FragColor = vec4((warped - vUv) * vec2(uAspect, 1.), 0., 1.);');
+        if (probe === source) throw new Error('warp output not found');
+        const shrink = big => { const o = new Float32Array(W * H * 4); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 2; c++) { const at = (X, Y) => big[(Y * 2 * W + X) * 4 + c]; o[(y * W + x) * 4 + c] = (at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1)) / 4; } return o; };
+        for (let mode = 0; mode < count; mode++) {
+          const picture = mode === 0 ? q.rich : q.smooth, params = { lumaWarpAmount: .3, lumaWarpMode: mode };
+          // The smooth picture has gentle slopes, so Edges and Contours need the full amount to move it visibly.
+          const shown = { ...params, lumaWarpAmount: mode === 0 ? .3 : 1 };
+          const plain = await q.px(q.project([picture()]));
+          const p = () => q.project([picture({ ...shown, lumaWarpChroma: .3 })]);
+          const small = await q.px(p()), big = await q.px(p(), .9, W * 2, H * 2);
+          const busy = () => q.project([q.rich(params)]);
+          mat.fragmentShader = probe; mat.needsUpdate = true;
+          let a, b;
+          try { await q.shot(busy(), .9, W, H); a = q.linear(W, H); await q.shot(busy(), .9, W * 2, H * 2); b = shrink(q.linear(W * 2, H * 2)); }
+          finally { mat.fragmentShader = source; mat.needsUpdate = true; }
+          let gap = 0, size = 0;
+          for (let i = 0; i < a.length; i += 4) { gap += Math.hypot(a[i] - b[i], a[i + 1] - b[i + 1]); size += Math.hypot(a[i], a[i + 1]); }
+          rows.push({ difference: q.difference(small, q.halved(big, W, H)), moved: q.difference(plain, small), share: gap / size });
+        }
+        return rows;
+      }, LUMA_MODES.length);
+      return { ok: rows.every(r => r.moved > 1 && r.difference < 2 && r.share < .01), detail: `${rows.some(r => r.moved <= 1) ? NO_LUMA : ''}${rows.map((r, i) => `${LUMA_MODES[i]} picture ${r.difference.toFixed(3)}, move differs ${(r.share * 100).toFixed(2)}%`).join(', ')} (limits 2 and 1%)` };
+    },
+  },
+  {
+    name: 'luma-edge',
+    // A diagonal push, because a push along one axis leaves the rim on the other axis exactly where it belongs.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, W = 960, H = 540, scene = params => { const p = q.project([q.rimmed(params)], true); p.highlights = 'exact'; return p; };
+        const plain = await q.px(scene({})), base = q.edgeStats(plain, W, H), rows = [];
+        for (let mode = 0; mode < count; mode++) {
+          const px = await q.px(scene({ lumaWarpAmount: 1, lumaWarpMode: mode, lumaWarpAngle: 45 }));
+          let gaps = 0; for (let i = 3; i < px.length; i += 4) if (px[i] !== 255) gaps++;
+          rows.push({ gaps, ...q.edgeStats(px, W, H), moved: q.difference(plain, px), baseArea: base.area });
+        }
+        return rows;
+      }, LUMA_MODES.length);
+      const ok = rows.every(r => r.moved > 3 && r.gaps === 0 && r.longest < STREAK_LIMIT && r.area < r.baseArea * RIM_AREA_LIMIT && r.line < .5);
+      return { ok, detail: `${rows.some(r => r.moved <= 3) ? NO_LUMA : ''}edge colour covers ${(rows[0].baseArea * 100).toFixed(2)}% unwarped; ${rows.map((r, i) => `${LUMA_MODES[i]} gaps ${r.gaps} edge ${(r.area * 100).toFixed(2)}% line ${(r.line * 100).toFixed(0)}% run ${r.longest}`).join(', ')} (limits ${RIM_AREA_LIMIT}x area, 50% of a line, run < ${STREAK_LIMIT})` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -511,7 +775,7 @@ const bundle = (dir, file) => build({
   stdin: { contents: `export {StudioRenderer} from './src/rendering/StudioRenderer';
 export {createProject,createLayer,applyPreset,PRESETS} from './src/core/project';
 export {encodePNG} from './src/rendering/png';
-export {DataTexture,RGBAFormat,FloatType} from 'three';`, resolveDir: dir, loader: 'ts' },
+export {DataTexture,RGBAFormat,FloatType,LinearFilter} from 'three';`, resolveDir: dir, loader: 'ts' },
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
@@ -644,7 +908,61 @@ try {
       renderer.renderer.readRenderTargetPixels(renderer.warpTarget, 0, 0, W, H, raw);
       return Float32Array.from(raw, fromHalf);
     };
-    window.wq = { m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
+    // Six bars whose channels all differ, with fine detail so a move inside a bar shows.
+    const BARS = [[220, 40, 40], [40, 220, 40], [40, 40, 220], [200, 200, 200], [90, 90, 90], [230, 200, 30]];
+    const barsUrl = await dataUrl(960, 540, (x, y) => {
+      const bar = BARS[Math.min(5, Math.floor((x + 480 / 540) / (960 / 540) * 6))], detail = .8 + .2 * Math.sin(70 * x + 40 * y);
+      return [Math.round(bar[0] * detail), Math.round(bar[1] * detail), Math.round(bar[2] * detail), 255];
+    });
+    const bars = (params = {}) => image(barsUrl, params, 'bars');
+    // Red marks the right half; green is busy everywhere, so a move shows even where red is flat.
+    const halfRedUrl = await dataUrl(960, 540, (x, y) => [x > 0 ? 255 : 0, Math.round(128 + 120 * Math.sin(83 * x + 31 * y)), 0, 255]);
+    const halfRed = (params = {}) => image(halfRedUrl, params, 'half-red');
+    // A white disc on nothing, placed by its centre.
+    const DISC_RADIUS = .2;
+    const discUrls = new Map();
+    for (const cx of [0, .45]) discUrls.set(cx, await dataUrl(960, 540, (x, y) => {
+      const a = 1 - ramp(DISC_RADIUS - .004, DISC_RADIUS + .004, Math.hypot(x - cx, y));
+      return [255, 255, 255, Math.round(255 * a)];
+    }));
+    const discLayer = (cx, params = {}) => image(discUrls.get(cx), params, `disc-${cx}`);
+    // Changed pixels well inside the disc, and well outside it. The margin covers its soft rim and the driver's blur.
+    const discZones = (a, b, W, H, cx) => {
+      let inside = 0, insideChanged = 0, outside = 0, outsideChanged = 0;
+      for (let py = 0; py < H; py++) for (let px_ = 0; px_ < W; px_++) {
+        const r = Math.hypot((px_ + .5) / H - W / H / 2 - cx, (py + .5) / H - .5), i = (py * W + px_) * 4;
+        const changed = Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 6;
+        if (r < DISC_RADIUS - .02) { inside++; if (changed) insideChanged++; }
+        else if (r > DISC_RADIUS + .03) { outside++; if (changed) outsideChanged++; }
+      }
+      return { inside: insideChanged / inside, outside: outsideChanged / outside };
+    };
+    // An animated source that closes its loop.
+    const moving = (params = {}) => { const l = m.applyPreset(m.createLayer('surface'), m.PRESETS.find(p => p.kind === 'surface').id); l.id = 'moving-proof'; Object.assign(l.params, params); return l; };
+    // Runs the warp pass alone on float pictures and returns its linear output.
+    const floats = (fill, W, H) => {
+      const data = new Float32Array(W * H * 4);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) data.set(fill((x + .5) / W, (y + .5) / H), (y * W + x) * 4);
+      const texture = new m.DataTexture(data, W, H, m.RGBAFormat, m.FloatType);
+      // Filtered like a real layer, or a move smaller than a texel would change nothing and the engage check could not fail.
+      texture.minFilter = texture.magFilter = m.LinearFilter; texture.needsUpdate = true;
+      return texture;
+    };
+    const feed = (params, sourceFill, belowFill = () => [0, 0, 0, 0], W = 960, H = 540) => {
+      const source = floats(sourceFill, W, H), under = floats(belowFill, W, H), layer = rich(params);
+      renderer.warpSource(layer, layer, source, under, .9, W, H);
+      const result = linear(W, H);
+      source.dispose(); under.dispose();
+      return result;
+    };
+    // Mean distance moved up the frame over a central crop, on a source whose value is its own height.
+    const rampMove = (params, belowColour) => {
+      const W = 960, H = 540, out = feed(params, (u, v) => [v, v, v, 1], () => belowColour, W, H);
+      let sum = 0, n = 0;
+      for (let y = H * .3 | 0; y < H * .6; y++) for (let x = W * .3 | 0; x < W * .7; x++) { sum += out[(y * W + x) * 4 + 1] - (y + .5) / H; n++; }
+      return sum / n;
+    };
+    window.wq = { m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
   }, !!baseline);
 
   for (const check of selected) {

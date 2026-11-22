@@ -241,6 +241,8 @@ export class StudioRenderer {
     uBendPoints: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
     uLiquidAmount: { value: 0 }, uLiquidStyle: { value: 0 }, uLiquidScale: { value: 2 }, uLiquidSteps: { value: 6 }, uLiquidDetail: { value: 3 },
     uLiquidTurn: { value: 0 }, uLiquidTrail: { value: 0 }, uLiquidChroma: { value: 0 }, uLiquidDrift: { value: new THREE.Vector2(1, 0) },
+    uBelow: { value: null }, uLumaAmount: { value: 0 }, uLumaSource: { value: 0 }, uLumaChannel: { value: 0 }, uLumaMode: { value: 0 },
+    uLumaDirection: { value: new THREE.Vector2(0, 1) }, uLumaThreshold: { value: 0 }, uLumaSoft: { value: .2 }, uLumaChroma: { value: 0 },
   });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
@@ -948,11 +950,11 @@ export class StudioRenderer {
    * Colour and Lens, in its own target, so it never enters the echo history.
    * `below` is the picture under this layer, read by Luma Warp.
    */
-  warpSource(original: Layer, layer: Layer, source: THREE.Texture, _below: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
+  warpSource(original: Layer, layer: Layer, source: THREE.Texture, below: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
     if (!warpActive(original)) return source;
     // A modulated amount can rest at zero, where there is nothing to do.
-    const amount = Math.max(0, number(layer, 'bendAmount', 0)), liquid = Math.max(0, number(layer, 'liquidAmount', 0));
-    if (amount <= 0 && liquid <= 0) return source;
+    const amount = Math.max(0, number(layer, 'bendAmount', 0)), liquid = Math.max(0, number(layer, 'liquidAmount', 0)), luma = Math.max(0, number(layer, 'lumaWarpAmount', 0));
+    if (amount <= 0 && liquid <= 0 && luma <= 0) return source;
     this.warpTarget ??= target();
     const output = this.warpTarget;
     if (output.width !== width || output.height !== height) output.setSize(width, height);
@@ -980,6 +982,13 @@ export class StudioRenderer {
     u.uLiquidTrail.value = style === 1 ? number(layer, 'liquidTrail', 0) : 0;
     u.uLiquidChroma.value = number(layer, 'liquidChroma', 0);
     (u.uLiquidDrift.value as THREE.Vector2).set(Math.cos(drift), Math.sin(drift));
+    const lumaAngle = number(layer, 'lumaWarpAngle', 90) * Math.PI / 180;
+    u.uBelow.value = below; u.uLumaAmount.value = luma;
+    u.uLumaSource.value = Math.round(number(layer, 'lumaWarpSource', 0)); u.uLumaChannel.value = Math.round(number(layer, 'lumaWarpChannel', 0));
+    u.uLumaMode.value = Math.round(number(layer, 'lumaWarpMode', 0));
+    (u.uLumaDirection.value as THREE.Vector2).set(Math.cos(lumaAngle), Math.sin(lumaAngle));
+    u.uLumaThreshold.value = number(layer, 'lumaWarpThreshold', 0); u.uLumaSoft.value = number(layer, 'lumaWarpSoft', .2);
+    u.uLumaChroma.value = number(layer, 'lumaWarpChroma', 0);
     this.draw(this.warp, output);
     return output.texture;
   }
