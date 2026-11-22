@@ -482,6 +482,15 @@ async function measure(entry, config, modules) {
 async function run() {
   const config = await window.bench.config();
   const modules = await import('./renderer.js');
+  if (config.proof) {
+    const { runProof } = await import('./kaleidoscope-proof.browser.mjs');
+    const probeGl = document.createElement('canvas').getContext('webgl2');
+    const debug = probeGl.getExtension('WEBGL_debug_renderer_info');
+    const gpu = debug ? probeGl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : probeGl.getParameter(probeGl.RENDERER);
+    const result = await runProof(modules, config, { 'kaleidoscope-parity': kaleidoscopeParity, 'kaleidoscope-inputs': kaleidoscopeInputs });
+    await window.bench.done({ renderer: gpu, ...result });
+    return;
+  }
   const all = buildCases(modules);
   const wanted = config.caseSelector === 'all' ? all : config.caseSelector.split(',').map(id => {
     const found = all.find(item => item.id === id);
