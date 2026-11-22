@@ -214,6 +214,27 @@ const CHECKS = [
     },
   },
   {
+    name: 'warp-fringe',
+    // A fold is not fringe movement. The live shader gets a temporary whole mirror period added to the read
+    // position: the picture lands in the same place, so any change means the fringe grew with the fold.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, mat = q.renderer.warp, rows = [];
+        const scene = (f, chroma) => q.project([q.rich({ bendAmount: .2, bendField: f, bendChroma: chroma })]);
+        const shots = [];
+        for (let f = 0; f < count; f++) shots.push({ none: await q.px(scene(f, 0)), fringe: await q.px(scene(f, 1)) });
+        const source = mat.fragmentShader, folded = source.replace('  return warped;\n}', '  return warped + vec2(2.);\n}');
+        if (folded === source) throw new Error('warpedUv return not found');
+        mat.fragmentShader = folded; mat.needsUpdate = true;
+        try {
+          for (let f = 0; f < count; f++) rows.push({ shift: q.difference(shots[f].fringe, await q.px(scene(f, 1))), fringe: q.difference(shots[f].none, shots[f].fringe) });
+        } finally { mat.fragmentShader = source; mat.needsUpdate = true; }
+        return rows;
+      }, FIELDS.length);
+      return { ok: rows.every(r => r.fringe > 1 && r.shift < 1), detail: `${rows.some(r => r.fringe <= 1) ? 'Colour fringe has no effect. ' : ''}${rows.map((r, i) => `${FIELDS[i]} fold changes ${r.shift.toFixed(3)} (fringe ${r.fringe.toFixed(2)})`).join(', ')} (limit 1)` };
+    },
+  },
+  {
     name: 'warp-history',
     // The warp reads the echo's result once. If it entered the history, each echo would be bent again.
     run: async ({ page }) => {

@@ -151,11 +151,20 @@ vec2 bendField(vec2 p) {
   return plasmaField(p);
 }
 
+/** How far red and blue read from green. Each effect adds its own movement, scaled by its own fringe control.
+ * Mirror and Polar add nothing, so a large fold never inflates it. Set by warpedUv. */
+vec2 warpFringe;
+
 /** Where this pixel reads from. Warps compose here in order: Mirror, Polar, Warp, Liquid, Luma. */
 vec2 warpedUv(vec2 uv) {
   vec2 frame = vec2(uAspect, 1.), warped = uv;
+  warpFringe = vec2(0.);
   // Warp: amount 1 moves a pixel at most half the frame height.
-  if (uBendAmount > 0.) warped += bendField((warped - .5) * frame) * uBendAmount * .5 / frame;
+  if (uBendAmount > 0.) {
+    vec2 move = bendField((warped - .5) * frame) * uBendAmount * .5 / frame;
+    warped += move;
+    warpFringe += move * uBendChroma * .08;
+  }
   return warped;
 }
 
@@ -196,9 +205,8 @@ void main() {
   float peak = 0.;
   Gathered g = readAt(warped, footprint, peak);
   vec3 covered = g.covered, light = g.light;
-  if (uBendChroma > 0.) {
-    vec2 fringe = (warped - vUv) * uBendChroma * .08;
-    Gathered r = readAt(warped + fringe, footprint, peak), b = readAt(warped - fringe, footprint, peak);
+  if (warpFringe != vec2(0.)) {
+    Gathered r = readAt(warped + warpFringe, footprint, peak), b = readAt(warped - warpFringe, footprint, peak);
     // Red and blue read other pixels than the alpha, so at a soft edge colour can outrun coverage.
     // Only that change is bounded, by the brightest straight colour read, so over-range light stays.
     // Uncovered light always passes, and counts against the room left for covered colour.
