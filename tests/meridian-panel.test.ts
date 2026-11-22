@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { createLayer } from '../src/core/project';
 import { compose } from '../src/meridian/composer';
 import { MACRO_KEYS, MERIDIAN_DEFAULTS, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS } from '../src/meridian/parameters';
-import { applyLockedVariation, applyMorph, captureMorph, filterParameters, MERIDIAN_CHOICES, morph, PANEL_PARAMETERS, performanceShortcut, recallSeed, releaseMoves, storeSeed, toggleGroupLock } from '../src/meridian/panel';
+import { applyLockedVariation, applyMorph, captureMorph, filterParameters, MERIDIAN_CHOICES, morph, PANEL_PARAMETERS, performanceShortcut, KeyHolds, recallSeed, storeSeed, toggleGroupLock } from '../src/meridian/panel';
+import { HeldMoves } from '../src/meridian/held-moves';
+import { createProject, validateProject } from '../src/core/project';
 import type { Layer, ParameterDefinition } from '../src/shared/types';
 
 const meridian = (locks: string[] = []): Layer => ({ ...createLayer('meridian'), meridian: { locks } });
@@ -135,12 +137,59 @@ test('A and B live on the layer, leave show settings out, and locked groups do n
   assert.deepEqual(toggleGroupLock(layer, 'Hero').meridian?.locks, []);
 });
 
-test('a restored layer never comes back with a move held', () => {
-  const layer = meridian(); layer.params.moveHold = 1; layer.params.moveRecall = 3; layer.params.ringOpacity = 0.4;
-  const released = releaseMoves(layer);
-  assert.equal(released.params.moveHold, 0);
-  assert.equal(released.params.moveRecall, 0);
-  assert.equal(released.params.ringOpacity, 0.4);
+test('held moves live outside the project, per layer, and read 0 once released', () => {
+  const held = new HeldMoves();
+  assert.equal(held.get('a', 'moveHold'), 0);
+  held.set('a', 'moveHold', 1); held.set('a', 'moveRecall', 3);
+  assert.equal(held.get('a', 'moveHold'), 1);
+  assert.equal(held.get('b', 'moveHold'), 0);
+  held.set('a', 'moveHold', 0);
+  assert.equal(held.get('a', 'moveHold'), 0);
+  assert.equal(held.get('a', 'moveRecall'), 3);
+  held.clear('a');
+  assert.equal(held.get('a', 'moveRecall'), 0);
+});
+
+test('a key is released by its physical code, whatever Shift did to its character', () => {
+  const holds = new KeyHolds();
+  holds.down('Digit1', 'recall:0');
+  assert.equal(holds.up('Digit2'), null);
+  assert.equal(holds.up('Digit1'), 'recall:0');
+  assert.equal(holds.up('Digit1'), null);
+});
+
+test('an action stays held until the last key holding it is up, and clear returns everything held', () => {
+  const holds = new KeyHolds();
+  holds.down('Digit1', 'recall:0'); holds.down('Numpad1', 'recall:0'); holds.down('KeyH', 'moveHold');
+  assert.equal(holds.up('Digit1'), null);
+  assert.equal(holds.up('Numpad1'), 'recall:0');
+  holds.down('KeyN', 'moveNext');
+  assert.deepEqual(holds.clear().sort(), ['moveHold', 'moveNext']);
+  assert.deepEqual(holds.clear(), []);
+});
+
+test('the morph position is stored on the layer and matches each capture', () => {
+  let layer = meridian(); layer.params.ringOpacity = 0.2;
+  layer = captureMorph(layer, 'morphA');
+  assert.equal(layer.meridian?.morphAmount, 0);
+  layer = captureMorph({ ...layer, params: { ...layer.params, ringOpacity: 0.8 } }, 'morphB');
+  assert.equal(layer.meridian?.morphAmount, 1);
+  const moved = applyMorph(layer, 0.7);
+  assert.equal(moved.meridian?.morphAmount, 0.7);
+  assert.ok(Math.abs(moved.params.ringOpacity - 0.62) < 1e-9);
+  assert.equal(captureMorph(moved, 'morphA').meridian?.morphAmount, 0);
+});
+
+test('a saved morph position survives validation, and a damaged one is repaired', () => {
+  const saved = (morphAmount: unknown) => {
+    const layer = meridian(); layer.meridian = { locks: [], morphAmount: morphAmount as number };
+    return validateProject({ ...createProject(), layers: [layer] }).layers[0].meridian?.morphAmount;
+  };
+  assert.equal(saved(0.7), 0.7);
+  assert.equal(saved(4), 1);
+  assert.equal(saved(-1), 0);
+  assert.equal(saved('x'), undefined);
+  assert.equal(saved(Number.NaN), undefined);
 });
 
 test('keys map to moves and Recall, and leave typing and app shortcuts alone', () => {

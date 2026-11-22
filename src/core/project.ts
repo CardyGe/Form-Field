@@ -904,6 +904,7 @@ function meridianState(input: unknown): MeridianLayerState | undefined {
     const known = (key: string) => MERIDIAN_PARAMETERS.some(d => d.key === key);
     if (entries.every(([key, value]) => known(key) && typeof value === 'number' && Number.isFinite(value))) state[slot] = Object.fromEntries(entries) as Record<string, number>;
   }
+  if (typeof raw.morphAmount === 'number' && Number.isFinite(raw.morphAmount)) state.morphAmount = Math.min(1, Math.max(0, raw.morphAmount));
   const mark = raw.mark;
   if (typeof mark === 'object' && mark !== null) {
     try {

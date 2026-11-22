@@ -114,7 +114,8 @@ const MORPHED = MERIDIAN_PARAMETERS.filter((d) => d.group !== 'Safety' && d.grou
 
 export function captureMorph(layer: Layer, side: 'morphA' | 'morphB'): Layer {
   const capture = Object.fromEntries(MORPHED.map((d) => [d.key, layer.params[d.key] ?? d.default]));
-  return { ...layer, meridian: { locks: [], ...layer.meridian, [side]: capture } };
+  // The look on screen is now that end of the morph, so the slider moves there too.
+  return { ...layer, meridian: { locks: [], ...layer.meridian, [side]: capture, morphAmount: side === 'morphA' ? 0 : 1 } };
 }
 
 /** Moves the layer to `amount` between its captures, leaving locked groups alone. Without both captures nothing changes. */
@@ -123,20 +124,34 @@ export function applyMorph(layer: Layer, amount: number): Layer {
   if (!state?.morphA || !state.morphB) return layer;
   const { morphA, morphB, locks } = state;
   const definitions = MORPHED.filter((d) => !locks.includes(d.group as string) && d.key in morphA && d.key in morphB);
-  return { ...layer, params: { ...layer.params, ...morph(morphA, morphB, amount, definitions) } };
-}
-
-/** A move is only down while it is held, so a value restored by Undo must not come back pressed. */
-export function releaseMoves(layer: Layer): Layer {
-  if (layer.kind !== 'meridian') return layer;
-  const params = { ...layer.params };
-  for (const d of MERIDIAN_PARAMETERS) if (d.momentary) params[d.key] = 0;
-  return { ...layer, params };
+  return { ...layer, params: { ...layer.params, ...morph(morphA, morphB, amount, definitions) }, meridian: { ...state, morphAmount: clamp(amount, 0, 1) } };
 }
 
 export type MoveKey = (typeof MERIDIAN_MOVES)[number];
 export type PerformanceAction = MoveKey | `recall:${number}`;
 const MOVE_KEYS: Readonly<Record<string, MoveKey>> = { n: 'moveNext', h: 'moveHold', d: 'moveDrop', c: 'moveCollapse', m: 'moveMutate', r: 'moveReseed' };
+
+/** Which physical keys hold which action. A key's character changes with Shift, its code does not. */
+export class KeyHolds {
+  private readonly byCode = new Map<string, PerformanceAction>();
+
+  down(code: string, action: PerformanceAction): void {
+    this.byCode.set(code, action);
+  }
+
+  /** The action this key lets go of, or null if it held none or another key still holds it. */
+  up(code: string): PerformanceAction | null {
+    const action = this.byCode.get(code);
+    if (!action || !this.byCode.delete(code)) return null;
+    return [...this.byCode.values()].includes(action) ? null : action;
+  }
+
+  clear(): PerformanceAction[] {
+    const actions = [...new Set(this.byCode.values())];
+    this.byCode.clear();
+    return actions;
+  }
+}
 
 /** The move a key plays. A slider keeps the keyboard live, so moves still fire straight after a drag; text boxes and dropdowns do not. */
 export function performanceShortcut(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; target: { tagName?: string; type?: string; isContentEditable?: boolean } | null }): PerformanceAction | null {

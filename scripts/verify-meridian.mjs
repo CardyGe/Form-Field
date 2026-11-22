@@ -80,6 +80,28 @@ async function verifySurface(real, ui, qa, failures) {
   await ui.keyboard.up('h');
   await ui.waitForTimeout(60);
   if (!holding.some(text => text.startsWith('Hold')) || (await held()).length) failures.push(`Hold did not press and release (${holding.join()})`);
+  // A press is not an edit: the project does not change, so nothing prepares, pauses or autosaves.
+  const status = ui.locator('.project-title [role=status]');
+  await ui.waitForFunction(() => document.querySelector('.project-title [role=status]')?.textContent === 'Autosaved');
+  const savedBefore = JSON.stringify(await ui.evaluate(() => window.studio.loadAutosave()));
+  const statuses = new Set();
+  await ui.keyboard.down('n');
+  for (let i = 0; i < 6; i++) { statuses.add(await status.textContent()); await ui.waitForTimeout(20); }
+  await ui.keyboard.up('n');
+  for (let i = 0; i < 45; i++) { statuses.add(await status.textContent()); await ui.waitForTimeout(20); }
+  const savedAfter = JSON.stringify(await ui.evaluate(() => window.studio.loadAutosave()));
+  result.pressIsNotAnEdit = statuses.size === 1 && statuses.has('Autosaved') && savedBefore === savedAfter;
+  if (!result.pressIsNotAnEdit) failures.push(`a move press changed the project (status: ${[...statuses].join(', ')})`);
+
+  // Keys let go by physical key, whatever Shift or Cmd did meanwhile.
+  await ui.keyboard.down('KeyH');
+  await ui.keyboard.down('Meta');
+  await ui.waitForTimeout(40);
+  const afterMeta = await held();
+  await ui.keyboard.up('Meta');
+  await ui.keyboard.up('KeyH');
+  if (afterMeta.length) failures.push('Hold stayed down after Cmd');
+
   await ui.getByRole('button', { name: 'Store seed in slot 1' }).click();
   await blur();
   const stored = await seedShown();
@@ -93,12 +115,41 @@ async function verifySurface(real, ui, qa, failures) {
   if (reseeded === stored) failures.push('R did not change the seed');
   if (recalled !== stored) failures.push('1 did not recall the stored seed');
 
+  await ui.keyboard.down('Digit1');
+  await ui.waitForTimeout(40);
+  const slotDown = await ui.locator('.m-slot.is-down').count();
+  await ui.keyboard.down('Shift');
+  await ui.keyboard.up('Digit1');
+  await ui.keyboard.up('Shift');
+  await ui.waitForTimeout(40);
+  result.shiftRelease = slotDown === 1 && await ui.locator('.m-slot.is-down').count() === 0;
+  if (!result.shiftRelease) failures.push('Recall 1 stuck after Shift changed its character');
+
+  // Double-click on a label resets a choice and the seed.
+  await ui.getByRole('button', { name: /^Score/ }).click();
+  await ui.getByLabel('Meridian seed').fill('77');
+  await ui.getByLabel('Meridian seed').press('Enter');
+  await ui.locator('.m-seed span').dblclick();
+  const seedReset = await ui.getByLabel('Meridian seed').inputValue();
+  await ui.getByRole('button', { name: /^Rings/ }).click();
+  const drawOn = ui.getByRole('combobox', { name: 'Draw-on style' });
+  await drawOn.selectOption('2');
+  await ui.locator('.stacked-label', { has: drawOn }).locator('span').dblclick();
+  const choiceReset = await drawOn.inputValue();
+  result.labelReset = seedReset === '1729' && choiceReset === '0';
+  if (!result.labelReset) failures.push(`double-click reset failed (seed ${seedReset}, choice ${choiceReset})`);
+  await ui.getByRole('button', { name: /^Rings/ }).click();
+  await ui.getByRole('button', { name: /^Score/ }).click();
+  await blur();
+
   await ui.getByRole('button', { name: 'Pause', exact: true }).click();
   await ui.getByRole('slider', { name: 'Timeline position' }).fill('0.55');
   await ui.waitForTimeout(400);
   const preview = ui.locator('.preview-stage canvas').first();
   const before = await preview.screenshot(), still = await preview.screenshot();
-  const scale = ui.getByRole('slider', { name: 'Scale', exact: true }), box = await scale.boundingBox();
+  const scale = ui.getByRole('slider', { name: 'Scale', exact: true });
+  await scale.scrollIntoViewIfNeeded();
+  const box = await scale.boundingBox();
   await ui.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await ui.mouse.down();
   await ui.mouse.move(box.x + box.width / 2, box.y - 4, { steps: 6 });
@@ -114,6 +165,20 @@ async function verifySurface(real, ui, qa, failures) {
   result.macro = { noise: +noise.toFixed(3), moved: +moved.toFixed(3) };
   if (!(moved > .2 && moved > noise * 3)) failures.push(`the Scale macro barely changes the picture (${moved.toFixed(3)} against ${noise.toFixed(3)})`);
   await scale.dblclick();
+  // The morph slider keeps its place when the panel is rebuilt.
+  await ui.getByRole('button', { name: 'Capture A' }).click();
+  await ui.getByRole('slider', { name: 'Scale', exact: true }).focus();
+  for (let i = 0; i < 20; i++) await ui.keyboard.press('ArrowUp');
+  await ui.getByRole('button', { name: 'Capture B' }).click();
+  const morphSlider = ui.getByRole('slider', { name: 'Morph between A and B' });
+  await morphSlider.fill('0.7');
+  await ui.getByRole('button', { name: 'Motion', exact: true }).click();
+  await ui.getByRole('button', { name: 'Shape', exact: true }).click();
+  const morphKept = await morphSlider.inputValue();
+  const macroKept = await ui.getByRole('slider', { name: 'Scale', exact: true }).getAttribute('aria-valuenow');
+  result.morphKept = morphKept === '0.7' && macroKept === '64';
+  if (!result.morphKept) failures.push(`the morph lost its place (slider ${morphKept}, Scale ${macroKept})`);
+  await morphSlider.fill('0');
   await ui.getByRole('button', { name: 'Play', exact: true }).click();
 
   await blur();

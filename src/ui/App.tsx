@@ -35,7 +35,6 @@ import { beginStudioEdit, endStudioEdit, onStudioWallWarning, studioEdit } from 
 import { projectForStudioSave, stashStudio, type ShapeEdit } from './studio-edit';
 import MapPanel from './MapPanel';
 import { MeridianControls, useMeridianPerformance } from './MeridianControls';
-import { releaseMoves } from '../meridian/panel';
 import { sameCanvasValues } from '../core/canvas-interaction';
 
 const TAU = Math.PI * 2;
@@ -221,17 +220,11 @@ export default function App() {
   }, [notify]);
   const edit = (fn: (p: Project) => Project) => replace(fn(projectRef.current));
   const editLayer = (fn: (l: Layer) => Layer, id = selected?.id) => { if (id) edit(p => { const layers=p.layers.map(l=>{if(l.id!==id)return l;const next=fn(l);if(next.surface?.source==='mask'&&next.mask.kind!=='image')delete next.surface;return next;}); return {...p,schemaVersion:layers.some(l=>l.surface||Object.values(l.modulations).some(m=>m.range))?2:p.schemaVersion,layers}; }); };
-  /** A held move is performance state, not an edit: it never enters Undo. */
-  const setMomentary = (id: string, key: string, value: number) => {
-    const current = projectRef.current;
-    if (current.layers.some(l => l.id === id && l.params[key] !== value)) replace({ ...current, layers: current.layers.map(l => l.id === id ? { ...l, params: { ...l.params, [key]: value } } : l) }, false);
-  };
-  const meridianPerformance = useMeridianPerformance({ layer: selected, enabled: mode === 'studio' && !exportOpen, edit: (change, id) => editLayer(change, id), setMomentary, notify });
+  const meridianPerformance = useMeridianPerformance({ layer: selected, enabled: mode === 'studio' && !exportOpen, edit: (change, id) => editLayer(change, id), notify });
   const beginGesture = () => { if (!gesture.current) { history.current.push(projectRef.current); history.current = history.current.slice(-80); future.current = []; gesture.current = true; } };
   const endGesture = () => { gesture.current = false; setHistoryRevision(n => n + 1); };
-  const withMovesReleased = (p: Project): Project => ({ ...p, layers: p.layers.map(releaseMoves) });
-  const undo = () => { const prev = history.current.pop(); if (prev) { future.current.push(projectRef.current); replace(withMovesReleased(prev), false); } };
-  const redo = () => { const next = future.current.pop(); if (next) { history.current.push(projectRef.current); replace(withMovesReleased(next), false); } };
+  const undo = () => { const prev = history.current.pop(); if (prev) { future.current.push(projectRef.current); replace(prev, false); } };
+  const redo = () => { const next = future.current.pop(); if (next) { history.current.push(projectRef.current); replace(next, false); } };
   const [filePath, setFilePath] = useState('');
   const fileName = filePath.split('/').pop() ?? '';
   const save = async (saveAs = false) => { try {

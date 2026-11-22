@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Poin
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Icon, Parameter } from './LayerControls';
 import { MACRO_KEYS, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
-import { applyLockedVariation, applyMorph, captureMorph, filterParameters, MAX_STORED_SEED, MERIDIAN_CHOICES, PANEL_PARAMETERS, performanceShortcut, recallSeed, SEED_SLOTS, storeSeed, toggleGroupLock, type MoveKey, type PerformanceAction } from '../meridian/panel';
+import { applyLockedVariation, applyMorph, captureMorph, filterParameters, MAX_STORED_SEED, MERIDIAN_CHOICES, PANEL_PARAMETERS, performanceShortcut, KeyHolds, recallSeed, SEED_SLOTS, storeSeed, toggleGroupLock, type MoveKey, type PerformanceAction } from '../meridian/panel';
+import { heldMoves } from '../meridian/held-moves';
 import './meridian.css';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -23,62 +24,66 @@ export interface MeridianPerformance { pressed: ReadonlySet<PerformanceAction>; 
 
 /**
  * Plays the moves, from buttons and keys. It lives in App so the keys still work in focus mode and on every tab.
- * Press sets a move's parameter to 1 and release to 0. Mutate, Reseed and Recall also act on the layer at once.
+ * Press and release go to `heldMoves`, not the Project, so playing never prepares, autosaves or enters Undo.
+ * Mutate, Reseed and Recall are real edits and also act on the layer at once.
  */
-export function useMeridianPerformance({ layer, enabled, edit, setMomentary, notify }: {
-  layer: Layer | undefined; enabled: boolean; edit: (change: (l: Layer) => Layer, id: string) => void;
-  setMomentary: (id: string, key: string, value: number) => void; notify: (message: string) => void;
+export function useMeridianPerformance({ layer, enabled, edit, notify }: {
+  layer: Layer | undefined; enabled: boolean; edit: (change: (l: Layer) => Layer, id: string) => void; notify: (message: string) => void;
 }): MeridianPerformance {
   const [pressed, setPressed] = useState<ReadonlySet<PerformanceAction>>(() => new Set());
   const held = useRef(new Set<PerformanceAction>());
-  const latest = useRef({ layer, edit, setMomentary, notify });
-  latest.current = { layer, edit, setMomentary, notify };
+  const keys = useRef(new KeyHolds());
+  const latest = useRef({ layer, edit, notify });
+  latest.current = { layer, edit, notify };
   const layerId = layer?.kind === 'meridian' ? layer.id : undefined;
 
   const press = useCallback((action: PerformanceAction) => {
-    const { layer, edit, setMomentary, notify } = latest.current;
+    const { layer, edit, notify } = latest.current;
     if (!layer || layer.kind !== 'meridian' || held.current.has(action)) return;
+    const recallSlot = action.startsWith('recall:') ? Number(action.slice(7)) : -1;
+    if (recallSlot >= 0 && !layer.params[`seedSlot${recallSlot}`]) { notify(`Seed slot ${recallSlot + 1} is empty.`); return; }
     held.current.add(action); setPressed(new Set(held.current));
     if (action === 'moveMutate') edit(l => applyLockedVariation(l, crypto.getRandomValues(new Uint32Array(1))[0], 'mutate'), layer.id);
     if (action === 'moveReseed') {
       if (layer.meridian?.locks.includes('Score')) notify('Score is locked, so Reseed keeps this seed.');
       else edit(l => applyLockedVariation(l, 1 + crypto.getRandomValues(new Uint32Array(1))[0] % MAX_STORED_SEED, 'reseed'), layer.id);
     }
-    if (action.startsWith('recall:')) {
-      const slot = Number(action.slice(7));
-      if (!layer.params[`seedSlot${slot}`]) { notify(`Seed slot ${slot + 1} is empty.`); return; }
-      edit(l => recallSeed(l, slot), layer.id);
-      setMomentary(layer.id, 'moveRecall', slot + 1);
-    } else setMomentary(layer.id, action, 1);
+    if (recallSlot >= 0) {
+      edit(l => recallSeed(l, recallSlot), layer.id);
+      heldMoves.set(layer.id, 'moveRecall', recallSlot + 1);
+    } else heldMoves.set(layer.id, action, 1);
   }, []);
   const release = useCallback((action: PerformanceAction) => {
     if (!held.current.delete(action)) return;
     setPressed(new Set(held.current));
     const id = latest.current.layer?.id;
-    if (id) latest.current.setMomentary(id, action.startsWith('recall:') ? 'moveRecall' : action, 0);
+    if (id) heldMoves.set(id, action.startsWith('recall:') ? 'moveRecall' : action, 0);
   }, []);
 
   useEffect(() => {
     if (!enabled || !layerId) return;
+    // macOS does not deliver a letter's keyup while Cmd is down, so Cmd lets go of every held key.
+    const releaseKeys = () => { for (const action of keys.current.clear()) release(action); };
     const down = (e: KeyboardEvent) => {
+      if (e.key === 'Meta') { releaseKeys(); return; }
       const action = performanceShortcut({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, target: e.target as HTMLInputElement | null });
       if (!action) return;
       e.preventDefault();
-      if (!e.repeat) press(action);
+      if (e.repeat) return;
+      keys.current.down(e.code, action);
+      press(action);
     };
-    // Released whatever has focus by then, so a held move can never stick.
     const up = (e: KeyboardEvent) => {
-      const action = performanceShortcut({ key: e.key, metaKey: false, ctrlKey: false, altKey: false, target: null });
+      if (e.key === 'Meta') { releaseKeys(); return; }
+      const action = keys.current.up(e.code);
       if (action) release(action);
     };
-    const releaseAll = () => { for (const action of [...held.current]) release(action); };
+    const releaseAll = () => { keys.current.clear(); for (const action of [...held.current]) release(action); };
     window.addEventListener('keydown', down); window.addEventListener('keyup', up); window.addEventListener('blur', releaseAll);
     return () => {
       window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); window.removeEventListener('blur', releaseAll);
-      for (const action of [...held.current]) {
-        held.current.delete(action);
-        latest.current.setMomentary(layerId, action.startsWith('recall:') ? 'moveRecall' : action, 0);
-      }
+      keys.current.clear(); held.current.clear();
+      heldMoves.clear(layerId);
       setPressed(new Set());
     };
   }, [enabled, layerId, press, release]);
@@ -151,7 +156,7 @@ function SeedBank({ layer, edit, performance, notify }: { layer: Layer; edit: (c
 }
 
 function Morph({ layer, edit, onStart, onEnd }: { layer: Layer; edit: (change: (l: Layer) => Layer) => void; onStart: () => void; onEnd: () => void }) {
-  const [amount, setAmount] = useState(0);
+  const amount = layer.meridian?.morphAmount ?? 0;
   const ready = !!layer.meridian?.morphA && !!layer.meridian.morphB;
   const capture = (side: 'morphA' | 'morphB') => <button className={`m-capture ${layer.meridian?.[side] ? 'is-filled' : ''}`} aria-label={`Capture ${side === 'morphA' ? 'A' : 'B'}`} title={`Capture the current look as ${side === 'morphA' ? 'A' : 'B'}`} onClick={() => edit(l => captureMorph(l, side))}>{side === 'morphA' ? 'A' : 'B'}</button>;
   return <div className="m-morph">{capture('morphA')}
@@ -159,7 +164,7 @@ function Morph({ layer, edit, onStart, onEnd }: { layer: Layer; edit: (change: (
       title={ready ? 'Crossfade from A to B · locked groups stay put' : 'Capture A and B to crossfade between them'}
       onPointerDown={onStart} onPointerUp={onEnd} onPointerCancel={onEnd} onKeyUp={onEnd}
       onKeyDown={e => { if (e.key.startsWith('Arrow')) onStart(); }}
-      onChange={e => { const next = Number(e.target.value); setAmount(next); edit(l => applyMorph(l, next)); }} />
+      onChange={e => { const next = Number(e.target.value); edit(l => applyMorph(l, next)); }} />
     {capture('morphB')}</div>;
 }
 
@@ -173,7 +178,8 @@ function SeedField({ value, onChange }: { value: number; onChange: (n: number) =
     setDraft(String(next));
     if (next !== value) onChange(next);
   };
-  return <label className="m-seed" title={d.description}>Seed<input aria-label="Meridian seed" type="number" min={d.min} max={d.max} step={1} value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit}
+  // The caption's click would focus the field, which would take the keyboard away from the performance keys.
+  return <label className="m-seed" title={`${d.description}\nDouble-click the label to reset`}><span onClick={e => e.preventDefault()} onDoubleClick={() => { if (value !== d.default) onChange(d.default); }}>Seed</span><input aria-label="Meridian seed" type="number" min={d.min} max={d.max} step={1} value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit}
     onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setDraft(String(value)); } }} /></label>;
 }
 
@@ -192,7 +198,7 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
   const control = (d: ParameterDefinition) => {
     const value = layer.params[d.key] ?? d.default, choices = MERIDIAN_CHOICES[d.key];
     const body = d.key === 'seed' ? <SeedField value={value} onChange={n => setParam('seed', n)} />
-      : choices ? <ChoiceParameter label={d.label} name={d.label} options={[...choices]} value={value} onChange={n => setParam(d.key, n)} />
+      : choices ? <ChoiceParameter label={d.label} name={d.label} options={[...choices]} value={value} resetTo={d.default} onChange={n => setParam(d.key, n)} />
       : <Parameter definition={d} value={value} animated={!!layer.modulations[d.key]} onChange={n => setParam(d.key, n)} onAnimate={!onAnimateKey || d.step === 1 || d.structural ? undefined : () => onAnimateKey(d.key)} onStart={onStart} onEnd={onEnd} />;
     return <div className="m-param" key={d.key}>{queued?.has(d.key) && <span className="m-next">Next phrase</span>}{body}</div>;
   };
@@ -203,7 +209,7 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
       <div className="m-heading"><span>Seeds</span><small>{layer.params.seed}</small></div>
       <SeedBank layer={layer} edit={edit} performance={performance} notify={notify} />
       <div className="m-heading"><span>Morph</span></div>
-      <Morph key={layer.id} layer={layer} edit={edit} onStart={onStart} onEnd={onEnd} />
+      <Morph layer={layer} edit={edit} onStart={onStart} onEnd={onEnd} />
     </section>
     <label className="m-search"><Icon name="search" size={14} /><input type="search" aria-label="Search parameters" placeholder={`Search ${PANEL_PARAMETERS.length} parameters`} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') setQuery(''); }} /></label>
     <div className="m-groups">

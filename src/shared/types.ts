@@ -36,13 +36,15 @@ export interface Layer {
   palette: string[];
   image?: { name: string; dataUrl: string; width: number; height: number; fit: 'contain' | 'cover' };
   modulations: Record<string, Modulation>;
-  /** Meridian only: group locks, the two morph captures and the optional mark. */
+  /** Meridian only: group locks, the two morph captures, the morph position and the optional mark. */
   meridian?: MeridianLayerState;
 }
 export interface MeridianLayerState {
   locks: string[];
   morphA?: Record<string, number>;
   morphB?: Record<string, number>;
+  /** Where the look sits between A (0) and B (1). */
+  morphAmount?: number;
   mark?: { dataUrl: string; width: number; height: number };
 }
 export interface Project {
