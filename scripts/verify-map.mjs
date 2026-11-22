@@ -1005,7 +1005,8 @@ try {
       const now = colours.map((c, k) => white(c) ? k : -1).filter(k => k >= 0);
       now.forEach(k => lit.add(k)); most = Math.max(most, now.length);
       assert.ok(colours.every(coloured), 'a border run made part of the shape black');
-      await sleep(90);
+      // Uneven gaps: with a fixed gap, a busy machine can make every sample land at the same point of the lap.
+      await sleep(40 + Math.random() * 160);
     }
     assert.ok(most < 12, `most of the border was lit at once (${most} of 16)`);
     assert.ok(lit.size >= 10, `the lit part did not go round: only ${lit.size} of 16 places were ever lit`);
@@ -1120,6 +1121,28 @@ try {
     await studio.waitForFunction(was => document.querySelector('.map-scenes .map-scene[aria-pressed="true"]')?.textContent !== was, held, { timeout: 25000 });
     await studio.getByLabel('Scene auto-advance', { exact: true }).selectOption('');
     await react('testBeat', false);
+  });
+
+  await check('Finish in the Effect tab shows Studio’s groups, and Opacity there dims the effect on the wall', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
+    await tool('Select');
+    await playLook(studio, 'preset:porcelain-shutters');
+    await openSection(studio, 'effect');
+    const settings = studio.locator('.map-effect-settings');
+    await studio.locator('.map-effect-parts').getByRole('button', { name: 'Finish', exact: true }).click();
+    const heads = await settings.locator('.control-section h3').allInnerTexts();
+    for (const h of ['Layer mix', 'Color finish', 'Tonal finishing']) assert.ok(heads.includes(h), `Finish has no "${h}" group (${heads.join(', ')})`);
+    // Optional groups (Glow, Print screen, Feedback and the rest) are not all listed at once.
+    assert.ok(await settings.locator('.parameter').count() < 30, 'Finish lists every setting at once');
+    const brightness = async () => (await sample(output, [[.25, .25], [.4, .4], [.55, .55], [.3, .5], [.5, .3]])).colours.flat().reduce((a, b) => a + b, 0);
+    await sleep(1500);
+    const before = await brightness();
+    await slide('Opacity', 0.2);
+    await sleep(1500);
+    const after = await brightness();
+    assert.ok(after < before * 0.7, `Opacity 0.2 left the wall at ${after} of ${before}`);
+    await studio.locator('.map-effect-parts').getByRole('button', { name: 'Settings', exact: true }).click();
   });
 
   await check('Escape in the output window closes it', async () => {

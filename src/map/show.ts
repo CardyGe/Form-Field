@@ -555,7 +555,7 @@ function readLinks(value: unknown, show: { shapes: Shape[]; sources: { id: strin
 }
 
 /** A trigger's action is valid when what it names is still in the show. */
-export function actionValid(action: unknown, show: Pick<ShowDocument, 'scenes' | 'sources'>): action is TriggerAction {
+function actionValid(action: unknown, show: Pick<ShowDocument, 'scenes' | 'sources'>): action is TriggerAction {
   if (!isRecord(action)) return false;
   switch (action.kind) {
     case 'scene': return typeof action.sceneId === 'string' && show.scenes.some(s => s.id === action.sceneId);

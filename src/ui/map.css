@@ -286,3 +286,10 @@ fieldset.layer-controls:disabled { opacity: .55; }
 .map-tools .map-bar-gap { flex: 0 0 4px; }
 /* With a room photo loaded there are more controls than fit on one row, so the strip may wrap. */
 .map-tools:has(.map-inline-range) { flex-wrap: wrap; }
+/* The effect card's actions look like buttons, as Live's do. */
+.map-content-card .map-toggles .text-button { border: 1px solid #3a3a3a; }
+.map-content-card .map-toggles .text-button:hover:not(:disabled) { border-color: #484848; }
+/* Settings | Finish inside the Effect tab, in Studio's tab style. Both rows of tabs stay in view while the settings scroll. */
+.map-inspector-tabs { position: sticky; top: -14px; z-index: 6; margin: 0; padding-top: 14px; background: var(--panel); }
+.map-inspector-tabs + * { margin-top: 8px; }
+.map-effect-parts { position: sticky; top: 34px; z-index: 5; margin: 4px 0 8px; background: var(--panel); }

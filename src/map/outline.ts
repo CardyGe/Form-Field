@@ -94,7 +94,7 @@ function ringsMeet(a: Point[], b: Point[]): boolean {
   }
   return false;
 }
-export function polygonArea(points: Point[]): number {
+function polygonArea(points: Point[]): number {
   let twice = 0;
   for (let i = 0; i < points.length; i++) { const a = points[i], b = points[(i + 1) % points.length]; twice += a.x * b.y - b.x * a.y; }
   return Math.abs(twice) / 2;

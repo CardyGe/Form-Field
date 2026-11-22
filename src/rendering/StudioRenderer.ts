@@ -261,9 +261,18 @@ export class StudioRenderer {
   private exporting = false;
   private prepareRevision = 0;
 
+  /** Anything whose contents were built up over frames lived on the lost context, so it is rebuilt. */
+  private readonly onContextRestored = () => {
+    for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
+    this.feedbackStates.clear();
+    this.releaseOilTargets();
+    this.instruments.resetGpuHistory();
+  };
+
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false,
       premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
     this.maxTargetSize=Math.min(this.renderer.capabilities.maxTextureSize,
       this.renderer.getContext().getParameter(this.renderer.getContext().MAX_RENDERBUFFER_SIZE) as number);
     this.renderer.setPixelRatio(1);
@@ -474,9 +483,11 @@ export class StudioRenderer {
     this.renderer.info.reset();
   }
 
+  isContextLost(): boolean { return this.renderer.getContext().isContextLost(); }
+
   private assertUsable(): void {
     if (this.disposed) throw new Error('This renderer has been disposed.');
-    if (this.renderer.getContext().isContextLost()) throw new Error('The GPU context was lost. Reload the renderer to resume the saved project.');
+    if (this.isContextLost()) throw new Error('The GPU context was lost. Reload the renderer to resume the saved project.');
   }
 
   // Looked up every frame. Building the key by joining strings would copy and
@@ -1433,6 +1444,7 @@ export class StudioRenderer {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
     for (const asset of this.assets.values()) asset.texture.dispose();
     this.assets.clear();
     for (const rt of [this.source, this.fractalPreview, this.accumA, this.accumB, this.linearOutput, this.byteOutput, this.resolved, this.environment]) rt.dispose();

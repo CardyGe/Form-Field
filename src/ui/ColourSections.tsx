@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { SPLIT_KEYS, GRADIENT_KEYS, GRADE_KEYS, KEY_KEYS } from '../core/finishing';
 import { GRADIENT_PALETTES, SPLIT_ORDERS, SPLIT_SHAPES, balanceControlVisible, gradientControlVisible, keyControlVisible, splitControlVisible } from '../rendering/colour-lens';
@@ -7,9 +8,12 @@ interface SectionProps {
   layer: Layer;
   definitions: ParameterDefinition[];
   edit: (change: (layer: Layer) => Layer) => void;
-  animate: (key: string) => void;
+  /** Studio jumps to the Motion tab; Map leaves this out and shows its own control through `extra`. */
+  animate?: (key: string) => void;
   onStart: () => void;
   onEnd: () => void;
+  extra?: (d: ParameterDefinition) => ReactNode;
+  readOnly?: (d: ParameterDefinition) => boolean;
 }
 
 const SWATCHES = ['Colour 1', 'Colour 2', 'Colour 3', 'Colour 4', 'Colour 5', 'Colour 6'];
@@ -27,7 +31,7 @@ const CHOICES: Record<string, { options: string[]; base?: number }> = {
   gradeHighlightColour: { options: SWATCHES, base: 1 },
 };
 
-function Section({ title, copy, keys, visible, layer, definitions, edit, animate, onStart, onEnd }: SectionProps & { title: string; copy: string; keys: string[]; visible: (layer: Layer, key: string) => boolean }) {
+function Section({ title, copy, keys, visible, layer, definitions, edit, animate, onStart, onEnd, extra, readOnly }: SectionProps & { title: string; copy: string; keys: string[]; visible: (layer: Layer, key: string) => boolean }) {
   const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
   return <section className="control-section"><h3>{title}</h3><p className="muted-text">{copy}</p>
     {keys.filter(key => visible(layer, key)).map(key => {
@@ -38,7 +42,7 @@ function Section({ title, copy, keys, visible, layer, definitions, edit, animate
         const base = choice.base ?? 0;
         return <ChoiceParameter key={key} label={d.label} name={d.label} options={choice.options} value={value - base} onChange={n => set(key, n + base)} />;
       }
-      return <Parameter key={key} definition={d} value={value} animated={!!layer.modulations[key]} onChange={n => set(key, n)} onAnimate={d.step === 1 ? undefined : () => animate(key)} onStart={onStart} onEnd={onEnd} />;
+      return <Parameter key={key} definition={d} value={value} animated={!!layer.modulations[key]} readOnly={readOnly?.(d) ?? false} onChange={n => set(key, n)} onAnimate={animate && d.step !== 1 ? () => animate(key) : undefined} extra={extra?.(d)} onStart={onStart} onEnd={onEnd} />;
     })}
   </section>;
 }
