@@ -36,6 +36,8 @@ uniform vec4 uFromColour;
 uniform sampler2D uFrom;
 uniform mat3 uFromInv;      // the old picture keeps its own placement
 uniform float uMix;
+uniform int uHueOn;         // Perform: 1 turns the picture's hue; 0 leaves it exactly as it is
+uniform vec2 uHue;          // the turn's cosine and sine
 uniform vec3 uLook;         // brightness times tint
 uniform float uAlpha;       // opacity, for drawing only (links, scene glides)
 uniform int uDecor;
@@ -70,6 +72,11 @@ void main() {
   if (cover <= 0. && d.a <= 0.) discard;
   vec4 c = uKind == 1 ? picture(uPicture, uInv) : uColour;
   if (uFromKind >= 0) c = mix(uFromKind == 1 ? picture(uFrom, uFromInv) : uFromColour, c, uMix);
+  if (uHueOn == 1) {
+    // A turn round the grey axis: white, grey and black stay as they are. Kept inside the picture's own alpha.
+    vec3 k = vec3(.57735027);
+    c.rgb = clamp(c.rgb * uHue.x + cross(k, c.rgb) * uHue.y + k * dot(k, c.rgb) * (1. - uHue.x), 0., c.a);
+  }
   c.rgb *= uLook;
   c *= cover;
   o = (d + c * (1. - d.a)) * uAlpha;
@@ -91,13 +98,14 @@ uniform vec2 uOut;          // the target's size in pixels
 uniform vec2 uStage;
 uniform mat3 uInv;          // target pixels (origin top-left) to stage pixels
 uniform sampler2D uTex;
+uniform float uMaster;      // Perform's master level over the whole stage; 1 for none
 void main() {
   vec2 p = vec2(gl_FragCoord.x, uOut.y - gl_FragCoord.y) * (uStage / uOut);
   vec3 q = uInv * vec3(p, 1.);
   vec2 s = q.xy / q.z;
   if (q.z <= 0. || s.x < 0. || s.y < 0. || s.x > uStage.x || s.y > uStage.y) { o = vec4(0., 0., 0., 1.); return; }
   vec4 c = texture(uTex, vec2(s.x / uStage.x, 1. - s.y / uStage.y));
-  o = vec4(c.rgb, 1.);  // premultiplied over the black stage
+  o = vec4(c.rgb * uMaster, 1.);  // premultiplied over the black stage
 }`;
 
 export interface Texture { tex: WebGLTexture; width: number; height: number }
@@ -114,7 +122,12 @@ export interface ShapeDraw {
   alpha?: number;
   /** A border run: the border's position picture, where the head is and how long the run is (0..1 of the lap). */
   run?: { texture: Texture; head: number; length: number } | null;
+  /** Perform: degrees to turn the picture's hue by; 0 or missing leaves it alone. The border is not turned. */
+  hueDeg?: number;
 }
+
+/** Stage pixels to a picture made by Gpu.hold() over `rect`. */
+export const heldInverse = (rect: { x: number; y: number; w: number; h: number }): H3 => [1 / rect.w, 0, -rect.x / rect.w, 0, -1 / rect.h, 1 + rect.y / rect.h, 0, 0, 1];
 
 type Program = { program: WebGLProgram; u: Record<string, WebGLUniformLocation | null> };
 /** Read back at twice the preview's size, so the worker can shrink it smoothly and thin lines do not drop out. */
@@ -136,6 +149,9 @@ export class Gpu {
   private copyFb!: WebGLFramebuffer;
   private drawFb!: WebGLFramebuffer;
   private blank!: Texture;
+  private solid!: Texture;
+  /** Perform's master level, as last drawn: the operator's preview shows it too. */
+  private master = 1;
   private readback: { buffer: WebGLBuffer; sync: WebGLSync } | null = null;
   private readbackBuffer: WebGLBuffer | null = null;
   /** Goes up whenever the context is set up again: a readback started before it will never arrive. */
@@ -170,9 +186,9 @@ export class Gpu {
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'program');
       return { program, u: Object.fromEntries(uniforms.map(n => [n, gl.getUniformLocation(program, n)])) };
     };
-    this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uLook', 'uAlpha', 'uDecor', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
+    this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uHueOn', 'uHue', 'uLook', 'uAlpha', 'uDecor', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
-    this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex']);
+    this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex', 'uMaster']);
     this.quad = gl.createVertexArray()!;
     gl.bindVertexArray(this.quad);
     const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -196,6 +212,10 @@ export class Gpu {
     const blank = this.texture();
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
     this.blank = { tex: blank, width: 1, height: 1 };
+    // And a one-pixel solid one: full coverage, for a picture held whole.
+    const solid = this.texture();
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    this.solid = { tex: solid, width: 1, height: 1 };
     this.readback = null; this.readbackBuffer = null;
     this.generation++;
   }
@@ -284,12 +304,37 @@ export class Gpu {
       gl.uniformMatrix3fv(u.uFromInv, false, columns(d.from.inv));
     } else { gl.uniform1i(u.uFromKind, 0); gl.uniform4fv(u.uFromColour, d.from.rgba); bind(2, 'uFrom', null); }
     gl.uniform1f(u.uMix, d.mix);
+    const hue = d.hueDeg ? d.hueDeg * Math.PI / 180 : 0;
+    gl.uniform1i(u.uHueOn, hue ? 1 : 0);
+    if (hue) gl.uniform2f(u.uHue, Math.cos(hue), Math.sin(hue));
     gl.uniform3f(u.uLook, ...d.look);
     gl.uniform1f(u.uAlpha, d.alpha ?? 1);
     gl.uniform1i(u.uDecor, d.decor ? 1 : 0); bind(3, 'uDecorTex', d.decor);
     gl.uniform1i(u.uRun, d.run && d.decor ? 1 : 0); bind(4, 'uRunTex', d.run?.texture ?? null);
     gl.uniform2f(u.uRunAt, d.run?.head ?? 0, d.run?.length ?? 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  /**
+   * Perform: what a shape shows right now (a part-finished blend of two pictures), kept as one picture, so a new
+   * blend can start from exactly what is on the wall. Drawn without the shape's look, coverage or border, over `rect`
+   * (whole stage pixels). Like the stage it is stored bottom row first: heldInverse() is the way back to it.
+   */
+  hold(d: Pick<ShapeDraw, 'content' | 'from' | 'mix'>, rect: { x: number; y: number; w: number; h: number }): Texture {
+    const gl = this.gl, t = { tex: this.texture(), width: rect.w, height: rect.h };
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, rect.w, rect.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.drawFb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.tex, 0);
+    // The stage's own mapping, moved so that the rectangle fills the picture.
+    gl.viewport(-rect.x, rect.y + rect.h - STAGE_SIZE.height, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.disable(gl.SCISSOR_TEST); gl.disable(gl.BLEND);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindVertexArray(this.quad);
+    this.shape({ rect, coverage: this.solid, content: d.content, from: d.from, mix: d.mix, look: [1, 1, 1], decor: null });
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.enable(gl.BLEND);
+    return t;
   }
 
   /** A stage-sized picture laid over everything drawn so far. */
@@ -303,8 +348,9 @@ export class Gpu {
   }
 
   /** The stage to the canvas. inv: canvas pixels to stage pixels (the stage corners), or the identity. */
-  finish(inv: H3 = IDENTITY): void {
+  finish(inv: H3 = IDENTITY, master = 1): void {
     const gl = this.gl;
+    this.master = master;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     this.flat(inv, this.canvas.width, this.canvas.height);
@@ -318,6 +364,7 @@ export class Gpu {
     gl.uniform2f(u.uStage, STAGE_SIZE.width, STAGE_SIZE.height);
     gl.uniform2f(u.uOut, w, h);
     gl.uniformMatrix3fv(u.uInv, false, columns(inv));
+    gl.uniform1f(u.uMaster, this.master);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.stageTex); gl.uniform1i(u.uTex, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.enable(gl.BLEND);

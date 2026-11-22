@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { MapCompositor } from '../map/compositor';
-import { STAGE_SIZE } from '../map/show';
+import { MapCompositor, MAX_ARMED, performDraw, type ShapeBlend } from '../map/compositor';
+import { isShapeShown, LIVE_SOURCE_ID, STAGE_SIZE } from '../map/show';
 import { applyMapMessage, initialWall } from '../map/wall';
+import { overlayShow, type ZonePicture } from '../perform/resolve';
+import { stepWallPerform, type WallPerform } from '../perform/wall-perform';
 import PreviewWorker from '../map/preview-worker?worker&inline';
 
 /** At most five previews a second, and only after the wall has changed. */
 const PREVIEW_EVERY_MS = 200;
 const REPORT_EVERY_MS = 1000;
+/** Perform starting or ending changes the wall like a short scene switch, never as a jump. */
+const HANDOVER_FADE_MS = 400;
+/** After End show the last picture stays up until Map's own looks are ready, but never longer than this. */
+const HANDOVER_WAIT_MS = 2000;
 
 /** The wall window: nothing but the picture. It is told what to show by the studio window, and plays the instruments itself. */
 const STALE_SIGNALS_MS = 500;
@@ -23,18 +29,55 @@ export default function MapOutput() {
     let state = initialWall();
     // Signals stop arriving if the studio stops sending them: after half a second the targets go back to their set values.
     let heard = 0;
-    const apply = (fadeMs?: number) => {
-      compositor.setShow(state.show, new Map([...state.projects].map(([id, held]) => [id, held.project])), fadeMs);
+    // Perform: while a show runs the wall draws its zones over the Map show, which is never changed. `ending` keeps a
+    // finished show's last picture up until Map's own looks are ready. With no show, none of this does anything.
+    let ending: { zones: ZonePicture[]; looks: string[]; until: number } | null = null;
+    let overlay: { show: typeof state.show; zones: ZonePicture[]; made: typeof state.show } | null = null;
+    let valuesFrom: Pick<WallPerform, 'zones' | 'values' | 'phaseOffsets'> | null = null;
+    const shown = () => {
+      const zones = state.perform.active ? state.perform.zones : ending?.zones;
+      if (!zones) return state.show;
+      // The same overlay while neither the show nor the zones change, so the wall's pictures are not made again.
+      if (!overlay || overlay.show !== state.show || overlay.zones !== zones) overlay = { show: state.show, zones, made: overlayShow(state.show, zones) };
+      return overlay.made;
+    };
+    /** Brightness, hue, speed and master reach the compositor clamped (performDraw), and only when they change. */
+    const syncValues = () => {
+      const p = state.perform;
+      if (!p.active) { if (!ending && valuesFrom) { valuesFrom = null; compositor.setPerformValues(null); } return; }
+      if (valuesFrom && valuesFrom.zones === p.zones && valuesFrom.values === p.values && valuesFrom.phaseOffsets === p.phaseOffsets) return;
+      valuesFrom = { zones: p.zones, values: p.values, phaseOffsets: p.phaseOffsets };
+      compositor.setPerformValues(performDraw(p));
+    };
+    const apply = (fade?: number | ReadonlyMap<string, ShapeBlend>) => {
+      compositor.setShow(shown(), new Map([...state.projects].map(([id, held]) => [id, held.project])), fade);
       compositor.setSignals(state.signals);
       compositor.setOptions(state.options);
       compositor.setFrozen(state.freeze);
       compositor.setLive(state.live);
       compositor.setCorners(state.show.stageCorners);
+      syncValues();
     };
     apply();
     const off = bridge.onMessage(message => {
       const kind = (message as { type?: string })?.type;
+      const before = state.perform;
       state = applyMapMessage(state, message);
+      if (typeof kind === 'string' && kind.startsWith('perform')) {
+        // A refused message, or one for a show that is not running, changes nothing.
+        if (state.perform === before) return;
+        if (kind === 'performStart') { ending = null; compositor.setArmed(new Set()); apply(HANDOVER_FADE_MS); }
+        else if (kind === 'performEnd') {
+          // Map's own looks are made ready behind the show's last picture; the tick hands over when they are.
+          const looks = [...new Set(state.show.shapes.filter(s => !s.blocker && s.sourceId !== null && s.sourceId !== LIVE_SOURCE_ID && isShapeShown(state.show, s)).map(s => s.sourceId!))].slice(0, MAX_ARMED);
+          ending = { zones: before.zones, looks, until: performance.now() + HANDOVER_WAIT_MS };
+          compositor.setArmed(new Set(looks));
+        }
+        else if (kind === 'performArm') compositor.setArmed(new Set(state.perform.armed));
+        else if (kind === 'performValues') syncValues();
+        // A launch or a cancel only changes the queue: the tick lands what is due.
+        return;
+      }
       // Signals come every frame: only they are passed on, not the whole show again.
       if (kind === 'signals') { heard = performance.now(); compositor.setSignals(state.signals); return; }
       if (kind === 'fade') return;
@@ -53,11 +96,35 @@ export default function MapOutput() {
     // It is the flat stage, read back from the graphics card on a later frame, before the stage corners bend it.
     const encoder = new PreviewWorker();
     let raf = 0, busy = false, reading = false, changed = true, sentPicture = 0, sentReport = 0;
+    let landed: { launchId: string; zones: number[] }[] = [], sentArmed = '';
+    const report = () => {
+      // While a show runs every report says which armed looks are ready; a landing is reported once.
+      const stats = { ...compositor.stats(), ...(state.perform.active ? { armed: compositor.armedIds() } : {}), ...(landed.length ? { landed } : {}) };
+      landed = [];
+      sentArmed = (stats.armed ?? []).join('\n');
+      // For scripted checks: what the compositor reports, read from the page.
+      (window as unknown as { __mapStats?: unknown }).__mapStats = stats;
+      bridge.sendState(stats);
+    };
     encoder.onmessage = (event: MessageEvent<ArrayBuffer | null>) => { busy = false; if (event.data) bridge.sendPreview(event.data); };
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
       if (heard && now - heard > STALE_SIGNALS_MS) { heard = 0; state = { ...state, signals: {} }; compositor.setSignals({}); }
+      if (state.perform.active) {
+        // Launches land by the clock both windows share. The queue is kept even when nothing landed: a source that
+        // was not ready has been moved on a bar.
+        const step = stepWallPerform(state.perform, performance.timeOrigin + performance.now(), id => compositor.isReady(id));
+        if (step.perform !== state.perform) state = { ...state, perform: step.perform };
+        if (step.changed) apply(step.blends);
+        if (step.landed.length) landed.push(...step.landed);
+      } else if (ending && (performance.now() >= ending.until || ending.looks.every(id => compositor.isReady(id)))) {
+        ending = null;
+        compositor.setArmed(new Set());
+        apply(HANDOVER_FADE_MS);
+      }
       if (compositor.frame(now)) changed = true;
+      // The studio hears at once when a launch lands or an armed look becomes ready (or stops being).
+      if (landed.length || (state.perform.active && compositor.armedIds().join('\n') !== sentArmed)) report();
       if (reading) {
         const picture = compositor.collectPreview();
         // A readback lost with the graphics context never arrives: start again.
@@ -69,10 +136,7 @@ export default function MapOutput() {
       }
       if (now - sentReport >= REPORT_EVERY_MS) {
         sentReport = now;
-        const stats = compositor.stats();
-        // For scripted checks: what the compositor reports, read from the page.
-        (window as unknown as { __mapStats?: unknown }).__mapStats = stats;
-        bridge.sendState(stats);
+        report();
       }
       if (busy || !changed || now - sentPicture < PREVIEW_EVERY_MS) return;
       // Started straight after a drawn frame.

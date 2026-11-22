@@ -10,9 +10,12 @@ import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
 import { drawCommands, ringPx, shownOnWall, stageCommands, type DrawOptions } from './draw';
 import { borderColour, fadeKey } from './edge';
-import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
+import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
-import { LIVE_SOURCE_ID, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
+import { BRIGHTNESS_MAX, LIVE_SOURCE_ID, SPEED_RANGE, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
+import type { BlendKind } from '../perform/types';
+import type { ZonePicture } from '../perform/resolve';
+import type { PerformValues } from '../perform/wall-perform';
 import type { Scene } from './scenes';
 import { LiveSlot, LIVE_ASPECT } from './liveSlot';
 import { VideoSlot } from './videoSlot';
@@ -21,7 +24,7 @@ import type { LiveSettings } from '../live/settings';
 import { flatten, ringBounds } from './outline';
 import { IDENTITY, invert, multiply, quadToQuad, apply, type H3 } from './homography';
 import { coverCrop, landing, landingAspect, sourceSizeFor, type Landing } from './placement';
-import { Gpu, type ShapeDraw, type Texture } from './gpu';
+import { Gpu, heldInverse, type ShapeDraw, type Texture } from './gpu';
 import { chaseHead, chaseOffsets, insetOutline, onlySurfaceDiffers, outlinePolygon, staggerDelays, withSurface } from './wild';
 import { FrameHistory } from './frameHistory';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
@@ -44,6 +47,53 @@ export const MAX_LIVE_INSTRUMENTS = 24;
 /** After its graphics context is lost, a source waits this long before it is started again. */
 const RESTART_AFTER_MS = 5000;
 
+// ---- Perform ----
+/** How one shape takes its new look when a launch lands. */
+export type ShapeBlend = { kind: BlendKind; durationMs: number };
+/**
+ * Perform's values, for drawing only: the master level, each shape's brightness (times its own) and hue turn, each
+ * source's speed (times its own) and the beats taken off the beat count for a loop locked to the tempo.
+ */
+export interface PerformDraw { master: number; shapes: ReadonlyMap<string, { brightness: number; hueDeg: number }>; speed: ReadonlyMap<string, number>; phaseOffsets: ReadonlyMap<string, number> }
+/** Most sources kept ready beside the ones playing: Perform's renderer budget (8 playing, 8 armed, 1 leaving the ceiling). */
+export const MAX_ARMED = 8;
+/**
+ * Who keeps a renderer when all MAX_LIVE_INSTRUMENTS are taken, highest first: a source a shape plays; the look
+ * leaving the ceiling through its dissolve; a source kept ready; a room look still moving while it fades out (it holds
+ * as a still instead). Map alone only ever has sources that play, so nothing there is let go for another.
+ */
+const RANK = { playing: 3, dissolving: 2, armed: 1, leaving: 0 } as const;
+
+const within = (value: number, min: number, max: number, fallback: number) => Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+/**
+ * The wall's Perform values as the compositor draws them, every one kept inside its range: brightness 0 to 2, hue
+ * within a turn either way, speed 0 (held) to 4, master 0 to 1. A shape takes the values of the first zone that owns
+ * it, and a source on several zones the speed of the first. Maps, so a source id such as __proto__ is an ordinary key.
+ */
+export function performDraw(perform: { zones: readonly ZonePicture[]; values: PerformValues | null; phaseOffsets: Record<string, number> }): PerformDraw {
+  const shapes = new Map<string, { brightness: number; hueDeg: number }>(), speed = new Map<string, number>();
+  const zones = Array.isArray(perform.values?.zones) ? perform.values.zones : [];
+  perform.zones.forEach((zone, i) => {
+    const z = zones[i];
+    if (!z) return;
+    const value = { brightness: within(z.brightness, 0, BRIGHTNESS_MAX, 1), hueDeg: within(z.hueDeg, -360, 360, 0) };
+    for (const id of zone.shapeIds) if (!shapes.has(id)) shapes.set(id, value);
+    if (zone.launched && zone.sourceId !== null && !speed.has(zone.sourceId)) speed.set(zone.sourceId, within(z.speed, 0, SPEED_RANGE.max, 1));
+  });
+  const phaseOffsets = new Map(Object.entries(perform.phaseOffsets).filter(([, beats]) => Number.isFinite(beats)));
+  return { master: perform.values ? within(perform.values.master, 0, 1, 1) : 1, shapes, speed, phaseOffsets };
+}
+/**
+ * The tempo as one Perform source hears it: `offset` beats taken off the count, and the count run at `speed`, so a
+ * loop of n beats plays as n / speed beats and starts on the corrected bar. Only the tempo signals are changed.
+ */
+function performClock(signals: Signals, offset: number, speed: number): Signals {
+  const beat = signals['tempo.beat'], phase = signals['tempo.phase'], bpm = signals['tempo.bpm'];
+  if ((offset === 0 && speed === 1) || beat === undefined) return signals;
+  const total = (beat + (phase ?? 0) - offset) * speed, whole = Math.floor(total);
+  return { ...signals, 'tempo.beat': whole, ...(phase === undefined ? {} : { 'tempo.phase': total - whole }), ...(bpm === undefined ? {} : { 'tempo.bpm': bpm * speed }) };
+}
+
 /** One instrument source on this stage. */
 interface Slot {
   canvas: HTMLCanvasElement;
@@ -60,10 +110,24 @@ interface Slot {
   /** A composition that could not be prepared is not tried again every frame; a new composition is. */
   failedProject: Project | null;
   prepares: number;
+  /** The composition last drawn. A source kept ready is drawn once for its composition, then waits. */
+  shown: Project | null;
+  /** Why it has a renderer (RANK), as of the last frame. */
+  rank: number;
 }
 
 /** A shape's crossfade from what it played before to what it plays now. start is set once the new content is ready. */
-interface Fade { from: Texture | string; start: number | null; duration: number }
+interface Fade {
+  from: Texture | string; start: number | null; duration: number;
+  /** Perform: the launch's blend. Missing for Map's own crossfade. */
+  kind?: BlendKind;
+  /** Perform: the source it leaves, while that still plays: its moving picture is used instead of `from`, the copy. */
+  fromSource?: string | null;
+  /** Perform: `from` is a video's or Live's picture of this shape (width over height): it covers the place, cropped. */
+  fromAspect?: number;
+  /** Perform: `from` is a held mix with its own place on the stage (stage pixels to the picture). */
+  fromInv?: H3;
+}
 /** A scene switch's glide of a shape's brightness and visibility, from where they were. */
 interface Glide { brightness: number; alpha: number; start: number; duration: number }
 const CHANGE_FADE_MS = 400;
@@ -101,11 +165,15 @@ export interface CompositorStats {
   adjusted?: number;
   staggered?: number;
   delayed?: number;
+  /** Perform: the armed sources that are ready to land, and (once, as they happen) the launches that landed. */
+  armed?: string[];
+  landed?: { launchId: string; zones: number[] }[];
 }
 
 const kindsOf = (project: Project | null | undefined) => project ? project.layers.map(l => l.kind).join(',') : '';
 const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255, parseInt(hex.slice(5, 7), 16) / 255];
 const opaque = (hex: string): [number, number, number, number] => [...rgb(hex), 1];
+const BLACK: { kind: 'colour'; rgba: [number, number, number, number] } = { kind: 'colour', rgba: [0, 0, 0, 1] };
 const STAGE_RECT: Point[] = [{ x: 0, y: 0 }, { x: STAGE_SIZE.width, y: 0 }, { x: STAGE_SIZE.width, y: STAGE_SIZE.height }, { x: 0, y: STAGE_SIZE.height }];
 /** The landing's inverse: stage pixels to the picture's square. A landing too flat to invert lands nowhere. */
 const inverseOf = (l: Landing): H3 => invert(l.h) ?? [0, 0, -1, 0, 0, -1, 0, 0, 1];
@@ -151,6 +219,12 @@ export class MapCompositor {
   private fadeClock = 0;
   private drawnShapes = new Set<string>();
   private overlayFor: { show: PlayShow; options: string } | null = null;
+  // ---- Perform: all empty or null while no show runs, and then nothing here changes what Map draws. ----
+  /** The sources kept ready, most urgent first. */
+  private armed: string[] = [];
+  private perform: PerformDraw | null = null;
+  /** A source leaving through a blend keeps the speed and bar it had when its zone moved on. */
+  private readonly leaving = new Map<string, { speed: number; offset: number }>();
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
@@ -172,10 +246,17 @@ export class MapCompositor {
   }
 
   /** The shapes and sources to play, and the compositions the stage has for them (by source id). */
-  /** fadeMs: a scene switch's fade time; otherwise a change of content crossfades in 0.4 s. */
-  setShow(show: PlayShow, projects: ReadonlyMap<string, Project>, fadeMs?: number): void {
+  /**
+   * fade: a number is a scene switch's fade time; otherwise a change of content crossfades in 0.4 s. A map is
+   * Perform's launch landing: each shape in it takes its new look with its own blend, and the others change as ever.
+   */
+  setShow(show: PlayShow, projects: ReadonlyMap<string, Project>, fade?: number | ReadonlyMap<string, ShapeBlend>): void {
     const before = this.show;
+    const fadeMs = typeof fade === 'number' ? fade : undefined;
+    const blends = fade !== undefined && typeof fade !== 'number' ? fade : null;
     const duration = fadeMs ?? CHANGE_FADE_MS;
+    // A launch landing on a shape in the middle of a blend starts from the mix on the wall, held before anything changes.
+    const mixes = blends ? this.holdMixes(show, blends) : null;
     // A scene switch glides brightness and visibility from where they were.
     if (fadeMs !== undefined && fadeMs > 0) {
       for (const shape of show.shapes) {
@@ -192,17 +273,26 @@ export class MapCompositor {
     // the old source is let go, so the shape holds it while the new one starts.
     for (const shape of show.shapes) {
       const next: Playing = { sourceId: shape.sourceId, kinds: shape.sourceId === LIVE_SOURCE_ID ? 'live' : kindsOf(shape.sourceId ? this.projects.get(shape.sourceId) : null) };
-      const before = this.playing.get(shape.id);
-      if (shouldFade(before, next) && !this.lost) {
-        const old = before!.sourceId === LIVE_SOURCE_ID ? this.live?.current ?? null : isVideoId(before!.sourceId) ? this.videoSlots.get(before!.sourceId)?.current ?? null : before!.sourceId ? this.slots.get(before!.sourceId)?.texture : null;
+      const was = this.playing.get(shape.id), blend = blends?.get(shape.id);
+      // A launch also blends a shape that was dark and plays the same source as it does in Map: it comes up, it does not pop.
+      const appears = !!blend && shownOnWall(show, shape, this.options.solo) && !before.shapes.some(s => s.id === shape.id && shownOnWall(before, s, this.options.solo));
+      if (blend && !this.lost && (shouldFade(was, next) || appears)) this.startBlend(shape, was, blend, before, mixes?.get(shape.id));
+      else if (shouldFade(was, next) && !this.lost) {
+        const old = was!.sourceId === LIVE_SOURCE_ID ? this.live?.current ?? null : isVideoId(was!.sourceId) ? this.videoSlots.get(was!.sourceId)?.current ?? null : was!.sourceId ? this.slots.get(was!.sourceId)?.texture : null;
         const held = this.fades.get(shape.id);
         // Changing again before the last change was ready keeps fading from what is on the wall, not from the colour.
-        const from = old ? this.gpu.copy(old) : held ? held.from : shape.colour;
+        // Perform handing the wall back: a zone that was black fades from black, not from the shape's Map colour.
+        const colour = this.perform ? before.shapes.find(s => s.id === shape.id)?.colour ?? shape.colour : shape.colour;
+        const from = old ? this.gpu.copy(old) : held ? held.from : colour;
         if (held && held.from !== from && typeof held.from !== 'string') this.gpu.free(held.from);
-        this.fades.set(shape.id, { from, start: shape.sourceId === null ? this.fadeClock : null, duration });
+        // A picture kept from a Perform blend keeps its own place.
+        const kept = held && held.from === from ? held : undefined;
+        this.fades.set(shape.id, { from, start: shape.sourceId === null ? this.fadeClock : null, duration, ...(kept?.fromInv ? { fromInv: kept.fromInv } : {}), ...(kept?.fromAspect ? { fromAspect: kept.fromAspect } : {}) });
       }
       this.playing.set(shape.id, next);
     }
+    // A held mix no blend took is let go.
+    if (mixes) for (const [id, mix] of mixes) if (this.fades.get(id)?.from !== mix.texture) this.gpu.free(mix.texture);
     for (const id of [...this.playing.keys()]) if (!show.shapes.some(s => s.id === id)) { this.playing.delete(id); this.endFade(id); }
     // A shape removed mid-glide takes its glide with it, or the stage would be redrawn every frame from then on.
     for (const id of [...this.glides.keys()]) if (!show.shapes.some(s => s.id === id)) this.glides.delete(id);
@@ -215,13 +305,95 @@ export class MapCompositor {
     this.updateVideos();
   }
 
+  // ---- Perform: arming, blends and values ----
+  /**
+   * The sources to keep ready for the next launch, most urgent first (at most MAX_ARMED): an instrument is prepared
+   * and drawn once, a video loaded to its first picture, and then neither is drawn again until a shape plays it.
+   */
+  setArmed(ids: ReadonlySet<string>): void {
+    const next = [...ids].slice(0, MAX_ARMED);
+    if (next.length === this.armed.length && next.every((id, i) => id === this.armed[i])) return;
+    this.armed = next;
+    this.updateVideos();
+  }
+  /** Whether a launch of this source would show its picture at once. A source that is not ready keeps its zone as it is. */
+  isReady(id: string): boolean {
+    if (this.lost || this.disposed) return false;
+    if (id === LIVE_SOURCE_ID) return !!this.live && !!this.liveTexture && (this.live.readiness === 'play' || this.live.readiness === 'hold');
+    if (isVideoId(id)) return this.videoSlots.get(id)?.state === 'playing' && !!this.videoTextures.get(id);
+    const slot = this.slots.get(id), project = this.projects.get(id);
+    return !!slot && !!project && !!slot.renderer && slot.project === project && slot.shown === project && !!slot.texture && slot.failedProject !== project;
+  }
+  /** The armed sources that are ready. */
+  armedIds(): string[] { return this.armed.filter(id => this.isReady(id)); }
+  /** Perform's values for drawing, or null when no show runs. They never change a composition or the show. */
+  setPerformValues(values: PerformDraw | null): void {
+    if (values === this.perform) return;
+    this.perform = values;
+    this.dirty = true;
+  }
+  private speedOf(id: string): number { return this.perform ? this.perform.speed.get(id) ?? this.leaving.get(id)?.speed ?? 1 : 1; }
+  private offsetOf(id: string): number { return this.perform ? this.perform.phaseOffsets.get(id) ?? this.leaving.get(id)?.offset ?? 0 : 0; }
+  /** The picture a source shows now, and for a video or Live its width over height. */
+  private currentOf(id: string | null): { texture: Texture; aspect?: number } | null {
+    if (id === null) return null;
+    if (id === LIVE_SOURCE_ID) { const t = this.live?.current; return t ? { texture: t, aspect: LIVE_ASPECT } : null; }
+    if (isVideoId(id)) { const slot = this.videoSlots.get(id), t = slot?.current; return slot && t ? { texture: t, aspect: slot.aspect } : null; }
+    const t = this.slots.get(id)?.texture;
+    return t ? { texture: t } : null;
+  }
+  /** For every shape a launch lands on while it is still blending: the mix on the wall now, as one picture. */
+  private holdMixes(show: PlayShow, blends: ReadonlyMap<string, ShapeBlend>): Map<string, { texture: Texture; inv: H3 }> {
+    const out = new Map<string, { texture: Texture; inv: H3 }>();
+    if (this.lost || this.disposed) return out;
+    for (const shape of show.shapes) {
+      const blend = blends.get(shape.id), was = this.playing.get(shape.id);
+      if (!blend || blend.kind === 'cut' || !(blend.durationMs > 0) || !was || was.sourceId === shape.sourceId || !this.fades.has(shape.id)) continue;
+      // As it was last drawn, links and all, so the held picture is the one on the wall.
+      const drawn = this.drawn.show.shapes.find(s => s.id === shape.id);
+      if (!drawn || drawn.blocker || !shownOnWall(this.drawn.show, drawn, this.options.solo)) continue;
+      const picture = this.pictureOf(drawn, this.drawn.show, this.fadeClock);
+      if (!picture || !picture.from) continue; // its blend had just finished
+      const b = picture.p.box, x = Math.max(0, Math.floor(b.x)), y = Math.max(0, Math.floor(b.y));
+      const rect = { x, y, w: Math.min(STAGE_SIZE.width, Math.ceil(b.x + b.w)) - x, h: Math.min(STAGE_SIZE.height, Math.ceil(b.y + b.h)) - y };
+      if (rect.w < 1 || rect.h < 1) continue;
+      out.set(shape.id, { texture: this.gpu.hold(picture, rect), inv: heldInverse(rect) });
+    }
+    return out;
+  }
+  /** A launch lands on a shape: it leaves what it showed through the launch's blend. A cut has no blend at all. */
+  private startBlend(shape: Shape, was: Playing | undefined, blend: ShapeBlend, previous: PlayShow, mix: { texture: Texture; inv: H3 } | undefined): void {
+    const held = this.fades.get(shape.id);
+    let next: Fade | null = null;
+    if (blend.kind !== 'cut' && blend.durationMs > 0) {
+      const base = { start: shape.sourceId === null ? this.fadeClock : null, duration: blend.durationMs, kind: blend.kind };
+      const old = previous.shapes.find(s => s.id === shape.id);
+      if (mix) next = { ...base, from: mix.texture, fromInv: mix.inv };
+      // A shape that was dark comes up from black, never from its Map colour.
+      else if (!old || !shownOnWall(previous, old, this.options.solo)) next = { ...base, from: '#000000' };
+      else {
+        // The copy is what the blend falls back on if the source it leaves has to stop; while it plays, it keeps moving.
+        const leaves = was?.sourceId ?? null, current = this.currentOf(leaves);
+        next = current ? { ...base, from: this.gpu.copy(current.texture), fromSource: leaves, fromAspect: current.aspect } : { ...base, from: old.colour };
+      }
+    }
+    if (held && typeof held.from !== 'string' && held.from !== next?.from) this.gpu.free(held.from);
+    if (!next) { this.fades.delete(shape.id); return; }
+    this.fades.set(shape.id, next);
+    if (next.fromSource) this.leaving.set(next.fromSource, { speed: this.speedOf(next.fromSource), offset: this.offsetOf(next.fromSource) });
+  }
+
   // ---- Stage 6: videos ----
   private readonly videoSlots = new Map<string, VideoSlot>();
   private videoTextures = new Map<string, Texture | null>();
-  /** One player per video a shape on screen plays; the others are closed. */
+  /** One player per video a shape on screen plays; the others are closed. Perform also keeps armed videos, and one a blend is leaving. */
   private updateVideos(): void {
     const videos = this.show.videos ?? [];
     const wanted = new Set(this.lost || this.disposed ? [] : this.show.shapes.filter(s => isVideoId(s.sourceId) && !s.blocker).map(s => s.sourceId!));
+    if (!this.lost && !this.disposed) {
+      for (const id of this.armed) if (isVideoId(id)) wanted.add(id);
+      for (const fade of this.fades.values()) if (isVideoId(fade.fromSource)) wanted.add(fade.fromSource);
+    }
     for (const [id, slot] of this.videoSlots) if (!wanted.has(id) || !videos.some(v => v.id === id)) { slot.dispose(); this.videoSlots.delete(id); this.videoTextures.delete(id); this.dirty = true; }
     for (const video of videos) {
       if (!wanted.has(video.id)) continue;
@@ -303,14 +475,29 @@ export class MapCompositor {
     const modShow = this.show.videos?.length ? { ...this.show, sources: [...this.show.sources, ...this.show.videos] } : this.show;
     this.drawn = this.modulator.apply(modShow, this.projects, this.frozen ? this.frozenSignals : this.signals, this.frozen ? 0 : seconds);
     const show = this.drawn.show;
+    // Perform: the sources shapes are still blending away from keep playing. With no show running there are none.
+    const fadingFrom = new Map<string, { shapes: Shape[]; dissolve: boolean }>();
+    for (const [shapeId, fade] of this.fades) {
+      const shape = fade.fromSource ? show.shapes.find(s => s.id === shapeId) : undefined;
+      if (!shape) continue;
+      const entry = fadingFrom.get(fade.fromSource!) ?? { shapes: [], dissolve: false };
+      entry.shapes.push(shape); entry.dissolve ||= fade.kind === 'dissolve';
+      fadingFrom.set(fade.fromSource!, entry);
+    }
+    let videoLeft = false;
+    for (const id of [...this.leaving.keys()]) if (!fadingFrom.has(id)) { this.leaving.delete(id); videoLeft ||= isVideoId(id); }
+    if (videoLeft) this.updateVideos();
     for (const source of this.show.sources) {
       const project = this.projects.get(source.id);
       if (!project) continue;
       // Only sources some visible shape plays are started; one whose shapes are all hidden gives its context back.
       // A shape gliding out of view after a scene switch still needs its picture.
       const users = show.shapes.filter(s => s.sourceId === source.id && (shownOnWall(show, s, this.options.solo) || this.glides.has(s.id)));
-      if (!users.length) { const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
-      const slot = this.slot(source.id, now);
+      const fading = fadingFrom.get(source.id);
+      // A source kept ready for a launch is prepared and drawn once, then waits.
+      const waiting = !users.length && !fading && this.armed.includes(source.id);
+      if (!users.length && !fading && !waiting) { const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
+      const slot = this.slot(source.id, now, users.length ? RANK.playing : fading ? (fading.dissolve ? RANK.dissolving : RANK.leaving) : RANK.armed);
       if (!slot) continue;
       // A setting that can follow sound changed (Map's Effect tab): the playing effect is adjusted in place, never restarted.
       if (project !== slot.project && slot.project && !slot.pending && slot.failedProject === null && !needsPrepare(slot.project, project)) { slot.project = project; this.adjusted++; }
@@ -318,19 +505,27 @@ export class MapCompositor {
       else if (slot.pending && project !== slot.pending && project !== slot.project && !needsPrepare(slot.pending, project)) slot.latest = project;
       else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) { slot.latest = null; this.prepare(slot, project, !!source.followOutline); }
       if (!slot.project || !slot.renderer) continue;
+      if (waiting && slot.shown === slot.project && slot.texture) continue;
+      // Perform's speed for this source (1 without a show), and the beats taken off the count for its bar.
+      const pace = this.speedOf(source.id);
       if (!this.frozen) {
         // In tempo sync the loop follows the clock's beats; without a clock it runs at its own speed.
-        const synced = source.tempoSync ? tempoPhase(this.signals, source.tempoSync) : null;
-        slot.phase = synced ?? advancePhase(slot.phase, seconds, slot.project, this.drawn.speed.get(source.id) ?? source.speed);
+        // Perform: a loop of n beats at speed s plays as n / s beats; a speed of 0 holds it where it is.
+        const synced = !source.tempoSync ? null : pace > 0 ? tempoPhase(performClock(this.signals, this.offsetOf(source.id), 1), source.tempoSync / pace) : slot.phase;
+        slot.phase = synced ?? advancePhase(slot.phase, seconds, slot.project, (this.drawn.speed.get(source.id) ?? source.speed) * pace);
       }
       if (!draw) continue;
       // Drawn once, at the size of the largest place it lands on the stage.
       // Sized from the shapes as set, not as links move them: a zoom on the bass would otherwise resize the instrument many times a second.
-      const size = sourceSizeFor(users.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), scale);
+      // A source kept ready is not on a shape yet: it is sized for the largest shape there is, so it never has to grow when it lands.
+      const places = waiting ? this.show.shapes.filter(s => !s.blocker) : [...users, ...(fading?.shapes ?? []).filter(s => !users.includes(s))];
+      const size = sourceSizeFor(places.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), scale);
       try {
         slot.renderer.render(withParams(slot.project, this.drawn.params.get(source.id)), slot.phase, size.width, size.height, { signals: this.signals, now });
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);
-        rendered = true;
+        slot.shown = slot.project;
+        // A source drawn only to be ready changes nothing on the stage.
+        if (!waiting) rendered = true;
         if (slot.failedProject === null) slot.failed = null;
       } catch (error) { slot.failed = String((error as Error)?.message ?? error); }
     }
@@ -338,7 +533,14 @@ export class MapCompositor {
     // Each video's newest frame, once for every shape that plays it.
     for (const [id, slot] of this.videoSlots) {
       const had = !!this.videoTextures.get(id);
-      const now = slot.frame(this.frozen ? this.frozenSignals : this.signals, this.drawn.speed.get(id));
+      // Perform: a video kept ready waits on its first picture until a shape plays it.
+      const idle = this.armed.includes(id) && !fadingFrom.has(id) && !this.show.shapes.some(s => s.sourceId === id && !s.blocker);
+      if (idle && had) { slot.setFrozen(true); continue; }
+      slot.setFrozen(this.frozen);
+      const pace = this.speedOf(id), offset = this.offsetOf(id), signals = this.frozen ? this.frozenSignals : this.signals;
+      const now = pace === 1 && offset === 0
+        ? slot.frame(signals, this.drawn.speed.get(id))
+        : slot.frame(performClock(signals, offset, pace), Math.min(SPEED_RANGE.max, (this.drawn.speed.get(id) ?? this.show.videos?.find(v => v.id === id)?.speed ?? 1) * pace));
       this.videoTextures.set(id, now);
       // A video that fails mid-show stops giving a picture: its shapes go to their fill at once.
       if (slot.fresh || had !== !!now) rendered = true;
@@ -402,6 +604,12 @@ export class MapCompositor {
 
   /** Lets a source go, and gives its graphics context back now rather than whenever it is garbage collected. */
   private release(id: string, slot: Slot): void {
+    // Perform: a shape still blending away from this source holds its last picture as a still from here on.
+    for (const fade of this.fades.values()) {
+      if (fade.fromSource !== id) continue;
+      if (slot.texture && !this.lost && !this.disposed) { if (typeof fade.from !== 'string') this.gpu.free(fade.from); fade.from = this.gpu.copy(slot.texture); }
+      fade.fromSource = null;
+    }
     slot.renderer?.dispose();
     slot.renderer = null;
     if (!this.lost) this.gpu.free(slot.texture);
@@ -425,14 +633,21 @@ export class MapCompositor {
   }
 
   /** The source's slot, started if need be. Null while over the limit or waiting to restart after a lost context. */
-  private slot(id: string, now: number): Slot | null {
+  private slot(id: string, now: number, rank: number = RANK.playing): Slot | null {
     const existing = this.slots.get(id);
-    if (existing) return existing;
+    if (existing) { existing.rank = rank; return existing; }
     if ((this.restartAt.get(id) ?? 0) > now) return null;
-    if (this.slots.size >= MAX_LIVE_INSTRUMENTS) { this.overLimit.add(id); return null; }
+    if (this.slots.size >= MAX_LIVE_INSTRUMENTS) {
+      // Perform: a source that matters more takes the renderer of the one that matters least (see RANK). A source
+      // kept ready never takes one from a look that is playing, so arming cannot cost the stage a picture.
+      let least: [string, Slot] | null = null;
+      for (const entry of this.slots) if (entry[1].rank < rank && (!least || entry[1].rank < least[1].rank)) least = entry;
+      if (!least) { if (rank === RANK.playing) this.overLimit.add(id); return null; }
+      this.release(least[0], least[1]);
+    }
     this.restartAt.delete(id);
     const canvas = document.createElement('canvas');
-    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0 };
+    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0, shown: null, rank };
     // A lost context (the graphics card reset, or too many contexts) drops the source: its shape plays its own fill
     // rather than freezing on its last picture, and the source starts again after a pause.
     canvas.addEventListener('webglcontextlost', event => {
@@ -542,7 +757,8 @@ export class MapCompositor {
       const overlay = this.overlayPicture();
       if (overlay) gpu.layer(overlay);
     }
-    gpu.finish(this.corners);
+    // Perform's master level dims the whole stage, last of all before the corners; 1 without a show.
+    gpu.finish(this.corners, this.perform?.master ?? 1);
     // A fade on a shape that is not being drawn (hidden, a Blocker, test grid, blackout) has nothing to show: it ends,
     // so a still show stops being redrawn.
     for (const id of [...this.fades.keys()]) if (!this.drawnShapes.has(id)) this.endFade(id);
@@ -629,11 +845,30 @@ export class MapCompositor {
 
   /** One shape: what it plays through its placement, its crossfade, its look, its coverage and its border. */
   private drawShape(shape: Shape, now: number, alpha = 1): void {
+    const picture = this.pictureOf(shape, this.drawn.show, now);
+    if (!picture) return;
+    const { p, content, from, mix } = picture;
+    if (!shape.blocker) this.drawnShapes.add(shape.id);
+    // Perform's values for this shape: its brightness times the shape's own, and a hue turn. None without a show.
+    const perform = shape.blocker ? undefined : this.perform?.shapes.get(shape.id);
+    const tint = rgb(shape.tint), b = shape.blocker ? 1 : shape.brightness * (perform?.brightness ?? 1);
+    this.gpu.shape({
+      rect: p.box, coverage: p.coverage!, content, from, mix,
+      look: shape.blocker ? [1, 1, 1] : [tint[0] * b, tint[1] * b, tint[2] * b],
+      decor: p.decor,
+      alpha,
+      run: p.run && shape.border.run ? { texture: p.run, head: this.runHeadOf(shape, now), length: shape.border.run.length } : null,
+      hueDeg: perform?.hueDeg ?? 0,
+    });
+  }
+
+  /** What a shape shows now: its picture through its placement, and during a crossfade the picture it is leaving and how far it has gone. */
+  private pictureOf(shape: Shape, show: PlayShow, now: number): { p: Pictures; content: ShapeDraw['content']; from: ShapeDraw['from']; mix: number } | null {
     const project = shape.sourceId ? this.projects.get(shape.sourceId) : undefined;
     const palette = project?.layers[0]?.palette ?? null;
     const p = this.picturesFor(shape, palette);
-    if (p.box.w < 0.5 || p.box.h < 0.5 || !p.coverage) return;
-    const land = landing(shape, this.drawn.show), inv = inverseOf(land);
+    if (p.box.w < 0.5 || p.box.h < 0.5 || !p.coverage) return null;
+    const land = landing(shape, show), inv = inverseOf(land);
     const isLive = shape.sourceId === LIVE_SOURCE_ID, isVideo = isVideoId(shape.sourceId);
     const videoSlot = isVideo ? this.videoSlots.get(shape.sourceId!) : undefined;
     const slot = shape.sourceId && !isLive && !isVideo ? this.slots.get(shape.sourceId) : undefined;
@@ -664,17 +899,20 @@ export class MapCompositor {
     if (fade && !shape.blocker) {
       if (ready && fade.start === null) fade.start = now;
       mix = fade.start === null ? 0 : fadeAlpha(fade.start, now, fade.duration);
-      from = typeof fade.from === 'string' ? { kind: 'colour', rgba: opaque(fade.from) } : { kind: 'picture', texture: fade.from, inv };
+      // The old picture sits where the shape's picture sits, unless it brought a place of its own (Perform).
+      const place = (aspect?: number) => fade.fromInv ?? (aspect ? multiply(coverCrop(landingAspect(land), aspect), inv) : inv);
+      from = typeof fade.from === 'string' ? { kind: 'colour', rgba: opaque(fade.from) } : { kind: 'picture', texture: fade.from, inv: place(fade.fromAspect) };
+      // Perform: a look that is still playing keeps moving while the shape leaves it.
+      const moving = fade.fromSource ? this.currentOf(fade.fromSource) : null;
+      if (moving) from = { kind: 'picture', texture: moving.texture, inv: place(moving.aspect) };
       if (mix >= 1) { this.endFade(shape.id); from = null; }
+      // Perform's dip: the old picture goes to black by the halfway point, then the new one comes up from black.
+      else if (fade.kind === 'dip') {
+        const alphas = blendAlphas('dip', mix);
+        if (alphas.from > 0 || alphas.to <= 0) { content = BLACK; mix = 1 - alphas.from; }
+        else { from = BLACK; mix = alphas.to; }
+      }
     }
-    if (!shape.blocker) this.drawnShapes.add(shape.id);
-    const tint = rgb(shape.tint), b = shape.blocker ? 1 : shape.brightness;
-    this.gpu.shape({
-      rect: p.box, coverage: p.coverage, content, from, mix,
-      look: shape.blocker ? [1, 1, 1] : [tint[0] * b, tint[1] * b, tint[2] * b],
-      decor: p.decor,
-      alpha,
-      run: p.run && shape.border.run ? { texture: p.run, head: this.runHeadOf(shape, now), length: shape.border.run.length } : null,
-    });
+    return { p, content, from, mix };
   }
 }
