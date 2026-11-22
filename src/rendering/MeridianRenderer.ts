@@ -264,9 +264,11 @@ export class MeridianRenderer {
       if (!list) { list = this.list; evaluateEvolve(seed, clock, view, list); }
       scheme = clock.schemeSeed;
     } else {
-      // An animated Speed or Evolution would change how many turns the closed path makes, so the saved values set it.
+      // An animated Speed, Evolution or ring rotation would change how many turns the closed path makes, so the saved values set it.
       view.macroSpeed = runtime?.structure?.macroSpeed ?? live.macroSpeed;
       view.scoreEvolution = runtime?.structure?.scoreEvolution ?? live.scoreEvolution;
+      view.ringRotationSpeed = runtime?.structure?.ringRotationSpeed ?? live.ringRotationSpeed;
+      view.ringCounterRotation = runtime?.structure?.ringCounterRotation ?? live.ringCounterRotation;
       const clock = exactEvolveClock(phase, duration, view, this.evolveExact);
       if (!list) { list = this.list; evaluateEvolve(seed, clock, view, list); }
     }

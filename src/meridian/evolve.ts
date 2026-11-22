@@ -28,11 +28,14 @@ const FORM_SWING = 0.3;
 const TURN_RADIANS = 3.4 * Math.PI / 180; // Per second at centre Speed: slow enough to watch a single spoke travel.
 const CLOSURE_STEP = Math.PI / 6; // The home form looks identical after this turn, so an export can close without a rewind.
 const GLIDE_SECONDS = 16;
+const TINT_FADE_SECONDS = 5;
 const NEXT_SECONDS = 11;
 const SHORTEST_MORPH = 11; // However restless Evolution is, one form takes at least this long to become the next.
 const FULL_PATH_SECONDS = 46; // An export shorter than this travels only part of the way to its second form and back.
 const TIER_RATES = [1, -0.618, 0.382];
-const TIER_WINDS = [1, -1, 1];
+const GLITCH_CELL = 2.2; // Seconds in which at most one glitch event happens.
+const EASE_PLACE = 1.5, EASE_LIGHT = 2.8, EASE_TURN = 1.5; // Per second, the fastest a voice may travel during a Density move.
+const USER_FOLLOW = 3.6; // Density and Scale follow the fader as a critically damped spring: most of the way in about a second.
 
 const RING_FIELDS = 5 + ARC_SLOTS * 2;
 const SPOKE_FIELDS = 6;
@@ -53,13 +56,14 @@ const ARC_COUNTS = [1, 2, 3, 4, 6];
 
 /** Values a performer can move, with how much of their range they may travel in a second. */
 const SMOOTHED: readonly (readonly [string, number])[] = [
-  ['macroDensity', 0.16], ['macroTension', 0.5], ['macroOrder', 0.5], ['macroSpeed', 0.8], ['macroWeight', 0.5], ['macroGlitch', 0.8], ['macroHeat', 0.5], ['macroScale', 0.15],
-  ['ringCount', 0.05], ['ringWeight', 0.1], ['ringOpacity', 0.5], ['ringArcShare', 0.25], ['ringRotationSpeed', 0.25], ['ringCounterRotation', 0.5],
+  ['macroDensity', 0.16], ['macroTension', 0.5], ['macroOrder', 0.5], ['macroSpeed', 0.8], ['macroWeight', 0.5], ['macroGlitch', 0.8], ['macroHeat', 0.4], ['macroScale', 0.15],
+  ['ringCount', 0.05], ['ringWeight', 0.1], ['ringOpacity', 0.5], ['ringArcShare', 0.1], ['ringRotationSpeed', 0.25], ['ringCounterRotation', 0.5],
   ['spokeCount', 0.03], ['spokeWeight', 0.1], ['spokeOpacity', 0.5], ['spokeInnerReach', 0.2], ['spokeOuterReach', 0.2], ['spokeOffsetAngle', 0.03],
   ['nodeDensity', 0.2], ['nodeSize', 0.1], ['nodeGlow', 0.25], ['nodeOpacity', 0.5],
   ['heroWeight', 0.1], ['heroGlow', 0.08], ['heroPulse', 0.5], ['heroRadius', 0.25], ['heroSplit', 0.25], ['heroHaloStrength', 0.25],
   ['lightExposure', 0.3], ['lightBloomAmount', 0.3], ['lightBloomSize', 0.3], ['lightLineGlow', 0.3], ['lightCore', 0.3], ['lightContrast', 0.3], ['colourSaturation', 0.3], ['colourFringe', 0.3], ['lightVignette', 0.3],
 ];
+const SPRUNG = ['macroDensity', 'macroScale'];
 const SPANS = SMOOTHED.map(([key]) => { const d = MERIDIAN_PARAMETERS.find(item => item.key === key)!; return d.max - d.min; });
 
 export interface EvolveMoves { next: boolean; hold: boolean; drop: boolean; collapse: boolean; burst: boolean }
@@ -74,6 +78,20 @@ export interface EvolveClock {
   readonly from: Float32Array;
   readonly pose: Float32Array;
   schemeSeed: number;
+  /** Accumulated turn of each ring tier, and of the spokes. Changing a rate changes only how they move from here. */
+  readonly ringTurns: Float64Array;
+  spokeTurn: number;
+  /** An export with no journey: a closed path around one held form. */
+  held: boolean;
+  /** Colour fades to nothing before the accent scheme may change. */
+  tintFade: number;
+  /** While Density is moving, voices travel to their new places at a limited speed, so they grow and merge instead of popping. */
+  densityMoving: boolean; easing: boolean; wall: number;
+  readonly settled: Float32Array;
+  /** Which way round each angle is travelling, for the journey's morph and for a Reseed glide. */
+  readonly morphTrack: Float64Array; readonly glideTrack: Float64Array;
+  morphKey: number; morphSeed: number; glideFresh: boolean;
+  glitchTime: number; glitchCell: number; glitchOn: boolean; glitchSeed: number; glitchStart: number; glitchLength: number; glitchVoice: number;
 }
 
 export interface EvolveTransport {
@@ -85,7 +103,7 @@ export interface EvolveTransport {
   chase: number | null;
   swellTarget: number;
   nextDown: boolean; dropDown: boolean; burstDown: boolean;
-  nextRipple: number;
+  readonly follow: Float64Array;
   evaluated: boolean;
 }
 
@@ -337,7 +355,10 @@ function project(form: Form, ringCount: number, spokeCount: number, nodeGain: nu
     if (voice > 0) {
       const parent = SPOKE_BASE + form.spokeParent[voice] * SPOKE_FIELDS;
       out[at + S_ANGLE] = out[parent + S_ANGLE] + shortest(out[parent + S_ANGLE], out[at + S_ANGLE]) * presence;
-      for (const f of [S_INNER, S_OUTER, S_WIDTH, S_MIRROR]) out[at + f] = out[parent + f] + (out[at + f] - out[parent + f]) * presence;
+      out[at + S_INNER] = out[parent + S_INNER] + (out[at + S_INNER] - out[parent + S_INNER]) * presence;
+      out[at + S_OUTER] = out[parent + S_OUTER] + (out[at + S_OUTER] - out[parent + S_OUTER]) * presence;
+      out[at + S_WIDTH] = out[parent + S_WIDTH] + (out[at + S_WIDTH] - out[parent + S_WIDTH]) * presence;
+      out[at + S_MIRROR] = out[parent + S_MIRROR] + (out[at + S_MIRROR] - out[parent + S_MIRROR]) * presence;
     }
     out[at + S_ALPHA] *= presence;
   }
@@ -347,19 +368,30 @@ function project(form: Form, ringCount: number, spokeCount: number, nodeGain: nu
   }
 }
 
-function blendPose(out: Float32Array, a: Float32Array, b: Float32Array, amount: number): void {
+/**
+ * The way round from one angle to another. With a tracker it stays on the side it started on while either end moves,
+ * because a shortest path that flips across the half turn would throw the voice to the far side of the circle.
+ */
+function angleBetween(from: number, to: number, slot: number, track: Float64Array | null, fresh: boolean): number {
+  if (!track) return shortest(from, to);
+  if (fresh) return track[slot] = shortest(from, to);
+  const raw = to - from;
+  return track[slot] = raw + TAU * Math.round((track[slot] - raw) / TAU);
+}
+
+function blendPose(out: Float32Array, a: Float32Array, b: Float32Array, amount: number, track: Float64Array | null = null, fresh = false): void {
   for (let voice = 0; voice < RING_VOICES; voice++) {
     const lag = voice / RING_VOICES * 0.38, m = windowed(amount, lag, lag + 0.62), at = voice * RING_FIELDS;
     for (let f = 0; f < RING_FIELDS; f++) out[at + f] = a[at + f] + (b[at + f] - a[at + f]) * m;
   }
   for (let voice = 0; voice < SPOKE_VOICES; voice++) {
     const lag = 0.08 + (SPOKE_VOICES - voice) / SPOKE_VOICES * 0.3, m = windowed(amount, lag, lag + 0.62), at = SPOKE_BASE + voice * SPOKE_FIELDS;
-    out[at + S_ANGLE] = a[at + S_ANGLE] + shortest(a[at + S_ANGLE], b[at + S_ANGLE]) * m;
+    out[at + S_ANGLE] = a[at + S_ANGLE] + angleBetween(a[at + S_ANGLE], b[at + S_ANGLE], voice, track, fresh) * m;
     for (let f = 1; f < SPOKE_FIELDS; f++) out[at + f] = a[at + f] + (b[at + f] - a[at + f]) * m;
   }
   for (let node = 0; node < NODE_VOICES; node++) {
     const lag = (node % 12) / 12 * 0.34, m = windowed(amount, lag, lag + 0.66), at = NODE_BASE + node * NODE_FIELDS;
-    out[at + N_ANGLE] = a[at + N_ANGLE] + shortest(a[at + N_ANGLE], b[at + N_ANGLE]) * m;
+    out[at + N_ANGLE] = a[at + N_ANGLE] + angleBetween(a[at + N_ANGLE], b[at + N_ANGLE], SPOKE_VOICES + node, track, fresh) * m;
     out[at + N_ALPHA] = a[at + N_ALPHA] + (b[at + N_ALPHA] - a[at + N_ALPHA]) * m;
     out[at + N_SIZE] = a[at + N_SIZE] + (b[at + N_SIZE] - a[at + N_SIZE]) * m;
   }
@@ -378,17 +410,52 @@ export function evolutionRate(params: Readonly<Record<string, number>>): number 
 }
 
 export function createEvolveClock(): EvolveClock {
-  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), schemeSeed: 0 };
+  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
 }
 
 export function createEvolveTransport(): EvolveTransport {
-  return { clock: createEvolveClock(), values: {}, seed: null, lastPhase: null, evolveRate: 1, chase: null, swellTarget: 0, nextDown: false, dropDown: false, burstDown: false, nextRipple: 0, evaluated: false };
+  return { clock: createEvolveClock(), values: {}, seed: null, lastPhase: null, evolveRate: 1, chase: null, swellTarget: 0, nextDown: false, dropDown: false, burstDown: false, follow: new Float64Array(SPRUNG.length), evaluated: false };
 }
 
 /** How many forms one closed export passes through. Each keeps enough time that its morph stays slow. */
 function exactStops(duration: number, rate: number): number {
   if (rate <= 0) return 0;
   return Math.max(2, Math.min(Math.floor(duration / 26), Math.round(duration * rate / FORM_SECONDS)));
+}
+
+const tierRate = (tier: number, counter: number | undefined): number => TIER_RATES[tier] * (tier === 1 ? clamp(finite(counter, 0.5) * 2, 0, 2) : 1);
+const growth = (density: number): number => (density <= 0.5 ? 0.34 + density * 1.32 : 1 + (density - 0.5) * 2);
+const ringVoices = (form: Form, grow: number, gain: number): number => form.rings * grow * gain;
+function spokeVoices(form: Form, grow: number, gain: number, exact: boolean): number {
+  const wanted = form.spokes * grow * gain;
+  if (form.kind !== HOME || !exact) return wanted;
+  return wanted < 9 ? 6 : wanted < 18 ? 12 : 24;
+}
+
+/**
+ * A turn that closes over one loop, keeping the rate asked for as nearly as whole steps allow. On the journey a step is
+ * one twelfth of a circle, which the home form cannot tell from none. A held form has no such symmetry, so it makes
+ * whole circles, or sways gently about its place when the loop is too short for one.
+ */
+function closedTurn(wanted: number, turn: number, held: boolean): number {
+  if (wanted === 0) return 0;
+  if (held) {
+    const circles = Math.round(wanted / TAU);
+    return circles !== 0 ? circles * TAU * turn : wanted / TAU * Math.sin(TAU * turn);
+  }
+  const steps = Math.round(wanted / CLOSURE_STEP);
+  return (steps !== 0 ? steps : wanted < 0 ? -1 : 1) * CLOSURE_STEP * turn;
+}
+
+/** Fixes one glitch event when its cell begins: Reseed, Density or the slider cannot change it while it is on screen. */
+function latchGlitch(clock: EvolveClock, seed: number, amount: number, visible: number): void {
+  const cell = Math.floor(clock.glitchTime / GLITCH_CELL);
+  if (cell === clock.glitchCell) return;
+  clock.glitchCell = cell; clock.glitchSeed = seed;
+  clock.glitchOn = amount > 0 && hashUnit(seed, cell, 401) < 0.08 + amount * 0.74;
+  clock.glitchStart = hashUnit(seed, cell, 403) * 1.4;
+  clock.glitchLength = 0.5 + amount * 0.3;
+  clock.glitchVoice = hash(seed, cell, 409) % Math.max(1, Math.min(RING_VOICES, Math.ceil(visible)));
 }
 
 /** The clock for an export or any exact frame. One turn is a closed path that starts and ends on the home form. */
@@ -401,7 +468,14 @@ export function exactEvolveClock(phase: number, duration: number, params: Readon
   out.motion = out.duration * turn * speedRate(params.macroSpeed);
   const bpm = clamp(finite(params.scoreBpm, 124), 20, 400);
   out.beat = turn * Math.max(1, Math.round(out.duration * bpm / 60));
-  out.swell = 0; out.gather = 0; out.ripples.fill(-1); out.glide = 1;
+  out.swell = 0; out.gather = 0; out.ripples.fill(-1); out.glide = 1; out.tintFade = 1; out.densityMoving = false; out.easing = false;
+  out.held = rate <= 0;
+  const across = TURN_RADIANS * speedRate(params.macroSpeed) * out.duration, spin = finite(params.ringRotationSpeed, 1);
+  out.spokeTurn = closedTurn(across, turn, out.held);
+  for (let tier = 0; tier < 3; tier++) out.ringTurns[tier] = closedTurn(across * spin * tierRate(tier, params.ringCounterRotation), turn, out.held);
+  // Whole glitch cells fill the loop, so an event never straddles the closing point.
+  out.glitchTime = turn * Math.max(1, Math.round(out.duration / GLITCH_CELL)) * GLITCH_CELL;
+  out.glitchCell = Number.NaN;
   return out;
 }
 
@@ -414,6 +488,15 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   for (let i = 0; i < SMOOTHED.length; i++) {
     const key = SMOOTHED[i][0], wanted = finite(params[key], 0);
     if (transport.seed === null || !Number.isFinite(values[key])) { values[key] = wanted; continue; }
+    const sprung = key === 'macroDensity' ? 0 : key === 'macroScale' ? 1 : -1;
+    if (sprung >= 0) {
+      // Exact solution of a critically damped spring, so it is stable at any frame time and arrives without overshoot.
+      const off = values[key] - wanted, drive = (transport.follow[sprung] + USER_FOLLOW * off) * wall, decay = Math.exp(-USER_FOLLOW * wall);
+      transport.follow[sprung] = (transport.follow[sprung] - USER_FOLLOW * drive) * decay;
+      values[key] = wanted + (off + drive) * decay;
+      if (Math.abs(values[key] - wanted) < 1e-5 && Math.abs(transport.follow[sprung]) < 1e-4) { values[key] = wanted; transport.follow[sprung] = 0; }
+      continue;
+    }
     const step = SMOOTHED[i][1] * SPANS[i] * wall;
     values[key] += clamp(wanted - values[key], -step, step);
   }
@@ -422,14 +505,19 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   else if (transport.seed !== seed) {
     if (transport.evaluated) clock.from.set(clock.pose);
     clock.glide = transport.evaluated ? 0 : 1;
-    clock.schemeSeed = transport.seed;
+    clock.glideFresh = true;
     transport.seed = seed;
     transport.chase = null;
   }
-  if (clock.glide < 1) {
-    clock.glide = Math.min(1, clock.glide + wall / GLIDE_SECONDS);
-    if (clock.glide >= 0.5) clock.schemeSeed = seed;
-  }
+  if (clock.glide < 1) clock.glide = Math.min(1, clock.glide + wall / GLIDE_SECONDS);
+  // However many reseeds arrive, colour only ever moves smoothly, and the scheme changes while none is showing.
+  const fadeStep = wall / TINT_FADE_SECONDS;
+  if (clock.schemeSeed !== seed) {
+    clock.tintFade = Math.max(0, clock.tintFade - fadeStep);
+    if (clock.tintFade === 0) clock.schemeSeed = seed;
+  } else clock.tintFade = Math.min(1, clock.tintFade + fadeStep);
+  clock.densityMoving = transport.follow[0] !== 0;
+  clock.wall = wall;
 
   let moved = 0;
   if (transport.lastPhase !== null && Number.isFinite(phase) && Number.isFinite(duration) && duration > 0) {
@@ -443,6 +531,15 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   clock.exact = false; clock.turn = 0; clock.duration = duration;
   clock.motion = Math.max(0, clock.motion + moved * speedRate(values.macroSpeed));
   clock.beat = Math.max(0, clock.beat + moved * clamp(values.scoreBpm, 20, 400) / 60);
+  clock.held = false;
+  clock.spokeTurn = TURN_RADIANS * clock.motion;
+  const turning = moved * speedRate(values.macroSpeed) * TURN_RADIANS * finite(values.ringRotationSpeed, 1);
+  for (let tier = 0; tier < 3; tier++) clock.ringTurns[tier] = (clock.ringTurns[tier] + turning * tierRate(tier, values.ringCounterRotation)) % TAU;
+  clock.glitchTime = Math.max(0, clock.glitchTime + moved);
+  if (Math.floor(clock.glitchTime / GLITCH_CELL) !== clock.glitchCell) {
+    const form = formFor(seed, segmentAt(seed, clock.evolution));
+    latchGlitch(clock, seed, values.macroGlitch > 0.5 ? (values.macroGlitch - 0.5) * 2 : 0, ringVoices(form, growth(unit(values.macroDensity)), clamp(finite(values.ringCount, 7) / 7, 0, 3)));
+  }
 
   // Next: arrive at the following form. Time spent holding a form changes nothing, so it is crossed at once.
   if (moves.next && !transport.nextDown) {
@@ -476,7 +573,10 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   const gatherTo = moves.collapse ? 1 : 0;
   clock.gather += clamp((gatherTo - clock.gather) * (1 - Math.exp(-wall / 1.1)), -wall * 0.42, wall * 0.42);
 
-  if (moves.burst && !transport.burstDown) { clock.ripples[transport.nextRipple] = 0; transport.nextRipple = (transport.nextRipple + 1) % clock.ripples.length; }
+  if (moves.burst && !transport.burstDown) {
+    // A ripple already travelling is never cut off: with every slot in use, the press adds nothing.
+    for (let i = 0; i < clock.ripples.length; i++) if (clock.ripples[i] < 0) { clock.ripples[i] = 0; break; }
+  }
   transport.burstDown = moves.burst;
   for (let i = 0; i < clock.ripples.length; i++) if (clock.ripples[i] >= 0) { clock.ripples[i] += wall; if (clock.ripples[i] > 3.2) clock.ripples[i] = -1; }
   transport.evaluated = true;
@@ -529,7 +629,7 @@ function rippleAt(clock: EvolveClock, radius: number): number {
   for (let i = 0; i < clock.ripples.length; i++) {
     const age = clock.ripples[i];
     if (age < 0) continue;
-    const front = age * 0.46, into = (radius - front) / 0.13, rise = smooth(age / 0.35), fall = 1 - smooth((age - 1.6) / 1.6);
+    const front = age * 0.46, into = (radius - front) / 0.13, rise = smooth(age / 0.5), fall = 1 - smooth((age - 1.6) / 1.6);
     light += rise * fall * Math.exp(-into * into);
   }
   return light;
@@ -541,18 +641,61 @@ function tintAt(clock: EvolveClock, heat: number, voice: number, speed: number):
   const wave = 0.5 + 0.5 * oscillate(clock, 83 + voice * 5.3, voice * 2.4, speed);
   const gate = heat >= 0.5 ? 0.86 - (heat - 0.5) * 1.5 : 0.86 + (0.5 - heat) * 0.2;
   const rich = heat <= 0.5 ? heat * 0.62 : 0.31 + (heat - 0.5) * 0.92;
-  const glide = clock.glide >= 1 ? 1 : Math.abs(clock.glide * 2 - 1);
-  return Math.min(1, smooth((wave - gate) / 0.12) * rich * glide);
+  return Math.min(1, smooth((wave - gate) / 0.12) * rich * clock.tintFade);
 }
 
-/** Exactly zero at or below the centre of the slider. Above it, one ring breaks briefly and mends. */
-function glitchEvent(seed: number, time: number, amount: number): number {
-  const cell = Math.floor(time / 2.2), chance = 0.08 + amount * 0.74;
-  if (hashUnit(seed, cell, 401) >= chance) return 0;
-  const start = hashUnit(seed, cell, 403) * 1.4, length = 0.5 + amount * 0.3, into = (time - cell * 2.2 - start) / length;
+/** One glitch event's envelope, from its latched timing. Above the centre of the slider, one ring breaks briefly and mends. */
+function glitchEnvelope(clock: EvolveClock): number {
+  if (!clock.glitchOn) return 0;
+  const into = (clock.glitchTime - clock.glitchCell * GLITCH_CELL - clock.glitchStart) / clock.glitchLength;
   if (into <= 0 || into >= 1) return 0;
   const shape = Math.sin(Math.PI * into);
   return shape * shape;
+}
+
+/** One value's step towards where it wants to be, at most `most`. Returns true if it had to be held back. */
+function easeField(pose: Float32Array, last: Float32Array, at: number, most: number, angle: boolean): boolean {
+  const off = angle ? shortest(last[at], pose[at]) : pose[at] - last[at];
+  if (Math.abs(off) <= most) return false;
+  pose[at] = last[at] + (off < 0 ? -most : most);
+  return true;
+}
+
+/**
+ * Density can ask many voices to move at once. For as long as it does, each may travel only so fast, so the structure
+ * grows and merges instead of popping. Once every voice has arrived this does nothing, and the default is untouched.
+ */
+function easePose(clock: EvolveClock): void {
+  const pose = clock.pose, last = clock.settled;
+  if (clock.densityMoving) clock.easing = true;
+  if (clock.easing) {
+    const place = EASE_PLACE * clock.wall, light = EASE_LIGHT * clock.wall, turn = EASE_TURN * clock.wall;
+    let held = false;
+    for (let voice = 0; voice < RING_VOICES; voice++) {
+      const at = voice * RING_FIELDS;
+      for (let f = R_RADIUS; f <= R_Y; f++) if (easeField(pose, last, at + f, place, false)) held = true;
+      if (easeField(pose, last, at + R_WIDTH, place * 20, false)) held = true;
+      if (easeField(pose, last, at + R_ALPHA, light, false)) held = true;
+      for (let f = R_ARCS; f < RING_FIELDS; f++) if (easeField(pose, last, at + f, light, false)) held = true;
+    }
+    for (let voice = 0; voice < SPOKE_VOICES; voice++) {
+      const at = SPOKE_BASE + voice * SPOKE_FIELDS;
+      if (easeField(pose, last, at + S_ANGLE, turn, true)) held = true;
+      if (easeField(pose, last, at + S_INNER, place, false)) held = true;
+      if (easeField(pose, last, at + S_OUTER, place, false)) held = true;
+      if (easeField(pose, last, at + S_ALPHA, light, false)) held = true;
+      if (easeField(pose, last, at + S_WIDTH, place * 20, false)) held = true;
+      if (easeField(pose, last, at + S_MIRROR, light, false)) held = true;
+    }
+    for (let node = 0; node < NODE_VOICES; node++) {
+      const at = NODE_BASE + node * NODE_FIELDS;
+      if (easeField(pose, last, at + N_ANGLE, turn, true)) held = true;
+      if (easeField(pose, last, at + N_ALPHA, light, false)) held = true;
+      if (easeField(pose, last, at + N_SIZE, place, false)) held = true;
+    }
+    if (!held && !clock.densityMoving) clock.easing = false;
+  }
+  last.set(pose);
 }
 
 export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Readonly<Record<string, number>>, out: DisplayList): void {
@@ -560,16 +703,17 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const seed = seedValue >>> 0;
   const density = unit(params.macroDensity), tension = unit(params.macroTension), chaos = unit(params.macroOrder), heat = unit(params.macroHeat), glitch = unit(params.macroGlitch);
   const speed = speedRate(params.macroSpeed), weight = 4.2 ** (unit(params.macroWeight) * 2 - 1), scale = 2.4 ** (unit(params.macroScale) * 2 - 1);
-  const grow = density <= 0.5 ? 0.34 + density * 1.32 : 1 + (density - 0.5) * 2;
+  const grow = growth(density);
   const ringGain = clamp(finite(params.ringCount, 7) / 7, 0, 3), spokeGain = clamp(finite(params.spokeCount, 12) / 12, 0, 4);
   const nodeGain = clamp(finite(params.nodeDensity, 0.5) * 2, 0, 2) * grow;
   const arcShare = clamp(finite(params.ringArcShare, 0.35) / 0.35, 0, 2.2);
+  const arcMoved = Math.max(0, 1 - arcShare); // Away from its designed value, Arc share regrows hidden arcs, which then fade in over more of their length.
 
   // Where the journey is: which two forms, and how far between them.
-  let from: Form, to: Form, amount: number, home = 0;
+  let from: Form, to: Form, amount: number, home = 0, key = Number.NaN;
   if (clock.exact) {
     const stops = exactStops(clock.duration, evolutionRate(params));
-    if (stops === 0) { from = to = formFor(seed, -1); amount = 0; home = 1; }
+    if (stops === 0) { from = to = formFor(seed, 0); amount = 0; }
     else {
       const index = Math.min(stops - 1, Math.floor(clock.evolution)), local = clock.evolution - index;
       amount = clamp((local - 0.38) / 0.62, 0, 1);
@@ -586,29 +730,22 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     }
   } else {
     const index = segmentAt(seed, clock.evolution);
-    from = formFor(seed, index); to = formFor(seed, index + 1);
+    from = formFor(seed, index); to = formFor(seed, index + 1); key = index;
     amount = morphWindow(seed, index, clock.evolution);
   }
 
-  const voicesFor = (form: Form) => form.rings * grow * ringGain;
-  const spokesFor = (form: Form) => {
-    const wanted = form.spokes * grow * spokeGain;
-    if (form.kind !== HOME) return wanted;
-    const steady = wanted < 9 ? 6 : wanted < 18 ? 12 : 24;
-    return clock.exact ? steady : wanted;
-  };
-  project(from, voicesFor(from), spokesFor(from), nodeGain, poseA);
-  project(to, voicesFor(to), spokesFor(to), nodeGain, poseB);
-  blendPose(clock.pose, poseA, poseB, amount);
+  project(from, ringVoices(from, grow, ringGain), spokeVoices(from, grow, spokeGain, clock.exact), nodeGain, poseA);
+  project(to, ringVoices(to, grow, ringGain), spokeVoices(to, grow, spokeGain, clock.exact), nodeGain, poseB);
+  const freshMorph = key !== clock.morphKey || seed !== clock.morphSeed;
+  clock.morphKey = key; clock.morphSeed = seed;
+  blendPose(clock.pose, poseA, poseB, amount, clock.exact ? null : clock.morphTrack, freshMorph);
   const pose = clock.pose;
-  if (clock.glide < 1) { poseA.set(pose); blendPose(pose, clock.from, poseA, clock.glide); }
+  if (clock.glide < 1) { poseA.set(pose); blendPose(pose, clock.from, poseA, clock.glide, clock.glideTrack, clock.glideFresh); clock.glideFresh = false; }
+
+  if (!clock.exact) easePose(clock);
 
   // Turning, breathing and drift, all continuous in the motion clock.
   const organic = chaos * chaos * (1 - home);
-  const baseTurn = clock.exact
-    ? Math.max(1, Math.round(TURN_RADIANS * speed * clock.duration / CLOSURE_STEP)) * CLOSURE_STEP * clock.turn
-    : TURN_RADIANS * clock.motion;
-  const ringTurn = finite(params.ringRotationSpeed, 1), counter = clamp(finite(params.ringCounterRotation, 0.5) * 2, 0, 2);
   const draw = (1.22 - tension * 0.44) * (1 - clock.gather * 0.62) * scale, tuck = smooth((1 - scale) / 0.5);
   const breathDepth = 0.008 + tension * 0.012;
   const heroBreath = 0.5 + 0.5 * oscillate(clock, 17, 1.3, speed);
@@ -620,9 +757,9 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const life = 1 - home; // Even while a form rests, its rings drift, its arcs part and its spokes lean into pairs.
 
   const glitchAmount = glitch > 0.5 ? (glitch - 0.5) * 2 : 0;
-  const glitchTime = clock.exact ? clock.turn * clock.duration : clock.motion / Math.max(speed, 1e-3);
-  const glitchShape = glitchAmount > 0 && home < 1 ? glitchEvent(seed, glitchTime, glitchAmount) * glitchAmount ** 0.5 * (1 - home) : 0;
-  const glitchVoice = glitchShape > 0 ? hash(seed, Math.floor(glitchTime / 2.2), 409) % Math.max(1, Math.min(RING_VOICES, Math.ceil(voicesFor(from)))) : -1;
+  if (clock.exact) latchGlitch(clock, seed, glitchAmount, 3);
+  const glitchShape = glitchAmount > 0 ? glitchEnvelope(clock) * Math.sqrt(glitchAmount) * (1 - home) : 0;
+  const glitchVoice = glitchShape > 0 ? clock.glitchVoice : -1;
 
   for (let voice = 0; voice < RING_VOICES; voice++) {
     const at = voice * RING_FIELDS, phase = voice * 1.91;
@@ -631,8 +768,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     const x = (pull(pose[at + R_X], tuck) + organic * 0.028 * oscillate(clock, 43 + voice * 2.9, phase * 2.3, speed)) * draw;
     const y = (pull(pose[at + R_Y], tuck) + organic * 0.028 * oscillate(clock, 47 + voice * 2.7, phase * 3.1, speed)) * draw;
     const tier = voice % 3;
-    const tierRate = TIER_RATES[tier] * (tier === 1 ? counter : 1);
-    const turn = clock.exact ? baseTurn * TIER_WINDS[tier] : baseTurn * ringTurn * tierRate;
+    const turn = clock.ringTurns[tier];
     const beatLight = lightAt(clock, Math.abs(radius)), ripple = rippleAt(clock, Math.abs(radius));
     const broken = voice === glitchVoice ? 1 - glitchShape * 0.72 : 1;
     const ink = pose[at + R_ALPHA] * ringInk * (1 + lightDepth * (beatLight - 0.3) + ripple * 0.75 + clock.swell * 0.12) * broken;
@@ -642,12 +778,12 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     const slot = TAU / ARC_SLOTS, parting = oscillate(clock, 59 + voice * 4.1, phase * 0.7, speed), opening = life * (parting > 0 ? parting * parting : 0) * 0.74, every = tier === 0 ? 6 : tier === 1 ? 4 : 3;
     for (let k = 0; k < ARC_SLOTS; k++) {
       const low = pose[at + R_ARCS + k * 2], high = 1 - (1 - pose[at + R_ARCS + k * 2 + 1]) * Math.min(arcShare, 1) - Math.max(0, arcShare - 1) * 0.28 * (1 - pose[at + R_ARCS + k * 2 + 1]);
-      const share = Math.max(0, (k % every === every - 1 ? high * (1 - opening) : high) - low);
-      out.push(PRIMITIVE.arc, x, y, radius, wrapAngle(turn + (k + low) * slot), share * slot, width, glow, colour, ink * smooth(share / 0.05), 0, voice * 0.07);
+      const share = Math.max(0, (k % every === every - 1 ? high * (1 - opening) : high) - low), arcFade = 0.05 + 0.25 * Math.min(1, arcMoved / Math.max(share, 0.001)) * (1 - smooth(pose[at + R_ARCS + k * 2 + 1] / 0.05));
+      out.push(PRIMITIVE.arc, x, y, radius, wrapAngle(turn + (k + low) * slot), share * slot, width, glow, colour, ink * smooth(share / arcFade), 0, voice * 0.07);
     }
   }
 
-  const spokeTurn = baseTurn + finite(params.spokeOffsetAngle, 0) * Math.PI / 180;
+  const spokeTurn = clock.spokeTurn + finite(params.spokeOffsetAngle, 0) * Math.PI / 180;
   const inner = clamp(finite(params.spokeInnerReach, 0), 0, 1), reach = clamp(finite(params.spokeOuterReach, 1), 0, 1);
   const spokeLine = clamp(finite(params.spokeWeight, 1), 0, 16) * weight, spokeInk = clamp(finite(params.spokeOpacity, 1), 0, 1);
   const centreX = pull(pose[HERO_BASE + H_X], tuck) * draw, centreY = pull(pose[HERO_BASE + H_Y], tuck) * draw;
@@ -669,7 +805,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const nodeInk = clamp(finite(params.nodeOpacity, 1), 0, 1), nodeSize = clamp(finite(params.nodeSize, 1), 0, 8) * Math.max(0.7, Math.min(weight, 1.45)), nodeGlow = clamp(finite(params.nodeGlow, 0.5), 0, 2);
   for (let node = 0; node < NODE_VOICES; node++) {
     const at = NODE_BASE + node * NODE_FIELDS, ringVoice = (node % 4) * RING_FIELDS;
-    const tier = (node % 4) % 3, turn = clock.exact ? baseTurn * TIER_WINDS[tier] : baseTurn * ringTurn * TIER_RATES[tier] * (tier === 1 ? counter : 1);
+    const turn = clock.ringTurns[(node % 4) % 3];
     const angle = pose[at + N_ANGLE] + turn, radius = pull(pose[ringVoice + R_RADIUS], tuck) * draw;
     const beatLight = lightAt(clock, radius), ripple = rippleAt(clock, radius);
     const x = pull(pose[ringVoice + R_X], tuck) * draw + Math.cos(angle) * radius, y = pull(pose[ringVoice + R_Y], tuck) * draw + Math.sin(angle) * radius;
@@ -696,13 +832,13 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
 
   // Glitch shards exist only above the centre of the slider, so at or below it the list is untouched by them.
   if (glitch > 0.5) {
-    const at = Math.max(0, glitchVoice) * RING_FIELDS;
-    const radius = pull(pose[at + R_RADIUS], tuck) * draw, x = pull(pose[at + R_X], tuck) * draw, y = pull(pose[at + R_Y], tuck) * draw, cell = Math.floor(glitchTime / 2.2);
+    const at = clock.glitchVoice * RING_FIELDS, shardSeed = clock.glitchSeed;
+    const radius = pull(pose[at + R_RADIUS], tuck) * draw, x = pull(pose[at + R_X], tuck) * draw, y = pull(pose[at + R_Y], tuck) * draw, cell = clock.glitchCell;
     for (let i = 0; i < GLITCH_SHARDS; i++) {
-      const a = hashUnit(seed, cell, 430 + i), b = hashUnit(seed, cell, 450 + i), reachOut = glitchShape * (0.012 + glitchAmount * 0.038);
+      const a = hashUnit(shardSeed, cell, 430 + i), b = hashUnit(shardSeed, cell, 450 + i), reachOut = glitchShape * (0.012 + glitchAmount * 0.038);
       const start = a * TAU, sweep = 0.16 + b * 0.5;
       const shardX = x + (a - 0.5) * reachOut * 1.6, shardY = y + (b - 0.5) * reachOut;
-      const colour = heat > 0 ? (i % 3) * Math.min(1, heat * 1.5) : 0;
+      const colour = heat > 0 ? (i % 3) * Math.min(1, heat * 1.5) * clock.tintFade : 0;
       out.push(PRIMITIVE.arc, shardX, shardY, radius * (1 + (b - 0.5) * reachOut), start, sweep, -(1.2 + b * 2) * Math.max(0.7, weight) / REFERENCE_HEIGHT, 0.16 + glitchShape * 0.3, colour, glitchShape * 0.95, 0, a);
     }
   }
