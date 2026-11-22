@@ -155,7 +155,7 @@ for (const hint of [118, null]) {
   });
 }
 /** Bass at 60 fps through the real detector into a following clock, as ReactivityEngine.read does it. */
-function detected(frameOffset = 0) {
+function detected(frameOffset = 0, eachFrame?: (clock: TempoClock, t: number) => void) {
   const clock = new TempoClock(), detector = new BeatDetector();
   clock.setSource('follow');
   let frame = 0;
@@ -168,6 +168,7 @@ function detected(frameOffset = 0) {
       const heard = detector.update(bass, t);
       if (heard.followOnset) clock.followOnset(t, detector.state(t).bpm, heard.strength);
       clock.followTick(t);
+      eachFrame?.(clock, t);
     }
   };
   return { clock, listen };
@@ -217,11 +218,13 @@ function assertNoFalseLock(clock: TempoClock, kick: number, bpm: number, label: 
 }
 for (const bpm of [124, 128, 140]) {
   for (const off of [0.5, 0.7, 0.9]) {
-    test(`detected: kicks on 1 and 3 with ${off} off-beats at ${bpm} BPM never lock on the off-beats`, () => {
+    const clear = off < 0.8;
+    test(`detected: kicks on 1 and 3 with ${off} off-beats at ${bpm} BPM ${clear ? 'reach LOCKED on the kick' : 'never lock on the off-beats'}`, () => {
       for (const offset of OFFSETS) {
         const { clock, listen } = detected(offset), start = 0.5, beat = 60 / bpm;
         listen(bars(start, bpm, 64, 2, [[0, 1], [0.5, off], [1.5, off]]), start + 63.2 * beat);
         assertNoFalseLock(clock, start + 62 * beat, bpm, `offset ${offset}`);
+        if (clear) assert.equal(clock.followState, 'locked', `offset ${offset}`);
       }
     });
   }
@@ -254,11 +257,16 @@ test('detected: a kick at 174 BPM still locks at every frame offset', () => {
     assert.ok(phaseErrorMs(clock, start + 127 * beat) < 30);
   }
 });
-for (const [name, step] of [['dotted-eighth', 0.375], ['dotted-quarter', 0.75], ['triplet', 2 / 3]] as [string, number][]) {
+const BREAKDOWNS: [string, number][] = [['dotted-eighth', 0.375], ['dotted-quarter', 0.75], ['triplet', 2 / 3], ['5:4', 0.8], ['4:5', 1.25], ['6:5', 5 / 6], ['5:6', 1.2], ['5:3', 0.6], ['7:4', 4 / 7]];
+for (const [name, step] of BREAKDOWNS) {
   test(`detected: an 8-bar ${name} breakdown keeps the 128 tempo and beat, and the kick returning locks them again`, () => {
     for (const offset of OFFSETS) {
       const { clock, listen } = detected(offset), start = 0.5, beat = 60 / 128, back = start + 64 * beat;
       const hits = [...bars(start, 128, 32, 1, [[0, 1]]), ...bars(start + 32 * beat, 128, 32, step, [[0, 0.7]]), ...bars(back, 128, 64, 1, [[0, 1]])];
+      for (let at = 32; at < 64; at += 2) {
+        listen(hits, start + at * beat);
+        assertNoFalseLock(clock, start + at * beat, 128, `offset ${offset}, beat ${at} of the breakdown`);
+      }
       listen(hits, back - 0.05);
       assert.notEqual(clock.followState, 'locked', `offset ${offset}: LOCKED during the breakdown at ${clock.bpm.toFixed(1)}`);
       assert.ok(Math.abs(clock.bpm - 128) <= 1, `offset ${offset}: held ${clock.bpm}`);
@@ -281,6 +289,40 @@ for (const [from, to] of [[96, 128], [128, 96], [116, 174], [174, 116]]) {
       assert.equal(clock.followState, 'locked', `offset ${offset}`);
       assert.ok(Math.abs(clock.bpm - to) <= 1, `offset ${offset}: ${clock.bpm}`);
     }
+  });
+}
+for (const to of [131.5, 132, 132.5]) {
+  test(`detected: after an 8-bar triplet breakdown from 128, the kick returning at ${to} BPM is followed and locks`, () => {
+    for (const offset of OFFSETS) {
+      const { clock, listen } = detected(offset), start = 0.5, beat = 60 / 128, back = start + 64 * beat, beats = 96;
+      const hits = [...bars(start, 128, 32, 1, [[0, 1]]), ...bars(start + 32 * beat, 128, 32, 2 / 3, [[0, 0.7]]), ...bars(back, to, beats, 1, [[0, 1]])];
+      listen(hits, back + (beats - 0.8) * 60 / to);
+      assert.equal(clock.followState, 'locked', `offset ${offset} at ${clock.bpm.toFixed(1)}`);
+      assert.ok(Math.abs(clock.bpm - to) <= 1, `offset ${offset}: ${clock.bpm}`);
+      const error = phaseErrorMs(clock, back + (beats - 1) * 60 / to);
+      assert.ok(error < 30, `offset ${offset}: ${error} ms from the kick`);
+    }
+  });
+}
+for (const jitter of [0.04, 0.05]) for (const [from, to] of [[128, 128], [124, 132]]) {
+  test(`detected: kicks ${jitter * 1000} ms loose, ${from} to ${to} BPM, then silence: leaving LOCKED never moves the beat`, () => {
+    let left = 0;
+    for (const seedStart of [7919, 15838, 23757]) for (const offset of OFFSETS) {
+      let seed = seedStart, at = 0.5;
+      const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      const hits: [number, number][] = [];
+      for (let i = 0; i < 200; i++) { hits.push([at + (random() * 2 - 1) * jitter, 1]); at += 60 / (from + (to - from) * Math.min(1, i / 160)); }
+      let before: { beats: number; bpm: number; state: string } | null = null, worst = 0;
+      const { clock, listen } = detected(offset, (c, t) => {
+        const now = c.snapshot(t);
+        if (before && before.state === 'locked' && now.state !== 'locked') { left++; worst = Math.max(worst, Math.abs(now.beats - before.beats - before.bpm / 3600)); }
+        before = now;
+      });
+      listen(hits, at + 6);
+      assert.ok(worst <= 0.1, `seed ${seedStart}, offset ${offset}: the beat moved ${worst.toFixed(3)} on leaving LOCKED`);
+      assert.equal(clock.followState, 'holding');
+    }
+    assert.ok(left > 0, 'no run was ever LOCKED, so nothing was tested');
   });
 }
 test('follow: equal kick and off-beat onsets are not guessed into a lock, and Tap settles the phase', () => {

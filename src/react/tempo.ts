@@ -12,31 +12,23 @@ export const BPM_RANGE = { min: 40, max: 240 };
 const TAP_RESET = 2;
 const FOLLOW = {
   min: 85, max: 175,
-  /** How far from the expected beat an onset may land, in beats. */
+  /** How far from the expected beat an onset may land, in beats. Onsets outside it never move the beat or the tempo. */
   window: 0.15,
   phaseGain: 0.25, tempoGain: 0.02,
-  /** Seconds without an accepted onset before the clock is holding. */
+  /** Seconds without an accepted onset before the clock is holding, and seconds with no onset at all before a fresh start. */
   silence: 4,
   /** Accepted onsets needed to call it locked. */
   lockAfter: 4,
-  /** Misses, less hits, that lose a lock. Kicks with an off-beat between them never get there; off-beats alone do, and the clock then holds its phase. */
-  maxMisses: 8,
   /** Onset gaps: the longest that counts, how closely gaps must agree, and how many agree to start. */
   maxGap: 2, agree: 0.06, startGaps: 2,
-  /** A tempo this close to the current one is the same tempo, so onset gaps can never re-phase the clock. */
+  /** A tempo this close to the running one is the same tempo. */
   sameTempo: 0.03,
-  /** Gaps that must show a different tempo before it is taken, and the share of them that must agree. A lock asks for more. */
-  holdingGaps: 12, lockedGaps: 24, dominantShare: 0.75,
-  /** A candidate this close to the current tempo, or this close to a 3:2 or 4:3 ratio of it, may be a rhythm rather than a new tempo. */
-  nearTempo: 0.05, ratioTolerance: 0.03,
-  /** Such a candidate must hold for this many of its beats, in the octave at or below the current tempo, so a fast pulse takes at least as long as this many current beats. */
+  /** Recent gaps that must show another tempo, the share of them that must agree, and how many gaps are kept. */
+  tempoGaps: 12, dominantShare: 0.75, keptGaps: 24,
+  /** Another tempo is taken only after it has lasted this many of its beats, counted in the octave at or below the running tempo. */
   confirmBeats: 32,
-  /** Seconds a candidate survives without being seen. */
-  candidateGrace: 2,
-  /** While holding, how close onsets must land to the kept grid to count as the music returning to it, in beats. */
-  holdWindow: 0.08,
-  /** Tight onsets in a row, with no loose one, before the grid is trusted enough to keep. */
-  keepAfter: 4,
+  /** How far a candidate may wander and still be the same candidate, and the seconds it survives without being seen. */
+  nearTempo: 0.05, candidateGrace: 2,
   /** Onsets heard before choosing a beat phase: with one phase heard, and with both. Both phases need this many onsets. */
   scoreOnsets: 8, scoreBothOnsets: 12, scoreMinEach: 3, scoreShare: 0.75,
   /** How much stronger, per onset, one phase must be to be called the beat. Closer than this it stays unlocked. */
@@ -74,14 +66,9 @@ function dominantBpm(gaps: number[], share: number): number | null {
   const mean = members.reduce((sum, b) => sum + octaveOffset(b, centre), 0) / members.length;
   return foldMeasured(centre * 2 ** mean);
 }
-/** Could this tempo just be a rhythm over the current one: near it, or at 3:2 or 4:3? */
-function mayBeRhythm(candidate: number, current: number): boolean {
-  const offset = Math.abs(octaveOffset(candidate, current));
-  return offset <= Math.log2(1 + FOLLOW.nearTempo) || Math.abs(offset - Math.log2(4 / 3)) <= Math.log2(1 + FOLLOW.ratioTolerance);
-}
 interface PhaseScore { on: number; off: number; onCount: number; offCount: number; hits: number; heard: number }
 const newScore = (): PhaseScore => ({ on: 0, off: 0, onCount: 0, offCount: 0, hits: 0, heard: 0 });
-const newFollow = () => ({ state: 'holding' as FollowState, hasTempo: false, accepted: 0, misses: 0, lastAccepted: -Infinity, lastHeard: -Infinity, gaps: [] as number[], score: null as PhaseScore | null, held: false, candidate: null as { bpm: number; from: number; seen: number } | null, kept: null as { t: number; beats: number; bpm: number } | null, tightRun: 0 });
+const newFollow = () => ({ state: 'holding' as FollowState, hasTempo: false, accepted: 0, lastAccepted: -Infinity, lastHeard: -Infinity, gaps: [] as number[], lastError: 0, score: null as PhaseScore | null, candidate: null as { bpm: number; from: number; seen: number } | null });
 
 export class TempoClock {
   source: TempoSource = 'fixed';
@@ -140,16 +127,17 @@ export class TempoClock {
   }
 
   /**
-   * An onset while following. Until there is a tempo it starts from the hint or the onset gaps, then scores the two
-   * possible beat phases. After that only onsets near the beat count. The phase moves again only after real silence or
-   * a clearly different tempo, so an off-beat breakdown cannot flip it.
+   * An onset while following. The running beat and tempo are moved only by onsets near the beat, and only gently.
+   * Everything else waits: another tempo in the onset gaps puts the clock in HOLDING and is taken only once it has
+   * lasted, and only real silence lets the beat start again from the next onset. A fresh start scores the two possible
+   * beat phases before it can lock.
    */
   followOnset(t: number, bpmHint: number | null, strength = 1): void {
     if (this.source !== 'follow' || this.follow.state === 'manual') return;
     const f = this.follow, gap = t - f.lastHeard, weight = Number.isFinite(strength) && strength > 0 ? strength : 1;
     f.lastHeard = t;
     if (gap > FOLLOW.maxGap) f.gaps = [];
-    else if (gap > 0) { f.gaps.push(gap); if (f.gaps.length > FOLLOW.lockedGaps) f.gaps.shift(); }
+    else if (gap > 0) { f.gaps.push(gap); if (f.gaps.length > FOLLOW.keptGaps) f.gaps.shift(); }
     if (!f.hasTempo) {
       const bpm = bpmHint && Number.isFinite(bpmHint) && bpmHint > 0 ? foldMeasured(bpmHint)
         : f.gaps.length >= FOLLOW.startGaps ? dominantBpm(f.gaps.slice(-FOLLOW.startGaps), 1) : null;
@@ -157,45 +145,52 @@ export class TempoClock {
       return;
     }
     if (gap >= FOLLOW.silence) { this.startFollowing(t, this.bpm, weight); return; }
-    const over = this.overCeiling();
-    if (over !== null) { this.startFollowing(t, over, weight); return; }
-    const changed = this.changedTempo(t);
-    if (changed !== null) { this.startFollowing(t, changed, weight); return; }
+    const confirmed = this.confirmedTempo(t);
+    if (confirmed !== null) { this.startFollowing(t, confirmed, weight); return; }
     if (f.score) { this.scorePhase(t, weight, f.score); return; }
     const beats = this.beatsAt(t), error = beats - Math.round(beats);
-    if (f.held) { this.heldOnset(t, beats, error); return; }
     if (Math.abs(error) > FOLLOW.window) {
-      // A locked clock ignores it, unless misses keep outweighing hits. Either way the phase stays where it is.
-      if (f.state === 'locked') {
-        if (++f.misses >= FOLLOW.maxMisses) this.holdGrid();
-      } else f.accepted = Math.max(0, f.accepted - 0.5);
+      if (f.state !== 'locked') f.accepted = Math.max(0, f.accepted - 0.5);
       return;
     }
-    this.correct(t, beats, error, Math.max(1, Math.round((t - f.lastAccepted) * this.bpm / 60)));
-    f.misses = Math.max(0, f.misses - 1);
-    if (++f.accepted >= FOLLOW.lockAfter && this.mayLock()) f.state = 'locked';
-    // Loose hits can be a rhythm pulling the clock, so only a run of tight ones updates the grid a hold goes back to.
-    f.tightRun = Math.abs(error) <= FOLLOW.holdWindow ? f.tightRun + 1 : 0;
-    if (f.state === 'locked' && f.tightRun >= FOLLOW.keepAfter && this.anchor) f.kept = { ...this.anchor, bpm: this.bpm };
+    // The pull is the part of the error two onsets in a row agree on. Drift and a nearby tempo are followed in full,
+    // and one stray onset near the edge of the window, as a breakdown's rhythm throws up, moves next to nothing.
+    const steady = error * f.lastError > 0 ? Math.sign(error) * Math.min(Math.abs(error), Math.abs(f.lastError)) : 0;
+    f.lastError = error;
+    this.correct(t, beats, steady, Math.max(1, Math.round((t - f.lastAccepted) * this.bpm / 60)));
+    if (f.state !== 'locked' && ++f.accepted >= FOLLOW.lockAfter && this.mayLock()) f.state = 'locked';
   }
-  /** Leaves a lock but keeps its tempo and phase, untouched, until the music comes back to them or a new tempo is confirmed. */
-  private holdGrid(): void {
-    const f = this.follow;
-    if (f.state === 'locked' && f.kept) { this.anchor = { t: f.kept.t, beats: f.kept.beats }; this.bpm = f.kept.bpm; }
-    f.state = 'holding'; f.held = true; f.accepted = 0; f.misses = 0; f.tightRun = 0;
-  }
-  /** While holding a kept grid nothing moves it. Enough onsets tight on it, with no rival tempo, restore the lock. */
-  private heldOnset(t: number, beats: number, error: number): void {
-    const f = this.follow;
-    if (Math.abs(error) > FOLLOW.holdWindow) { f.accepted = Math.max(0, f.accepted - 0.5); return; }
-    f.lastAccepted = t;
-    if (++f.accepted < FOLLOW.lockAfter || f.candidate || !this.mayLock()) return;
-    f.state = 'locked'; f.held = false; f.misses = 0;
-    this.correct(t, beats, error, 1);
-  }
-  /** Near the ceiling a lock waits until enough gaps have shown the tempo is not above it. */
+  /** No lock while another tempo is a candidate, or near the ceiling before enough gaps have shown the tempo is not above it. */
   private mayLock(): boolean {
-    return this.bpm < FOLLOW.max * FOLLOW.ceilingNear || this.follow.gaps.length >= FOLLOW.ceilingGaps;
+    return !this.follow.candidate && (this.bpm < FOLLOW.max * FOLLOW.ceilingNear || this.follow.gaps.length >= FOLLOW.ceilingGaps);
+  }
+  /**
+   * The one rule for every other tempo, whatever its ratio to the running one: while the gaps show it the clock is
+   * HOLDING and the running beat and tempo are left alone, and it is returned, to be taken, only once it has lasted
+   * 32 of its beats. So a triplet, dotted or 5:4 breakdown of 8 bars passes without moving anything.
+   */
+  private confirmedTempo(t: number): number | null {
+    const f = this.follow;
+    if (f.candidate && t - f.candidate.seen > FOLLOW.candidateGrace) f.candidate = null;
+    const other = this.overCeiling() ?? this.otherTempo();
+    if (other === null) return null;
+    if (!f.candidate || !sameTempo(other, f.candidate.bpm, FOLLOW.nearTempo)) f.candidate = { bpm: other, from: t, seen: t };
+    f.candidate.seen = t;
+    f.state = 'holding';
+    f.accepted = 0;
+    let slow = other;
+    while (slow > this.bpm * (1 + FOLLOW.agree)) slow /= 2;
+    return (t - f.candidate.from) * slow / 60 >= FOLLOW.confirmBeats ? other : null;
+  }
+  /** The tempo most recent gaps agree on, when it is not the running one. Agreeing with the running one ends any candidate. */
+  private otherTempo(): number | null {
+    const f = this.follow;
+    if (f.gaps.length < FOLLOW.tempoGaps) return null;
+    const bpm = dominantBpm(f.gaps.slice(-FOLLOW.tempoGaps), FOLLOW.dominantShare);
+    if (bpm === null) return null;
+    if (sameTempo(bpm, this.bpm, FOLLOW.sameTempo)) { f.candidate = null; return null; }
+    // At the ceiling a reading above it is frame timing, unless overCeiling says it is sustained.
+    return bpm > FOLLOW.max && this.bpm >= FOLLOW.max * FOLLOW.ceilingNear ? null : bpm;
   }
   /** A sustained tempo above the ceiling, measured over the whole span of gaps so frame timing averages out: returns its half. */
   private overCeiling(): number | null {
@@ -219,34 +214,9 @@ export class TempoClock {
     this.follow.lastAccepted = t;
   }
   /**
-   * A tempo clearly different from the current one, once it has lasted. A candidate that could be a rhythm over the
-   * current tempo (triplets, dotted notes) must hold for 32 of its beats, and the clock is not LOCKED meanwhile.
-   */
-  private changedTempo(t: number): number | null {
-    const f = this.follow;
-    if (f.candidate && t - f.candidate.seen > FOLLOW.candidateGrace) f.candidate = null;
-    if (f.gaps.length < FOLLOW.holdingGaps) return null;
-    const bpm = dominantBpm(f.gaps.slice(-FOLLOW.holdingGaps), FOLLOW.dominantShare);
-    if (bpm === null) return null;
-    if (sameTempo(bpm, this.bpm, FOLLOW.sameTempo)) { f.candidate = null; return null; }
-    if (bpm > FOLLOW.max && this.bpm >= FOLLOW.max * FOLLOW.ceilingNear) return null;
-    if (mayBeRhythm(bpm, this.bpm)) {
-      if (!f.candidate || !sameTempo(bpm, f.candidate.bpm, FOLLOW.nearTempo)) f.candidate = { bpm, from: t, seen: t };
-      f.candidate.seen = t;
-      if (f.state === 'locked') this.holdGrid();
-      let slow = bpm;
-      while (slow > this.bpm * (1 + FOLLOW.agree)) slow /= 2;
-      return (t - f.candidate.from) * slow / 60 >= FOLLOW.confirmBeats ? bpm : null;
-    }
-    f.candidate = null;
-    if (f.state !== 'locked') return bpm;
-    if (f.gaps.length < FOLLOW.lockedGaps) return null;
-    const sustained = dominantBpm(f.gaps, FOLLOW.dominantShare);
-    return sustained !== null && !sameTempo(sustained, this.bpm, FOLLOW.sameTempo) ? sustained : null;
-  }
-  /**
-   * Before a lock: is the beat on the first onset, or half a beat from it? The phase with the stronger onsets on average
-   * is the beat, so a phase cannot win by having more of them. With no clear winner it keeps listening and does not lock.
+   * After a fresh start: is the beat on the first onset, or half a beat from it? The phase with the stronger onsets on
+   * average is the beat, so a phase cannot win by having more of them. A clear winner locks at once. With no clear
+   * winner, or with a grid that explains too few of the onsets, it keeps listening and does not lock.
    */
   private scorePhase(t: number, weight: number, score: PhaseScore): void {
     const f = this.follow, beats = this.beatsAt(t), nearest = Math.round(beats * 2) / 2, error = beats - nearest;
@@ -259,29 +229,26 @@ export class TempoClock {
     const both = score.onCount > 0 && score.offCount > 0;
     if (score.heard < (both ? FOLLOW.scoreBothOnsets : FOLLOW.scoreOnsets)) return;
     const onMean = score.onCount ? score.on / score.onCount : 0, offMean = score.offCount ? score.off / score.offCount : 0;
-    const clear = both
-      ? Math.min(score.onCount, score.offCount) >= FOLLOW.scoreMinEach && Math.max(onMean, offMean) >= FOLLOW.scoreMargin * Math.min(onMean, offMean)
-      : score.onCount + score.offCount > 0;
-    if (!clear) { f.score = newScore(); return; }
+    const clear = score.hits >= FOLLOW.scoreShare * score.heard
+      && (!both || (Math.min(score.onCount, score.offCount) >= FOLLOW.scoreMinEach && Math.max(onMean, offMean) >= FOLLOW.scoreMargin * Math.min(onMean, offMean)));
+    if (!clear || !this.mayLock()) { f.score = newScore(); return; }
     if (offMean > onMean) this.anchor = { t, beats: this.beatsAt(t) + 0.5 };
-    f.accepted = score.hits >= FOLLOW.scoreShare * score.heard ? FOLLOW.lockAfter - 1 : 0;
     f.score = null;
+    f.state = 'locked';
   }
   /** Takes a tempo, puts a provisional beat on this onset, and starts scoring which phase is the real one. */
   private startFollowing(t: number, bpm: number, weight: number): void {
     this.anchor = { t, beats: Math.round(this.beatsAt(t)) };
     this.bpm = Math.min(FOLLOW.max, bpm);
     this.lastT = t;
-    this.follow = { ...this.follow, state: 'holding', hasTempo: true, accepted: 0, misses: 0, lastAccepted: t, lastHeard: t, gaps: [], held: false, candidate: null, kept: null, tightRun: 0, score: { ...newScore(), on: weight, onCount: 1, hits: 1, heard: 1 } };
+    this.follow = { state: 'holding', hasTempo: true, accepted: 0, lastAccepted: t, lastHeard: t, gaps: [], lastError: 0, candidate: null, score: { ...newScore(), on: weight, onCount: 1, hits: 1, heard: 1 } };
   }
-  /** Each frame: with no accepted onset for a while the clock is holding, free-running at the last tempo. */
+  /** Each frame: with no accepted onset for a while the clock is holding, free-running at the last tempo. Nothing moves. */
   followTick(t: number): void {
     const f = this.follow;
     if (this.source !== 'follow' || f.state === 'manual' || t - f.lastAccepted < FOLLOW.silence) return;
-    if (f.state === 'locked') this.holdGrid();
     f.state = 'holding';
     f.accepted = 0;
-    f.misses = 0;
   }
   /** A tap during a show: the clock is manual until told to follow again. Saved preferences are not touched. */
   manualTap(t: number): void {
@@ -296,7 +263,7 @@ export class TempoClock {
     this.anchor = { t, beats: this.beatsAt(t) };
     this.bpm = foldBpm(this.bpm);
     this.lastT = t;
-    this.follow = { ...this.follow, state: 'holding', accepted: 0, misses: 0, lastAccepted: t, lastHeard: t, gaps: [], score: null, held: false, candidate: null, kept: null, tightRun: 0 };
+    this.follow = { ...this.follow, state: 'holding', accepted: 0, lastAccepted: t, lastHeard: t, gaps: [], lastError: 0, score: null, candidate: null };
   }
   /** "This is the 1": the bar now starts on the nearest beat. Only the offset changes, so running loops never jump. */
   setBarStart(t: number): void {
