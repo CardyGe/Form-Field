@@ -135,6 +135,9 @@ function number(layer: Layer, key: string, fallback: number): number {
  * Only displayMaterial applies an output transfer function (sRGB) and 8-bit dither.
  * The EXR cache deliberately contains no transfer function or display metadata guess.
  */
+/** Longest a project's preparation waits for a shader compile. */
+const COMPILE_WAIT_MS = 15000;
+
 export class StudioRenderer {
   /** Reused by render() to read the canvas size without allocating. */
   private readonly canvasSize = new THREE.Vector2();
@@ -481,6 +484,8 @@ export class StudioRenderer {
     }
     await Promise.all(pending);
     this.assertUsable();
+    if (revision === this.prepareRevision) await this.compileKaleidoscope(project);
+    this.assertUsable();
     if (revision === this.prepareRevision) {
       this.instruments.prepare(project,(m,t)=>this.draw(m,t),layer=>layer.mask.dataUrl?this.assets.get(this.assetKey(layer.mask.dataUrl,true))?.texture.image as CanvasImageSource|undefined:undefined);
       for (const [key, asset] of this.assets) if (!required.has(key)) { asset.texture.dispose(); this.assets.delete(key); }
@@ -492,6 +497,27 @@ export class StudioRenderer {
         this.super8Source?.dispose(); this.super8Source = null;
       }
     }
+  }
+
+  /**
+   * Compiles the Kaleidoscope before its first draw, so a Map slot does not stall the shared wall loop.
+   * Only for projects that show one. The wait is capped: a slow driver falls back to compiling at first draw.
+   */
+  private async compileKaleidoscope(project: Project): Promise<void> {
+    const layer = project.layers.find(item => item.visible && item.kind === 'kaleidoscope');
+    if (!layer) return;
+    this.kaleidoscope ??= new KaleidoscopeRenderer();
+    const material = this.kaleidoscope.materialFor(layer);
+    const shown = this.quad.material, bound = this.renderer.getRenderTarget();
+    // The program depends on the output, so compile for the render target the layer draws into.
+    this.quad.material = material;
+    this.renderer.setRenderTarget(this.source);
+    let ready: Promise<unknown>;
+    try { ready = this.renderer.compileAsync(this.quadScene, this.quadCamera); }
+    finally { this.quad.material = shown; this.renderer.setRenderTarget(bound); }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([ready, new Promise(resolve => { timer = setTimeout(resolve, COMPILE_WAIT_MS); })]);
+    clearTimeout(timer);
   }
 
   private resize(width: number, height: number): void {
@@ -764,7 +790,7 @@ export class StudioRenderer {
       this.kaleidoscope ??= new KaleidoscopeRenderer();
       const asset = layer.image ? this.assets.get(this.assetKey(layer.image.dataUrl, false)) : undefined;
       const picture = asset?.texture.image ? asset.texture : null;
-      // Inside a feedback step the ground stays clear even at echo 0, so modulated echo never flashes it.
+      // Inside a feedback step the ground follows the echo, so a modulated echo fades it rather than flashing it.
       const folding = this.feedbackHistory !== null && kaleidoscopeInput(layer.params) === KALEIDOSCOPE_INPUT.feedback;
       const mode = folding ? 'feedback' : kaleidoscopeInputMode(layer, { image: picture !== null, hasBelow: this.belowInput !== null });
       this.kaleidoscope.draw({ layer, phase, width: this.width, height: this.height, target: this.source,

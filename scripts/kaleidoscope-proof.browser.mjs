@@ -552,6 +552,83 @@ async function existingChecks(modules, config, checks) {
   return { id: 'existing-checks', name: 'Existing parity and input checks', kind: 'picture', limit: 'both pass', value: Object.values(results).filter(v => v === 'passed').length, unit: 'of 2 passed', status, results };
 }
 
+// Not a gate. Real renders of two picture rules: the Feedback ground on a white ground as Echo leaves 0,
+// and the circle motif's mean brightness through a fast loop.
+async function pictureChecks(modules, config) {
+  const { studio, float, frame, projectOf, kLayer } = studioRig(modules);
+  const rt = float(320, 180), large = float(960, 540);
+  const luminance = px => { let sum = 0; for (let i = 0; i < px.length; i += 4) sum += .2126 * px[i] + .7152 * px[i + 1] + .0722 * px[i + 2]; return sum / (px.length / 4); };
+  const save = async (name, px, w, h) => {
+    if (!config.images) return;
+    const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d'), image = ctx.createImageData(w, h);
+    const encode = v => 255 * (v <= .0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - .055);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const from = (h - 1 - y) * w * 4 + x * 4, to = y * w * 4 + x * 4;
+      for (let c = 0; c < 3; c++) image.data[to + c] = encode(Math.max(0, Math.min(1, px[from + c])));
+      image.data[to + 3] = 255;
+    }
+    ctx.putImageData(image, 0, 0);
+    await window.bench.image(name, canvas.toDataURL('image/png').split(',')[1]);
+  };
+  try {
+    const ground = [];
+    for (const echo of [0, .0005, ...Array.from({ length: 60 }, (_, i) => (i + 1) / 1000)]) {
+      const layer = kLayer({ input: 3, group: 1, motif: 0, echo, sourceDrift: 0 });
+      layer.palette = [...layer.palette.slice(0, 5), '#ffffff'];
+      ground.push({ echo, meanLuminance: luminance(frame(projectOf([layer]), 0, rt)) });
+    }
+    const groundSteps = ground.slice(1).map((row, i) => ({ from: ground[i].echo, to: row.echo, change: Math.abs(row.meanLuminance - ground[i].meanLuminance) }));
+    const parity = {};
+    const parityCases = [['rosette', { group: 0 }], ['mirror', { group: 1 }], ['triangle', { group: 2 }], ['square', { group: 3 }], ['hexagon', { group: 4 }], ['spiral', { group: 0, spiral: 1 }]];
+    for (const [name, params] of parityCases) {
+      const layer = kLayer({ motif: 2, cycles: 8, ...params }), project = projectOf([layer]), values = [];
+      for (let i = 0; i < 96; i++) values.push(luminance(frame(project, i / 96 * Math.PI * 2, rt)));
+      parity[name] = { min: Math.min(...values), max: Math.max(...values), swing: Math.max(...values) - Math.min(...values) };
+      await save(`parity-${name}`, frame(project, 1.1, large), 960, 540);
+      await save(`parity-${name}-later`, frame(project, 1.1 + Math.PI / 16, large), 960, 540);
+    }
+    return { ground, largestGroundStep: Math.max(...groundSteps.map(step => step.change)), groundSteps, parity, worstParitySwing: Math.max(...Object.values(parity).map(row => row.swing)) };
+  } finally { rt.dispose(); large.dispose(); studio.dispose(); }
+}
+
+// Not a gate. How long the first use of the shader takes with and without compiling in prepare. Each round
+// uses a new GL context and a never-seen shader, so neither the program cache nor the driver can reuse a build.
+async function firstUseCost(modules) {
+  const { StudioRenderer, KaleidoscopeRenderer, kaleidoscopeFragment, createProject, createLayer } = modules;
+  const round = async (index, compileFirst) => {
+    const canvas = document.createElement('canvas'), studio = new StudioRenderer(canvas);
+    try {
+      const gl = studio.renderer.getContext();
+      studio.kaleidoscope = new KaleidoscopeRenderer(`${kaleidoscopeFragment}\n// cold ${index} ${compileFirst} ${performance.now()} ${Math.random()}`);
+      const layer = createLayer('kaleidoscope');
+      const project = Object.assign(createProject(), { id: `first-use-${index}`, duration: 2, fps: { num: 30, den: 1 }, transparent: false, background: '#000000', tileEdges: false, layers: [layer] });
+      let beating = true, longest = 0, last = performance.now();
+      const beat = async () => { while (beating) { await new Promise(resolve => setTimeout(resolve, 0)); const now = performance.now(); longest = Math.max(longest, now - last); last = now; } };
+      const heart = beat();
+      const prepareStart = performance.now();
+      if (compileFirst) await studio.prepare(project);
+      else await studio.prepare({ ...project, layers: [] });
+      const prepareMs = performance.now() - prepareStart;
+      beating = false; await heart;
+      const programsBefore = studio.renderer.info.programs.length;
+      const drawStart = performance.now();
+      studio.exactFeedback = true;
+      studio.renderFrame(project, 0, 960, 540);
+      studio.renderer.setRenderTarget(null);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+      const firstDrawMs = performance.now() - drawStart;
+      return { prepareMs, longestMainThreadGapDuringPrepareMs: longest, firstDrawMs, programsBuiltByFirstDraw: studio.renderer.info.programs.length - programsBefore,
+        parallelCompile: gl.getExtension('KHR_parallel_shader_compile') !== null };
+    } finally { studio.dispose(); }
+  };
+  const compiled = [], uncompiled = [];
+  for (let i = 0; i < 5; i++) { uncompiled.push(await round(i, false)); compiled.push(await round(i, true)); }
+  const median = (rows, key) => percentile(rows.map(row => row[key]), .5);
+  const summary = rows => ({ prepareMs: median(rows, 'prepareMs'), longestMainThreadGapDuringPrepareMs: median(rows, 'longestMainThreadGapDuringPrepareMs'), worstMainThreadGapDuringPrepareMs: Math.max(...rows.map(row => row.longestMainThreadGapDuringPrepareMs)), firstDrawMs: median(rows, 'firstDrawMs'), worstFirstDrawMs: Math.max(...rows.map(row => row.firstDrawMs)) });
+  return { load: await window.bench.load(), parallelCompile: compiled.every(row => row.parallelCompile), compiledInPrepare: summary(compiled), compiledAtFirstDraw: summary(uncompiled), rounds: { compiled, uncompiled } };
+}
+
 async function guarded(id, name, kind, work) {
   try { return await work(); }
   catch (error) { return { id, name, kind, limit: 'gate must run', value: null, unit: '', status: 'FAIL', error: String(error && error.stack || error) }; }
@@ -572,6 +649,18 @@ export async function runProof(modules, config, checks) {
   await step('loop-closure', 'Loop closure', () => loopClosure(modules));
   await step('centre', 'Centre', () => centreGate(modules));
   const finite = await step('finite-output', 'Finite output', () => finiteOutput(modules));
+  let pictures = null;
+  if (wanted('picture-checks')) {
+    await note('Ground and motif brightness');
+    try { pictures = await pictureChecks(modules, config); }
+    catch (error) { pictures = { error: String(error && error.stack || error) }; }
+  }
+  let firstUse = null;
+  if (wanted('first-use')) {
+    await note('First use of the shader');
+    try { firstUse = await firstUseCost(modules); }
+    catch (error) { firstUse = { error: String(error && error.stack || error) }; }
+  }
   let timing = null;
   if (['4k-budget', 'frame-stability', 'repeatability'].some(wanted)) {
     await note('timing');
@@ -590,5 +679,5 @@ export async function runProof(modules, config, checks) {
   }
   return { proof: 'kaleidoscope', quietRule: { load1AtLaunchAbove: QUIET_LOAD, otherProcessesCpuPercentAtLeast: COMPETING_CPU_PERCENT, otherGpuCpuPercentAtLeast: GPU_BUSY_PERCENT }, loadAtLaunch: config.loadAtLaunch, loadAtStart: started, loadAtEnd: await window.bench.load(),
     timingMethod: 'performance.now() around LiveRenderer.frame plus a one-pixel readback, on frames carrying a newly presented picture (requestVideoFrameCallback) from a generated 1080p VP9 video. The clock is coarsened to 0.1 ms. Every gate uses per-frame samples; 5-frame means are extra information only.',
-    timingRuns: timing?.runs ?? [], gates };
+    firstUse, pictures, timingRuns: timing?.runs ?? [], gates };
 }

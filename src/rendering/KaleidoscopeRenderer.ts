@@ -45,9 +45,14 @@ export function kaleidoscopeImageFit(aspect: number, fit: ImageFit): { x: number
 const TAU = Math.PI * 2;
 const FALLBACK_PALETTE = ['#26cfee', '#adfc35', '#ec72dd', '#7535c0', '#ff805f', '#152043'];
 
-/** The material is built on first draw, so a project without this instrument pays nothing. */
+/** The material is built only when a project uses it, so a project without this instrument pays nothing. */
 export class KaleidoscopeRenderer {
   private material: THREE.ShaderMaterial | null = null;
+
+  constructor(private readonly fragmentShader: string = kaleidoscopeFragment) {}
+
+  /** The material, for compiling ahead of the first draw. */
+  materialFor(layer: Layer): THREE.ShaderMaterial { return this.material ??= this.build(layer); }
 
   private build(layer: Layer): THREE.ShaderMaterial {
     const uniforms: Record<string, THREE.IUniform> = {
@@ -58,7 +63,7 @@ export class KaleidoscopeRenderer {
     };
     for (const [key, value] of Object.entries(kaleidoscopeUniforms(layer, 0))) uniforms[key] = { value };
     const material = new THREE.ShaderMaterial({
-      vertexShader: fullscreenVertex, fragmentShader: kaleidoscopeFragment, uniforms,
+      vertexShader: fullscreenVertex, fragmentShader: this.fragmentShader, uniforms,
       depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
     });
     material.name = 'kaleidoscope';
@@ -66,7 +71,7 @@ export class KaleidoscopeRenderer {
   }
 
   draw({ layer, phase, width, height, target, draw, input, history, imageAspect, mode, imageFit = 'cover' }: KaleidoscopeDraw): void {
-    const material = this.material ??= this.build(layer);
+    const material = this.materialFor(layer);
     const u = material.uniforms;
     for (const [key, value] of Object.entries(kaleidoscopeUniforms(layer, phase / TAU))) u[key].value = value;
     const aspect = width / height;
