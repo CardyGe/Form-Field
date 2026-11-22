@@ -22,6 +22,7 @@ import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
+import { lensActive, lensFragment, spectralWeights } from './colour-lens';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -190,6 +191,16 @@ export class StudioRenderer {
   private readonly glowBright: THREE.ShaderMaterial;
   /** Glow finish: one bright-pass target and blur pyramid, shared by all layers. */
   private glow: { bright: THREE.WebGLRenderTarget; pyramid: BloomPyramid } | null = null;
+  /** Colour and Lens finish: one target shared by all layers, built on first use. */
+  private lensTarget: THREE.WebGLRenderTarget | null = null;
+  private readonly lens = material(lensFragment, {
+    uSource: { value: null }, uAspect: { value: 1 }, uHeight: { value: 1 }, uTile: { value: 0 }, uPhase: { value: 0 }, uSeed: { value: 0 },
+    uSplitOn: { value: 0 }, uSplitAmount: { value: 0 }, uSplitShape: { value: 0 }, uSplitThreshold: { value: .15 },
+    uSplitWaves: { value: 4 }, uSplitTravel: { value: 1 }, uSplitOrder: { value: 0 }, uSplitBlocks: { value: 0 }, uSplitChance: { value: .5 },
+    uSplitDirection: { value: new THREE.Vector2(1, 0) }, uSplitCount: { value: 3 },
+    uSplitOffsets: { value: new Array<number>(15).fill(0) },
+    uSplitWeights: { value: Array.from({ length: 15 }, () => new THREE.Vector3()) },
+  });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
@@ -790,8 +801,9 @@ export class StudioRenderer {
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
+      const finished = lensActive(original) ? this.lensSource(original, layer, sourceTexture, wrapped, width, height) : sourceTexture;
       const u = this.composite.uniforms;
-      u.uBelow.value = below.texture; u.uSource.value = sourceTexture;
+      u.uBelow.value = below.texture; u.uSource.value = finished;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
       (u.uTexel.value as THREE.Vector2).set(1 / width, 1 / height);
       u.uAspect.value = width / height; u.uScale.value = layer.transform.scale;
@@ -813,7 +825,7 @@ export class StudioRenderer {
       u.uMaskSize.value = layer.mask.size; u.uMaskSoftness.value = layer.mask.softness;
       u.uMaskInvert.value = Number(layer.mask.invert);
       u.uGlow.value = number(layer, 'glow', layer.kind === 'sculpture' ? .12 : 0);
-      this.bindGlow(original, layer, sourceTexture, width, height);
+      this.bindGlow(original, layer, finished, width, height);
       this.bindPrint(original, layer, wrapped);
       for(const d of FINISH_PARAMETERS)u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=number(layer,d.key,d.default);
       u.uSaturation.value=number(layer,'saturation',1);u.uHue.value=number(layer,'hue',0);
@@ -840,6 +852,41 @@ export class StudioRenderer {
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
     this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
     this.draw(this.finish, this.linearOutput);
+  }
+
+  /**
+   * Colour and Lens finish: runs on the layer's source after Feedback and Time
+   * displacement and writes to its own target, so it never enters the echo
+   * history. Sizes are in pixels of a 1080-line frame.
+   */
+  lensSource(original: Layer, layer: Layer, source: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
+    if (!lensActive(original)) return source;
+    const amount = number(layer, 'splitAmount', 0), order = Math.round(number(layer, 'splitOrder', 0));
+    // A modulated amount can rest at zero, where there is nothing to do.
+    if (amount <= 0 && order === 0) return source;
+    this.lensTarget ??= target();
+    const output = this.lensTarget;
+    if (output.width !== width || output.height !== height) output.setSize(width, height);
+    setWrap(output, this.tiling);
+    const u = this.lens.uniforms, taps = spectralWeights(Math.min(15, number(layer, 'splitSamples', 3)));
+    const angle = number(layer, 'splitAngle', 0) * Math.PI / 180;
+    u.uSource.value = source; u.uAspect.value = width / height; u.uHeight.value = height; u.uTile.value = Number(this.tiling);
+    u.uPhase.value = phase; u.uSeed.value = number(layer, 'seed', 0) % 1000;
+    u.uSplitOn.value = Number(amount > 0); u.uSplitAmount.value = amount;
+    u.uSplitShape.value = Math.round(number(layer, 'splitShape', 0));
+    u.uSplitThreshold.value = number(layer, 'splitThreshold', .15);
+    u.uSplitWaves.value = Math.round(number(layer, 'splitWaves', 4));
+    u.uSplitTravel.value = Math.round(number(layer, 'splitTravel', 1));
+    u.uSplitOrder.value = order; u.uSplitBlocks.value = Math.round(number(layer, 'splitBlocks', 0));
+    u.uSplitChance.value = number(layer, 'splitChance', .5);
+    (u.uSplitDirection.value as THREE.Vector2).set(Math.cos(angle), Math.sin(angle));
+    u.uSplitCount.value = taps.length;
+    taps.forEach((sample, i) => {
+      (u.uSplitOffsets.value as number[])[i] = sample.offset;
+      (u.uSplitWeights.value as THREE.Vector3[])[i].fromArray(sample.weight);
+    });
+    this.draw(this.lens, output);
+    return output.texture;
   }
 
   /**
@@ -1180,6 +1227,7 @@ export class StudioRenderer {
     this.feedbackStates.clear();
     this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow = null; this.glowBright.dispose();
     this.tiledSurface?.dispose(); this.tiledSurface = null;
+    this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
