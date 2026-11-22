@@ -1,11 +1,12 @@
 /**
- * The Finish tab of a layer: one short list of effects, each with its state and a switch, and one effect's controls
- * at a time. Studio's Finish tab and Map's Finish part both draw it.
+ * The Finish tab of a layer: a short list of the effects in use, a browser to add more, and one effect's controls at
+ * a time. Studio's Finish tab and Map's Finish part both draw it.
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { TOON_KEYS, FEEDBACK_KEYS, GLOW_KEYS } from '../core/finishing';
 import { SLIT_MODES, SLIT_SHAPES, slitControlVisible } from '../rendering/slitscan';
-import { FINISH_GROUPS, finishEffectOn, finishEffectsFor, finishSummary, hasPower, powerLocked, resetFinishEffect, toggleFinishEffect, type FinishEffect } from './finish-rack';
+import { FINISH_GROUPS, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, hasPower, powerLocked, resetFinishEffect, searchFinishEffects, toggleFinishEffect, type FinishEffect } from './finish-rack';
+import { FINISH_THUMBS } from './finish-thumbs';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Parameter } from './LayerControls';
 import { ColourSplitSection, GradientMapSection, ColourBalanceSection, KeySection } from './ColourSections';
@@ -81,6 +82,11 @@ const FEEDBACK_PARTS: [string, string[]][] = [
   ['Damage', ['echoMelt', 'echoStreak', 'echoStreakAxis', 'echoBlock', 'echoSlip', 'echoEvents', 'echoPixel']],
 ];
 
+/** Per-layer list state for this session. It outlives the panel, which unmounts on every tab change. */
+const addedEffects = new Map<string, Set<string>>();
+const storedAmounts = new Map<string, Record<string, number>>();
+const ADD_VIEW = 'add-effect';
+
 const Chevron = ({ back = false }: { back?: boolean }) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={back ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7'} /></svg>;
 
 export function FinishSections({ layer, definitions, edit, animate, onStart, onEnd, extra, readOnly, layerPanels = [], open: openProp, onOpen }: FinishProps) {
@@ -88,19 +94,23 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
   const [ownOpen, setOwnOpen] = useState<string | null>(null);
   const requested = openProp === undefined ? ownOpen : openProp;
   const setOpen = (id: string | null) => { setOwnOpen(id); onOpen?.(id); };
-  const stored = useRef(new Map<string, Record<string, number>>());
+  const [, refresh] = useReducer((n: number) => n + 1, 0);
+  const [search, setSearch] = useState('');
   const root = useRef<HTMLDivElement>(null);
   const [feedbackPart, setFeedbackPart] = useState('Move');
-  const effects = finishEffectsFor(layer, definitions);
+  const available = finishEffectsFor(layer, definitions);
+  const added = addedEffects.get(layer.id) ?? new Set<string>();
+  const effects = finishRackEffects(layer, definitions, added);
+  const picking = requested === ADD_VIEW;
   const effect = effects.find(item => item.id === requested);
   const panel = layerPanels.find(item => item.id === requested);
   const openId = effect?.id ?? panel?.id ?? null;
-  const order = [...FINISH_GROUPS.flatMap(group => effects.filter(item => item.group === group).map(item => item.id)), ...layerPanels.map(item => item.id)];
+  const order = [...effects.map(item => item.id), ...layerPanels.map(item => item.id)];
   const labelOf = (id: string) => effects.find(item => item.id === id)?.label ?? layerPanels.find(item => item.id === id)?.label ?? '';
   // A newly opened effect starts at its first control.
   useEffect(() => {
     for (let node = root.current?.parentElement; node; node = node.parentElement) if (/auto|scroll/.test(getComputedStyle(node).overflowY)) { node.scrollTop = 0; break; }
-  }, [openId]);
+  }, [openId, picking]);
   const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
   /** One slider. Settings that choose among whole steps (step 1) have no wave. */
   const row = (d: ParameterDefinition, steps = false) => <Parameter key={d.key} definition={d} value={p[d.key] ?? d.default} animated={!!mod[d.key]} readOnly={readOnly?.(d) ?? false}
@@ -114,9 +124,24 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
   const slitMode = Math.round(p.slitMode ?? 0);
   const blocked = (item: FinishEffect, keys: string[]) => keys.some(key => { const d = definitions.find(x => x.key === key); return !!d && (readOnly?.(d) ?? false); }) || (keys === item.keys ? false : powerLocked(layer, item));
   const toggle = (item: FinishEffect) => {
-    const id = layer.id + ':' + item.id, result = toggleFinishEffect(layer, item, definitions, stored.current.get(id));
-    if (result.stored) stored.current.set(id, result.stored); else stored.current.delete(id);
+    const id = layer.id + ':' + item.id, result = toggleFinishEffect(layer, item, definitions, storedAmounts.get(id));
+    if (result.stored) storedAmounts.set(id, result.stored); else storedAmounts.delete(id);
+    keep(item.id);
     onStart(); edit(() => result.layer); onEnd();
+  };
+  const keep = (id: string) => { const next = addedEffects.get(layer.id) ?? new Set<string>(); next.add(id); addedEffects.set(layer.id, next); };
+  const pick = (item: FinishEffect) => {
+    if (!effects.includes(item)) {
+      const id = layer.id + ':' + item.id, result = addFinishEffect(layer, item, definitions, storedAmounts.get(id));
+      storedAmounts.delete(id); keep(item.id);
+      if (result.layer !== layer) { onStart(); edit(() => result.layer); onEnd(); }
+    }
+    setSearch(''); setOpen(item.id);
+  };
+  const remove = (item: FinishEffect) => {
+    addedEffects.get(layer.id)?.delete(item.id); storedAmounts.delete(layer.id + ':' + item.id);
+    onStart(); edit(l => resetFinishEffect(l, item, definitions)); onEnd();
+    setOpen(null); refresh();
   };
   const powerSwitch = (item: FinishEffect) => {
     if (!hasPower(item)) return <span className="finish-switch-space" />;
@@ -158,6 +183,22 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
   const rowFor = (id: string, label: string, summary: string, on: boolean, control: ReactNode) => <div key={id} className={'finish-row' + (on ? ' on' : '')}>
     <button type="button" className="finish-row-open" aria-label={label + ' settings'} onClick={() => setOpen(id)}><i aria-hidden="true" /><span>{label}</span><small>{summary}</small><Chevron /></button>{control}</div>;
 
+  if (picking) {
+    const found = searchFinishEffects(available, search);
+    const closePicker = () => { setSearch(''); setOpen(null); };
+    const cannotAdd = (item: FinishEffect) => !effects.includes(item) && hasPower(item) && blocked(item, Object.keys(item.power));
+    return <div ref={root} className="finish-picker" onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); closePicker(); } }}>
+      <div className="finish-detail-head">
+        <div className="finish-detail-nav"><button type="button" className="finish-back" onClick={closePicker}><Chevron back />All finishes</button></div>
+        <div className="finish-detail-title"><h3>Add effect</h3></div>
+        <input className="finish-search" type="search" aria-label="Search effects" placeholder="Search effects" autoFocus value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && found[0] && !cannotAdd(found[0])) { e.preventDefault(); pick(found[0]); } }} />
+      </div>
+      {FINISH_GROUPS.map(group => { const items = found.filter(item => item.group === group); return items.length > 0 && <section key={group} className="finish-picker-group"><h3>{group}</h3><div>
+        {items.map(item => { const inUse = effects.includes(item); return <button type="button" key={item.id} className={inUse ? 'in-use' : ''} aria-label={(inUse ? 'Open ' : 'Add ') + item.label} title={item.description} disabled={cannotAdd(item)} onClick={() => pick(item)}><img src={FINISH_THUMBS[item.id]} alt="" /><span>{item.label}</span>{inUse && <small>Added</small>}</button>; })}
+      </div></section>; })}
+      {found.length === 0 && <p className="muted-text">No effects match that search.</p>}
+    </div>;
+  }
   if (openId) {
     const index = order.indexOf(openId), previous = order[(index - 1 + order.length) % order.length], next = order[(index + 1) % order.length];
     const active = effects.filter(item => item.id !== openId && finishEffectOn(layer, item, definitions));
@@ -169,7 +210,8 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
           <button type="button" className="finish-step" aria-label={'Next: ' + labelOf(next)} title={labelOf(next)} onClick={() => setOpen(next)}><Chevron /></button>
         </div>
         <div className="finish-detail-title"><h3>{effect?.label ?? panel!.label}</h3>
-          {effect && <button type="button" className="finish-reset" disabled={blocked(effect, effect.keys)} onClick={() => { onStart(); edit(l => resetFinishEffect(l, effect, definitions)); onEnd(); stored.current.delete(layer.id + ':' + effect.id); }}>Reset</button>}
+          {effect && <button type="button" className="finish-reset" disabled={blocked(effect, effect.keys)} onClick={() => { keep(effect.id); onStart(); edit(l => resetFinishEffect(l, effect, definitions)); onEnd(); storedAmounts.delete(layer.id + ':' + effect.id); }}>Reset</button>}
+          {effect && <button type="button" className="finish-reset" disabled={blocked(effect, effect.keys)} onClick={() => remove(effect)}>Remove</button>}
           {effect && hasPower(effect) && powerSwitch(effect)}
         </div>
         {active.length > 0 && <div className="finish-hop" role="group" aria-label="Effects that are on">{active.map(item => <button type="button" key={item.id} onClick={() => setOpen(item.id)}>{item.label}</button>)}</div>}
@@ -183,9 +225,9 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
     <section className="control-section finish-mix"><h3>Layer mix</h3>
       <Parameter definition={opacity} value={layer.opacity} animated={!!mod.opacity} readOnly={readOnly?.(opacity) ?? false} onChange={n => edit(l => ({ ...l, opacity: n }))} onAnimate={animate ? () => animate('opacity') : undefined} onStart={onStart} onEnd={onEnd} />
       <label className="finish-blend">Blending<select aria-label="Blending" value={layer.blend} onChange={e => edit(l => ({ ...l, blend: e.target.value as Layer['blend'] }))}><option value="normal">Normal</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="add">Light add</option><option value="source">Colour from below</option></select></label></section>
-    <p className="finish-count">{activeCount ? activeCount + (activeCount === 1 ? ' effect on' : ' effects on') : 'No effects on'}</p>
-    {FINISH_GROUPS.map(group => { const items = effects.filter(item => item.group === group); return items.length > 0 && <section key={group} className="finish-group"><h3>{group}</h3>
-      {items.map(item => rowFor(item.id, item.label, finishSummary(layer, item, definitions), finishEffectOn(layer, item, definitions), powerSwitch(item)))}</section>; })}
+    <div className="finish-effects-head"><h3>Effects{activeCount > 0 && <small>{activeCount} on</small>}</h3><button type="button" className="finish-add" onClick={() => setOpen(ADD_VIEW)}><span aria-hidden="true">+</span>Add effect</button></div>
+    {effects.length ? <section className="finish-group">{effects.map(item => rowFor(item.id, item.label, finishSummary(layer, item, definitions), finishEffectOn(layer, item, definitions), powerSwitch(item)))}</section>
+      : <p className="finish-empty">No effects yet. Add one to start building a look.</p>}
     {layerPanels.length > 0 && <section className="finish-group"><h3>Layer</h3>{layerPanels.map(item => rowFor(item.id, item.label, item.summary ?? '', !!item.on, <span className="finish-switch-space" />))}</section>}
   </div>;
 }

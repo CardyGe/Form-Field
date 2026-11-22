@@ -99,3 +99,23 @@ export function resetFinishEffect(layer: Layer, effect: FinishEffect, definition
   for (const d of definitions) if (effect.keys.includes(d.key)) { params[d.key] = d.default; delete modulations[d.key]; }
   return { ...layer, params, modulations };
 }
+
+/**
+ * The effects shown on a layer's Finish list: anything on, anything with changed settings, and anything added or
+ * switched off during this session, so a switch never makes its row disappear.
+ */
+export function finishRackEffects(layer: Layer, definitions: readonly ParameterDefinition[], added: ReadonlySet<string> = new Set()): FinishEffect[] {
+  return finishEffectsFor(layer, definitions).filter(effect => added.has(effect.id) || finishEffectOn(layer, effect, definitions) || changedSettings(layer, effect, definitions) > 0);
+}
+
+/** Adding an effect makes it visible at once: a switched effect that is off turns on. */
+export function addFinishEffect(layer: Layer, effect: FinishEffect, definitions: readonly ParameterDefinition[], stored?: Record<string, number>): { layer: Layer; stored?: Record<string, number> } {
+  if (!hasPower(effect) || finishEffectOn(layer, effect, definitions)) return { layer, stored };
+  return toggleFinishEffect(layer, effect, definitions, stored);
+}
+
+/** Effects whose name, group or description contains every word of the search. */
+export function searchFinishEffects(effects: readonly FinishEffect[], query: string): FinishEffect[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return effects.filter(effect => { const text = `${effect.label} ${effect.group} ${effect.description}`.toLowerCase(); return words.every(word => text.includes(word)); });
+}

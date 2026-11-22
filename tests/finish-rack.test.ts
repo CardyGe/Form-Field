@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FINISH_KEYS } from '../src/core/finishing';
 import { createLayer, visibleParameterDefinitions } from '../src/core/project';
-import { FINISH_EFFECTS, finishEffectOn, finishEffectsFor, finishSummary, powerLocked, resetFinishEffect, toggleFinishEffect } from '../src/ui/finish-rack';
+import { FINISH_EFFECTS, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, powerLocked, resetFinishEffect, searchFinishEffects, toggleFinishEffect } from '../src/ui/finish-rack';
 
 const effect = (id: string) => FINISH_EFFECTS.find(item => item.id === id)!;
 const defs = (layer = createLayer('surface')) => visibleParameterDefinitions(layer);
@@ -73,4 +73,38 @@ test('reset returns only that effect to defaults and removes its animation', () 
   assert.equal(next.params.glowMix, 0);
   assert.equal(next.modulations.glowSize, undefined);
   assert.equal(next.params.printMix, 1);
+});
+
+test('a new layer lists no effects until one is added', () => {
+  const layer = createLayer('surface');
+  assert.deepEqual(finishRackEffects(layer, defs(layer)), []);
+  assert.deepEqual(finishRackEffects(layer, defs(layer), new Set(['tone'])).map(item => item.id), ['tone']);
+});
+
+test('the list keeps effects that are on or have changed settings', () => {
+  const layer = createLayer('surface'); layer.params.glowMix = .5; layer.params.printSize = 12;
+  assert.deepEqual(finishRackEffects(layer, defs(layer)).map(item => item.id), ['glow', 'print']);
+});
+
+test('the list never shows an effect the layer cannot take', () => {
+  const layer = createLayer('graphic');
+  assert.deepEqual(finishRackEffects(layer, defs(layer), new Set(['glow'])), []);
+});
+
+test('adding turns a switched effect on, keeps one already on, and restores a stored amount', () => {
+  const layer = createLayer('surface');
+  assert.equal(addFinishEffect(layer, effect('glow'), defs(layer)).layer.params.glowMix, .8);
+  assert.equal(addFinishEffect(layer, effect('glow'), defs(layer), { glowMix: 1.4 }).layer.params.glowMix, 1.4);
+  const on = { ...layer, params: { ...layer.params, glowMix: 1.2 } };
+  assert.equal(addFinishEffect(on, effect('glow'), defs(layer)).layer, on);
+  assert.equal(addFinishEffect(layer, effect('tone'), defs(layer)).layer, layer);
+});
+
+test('search matches names, groups and descriptions, with every word required', () => {
+  const ids = (query: string) => searchFinishEffects(FINISH_EFFECTS, query).map(item => item.id);
+  assert.deepEqual(ids('glow'), ['glow']);
+  assert.ok(ids('time').includes('feedback'));
+  assert.ok(ids('halftone').includes('print'));
+  assert.deepEqual(ids('halftone glow'), []);
+  assert.equal(ids('  ').length, FINISH_EFFECTS.length);
 });
