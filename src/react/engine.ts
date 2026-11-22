@@ -100,6 +100,7 @@ export class ReactivityEngine {
   beginShowClock(): void {
     if (this.show) return;
     this.show = { bpm: this.tempo.bpm };
+    this.tempo.clearBarStart();
     if (this.prefs.tempo !== 'midi') this.tempo.setSource('follow');
   }
   /** Back to the saved source and its tempo. The beat count carries on. */
@@ -134,9 +135,9 @@ export class ReactivityEngine {
       out['audio.mids'] = this.gains.mids.update(sound.mids, dt);
       out['audio.highs'] = this.gains.highs.update(sound.highs, dt);
       out['audio.level'] = this.gains.level.update(sound.level, dt);
-      const { onset } = this.beat.update(sound.bass, t);
+      const { onset, strength } = this.beat.update(sound.bass, t);
       const beat = this.beat.state(t);
-      if (onset) { this.tempo.detected(t, beat.bpm); this.tempo.followOnset(t, beat.bpm); }
+      if (onset) { this.tempo.detected(t, beat.bpm); this.tempo.followOnset(t, beat.bpm, strength); }
       out['beat.pulse'] = beat.pulse;
       out['beat.count'] = beat.count;
     }

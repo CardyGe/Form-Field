@@ -13,7 +13,7 @@ export class BeatDetector {
   count = 0;
 
   /** One frame's bass energy at time t (seconds). */
-  update(bass: number, t: number): { onset: boolean } {
+  update(bass: number, t: number): { onset: boolean; strength: number } {
     const v = Number.isFinite(bass) ? Math.max(0, bass) : 0;
     const f = Math.max(0, v - this.prev);
     this.prev = v;
@@ -28,7 +28,7 @@ export class BeatDetector {
     this.flux.push({ t, v: f });
     this.recent.push({ t, v });
     if (onset) { this.last = t; this.count++; this.onsets.push(t); if (this.onsets.length > 16) this.onsets.shift(); }
-    return { onset };
+    return { onset, strength: f };
   }
 
   /** The beat pulse (1 at an onset, fading over 0.15 s), the beat count, and the tempo once trusted. */
