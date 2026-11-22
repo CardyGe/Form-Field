@@ -58,7 +58,7 @@ export const FEEDBACK_PARAMETERS:ParameterDefinition[]=[
  * some frames ago. Stateless and exactly looping. Off by default (Time shift 0).
  */
 export const SLIT_PARAMETERS:ParameterDefinition[]=[
- {key:'slitShift',label:'Time shift',min:-1,max:1,step:.01,default:0,section:'Motion',description:'How far back the delay map reaches, as a share of Time span. Negative values flip the map. 0 is off.'},
+ {key:'slitShift',label:'Time shift',min:-1,max:1,step:.01,default:0,section:'Motion',description:'How far back the delay map reaches, as a share of Time span. In Delay map mode, negative values flip the map. Other Time modes use only its size. 0 is off.'},
  {key:'slitSpan',label:'Time span',min:1,max:120,step:1,default:30,section:'Motion',description:'The longest delay in frames, at Time shift 1.'},
  {key:'slitShape',label:'Delay map',min:0,max:6,step:1,default:0,section:'Shape',description:'Which parts of the frame lag: rows, columns, rings, a diagonal, random blocks, by brightness or in bands.'},
  {key:'slitSlices',label:'Time slices',min:2,max:32,step:1,default:12,section:'Shape',description:'Moments of the past sampled each frame. More slices are smoother and slower to render.'},
@@ -155,9 +155,9 @@ export const GRADIENT_PARAMETERS:ParameterDefinition[]=[
 export const GRADE_PARAMETERS:ParameterDefinition[]=[
  {key:'gradeTemperature',label:'Temperature',min:-1,max:1,step:.01,default:0,section:'Material',description:'Warms (positive) or cools (negative) the colour without changing brightness. 0 is off.'},
  {key:'gradeTint',label:'Tint',min:-1,max:1,step:.01,default:0,section:'Material',description:'Moves the colour towards magenta (positive) or green (negative) without changing brightness. 0 is off.'},
- {key:'gradeShadowTint',label:'Shadow tint',min:0,max:1,step:.01,default:0,section:'Material',description:'How strongly the darks take the shadow colour. Brightness is kept. 0 is off.'},
+ {key:'gradeShadowTint',label:'Shadow tint',min:0,max:1,step:.01,default:0,section:'Material',description:'How strongly the darks take the shadow colour. Brightness is kept, except that a black or near-black colour darkens them. 0 is off.'},
  {key:'gradeShadowColour',label:'Shadow colour',min:1,max:6,step:1,default:1,section:'Material',description:'Palette swatch used for the shadow tint.'},
- {key:'gradeHighlightTint',label:'Highlight tint',min:0,max:1,step:.01,default:0,section:'Material',description:'How strongly the brights take the highlight colour. Brightness is kept. 0 is off.'},
+ {key:'gradeHighlightTint',label:'Highlight tint',min:0,max:1,step:.01,default:0,section:'Material',description:'How strongly the brights take the highlight colour. Brightness is kept, except that a black or near-black colour darkens them. 0 is off.'},
  {key:'gradeHighlightColour',label:'Highlight colour',min:1,max:6,step:1,default:2,section:'Material',description:'Palette swatch used for the highlight tint.'},
 ];
 /**

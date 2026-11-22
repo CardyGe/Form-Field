@@ -51,6 +51,11 @@ export function sliceDelays(layer: Pick<Layer, 'params'>): number[] {
   return Array.from({ length: count }, (_, i) => span * i / (count - 1));
 }
 
+/** Share of Twist and Time zoom in use: they follow the real delay, so they fade out as Time shift reaches 0. */
+export function sliceWarpScale(shift: number): number {
+  return Math.min(Math.abs(shift), 1);
+}
+
 /** Source renders per frame: one per slice, plus the Brightness map's driver in Delay map mode. */
 export function sliceSourceRenders(layer: Pick<Layer, 'params'>): number {
   const shape = layer.params.slitShape ?? 0;

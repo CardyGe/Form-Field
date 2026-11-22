@@ -150,3 +150,30 @@ test('the five new time looks exist with their exact recipes', () => {
   assert.deepEqual(find('finish-premonition'), { slitShift: 1, slitSpan: 24, slitMode: 1, slitDirection: 1, slitSlices: 8, slitDecay: .7 });
   assert.deepEqual(find('finish-brightness-time'), { slitShift: 1, slitSpan: 60, slitShape: 5, slitSlices: 16, slitSmooth: 1 });
 });
+
+const unlockedVary = { palette: false, structure: false, motion: false, material: false };
+test('variations leave Time and Glow extras off when they are stored off', () => {
+  const layer = createLayer('surface');
+  Object.assign(layer.params, { slitShift: 1, slitSpan: 60, glowMix: .8, glowThreshold: .5, glowSize: .4 });
+  for (let entropy = 0; entropy < 480; entropy++) {
+    const varied = varyLayer(layer, 1, unlockedVary, entropy);
+    for (const key of ['slitChroma', 'slitZoom', 'slitReach', 'slitTwist', 'glowSpread', 'glowStreak', 'glowStreakAngle', 'glowStreakShape'])
+      assert.equal(varied.params[key], layer.params[key], `entropy ${entropy} ${key}`);
+  }
+});
+test('variations keep Twist, streak angle and streak shape, and still vary extras that are on', () => {
+  const layer = createLayer('surface');
+  Object.assign(layer.params, { slitShift: 1, slitSpan: 60, slitTwist: .5, slitZoom: .2, slitChroma: .25, glowMix: .8, glowStreak: 1, glowStreakAngle: 30, glowStreakShape: 1 });
+  let moved = 0;
+  for (let entropy = 0; entropy < 120; entropy++) {
+    const varied = varyLayer(layer, 1, unlockedVary, entropy);
+    assert.equal(varied.params.slitTwist, .5); assert.equal(varied.params.glowStreakAngle, 30); assert.equal(varied.params.glowStreakShape, 1);
+    if (varied.params.glowStreak !== 1 && varied.params.slitZoom !== .2) moved++;
+  }
+  assert.ok(moved > 0, 'extras that are on keep varying');
+});
+test('the Time text says what the controls really do', () => {
+  const describe = (key: string) => parameterDefinitions('surface').find(d => d.key === key)!.description ?? '';
+  assert.match(describe('slitShift'), /Delay map/);
+  assert.match(FINISH_LOOKS.find(f => f.id === 'finish-brightness-time')!.description, /Bright parts stay in the present and dark parts/);
+});

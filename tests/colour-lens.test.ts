@@ -151,3 +151,24 @@ test('colour looks apply, replace other finishes and clear', () => {
   assert.equal(applyFinish(mapped, 'finish-none').params.gradMix, 0);
   assert.equal(finishSupported(createLayer('scope'), 'finish-anamorphic'), false);
 });
+
+test('looks and No finish keep Colour balance, Key and their routes', () => {
+  const route = { kind: 'sine' as const, cycles: 1, phase: 0, amount: .2, points: [] };
+  const layer = createLayer('surface');
+  Object.assign(layer.params, { gradeTemperature: .4, gradeShadowTint: .3, keyMix: 1, keyLow: .4 });
+  layer.modulations.gradeTint = structuredClone(route); layer.modulations.keyHigh = structuredClone(route);
+  for (const id of ['finish-neon-map', 'finish-anamorphic', 'finish-tunnel', 'finish-none']) {
+    const next = applyFinish(layer, id);
+    for (const key of [...GRADE_KEYS, ...KEY_KEYS]) assert.equal(next.params[key], layer.params[key], `${id} ${key}`);
+    assert.deepEqual(next.modulations.gradeTint, route, `${id} grade route`);
+    assert.deepEqual(next.modulations.keyHigh, route, `${id} key route`);
+  }
+  const split = createLayer('surface'); Object.assign(split.params, { splitAmount: 12, gradMix: 1 });
+  const cleared = applyFinish(split, 'finish-none');
+  assert.deepEqual([cleared.params.splitAmount, cleared.params.gradMix], [0, 0], 'Split and Gradient still clear');
+});
+test('the gradient tone stays finite when a route passes the midpoint range', () => {
+  assert.equal(gradientTone(.2, 1), gradientTone(.2, .95));
+  assert.equal(gradientTone(.2, 0), gradientTone(.2, .05));
+  assert.ok(Number.isFinite(gradientTone(.2, 1)));
+});

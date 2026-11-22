@@ -10,7 +10,7 @@ import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
-import { channelSliceCounts, echoWeights, previewSliceScale, slicePhase, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
+import { channelSliceCounts, echoWeights, previewSliceScale, slicePhase, sliceWarpScale, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
 import { TIME_ECHO, TIME_MEDIAN, medianFramePlan, type MedianPlan, timeGatherFragment, timeMedianFragment, timeMode, timeTargetNeeds } from './time-stats';
 import { parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
@@ -23,7 +23,7 @@ import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
-import { gradientStops, lensActive, lensFragment, spectralWeights, whiteBalance } from './colour-lens';
+import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -956,7 +956,7 @@ export class StudioRenderer {
     });
     // Gradient Map: a whole number of cycles, so the loop closes. The shift is
     // in half periods of the fold (see foldTone), so offset 1 is a full turn.
-    u.uGradMix.value = mix; u.uGradMidpoint.value = number(layer, 'gradMidpoint', .5);
+    u.uGradMix.value = mix; u.uGradMidpoint.value = safeMidpoint(number(layer, 'gradMidpoint', .5));
     u.uGradShift.value = 2 * (number(layer, 'gradOffset', 0) + Math.round(number(layer, 'gradCycles', 0)) * phase / TAU);
     u.uGradKeep.value = number(layer, 'gradKeep', 0);
     const stops = gradientStops(Math.round(number(layer, 'gradPalette', 0)), layer.palette), colours = u.uGradStops.value as THREE.Color[];
@@ -1074,7 +1074,8 @@ export class StudioRenderer {
     u.uScroll.value = (((p.slitScroll ?? 0) * phase / TAU) % 1 + 1) % 1;
     u.uAspect.value = this.width / this.height; u.uReverse.value = Number((p.slitShift ?? 0) < 0);
     u.uSeed.value = (p.seed ?? 0) % 1000;
-    u.uTwist.value = p.slitTwist ?? 0; u.uZoom.value = p.slitZoom ?? 0;
+    const warp = sliceWarpScale(p.slitShift ?? 0);
+    u.uTwist.value = (p.slitTwist ?? 0) * warp; u.uZoom.value = (p.slitZoom ?? 0) * warp;
     const chroma = Math.max(0, p.slitChroma ?? 0);
     u.uChroma.value = chroma;
     const shape = p.slitShape ?? 0;

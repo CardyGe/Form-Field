@@ -213,11 +213,14 @@ vec4 gradientStage(vec4 c) {
 }
 
 /** Moves the colour towards a tint and keeps its brightness: the tint is scaled
- * to the pixel's luma, so the mix has the same luma. Nothing is clamped. */
+ * to the pixel's luma, so the mix has the same luma. The scaling is limited to
+ * 16, enough for a pure blue swatch on a full highlight, so a black swatch
+ * darkens and a near-black one lands close to it. */
 vec3 tintTowards(vec3 straight, vec3 tint, float weight) {
+  if (weight <= 0.) return straight;
   float l = luma(straight), t = luma(tint);
-  if (weight <= 0. || l <= 0. || t <= .0001) return straight;
-  return mix(straight, tint * (l / t), weight);
+  if (l <= 0.) return straight;
+  return mix(straight, tint * min(l / max(t, .0001), 16.), weight);
 }
 
 /** Grading on unpremultiplied colour: white balance, then shadow and highlight
@@ -272,11 +275,16 @@ void main() {
 }
 `;
 
+/** The Gradient midpoint's slider range. A route can pass it, and the tone curve divides by zero at 1. */
+export function safeMidpoint(midpoint: number): number {
+  return Math.min(.95, Math.max(.05, midpoint));
+}
+
 /** Brightness position on the gradient: perceptual (gamma 2.2), then bent so
  * that the midpoint tone lands halfway along the gradient. */
 export function gradientTone(luma: number, midpoint: number): number {
   const perceptual = Math.pow(Math.min(Math.max(luma, 0), 1), 1 / 2.2);
-  return Math.pow(perceptual, Math.log(.5) / Math.log(midpoint));
+  return Math.pow(perceptual, Math.log(.5) / Math.log(safeMidpoint(midpoint)));
 }
 
 function hexLuma(hex: string): number {

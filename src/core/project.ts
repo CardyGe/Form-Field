@@ -563,11 +563,12 @@ PRESETS.push(
 /**
  * Finish presets set only the feedback, time-displacement and glow controls, so they
  * apply to the selected layer of any kind that supports them. Applying one
- * resets the other finish controls, so finishes replace each other.
+ * resets the other finish controls, so finishes replace each other. Colour
+ * balance and Key are not finish controls here: they stay as the artist set them.
  */
 export interface FinishLook { id: string; name: string; description: string; params: Record<string, number> }
 export const FINISH_LOOKS: FinishLook[] = [
-  { id: 'finish-none', name: 'No finish', description: 'Turns feedback, time displacement, glow and print screen off.', params: {} },
+  { id: 'finish-none', name: 'No finish', description: 'Turns feedback, time displacement, glow, print screen, colour split and gradient off. Colour balance and Key stay.', params: {} },
   { id: 'finish-tunnel', name: 'Tunnel', description: 'The layer becomes a frame that nests inside itself and turns into the distance. Best on full-frame sources.', params: { echo: 0.95, echoZoom: 0.9, echoRotate: 1.5, echoHue: 6, echoFrame: 0.62, echoBlend: 1 } },
   { id: 'finish-bloom-echo', name: 'Bloom Echo', description: 'A centre window streams outward, leaving colour-shifted echoes.', params: { echo: 0.85, echoZoom: 1.035, echoRotate: -1, echoHue: 9, echoBlend: 2, echoWindow: 0.35 } },
   { id: 'finish-glitch-tunnel', name: 'Glitch Tunnel', description: 'A centre window streams outward in stepped rings that streak, break into blocks and crunch into primary colour.', params: { echo: 1, echoBlend: 1, echoEdge: 0.6, echoWindow: 0.5, echoSquare: 0.7, echoRound: 0.25, echoZoom: 1.05, echoLens: 0.15, echoStreak: 0.4, echoStreakAxis: 1, echoBlock: 8, echoCrush: 0.7, echoHue: 12, echoSlip: 0.25 } },
@@ -579,7 +580,7 @@ export const FINISH_LOOKS: FinishLook[] = [
   { id: 'finish-ghost-median', name: 'Ghosts', description: 'Anything that moves fades away and only what stays put remains, with faint ghosts of the rest.', params: { slitShift: 1, slitSpan: 60, slitMode: 2, slitSlices: 9, slitReach: .4 } },
   { id: 'finish-long-exposure', name: 'Long Exposure', description: 'The brightest light of the last few frames is kept, so moving lights draw short trails.', params: { slitShift: 1, slitSpan: 16, slitMode: 4, slitSlices: 8 } },
   { id: 'finish-premonition', name: 'Premonition', description: 'Echoes of what is about to happen, fading into the future of the loop.', params: { slitShift: 1, slitSpan: 24, slitMode: 1, slitDirection: 1, slitSlices: 8, slitDecay: .7 } },
-  { id: 'finish-brightness-time', name: 'Brightness Time', description: 'Bright parts show the past and dark parts the present, in a smooth smear.', params: { slitShift: 1, slitSpan: 60, slitShape: 5, slitSlices: 16, slitSmooth: 1 } },
+  { id: 'finish-brightness-time', name: 'Brightness Time', description: 'Bright parts stay in the present and dark parts are delayed, in a smooth smear.', params: { slitShift: 1, slitSpan: 60, slitShape: 5, slitSlices: 16, slitSmooth: 1 } },
   { id: 'finish-soft-glow', name: 'Soft Glow', description: 'Bright areas spill a gentle halo.', params: { glowMix: 0.8, glowThreshold: 0.6, glowSize: 0.4 } },
   { id: 'finish-dream-haze', name: 'Dream Haze', description: 'The whole layer swims in a wide, soft haze.', params: { glowMix: 1.2, glowThreshold: 0.15, glowSize: 0.9 } },
   { id: 'finish-hot-highlights', name: 'Hot Highlights', description: 'Only the hottest points flare, tight and strong.', params: { glowMix: 1.5, glowThreshold: 0.8, glowSize: 0.2 } },
@@ -594,7 +595,8 @@ export const FINISH_LOOKS: FinishLook[] = [
   { id: 'finish-bitmap-dither', name: 'Bitmap Dither', description: 'Hard square cells in an 8×8 ordered dither.', params: { printMix: 1, printType: 2, printSize: 3, printMatrix: 2, printAngle: 0 } },
   { id: 'finish-halftone-edges', name: 'Halftone Edges', description: 'Dots only along the layer\'s edges; the rest stays smooth.', params: { printMix: 1, printSize: 8, printAngle: 45, printArea: 1, printEdgeWidth: 16 } },
 ];
-const FINISH_LOOK_KEYS = [...FEEDBACK_KEYS, ...SLIT_KEYS, ...GLOW_KEYS, ...PRINT_KEYS, ...LENS_KEYS];
+// Colour balance and Key are the artist's own grade and cut-out, so looks leave them and their routes alone.
+const FINISH_LOOK_KEYS = [...FEEDBACK_KEYS, ...SLIT_KEYS, ...GLOW_KEYS, ...PRINT_KEYS, ...SPLIT_KEYS, ...GRADIENT_KEYS];
 /** Whether the layer takes finishes at all or, with an id, that finish: glow
  * and print looks need a layer that supports them. */
 export function finishSupported(layer: Pick<Layer, 'kind' | 'params'>, finishId?: string): boolean {
@@ -672,6 +674,7 @@ export function clampParameter(value: number, definition: ParameterDefinition): 
 
 // Identity, coverage and Julia topology are deliberate composition choices.
 const VARIATION_FIXED = new Set(['scopeMode','emberPhrases','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
+const VARIATION_OFF_VALUES: Record<string, number> = { slitChroma: 0, slitZoom: 0, slitReach: 1, glowSpread: 0, glowStreak: 0 };
 export type VariationLocks = { palette: boolean; structure: boolean; motion: boolean; material: boolean };
 
 /** Deterministic by default; UI entropy is independent of the locked film seed. */
@@ -712,7 +715,9 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     const glow = GLOW_KEYS.includes(key);
     // Colour and Lens are explicit choices too: never varied. Glow's streak
     // shape is a stepped choice, so it is fixed even when glow is on.
-    if (LENS_KEYS.includes(key) || key === 'glowStreakShape') continue;
+    if (LENS_KEYS.includes(key) || key === 'glowStreakShape' || key === 'glowStreakAngle') continue;
+    // These extras are off at their stored value, so a variation must not switch them on.
+    if (key in VARIATION_OFF_VALUES && original === VARIATION_OFF_VALUES[key]) continue;
     if (glow && (key === 'glowMix' || key === 'glowTint' || !((layer.params.glowMix ?? 0) > 0))) continue;
     // Print screen likewise: never switch it, never change a stepped choice or
     // its travel, and keep its continuous controls near the artist's values.

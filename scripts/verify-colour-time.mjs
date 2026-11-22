@@ -298,6 +298,19 @@ const CHECKS = [
     },
   },
   {
+    name: 'gradient-midpoint-guard',
+    // A route can carry the midpoint past its slider range. At 1 the tone curve divides by zero.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct;
+        const scene = value => { const l = q.ramp({ gradMix: 1, gradPalette: 1, gradMidpoint: .5 }); l.modulations.gradMidpoint = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: value, max: value } }; return q.project([l]); };
+        const top = await q.px(scene(.95)), over = await q.px(scene(1)), bottom = await q.px(scene(.05)), under = await q.px(scene(0));
+        return { high: q.difference(top, over), low: q.difference(bottom, under) };
+      });
+      return { ok: r.high === 0 && r.low === 0, detail: `route at 1 against .95: ${r.high.toFixed(3)}; route at 0 against .05: ${r.low.toFixed(3)} (both must be 0)` };
+    },
+  },
+  {
     name: 'gradient-echo',
     // The map colours the output once. If it entered the echo history it would compound.
     run: async ({ page }) => {
@@ -408,6 +421,31 @@ const CHECKS = [
     },
   },
   {
+    name: 'streak-beads',
+    // A small bright dot must streak into one smooth line at every export size. Walking
+    // outward from the dot, the light may only fall: each rise of 2/255 is a false peak.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.ct, rows = [];
+        for (const [W, H] of [[960, 540], [1920, 1080], [3840, 2160]]) {
+          const url = await q.dotUrl(W, H), l = q.m.createLayer('image');
+          l.id = `dot-${W}`; Object.assign(l.params, { glowMix: 1, glowThreshold: .5, glowSize: .1, glowStreak: 2 });
+          l.image = { name: `dot-${W}.png`, dataUrl: url, width: W, height: H, fit: 'contain' };
+          const p = q.project([l]); p.highlights = 'exact';
+          const px = await q.px(p, .9, W, H);
+          let peak = -1, at = 0;
+          for (let i = 0; i < px.length; i += 4) if (px[i] > peak) { peak = px[i]; at = i / 4; }
+          const y = Math.floor(at / W), cx = at % W, row = Array.from({ length: W }, (_, x) => px[(y * W + x) * 4]);
+          const walk = step => { let low = row[cx], count = 0; for (let x = cx + step; x >= 0 && x < W; x += step) { if (row[x] - low >= 2) { count++; low = row[x]; } else low = Math.min(low, row[x]); } return count; };
+          let reach = 0; for (let x = cx; x < W && row[x] > 8; x++) reach = x - cx;
+          rows.push({ W, peaks: walk(1) + walk(-1), reach: reach / H * 1080 });
+        }
+        return rows;
+      });
+      return { ok: rows.every(r => r.peaks === 0 && r.reach > 20), detail: rows.map(r => `${r.W} wide: ${r.peaks} false peaks, reach ${r.reach.toFixed(0)} px of 1080`).join('; ') + ' (no false peaks, reach above 20)' };
+    },
+  },
+  {
     name: 'grade-grey',
     // Grey ignores a channel swap, so Channel order 1 runs the lens pass without changing it.
     // Every grade and key control is moved off its default except the amounts, so a tint or
@@ -473,6 +511,20 @@ const CHECKS = [
         return { mean: sum / a.length, worst, moved: q.difference(a, full) };
       });
       return { ok: r.moved >= 1 && r.mean < 1 && r.worst < 4, detail: `${r.moved >= 1 ? '' : 'Grading has no visible effect on the render. '}amount .001 against plain: mean ${r.mean.toFixed(3)}, worst ${r.worst} (limits 1 and 4); amount 1 moves it by ${r.moved.toFixed(3)}` };
+    },
+  },
+  {
+    name: 'grade-black',
+    // A black swatch is a real colour: it darkens, and a near-black swatch lands close to it.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, W = 960, H = 540;
+        const scene = (swatch, amount) => { const l = q.ramp({ gradeHighlightTint: amount, gradeHighlightColour: 1 }); l.palette = [swatch, ...l.palette.slice(1)]; const p = q.project([l]); p.highlights = 'exact'; return p; };
+        const bright = px => { let sum = 0, n = 0; for (let y = 0; y < H; y += 8) for (let x = Math.floor(W * .9); x < W; x++) { sum += px[(y * W + x) * 4]; n++; } return sum / n; };
+        const plain = bright(await q.px(scene('#000000', 0))), black = bright(await q.px(scene('#000000', 1))), near = bright(await q.px(scene('#020202', 1))), neutral = bright(await q.px(scene('#ff0000', 0)));
+        return { plain, black, near, neutral };
+      });
+      return { ok: r.black < r.plain * .25 && Math.abs(r.near - r.black) < 40 && r.neutral === r.plain, detail: `bright end: plain ${r.plain.toFixed(1)}, black swatch ${r.black.toFixed(1)} (under a quarter of plain), #020202 ${r.near.toFixed(1)} (within 40 of black), zero tint ${r.neutral.toFixed(1)} (equals plain)` };
     },
   },
   {
@@ -616,6 +668,27 @@ const CHECKS = [
       });
       const loop = loopVerdict(r.loop);
       return { ok: r.moved > 1 && loop.ok, detail: `Twist .5 moves Rings by ${r.moved.toFixed(3)} (at least 1); ${loop.detail}` };
+    },
+  },
+  {
+    name: 'time-shift-sweep',
+    // Twist and Zoom must fade with the real delay: the distance from shift 0 must shrink
+    // steadily to nothing as the shift falls, and a route held at 0 shows the plain layer.
+    // Before the fix the distance stayed near 70 however small the shift was.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, look = { slitSpan: 60, slitShape: 2, slitSlices: 16, slitSmooth: 1, slitTwist: .5, slitZoom: .2 };
+        const scene = (slitShift, extra = {}) => q.project([q.layer('surface', null, { ...look, ...extra, slitShift })]);
+        const zero = await q.px(scene(0)), steps = [];
+        for (const shift of [.0001, .001, .01, .1]) steps.push({ shift, step: q.difference(zero, await q.px(scene(shift))) });
+        const held = q.layer('surface', null, { ...look, slitShift: 0 });
+        held.modulations.slitShift = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: 0, max: 0 } };
+        const plain = await q.px(q.project([q.layer('surface', null, {})]));
+        const full = await q.px(scene(1)), noWarp = await q.px(scene(1, { slitTwist: 0, slitZoom: 0 }));
+        return { steps, held: q.difference(plain, await q.px(q.project([held]))), moved: q.difference(full, noWarp) };
+      });
+      const rising = r.steps.every((s, i) => !i || s.step > r.steps[i - 1].step);
+      return { ok: r.steps[0].step < .5 && rising && r.held < .05 && r.moved > 1, detail: `distance from shift 0: ${r.steps.map(s => `${s.shift}: ${s.step.toFixed(3)}`).join(', ')} (smallest under .5, rising with shift); route held at 0 against plain ${r.held.toFixed(4)} (limit .05); warp at shift 1 moves ${r.moved.toFixed(3)} (at least 1)` };
     },
   },
   {
@@ -1251,6 +1324,15 @@ try {
       const halo = .6 * (1 - ramp(.2, .34, Math.hypot(x, y))), block = Math.abs(x) < .1 && Math.abs(y) < .1 ? 1 : 0;
       return [176, 96, 48, Math.round(255 * Math.max(halo, block))];
     });
+    // Black with one white 3x3 dot at the centre, built directly because 4K is 8M pixels.
+    const dotUrl = async (w, h) => {
+      const bytes = new Uint8Array(w * h * 4);
+      for (let i = 3; i < bytes.length; i += 4) bytes[i] = 255;
+      for (let y = (h >> 1) - 1; y <= (h >> 1) + 1; y++) for (let x = (w >> 1) - 1; x <= (w >> 1) + 1; x++) bytes.fill(255, (y * w + x) * 4, (y * w + x) * 4 + 4);
+      const png = await m.encodePNG(bytes, w, h), parts = [];
+      for (let i = 0; i < png.length; i += 8192) parts.push(String.fromCharCode(...png.subarray(i, i + 8192)));
+      return `data:image/png;base64,${btoa(parts.join(''))}`;
+    };
     const greyUrl = await dataUrl(64, 36, () => [128, 128, 128, 255]);
     const tinyUrl = await dataUrl(64, 36, (x, y) => [Math.round(255 * (x + .9) / 1.8), Math.round(255 * (y + .5)), 90, Math.round(255 * (1 - ramp(.25, .48, Math.hypot(x, y))))]);
     const image = (url, params, name) => {
@@ -1330,7 +1412,7 @@ try {
       const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
       return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
     };
-    window.ct = { m, old, tinyUrl, renderer, slide, layer, poster, soft, grey, bars, stripes, wave, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, litShare, loop };
+    window.ct = { m, old, tinyUrl, dotUrl, renderer, slide, layer, poster, soft, grey, bars, stripes, wave, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, litShare, loop };
   }, !!baseline);
 
   for (const check of selected) {
