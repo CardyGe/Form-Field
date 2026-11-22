@@ -181,6 +181,15 @@ export const tearFragment = /* glsl */`
     return fract((q.x+q.y)*q.z);
   }
   float faultDistance(float y, float at) { float d=abs(y-at); return min(d,1.-d); }
+  // What Resolve leaves where there is no light: the ground and black level. Transparent output has none.
+  vec3 floorAt(vec2 uv) {
+    if (uTransparent>.5) return vec3(0.);
+    vec2 d=(uv-uCentre)*vec2(uAspect,1.);
+    vec3 ground=uGround+uLift*(.35+.65*exp(-dot(d,d)*2.6))*vec3(.32,.42,.62);
+    return uBlack+ground*(1.-uBlack);
+  }
+  // The light in a resolved value, with its floor taken out.
+  float lightIn(float value, float base) { return max((value-base)/max(1.-base,.001)-.001,0.); }
   void main() {
     // Slabs: the frame is cut into strata of uneven height, so whole slices of the disc move as one.
     float strata=uGrid.y*.5, course=floor(vUv.y*strata), courseKey=hash(vec2(course,3.),uNoise.x);
@@ -241,7 +250,8 @@ export const tearFragment = /* glsl */`
     vec2 part=vec2(cos(lean*TAU*.25),sin(lean*TAU*.25)*.35)*uSplit*.04*uDrive*(.22+.78*broken)*uTear;
     vec2 at=fract(vUv+shift);
     vec4 middle=texture2D(uImage,at);
-    vec3 c=vec3(texture2D(uImage,fract(at+part)).r,middle.g,texture2D(uImage,fract(at-part)).b);
+    // From here c is light alone, so recolouring cannot turn a raised black level into coloured blocks.
+    vec3 c=vec3(lightIn(texture2D(uImage,fract(at+part)).r,floorAt(fract(at+part)).r),lightIn(middle.g,floorAt(at).g),lightIn(texture2D(uImage,fract(at-part)).b,floorAt(fract(at-part)).b));
 
     // Colour shred: only light is recoloured, so the black stays black and the rip has edges to read against.
     if (broken>.5) {
@@ -265,11 +275,10 @@ export const tearFragment = /* glsl */`
     float band=floor(vUv.y*34.);
     if (hash(vec2(band,21.),uNoise.y)<uBands*.8*uTear) c*=.26+.5*step(.5,fract(vUv.y*270.));
 
-    // A tear can darken light, but never below the ground and black level Resolve laid down.
-    if (uTransparent<.5) {
-      vec3 ground=uGround+uLift*(.35+.65*exp(-dot(from,from)*2.6))*vec3(.32,.42,.62);
-      c=max(c,uBlack+ground*(1.-uBlack));
-    }
-    float cover=clamp(max(middle.a,max(c.r,max(c.g,c.b))),0.,1.);
+    // Light goes back over the floor here, so a tear can never darken below it.
+    vec3 base=floorAt(vUv);
+    c=base+c*(1.-base);
+    // Transparent alpha follows the colour, as in Resolve, so darkened areas do not occlude the layers below.
+    float cover=uTransparent>.5?clamp(max(c.r,max(c.g,c.b)),0.,1.):middle.a;
     gl_FragColor=vec4(c,cover);
   }`;

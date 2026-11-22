@@ -211,26 +211,29 @@ export class MeridianRenderer {
     const ends = score.stateEnds, peak = smoothRange(position.progress, ends[3], ends[3] + (ends[4] - ends[3]) * .2) * (1 - smoothRange(position.progress, ends[4], ends[5]));
     const loopFrames = Math.max(1, Math.round(runtime?.loopFrames ?? DEFAULT_LOOP_FRAMES));
     const frame = Math.min(loopFrames - 1, Math.floor(along / repeat * loopFrames + 1e-6));
-    const phraseFrame = Math.ceil(phrase * loopFrames / repeat - 1e-6);
-    this.tearAmount = this.prepareTear(score, position.progress, frame, phraseFrame, loopFrames, repeat, phrase, live);
+    this.tearAmount = this.prepareTear(score, position.progress, frame, loopFrames / repeat, phrase, live);
     sourceViewMatrix(layer.transform, width / height, this.view);
     this.renderList(renderer, list, live, layer.palette, this.view.invert(), layer.transform.scale, position.progress, peak, width, height, target, draw);
   }
 
   /**
    * How torn this moment is, 0 to 1, and the pattern it shows. It cuts in at the start of Peak, holds, and Recovery
-   * sets how far it trails into Collapse. Amount and pattern are both read at the first frame of the current hold,
-   * counted from the start of the phrase, so they stay exactly still for Hold frames of real output.
+   * sets how far it trails into Collapse. Holds are counted in output frames from the first frame of Peak, and each
+   * reads the envelope at its midpoint, so amount and pattern stay exactly still for Hold frames. The first hold reads
+   * no later than the end of the plateau, so a hold longer than the whole tear still shows it at full strength.
    */
-  private prepareTear(score: Score, progress: number, frame: number, phraseFrame: number, loopFrames: number, repeat: number, phrase: number, p: Readonly<Record<string, number>>): number {
+  private prepareTear(score: Score, progress: number, frame: number, phraseFrames: number, phrase: number, p: Readonly<Record<string, number>>): number {
     const glitch = read(p, 'glitchAmount'), ends = score.stateEnds, peakLength = ends[4] - ends[3];
-    if (glitch <= 0 || progress < ends[3] || progress >= ends[5]) return 0;
+    const firstFrame = Math.ceil((phrase + ends[3]) * phraseFrames - 1e-6);
+    if (glitch <= 0 || frame < firstFrame || progress >= ends[5]) return 0;
     const hold = Math.max(1, Math.round(read(p, 'glitchHoldFrames')));
-    const step = Math.floor(Math.max(0, frame - phraseFrame) / hold);
-    const held = Math.max(0, (phraseFrame + step * hold) / loopFrames * repeat - phrase);
+    const step = Math.floor((frame - firstFrame) / hold);
+    const middle = (firstFrame + (step + .5) * hold) / phraseFrames - phrase;
+    const releases = ends[4] - peakLength * .45;
+    const held = step === 0 ? Math.min(middle, releases) : middle;
     const recovery = read(p, 'glitchRecovery');
     const settled = ends[4] + (ends[5] - ends[4]) * .7 * (1 - recovery);
-    const shape = smoothRange(held, ends[3], ends[3] + peakLength * .1) * (1 - smoothRange(held, ends[4] - peakLength * .45, settled));
+    const shape = smoothRange(held, ends[3], ends[3] + peakLength * .1) * (1 - smoothRange(held, releases, settled));
     const amount = Math.min(1, glitch * shape);
     if (amount <= 0) return 0;
     const u = this.tear.uniforms, seed = (score.seed ^ Math.imul(Math.round(read(p, 'glitchSeed')), 0x9e3779b1)) >>> 0;

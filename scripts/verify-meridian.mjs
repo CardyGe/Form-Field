@@ -269,7 +269,57 @@ try {
       target.dispose();
       return lowest;
     };
-    window.meridianQA = { m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold, tearChecks, tearHold, tearBlack };
+    // A long hold on a short loop must still show a tear in the first output frame of Peak.
+    const tearShort = async (seconds, hold) => {
+      const missing = [];
+      for (let seed = 1; seed <= 24; seed++) {
+        const frameOf = amount => {
+          const project = m.createProject(), layer = layerFor(seed);
+          Object.assign(layer.params, { glitchHoldFrames: hold, glitchAmount: amount });
+          project.layers = [layer]; project.background = '#000000'; project.duration = seconds; project.fps = { num: 30, den: 1 };
+          const total = m.frameCount(project), at = Math.ceil(phaseOf(seed, 4, 0) / (Math.PI * 2) * total - 1e-6);
+          return studio.exportPNG(project, m.phaseAtFrame(at, total), 96, 54);
+        };
+        const torn = await frameOf(1), amount = studio.meridian.tearAmount, clean = await frameOf(0);
+        if (!(amount > 0) || (torn.length === clean.length && torn.every((value, i) => value === clean[i]))) missing.push(seed);
+      }
+      return missing;
+    };
+    // Empty torn cells stay exactly on the floor that Resolve lays down, with black level and background lift raised.
+    const tearEmpty = () => {
+      const w = 320, h = 180, target = floatTarget(w, h);
+      let worst = 0;
+      for (const seed of [1, 2, 3, 4, 5, 6]) {
+        const layer = layerFor(seed);
+        Object.assign(layer.params, { outputBlackLevel: .1, lightBackgroundLift: .2, glitchAmount: 2, glitchScanBands: 1, glitchColourShred: 1, glitchPosterise: 1, glitchRgbSplit: 1 });
+        meridian.draw(gl, layer, phaseOf(seed, 4, .4), w, h, target, draw);
+        gl.setClearColor(0, 0); gl.setRenderTarget(meridian.light); gl.clear();
+        meridian.resolve.uniforms.uWeights.value.fill(0);
+        draw(meridian.resolve, target);
+        const floor = read(target, w, h);
+        draw(meridian.resolve, meridian.untorn);
+        draw(meridian.tear, target);
+        const torn = read(target, w, h);
+        for (let i = 0; i < torn.length; i += 4) for (let k = 0; k < 3; k++) worst = Math.max(worst, Math.abs(torn[i + k] - floor[i + k]));
+      }
+      target.dispose();
+      return worst;
+    };
+    // In transparent output, alpha follows the torn colour as Resolve defines it, so dark patches do not occlude.
+    const tearAlpha = () => {
+      const w = 320, h = 180, target = floatTarget(w, h);
+      let worst = 0;
+      for (const seed of [1, 2, 3, 4, 5, 6]) {
+        const layer = layerFor(seed);
+        Object.assign(layer.params, { outputTransparent: 1, glitchAmount: 2, glitchScanBands: 1, glitchColourShred: 1 });
+        meridian.draw(gl, layer, phaseOf(seed, 4, .4), w, h, target, draw);
+        const data = read(target, w, h);
+        for (let i = 0; i < data.length; i += 4) worst = Math.max(worst, Math.abs(data[i + 3] - Math.min(1, Math.max(data[i], data[i + 1], data[i + 2]))));
+      }
+      target.dispose();
+      return worst;
+    };
+    window.meridianQA = { m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold, tearChecks, tearHold, tearBlack, tearShort, tearEmpty, tearAlpha };
   });
 
   const report = { luma: {}, widths: {}, errors };
@@ -345,6 +395,17 @@ try {
   report.tearBlack = await page.evaluate(level => window.meridianQA.tearBlack(level), BLACK_LEVEL);
   if (report.tearBlack < BLACK_LEVEL - 1e-3) failures.push(`a torn pixel reaches ${report.tearBlack.toFixed(4)}, below the black level ${BLACK_LEVEL}`);
 
+  report.tearShort = {};
+  for (const [seconds, hold] of [[1, 12], [2, 12], [1, 6]]) {
+    const missing = await page.evaluate(([seconds, hold]) => window.meridianQA.tearShort(seconds, hold), [seconds, hold]);
+    report.tearShort[`${seconds}s hold ${hold}`] = missing.length;
+    if (missing.length) failures.push(`${seconds} s loop at Hold ${hold}: no tear at Peak for ${missing.length} of 24 seeds`);
+  }
+  report.tearEmpty = await page.evaluate(() => window.meridianQA.tearEmpty());
+  if (report.tearEmpty > .004) failures.push(`an empty torn area moves ${report.tearEmpty.toFixed(4)} off the black level floor`);
+  report.tearAlpha = await page.evaluate(() => window.meridianQA.tearAlpha());
+  if (report.tearAlpha > .004) failures.push(`transparent tear alpha is ${report.tearAlpha.toFixed(4)} away from its colour`);
+
   // Stills go through the whole Studio path, so masks, blend and transform stay in the proof.
   const tiles = [];
   for (const name of SHEET) for (const seed of SEEDS) {
@@ -378,7 +439,7 @@ try {
   await fs.writeFile(path.join(out, 'first-look.png'), Buffer.from(sheet));
 
   report.ui = await verifyInApp(page, failures);
-  console.log(JSON.stringify({ structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, ui: report.ui }));
+  console.log(JSON.stringify({ structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));
   assert.deepEqual(errors, []);
   assert.deepEqual(failures, []);
