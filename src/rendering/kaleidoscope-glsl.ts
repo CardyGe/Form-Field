@@ -304,6 +304,35 @@ vec4 kHistory(vec2 p, vec2 dx, vec2 dy) {
   return sum / 8.;
 }
 
+// Everything after the fold, for one footprint.
+vec4 kShade(vec2 p, vec2 dx, vec2 dy) {
+  p = kWarpAfter(p, dx, dy);
+  if (uKFeedback > .5) {
+    vec4 motif = kMotif(p, dx, dy);
+    return motif + (1. - motif.a) * uKGain * kHistory(p, dx, dy);
+  }
+  return uKHasImage > .5 ? kImage(p, dx, dy) : kMotif(p, dx, dy);
+}
+
+// One filtered tap across a mirror would read picture from beyond the wall. Every pixel takes the
+// same four rotated-grid taps, each with its own fold and half the footprint: because the filter is
+// the same on and off a mirror, a fold line cannot look sharper or softer than its surroundings.
+const vec2 K_FOLD_TAPS[4] = vec2[4](vec2(-.125, -.375), vec2(.375, -.125), vec2(.125, .375), vec2(-.375, .125));
+vec4 kFoldedColor(vec2 p, vec2 dx, vec2 dy) {
+  vec4 color = vec4(0.);
+  for (int i = 0; i < 4; i++) {
+    vec2 tapX = .5 * dx, tapY = .5 * dy;
+    vec2 tap = foldDomain(p + K_FOLD_TAPS[i].x * dx + K_FOLD_TAPS[i].y * dy, tapX, tapY);
+    tap = kWarpAfter(tap, tapX, tapY);
+    color += .25 * (uKHasImage > .5 && uKFeedback < .5 ? kImage(tap, tapX, tapY) : kMotif(tap, tapX, tapY));
+  }
+  if (uKFeedback < .5) return color;
+  // The history is read once: spreading taps here would blur it again on every echo.
+  vec2 historyX = dx, historyY = dy;
+  vec2 history = kWarpAfter(foldDomain(p, historyX, historyY), historyX, historyY);
+  return color + (1. - color.a) * uKGain * kHistory(history, historyX, historyY);
+}
+
 vec4 kaleidoscopeColor(vec2 frame, vec2 dx, vec2 dy) {
   if (uKEmpty > .5) return vec4(0.);
   float c = cos(uKSourceTurn), s = sin(uKSourceTurn);
@@ -315,16 +344,9 @@ vec4 kaleidoscopeColor(vec2 frame, vec2 dx, vec2 dy) {
   if (uKSpiral == 1) {
     p = spiralDomain(p, dx, dy);
     p.x += uKZoom;
-  } else {
-    p /= uKCell; dx /= uKCell; dy /= uKCell;
-    p = foldDomain(p, dx, dy);
+    return kShade(p, dx, dy);
   }
-  p = kWarpAfter(p, dx, dy);
-  if (uKFeedback > .5) {
-    vec4 motif = kMotif(p, dx, dy);
-    return motif + (1. - motif.a) * uKGain * kHistory(p, dx, dy);
-  }
-  return uKHasImage > .5 ? kImage(p, dx, dy) : kMotif(p, dx, dy);
+  return kFoldedColor(p / uKCell, dx / uKCell, dy / uKCell);
 }
 `;
 
