@@ -539,6 +539,21 @@ const CHECKS = [
     },
   },
   {
+    name: 'time-looks',
+    // The five Task 10 looks, applied as the library applies them, on a Surface layer: each must differ visibly from the plain layer.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, plain = await q.px(q.project([q.layer('surface')]), .9), rows = [];
+        for (const id of ['finish-time-vortex', 'finish-ghost-median', 'finish-long-exposure', 'finish-premonition', 'finish-brightness-time']) {
+          const l = q.m.applyFinish(q.m.createLayer('surface'), id);
+          rows.push({ id, moved: q.difference(plain, await q.px(q.project([l]), .9)) });
+        }
+        return rows;
+      });
+      return { ok: r.every(x => x.moved > .01), detail: r.map(x => `${x.id.slice(7)} ${x.moved.toFixed(3)}`).join(', ') + ' (mean difference from the plain layer, limit 0.01)' };
+    },
+  },
+  {
     name: 'time-brightness',
     // Black and white plateaus joined by ramps, moving half a period between the two phases.
     // Where the frame is white now it must show now; where it is black, the full delay.
@@ -1004,7 +1019,7 @@ export {encodePNG} from './src/rendering/png';${extra}`, resolveDir: dir, loader
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
-await bundle(root, 'renderer.js', `\nexport {gradientTone,gradientStops} from './src/rendering/colour-lens';\nexport {supportsSlitScan,medianOf,medianTargetSize} from './src/rendering/slitscan';\nexport {feedbackActive} from './src/rendering/feedback';`);
+await bundle(root, 'renderer.js', `\nexport {gradientTone,gradientStops} from './src/rendering/colour-lens';\nexport {applyFinish} from './src/core/project';\nexport {supportsSlitScan,medianOf,medianTargetSize} from './src/rendering/slitscan';\nexport {feedbackActive} from './src/rendering/feedback';`);
 if (baseline) await bundle(path.resolve(baseline), 'baseline.js');
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');

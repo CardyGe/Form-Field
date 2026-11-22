@@ -24,6 +24,20 @@ export function slitActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>
   return supportsSlitScan(layer) && ((layer.params.slitShift ?? 0) !== 0 || !!layer.modulations.slitShift);
 }
 
+/** Whether an inspector control applies to the layer's current Time mode. Shift is always shown; the rest need it on. */
+export function slitControlVisible(layer: Pick<Layer, 'params' | 'modulations'>, key: string): boolean {
+  if (key === 'slitShift') return true;
+  if (!((layer.params.slitShift ?? 0) !== 0 || !!layer.modulations.slitShift)) return false;
+  const mode = Math.round(layer.params.slitMode ?? 0), delayMap = mode <= 0;
+  switch (key) {
+    case 'slitShape': case 'slitSmooth': case 'slitScroll': case 'slitTwist': case 'slitZoom': case 'slitChroma': return delayMap;
+    case 'slitBlocks': { const shape = Math.round(layer.params.slitShape ?? 0); return delayMap && (shape === 4 || shape === 6); }
+    case 'slitDecay': return mode === 1;
+    case 'slitReach': return mode >= 2;
+    default: return true;
+  }
+}
+
 /** Slices rendered per frame. Median needs an odd count of at most nine. */
 export function sliceCount(params: Record<string, number>): number {
   const count = Math.max(2, Math.round(params.slitSlices ?? 12));

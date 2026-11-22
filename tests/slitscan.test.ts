@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FINISH_LOOKS, FINISH_SHOWCASE_IDS, applyFinish, PRESETS, applyPreset, parameterDefinitions, createLayer, createProject, validateProject, varyLayer } from '../src/core/project';
 import { SLIT_KEYS } from '../src/core/finishing';
-import { SLIT_SHAPES, slitActive, sliceDelays, supportsSlitScan, sliceCount, slicePhase, sliceSourceRenders, echoWeights, channelSliceCounts, medianOf, medianTargetSize } from '../src/rendering/slitscan';
+import { SLIT_SHAPES, slitActive, sliceDelays, supportsSlitScan, sliceCount, slicePhase, sliceSourceRenders, echoWeights, channelSliceCounts, medianOf, medianTargetSize, slitControlVisible } from '../src/rendering/slitscan';
 const unlocked = { palette: false, structure: false, motion: false, material: false };
 
 test('time displacement is off by default and older projects migrate without it', () => {
@@ -37,7 +37,7 @@ test('patterns and evolving ink cannot take time displacement', () => {
 
 test('time displacement looks are ordinary saved layers with it switched on', () => {
   const slits = FINISH_LOOKS.filter(f => (f.params.slitShift ?? 0) !== 0);
-  assert.equal(slits.length, 3);
+  assert.equal(slits.length, 8);
   assert.ok(slitActive(applyPreset(createLayer('surface'), FINISH_SHOWCASE_IDS[1])));
   for (const finish of slits) {
     const layer = applyFinish(applyFinish(createLayer('fractal'), 'finish-tunnel'), finish.id);
@@ -119,4 +119,34 @@ test('the time mode is rounded the same way when counting slices', () => {
   assert.equal(sliceCount({ slitMode: 1.6, slitSlices: 12 }), 9);
   assert.equal(sliceCount({ slitMode: 2.4, slitSlices: 4 }), 5);
   assert.equal(sliceCount({ slitMode: 2.6, slitSlices: 12 }), 12);
+});
+
+test('time controls appear only for the mode that uses them', () => {
+  const base = createLayer('surface');
+  const on = (params: Record<string, number>) => ({ ...base, params: { ...base.params, slitShift: 1, ...params } });
+  assert.equal(slitControlVisible(base, 'slitShift'), true);
+  assert.equal(slitControlVisible(base, 'slitMode'), false);
+  assert.equal(slitControlVisible(on({ slitMode: 0 }), 'slitTwist'), true);
+  assert.equal(slitControlVisible(on({ slitMode: 1 }), 'slitTwist'), false);
+  assert.equal(slitControlVisible(on({ slitMode: 1 }), 'slitDecay'), true);
+  assert.equal(slitControlVisible(on({ slitMode: 2 }), 'slitReach'), true);
+  assert.equal(slitControlVisible(on({ slitMode: 2 }), 'slitSmooth'), false);
+  assert.equal(slitControlVisible(on({ slitShape: 4 }), 'slitBlocks'), true);
+  assert.equal(slitControlVisible(on({ slitShape: 6 }), 'slitBlocks'), true);
+  assert.equal(slitControlVisible(on({ slitShape: 2 }), 'slitBlocks'), false);
+  assert.equal(slitControlVisible(on({ slitMode: 1, slitShape: 4 }), 'slitBlocks'), false);
+  assert.equal(slitControlVisible(on({ slitMode: 0 }), 'slitDecay'), false);
+  for (const mode of [3, 4]) assert.equal(slitControlVisible(on({ slitMode: mode }), 'slitReach'), true);
+  for (const key of ['slitSpan', 'slitSlices', 'slitMode', 'slitDirection']) for (const mode of [0, 1, 2, 3, 4]) assert.equal(slitControlVisible(on({ slitMode: mode }), key), true, `${key} ${mode}`);
+  const modulated = { ...base, modulations: { ...base.modulations, slitShift: { source: 'lfo' } as never } };
+  assert.equal(slitControlVisible(modulated, 'slitSpan'), true);
+});
+
+test('the five new time looks exist with their exact recipes', () => {
+  const find = (id: string) => FINISH_LOOKS.find(f => f.id === id)!.params;
+  assert.deepEqual(find('finish-time-vortex'), { slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 16, slitSmooth: 1, slitTwist: .5, slitZoom: .2, slitChroma: .25 });
+  assert.deepEqual(find('finish-ghost-median'), { slitShift: 1, slitSpan: 60, slitMode: 2, slitSlices: 9, slitReach: .4 });
+  assert.deepEqual(find('finish-long-exposure'), { slitShift: 1, slitSpan: 45, slitMode: 4, slitSlices: 16 });
+  assert.deepEqual(find('finish-premonition'), { slitShift: 1, slitSpan: 24, slitMode: 1, slitDirection: 1, slitSlices: 8, slitDecay: .7 });
+  assert.deepEqual(find('finish-brightness-time'), { slitShift: 1, slitSpan: 60, slitShape: 5, slitSlices: 16, slitSmooth: 1 });
 });
