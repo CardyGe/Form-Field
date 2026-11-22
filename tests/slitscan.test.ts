@@ -106,3 +106,11 @@ test('the Brightness map counts its driver as one more source render', () => {
   assert.equal(sliceSourceRenders({ params: { slitSlices: 12, slitShape: 2 } }), 12);
   assert.equal(sliceSourceRenders({ params: { slitSlices: 12, slitShape: 5 } }), 13);
 });
+
+test('statistical time modes render no Brightness driver', () => {
+  const params = { slitShift: 1, slitSpan: 30, slitSlices: 7, slitShape: 5 };
+  assert.equal(sliceSourceRenders({ params: { ...params, slitMode: 0 } }), 8);
+  for (const slitMode of [1, 3, 4]) assert.equal(sliceSourceRenders({ params: { ...params, slitMode } }), 7);
+  assert.equal(sliceSourceRenders({ params: { ...params, slitMode: 2 } }), 7);
+  assert.equal(sliceSourceRenders({ params: { ...params, slitMode: 2, slitSlices: 12 } }), 9);
+});

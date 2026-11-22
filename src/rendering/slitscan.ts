@@ -37,10 +37,11 @@ export function sliceDelays(layer: Pick<Layer, 'params'>): number[] {
   return Array.from({ length: count }, (_, i) => span * i / (count - 1));
 }
 
-/** Source renders per frame: one per slice, plus the Brightness map's driver. */
+/** Source renders per frame: one per slice, plus the Brightness map's driver in Delay map mode. */
 export function sliceSourceRenders(layer: Pick<Layer, 'params'>): number {
   const shape = layer.params.slitShape ?? 0;
-  return sliceDelays(layer).length + Number(shape >= 4.5 && shape < 5.5);
+  const delayMap = Math.round(layer.params.slitMode ?? 0) <= 0;
+  return sliceDelays(layer).length + Number(delayMap && shape >= 4.5 && shape < 5.5);
 }
 
 /** Phase of a slice: back in time by default, forward in Future, wrapped to the loop. */

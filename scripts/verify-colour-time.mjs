@@ -938,6 +938,12 @@ const CHECKS = [
         const preview = [];
         for (const mode of [1, 2, 3, 4]) { const p = q.project([slit({ slitMode: mode, slitReach: .4 })]); await R.prepare(p); while (gl.getError()); R.render(p, .9, 960, 540); preview.push(gl.getError()); }
         out.preview = preview;
+        // The Median array holds the slices in use: three take a third of the memory of nine.
+        const sized = async slices => { const p = q.project([slit({ slitMode: 2, slitSlices: slices })]); await R.prepare(p); await R.exportPNG(p, .9, 5120, 2880); const t = R.medianTarget; return { width: t.width, height: t.height, depth: t.depth, bytes: t.width * t.height * t.depth * 8 }; };
+        out.three = await sized(3);
+        let reallocated = 0; R.medianTarget.addEventListener('dispose', () => { reallocated++; });
+        await sized(3); out.repeat = reallocated;
+        out.nine = await sized(9); out.changed = reallocated; out.nineWant = q.m.medianTargetSize(5120, 2880, 9);
         await frame(q.layer('surface'));
         await frame(slit({ slitMode: 1, slitShape: 5, slitChroma: 1 })); out.echo = held();
         await frame(slit({ slitMode: 3, slitShape: 5, slitChroma: 1, slitReach: .4 })); out.reach = held();
@@ -952,9 +958,12 @@ const CHECKS = [
         return { ...out, keys };
       });
       const same = (a, b) => [...a].sort().join() === [...b].sort().join();
-      const ok = r.preview.every(e => e === 0) && same(r.echo, []) && same(r.reach, ['statBoundTarget', 'statLightTarget']) && same(r.median, ['medianTarget']) &&
+      const array = t => `${t.width}x${t.height}x${t.depth} = ${(t.bytes / 1024 / 1024).toFixed(1)} MiB`;
+      const sizing = r.three.width === 5120 && r.three.height === 2880 && r.three.depth === 3 && r.repeat === 0 && r.changed > 0 &&
+        r.nine.depth === 9 && r.nine.width === r.nineWant.width && r.nine.height === r.nineWant.height && r.nine.width < 5120 && r.nine.bytes <= 768 * 1024 * 1024;
+      const ok = sizing && r.preview.every(e => e === 0) && same(r.echo, []) && same(r.reach, ['statBoundTarget', 'statLightTarget']) && same(r.median, ['medianTarget']) &&
         same(r.delay, ['lensTarget', 'slitBoundTarget', 'slitLagTarget', 'slitDriverTarget']) && same(r.all, r.keys) && !r.after.length && same(r.released, r.keys) && same(r.closed, r.keys) && !r.left.length;
-      return { ok, detail: `preview GL errors ${r.preview}; Echo holds [${r.echo}]; Darkest with reach [${r.reach}]; Median [${r.median}]; delay map [${r.delay}]; all in use ${r.all.length}/${r.keys.length}; after they stop [${r.after}], released ${r.released.length}; dispose released ${r.closed.length}, left [${r.left}]` };
+      return { ok, detail: `5120x2880 Median: 3 slices ${array(r.three)}, same again reallocates ${r.repeat} times, 9 slices ${array(r.nine)} (budget 768 MiB); preview GL errors ${r.preview}; Echo holds [${r.echo}]; Darkest with reach [${r.reach}]; Median [${r.median}]; delay map [${r.delay}]; all in use ${r.all.length}/${r.keys.length}; after they stop [${r.after}], released ${r.released.length}; dispose released ${r.closed.length}, left [${r.left}]` };
     },
   },
 ];

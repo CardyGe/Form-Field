@@ -13,7 +13,7 @@ import type { Layer } from '../shared/types';
 import { slitActive } from './slitscan';
 
 export const TIME_ECHO = 1, TIME_MEDIAN = 2, TIME_DARKEST = 3, TIME_BRIGHTEST = 4;
-/** Layers of the Median array target. */
+/** The most slices Median combines, which sizes the shader's sort arrays. */
 export const MEDIAN_DEPTH = 9;
 
 /** The time mode a parameter value selects. */

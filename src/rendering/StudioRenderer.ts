@@ -11,7 +11,7 @@ import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
 import { channelSliceCounts, echoWeights, medianTargetSize, slicePhase, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
-import { MEDIAN_DEPTH, TIME_ECHO, TIME_MEDIAN, timeGatherFragment, timeMedianFragment, timeMode, timeTargetNeeds } from './time-stats';
+import { TIME_ECHO, TIME_MEDIAN, timeGatherFragment, timeMedianFragment, timeMode, timeTargetNeeds } from './time-stats';
 import { parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
@@ -1107,16 +1107,16 @@ export class StudioRenderer {
     const bounded = channels[0] !== count || channels[1] !== count;
     const sliceAt = (delay: number) => this.plainSource(original, slicePhase(phase, delay, total, direction), duration);
     if (mode === TIME_MEDIAN) {
-      const size = medianTargetSize(this.width, this.height, MEDIAN_DEPTH);
+      const size = medianTargetSize(this.width, this.height, count);
       let layers = this.medianTarget;
       if (!layers) {
-        layers = new THREE.WebGLArrayRenderTarget(size.width, size.height, MEDIAN_DEPTH, {
+        layers = new THREE.WebGLArrayRenderTarget(size.width, size.height, count, {
           type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false,
           minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false,
         });
         layers.texture.colorSpace = THREE.LinearSRGBColorSpace;
         this.medianTarget = layers;
-      } else if (layers.width !== size.width || layers.height !== size.height) layers.setSize(size.width, size.height, MEDIAN_DEPTH);
+      } else if (layers.width !== size.width || layers.height !== size.height || layers.depth !== count) layers.setSize(size.width, size.height, count);
       setWrap(layers, this.tiling);
       delays.forEach((delay, index) => {
         this.copy.uniforms.uImage.value = sliceAt(delay);
