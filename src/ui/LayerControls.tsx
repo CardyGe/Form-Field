@@ -65,6 +65,7 @@ export function Icon({ name, size = 18 }: { name: string; size?: number }) {
     oil: <><path d="M12 2C9 7 4 10 4 15a8 8 0 0 0 16 0c0-5-5-8-8-13Z" /><path d="M8 15a4 4 0 0 0 4 4" /><circle cx="14" cy="12" r="2" /></>,
     liquid: <><circle cx="9" cy="9" r="6" /><circle cx="17.5" cy="16.5" r="3.5" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="6" r="1.5" /></>,
     scope: <><circle cx="12" cy="12" r="9" /><path d="M3 12c3-8 6-8 9 0s6 8 9 0" /></>,
+    smokecloud: <><circle cx="12" cy="12" r="3" /><circle cx="12" cy="12" r="7" /><path d="M4 5c2 1 2 3 1 4M20 19c-2-1-2-3-1-4M19 4c-1 2-3 2-4 1M5 20c1-2 3-2 4-1" /></>,
     graphic: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><path d="M12 3v4m9 5h-4m-5 9v-4M3 12h4" /></>,
     livingink: <><circle cx="8" cy="8" r="4"/><circle cx="16" cy="15" r="5"/></>,
     relief: <><path d="m3 6 7-3v15l-7 3Zm11 0 7-3v15l-7 3Z"/></>,

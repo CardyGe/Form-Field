@@ -21,6 +21,7 @@ import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
+import { SmokeCloudRenderer } from './SmokeCloud';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
@@ -172,6 +173,8 @@ export class StudioRenderer {
   private readonly liquid: THREE.ShaderMaterial;
   private readonly liquidLayouts = new Map<string, THREE.DataTexture>();
   private scope: ScopeRenderer | null = null;
+  private smokeClouds: SmokeCloudRenderer | null = null;
+  private previewPlaying = true;
   /** Reduced-size stand-ins for `source` while the preview draws time slices. */
   private sliceSource: THREE.WebGLRenderTarget | null = null;
   private sliceSourceSmooth: THREE.WebGLRenderTarget | null = null;
@@ -267,6 +270,7 @@ export class StudioRenderer {
     this.feedbackStates.clear();
     this.releaseOilTargets();
     this.instruments.resetGpuHistory();
+    this.smokeClouds?.resetGpuHistory();
   };
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -552,6 +556,7 @@ export class StudioRenderer {
       this.instruments.prepare(project,(m,t)=>this.draw(m,t),layer=>layer.mask.dataUrl?this.assets.get(this.assetKey(layer.mask.dataUrl,true))?.texture.image as CanvasImageSource|undefined:undefined);
       for (const [key, asset] of this.assets) if (!required.has(key)) { asset.texture.dispose(); this.assets.delete(key); }
       if (!project.layers.some(layer => layer.kind === 'oil' && layer.visible)) this.releaseOilTargets();
+      this.smokeClouds?.keep(new Set(project.layers.filter(layer => layer.kind === 'smokecloud' && layer.visible).map(layer => layer.id)));
       if (!project.layers.some(layer => layer.kind === 'graphic' && layer.visible)) {
         this.graphicSource?.dispose(); this.graphicSource = null;
       }
@@ -734,6 +739,9 @@ export class StudioRenderer {
     } else if (layer.kind === 'scope') {
       this.scope ??= new ScopeRenderer();
       this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t), smokeAudio);
+    } else if (layer.kind === 'smokecloud') {
+      this.smokeClouds ??= new SmokeCloudRenderer();
+      this.smokeClouds.draw(this.renderer, layer, original, localPhase, this.width, this.height, this.source, smokeAudio, { exact: this.exactFeedback, playing: this.previewPlaying, duration });
     } else if (layer.kind === 'liquid') {
       const u = this.liquid.uniforms;
       u.uAspect.value = aspect; u.uPhase.value = localPhase;
@@ -1336,7 +1344,7 @@ export class StudioRenderer {
   /** True while a paused preview is still refining a feedback history. */
   needsRefresh(): boolean {
     for (const state of this.feedbackStates.values()) if (state.settle) return true;
-    return false;
+    return this.smokeClouds?.needsRefresh() ?? false;
   }
 
   private disposeFeedback(state: FeedbackState): void {
@@ -1366,8 +1374,9 @@ export class StudioRenderer {
     if (this.lensTarget && !project.layers.some(layer => layer.visible && lensActive(layer))) { this.lensTarget.dispose(); this.lensTarget = null; }
   }
 
-  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }): void {
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }, playing = true): void {
     if (this.exporting) return;
+    this.previewPlaying = playing;
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();
@@ -1467,6 +1476,7 @@ export class StudioRenderer {
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;
+    this.smokeClouds?.dispose(); this.smokeClouds = null;
     this.sliceSource?.dispose(); this.sliceSource = null;
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();

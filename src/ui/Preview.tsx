@@ -70,7 +70,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
         const size=previewSize(box.width,box.height,ratio,density);
         canvas.current!.style.width=`${size.cssWidth}px`;canvas.current!.style.height=`${size.cssHeight}px`;
         try { engine.render(state.project, phase.current, size.width, size.height,
-          state.playing && state.smokeSound ? { signals: state.smokeSound.signals, now } : undefined);
+          state.playing && state.smokeSound ? { signals: state.smokeSound.signals, now } : undefined, state.playing);
           const overlay = tileCanvas.current;
           if (state.tiled && overlay) {
             // Drawn in the same frame as the render, while the WebGL buffer is still valid.
