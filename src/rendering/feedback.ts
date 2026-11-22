@@ -78,8 +78,8 @@ export function frameAtPhase(phase: number, total: number): number {
 /** Feedback cannot run on tiled patterns (the source is a tile, not the frame)
  * or on Evolving ink, whose clip clock does not loop. */
 export function supportsFeedback(layer: Pick<Layer, 'kind' | 'params'>): boolean {
-  // Feedback Glitch is a feedback instrument: its echo is not a finish.
-  return layer.kind !== 'graphic' && layer.kind !== 'glitchtunnel' && !(layer.kind === 'livingink' && layer.params.inkMode === 2);
+  // Feedback Glitch is a feedback instrument: its echo is not a finish. Meridian keeps its own afterglow.
+  return layer.kind !== 'graphic' && layer.kind !== 'glitchtunnel' && layer.kind !== 'meridian' && !(layer.kind === 'livingink' && layer.params.inkMode === 2);
 }
 
 export function feedbackActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>): boolean {

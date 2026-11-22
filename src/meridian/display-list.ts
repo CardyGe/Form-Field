@@ -3,10 +3,12 @@ const DEFAULT_CAPACITY = 20000;
 
 /**
  * Fixed instance buffer. Positions are centred, in units of frame height. `width` is in output pixels.
- * ring: x,y centre, p0 radius.
+ * ring: x,y centre, p0 radius, p1 wobble amount, p2 wobble phase.
  * arc: x,y centre, p0 radius, p1 start angle, p2 sweep.
- * segment: x,y start, p0,p1 end.
+ * segment: x,y start, p0,p1 end, p2 1 for a link in a flattened curve (no end caps).
  * square, dot: x,y centre, p0 half size, p1 rotation. `width` is unused.
+ * fill: x,y centre, p0 radius. Soft light inside a circle, strongest at its rim. `width` is unused.
+ * `colour` is a swatch index; a fraction blends towards the next swatch.
  */
 export class DisplayList {
   readonly data: Float32Array;

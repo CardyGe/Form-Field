@@ -20,6 +20,7 @@ import fractalThumb from './assets/fractal.png';
 import oilThumb from './assets/oil.png';
 import liquidThumb from './assets/liquid.png';
 import scopeThumb from './assets/scope.png';
+import meridianThumb from './assets/meridian.png';
 import super8Thumb from './assets/super8.png';
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import { Preview } from './Preview';
@@ -130,6 +131,7 @@ const instrumentCatalogue = [
   { kind: 'oil', name: 'Oil Slides', caption: 'Paint · glass · cellular ink', image: oilThumb, label: 'Add oil slides' },
   { kind: 'liquid', name: 'Liquid Light', caption: 'Oil droplets · dye · projector', image: liquidThumb, label: 'Add liquid light' },
   { kind: 'scope', name: 'Oscilloscope', caption: 'Glowing line · signal · beam', image: scopeThumb, label: 'Add oscilloscope' },
+  { kind: 'meridian', name: 'Meridian', caption: 'Rings · spokes · phrases of light', image: meridianThumb, label: 'Add Meridian' },
   { kind: 'graphic', name: 'Graphic Patterns', caption: 'Waves · circles · tiles · paths', image: graphicThumb, label: 'Add graphic patterns' },
   ...INSTRUMENTS.map(info => ({ kind: info.kind, name: info.name, caption: info.description, image: projectionThumbnails[`./assets/projection/${startingLooks[info.kind]}.png`]??instrumentThumbnails[`./assets/instruments/${info.kind}.png`], label: `Add ${info.name}` })),
 ] satisfies {kind: LayerKind; name: string; caption: string; image: string; label: string}[];

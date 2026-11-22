@@ -101,8 +101,8 @@ function composeCandidate(seed: number, random: Random, params: ComposeParams): 
 
   const elements: ScoreElement[] = [];
   const add = (group: ElementGroup, zone: number, radius: number, angle: number, length: number, weight: number, colour: number, slot: number, shape: ScoreElement['shape'] = 'dot') => {
-    // Collapse runs outside-in. The hub survives Rest as the point that becomes the next Seed.
-    const exit = group === 'hub' ? 1 : collapseStart + (collapseEnd - collapseStart) * 0.8 * (1 - clamp(radius / OUTER_RADIUS, 0, 1));
+    // Collapse runs outside-in, a spoke going with its outer end. The hub survives Rest as the point that becomes the next Seed.
+    const exit = group === 'hub' ? 1 : collapseStart + (collapseEnd - collapseStart) * 0.8 * (1 - clamp((group === 'spoke' ? radius + length : radius) / OUTER_RADIUS, 0, 1));
     elements.push({ group, zone, radius, angle: wrap(angle), length, weight, colour, enter: enterFor[group](slot), exit, slot, shape });
   };
 
@@ -123,6 +123,11 @@ function composeCandidate(seed: number, random: Random, params: ComposeParams): 
   roles.forEach((role, zone) => {
     if (role !== 'scale') return;
     for (const step of INTERIOR_STEPS.slice(0, 2)) placeRing(between(edges[zone + 1], edges[zone], step), zone, LINE.hair);
+  });
+  // A higher Ring count keeps going: the remaining divisions, then the bands that are not held empty.
+  roles.forEach((role, zone) => {
+    if (role === 'void') return;
+    for (const step of INTERIOR_STEPS) placeRing(between(edges[zone + 1], edges[zone], step), zone, LINE.hair);
   });
 
   // Zone contents.

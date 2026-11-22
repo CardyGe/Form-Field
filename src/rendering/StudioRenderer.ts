@@ -20,6 +20,7 @@ import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
+import { MeridianRenderer } from './MeridianRenderer';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
@@ -170,6 +171,7 @@ export class StudioRenderer {
   private readonly liquid: THREE.ShaderMaterial;
   private readonly liquidLayouts = new Map<string, THREE.DataTexture>();
   private scope: ScopeRenderer | null = null;
+  private meridian: MeridianRenderer | null = null;
   /** Reduced-size stand-ins for `source` while the preview draws time slices. */
   private sliceSource: THREE.WebGLRenderTarget | null = null;
   private sliceSourceSmooth: THREE.WebGLRenderTarget | null = null;
@@ -727,8 +729,8 @@ export class StudioRenderer {
       (this.image.uniforms.uFit.value as THREE.Vector2).set(x, y);
       this.draw(this.image, this.source);
     } else if (layer.kind === 'meridian') {
-      // Placeholder until the Meridian renderer lands: draw nothing rather than fall through to the sculpture.
-      this.renderer.setRenderTarget(this.source); this.renderer.clear(); return this.source.texture;
+      this.meridian ??= new MeridianRenderer();
+      this.meridian.draw(this.renderer, layer, phase, this.width, this.height, this.source, (m, t) => this.draw(m, t));
     } else {
       const u = this.sculptureUniforms;
       for(const [key,value] of Object.entries(SCULPTURE_SHAPE_DEFAULTS))u[`studio${key[0].toUpperCase()}${key.slice(1)}`].value=number(layer,key,value);
@@ -1199,6 +1201,7 @@ export class StudioRenderer {
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;
+    this.meridian?.dispose(); this.meridian = null;
     this.sliceSource?.dispose(); this.sliceSource = null;
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();

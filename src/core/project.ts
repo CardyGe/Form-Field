@@ -407,6 +407,8 @@ const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
 export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const visible = familyParameterDefinitions(layer);
   const glow = supportsGlow(layer), print = supportsPrint(layer);
+  // Meridian has its own bloom and afterglow, so the shared glow and echo would fight them.
+  if (layer.kind === 'meridian') return visible.filter(d => !GLOW_KEYS.includes(d.key) && !FEEDBACK_KEYS.includes(d.key));
   return glow && print ? visible : visible.filter(d => (glow || !GLOW_KEYS.includes(d.key)) && (print || !PRINT_KEYS.includes(d.key)));
 }
 function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
