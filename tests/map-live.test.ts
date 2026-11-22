@@ -65,7 +65,7 @@ test('scenes keep Live, and a show uses Live while only a scene names it', () =>
 test('version 6 round-trips; version 5 files open unrepaired; "live" in a version 5 file is a missing source, repaired', () => {
   let show = ok(base(), { type: 'addScene', sceneId: 's1', name: 'One' });
   show = ok(show, { type: 'setContent', shapeId: 'c', content: { kind: 'live' } });
-  assert.equal(show.version, 8);
+  assert.equal(show.version, 9);
   const again = validateShow(JSON.parse(JSON.stringify(show)));
   assert.equal(again.repaired, false);
   assert.equal(shapeOf(again.show, 'c').sourceId, 'live');

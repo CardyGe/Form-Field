@@ -446,7 +446,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (action.sourceIds.length < members.length || new Set(action.sourceIds).size !== action.sourceIds.length) return { reason: 'needs-source-id' };
       if (action.sourceIds.some(id => next.sources.some(s => s.id === id) || isVideoId(id) || id === LIVE_SOURCE_ID)) return { reason: 'duplicate-id' };
       const leaving = new Set(members.map(m => m.sourceId!));
-      const stays = next.sources.filter(src => !leaving.has(src.id) || playedBy({ shapes: next.shapes.filter(s => !members.includes(s)), scenes: next.scenes }, src.id)).length;
+      const stays = next.sources.filter(src => !leaving.has(src.id) || playedBy({ shapes: next.shapes.filter(s => !members.includes(s)), scenes: next.scenes, performance: next.performance }, src.id)).length;
       if (stays + members.length > MAX_SOURCES) return { reason: 'too-many-sources' };
       members.forEach((shape, i) => {
         const source = next.sources.find(s => s.id === shape.sourceId)!;
@@ -628,7 +628,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
         if (shape.blocker) return { reason: 'blocker' };
         if (!isVideoPath(content.path)) return { reason: 'not-a-video' };
         if (!isVideoId(content.videoId) || next.videos.some(v => v.id === content.videoId)) return { reason: 'duplicate-id' };
-        const stays = next.videos.filter(v => !linked.every(s => s.sourceId === v.id) || playedBy({ shapes: next.shapes.filter(s => !linked.includes(s)), scenes: next.scenes }, v.id));
+        const stays = next.videos.filter(v => !linked.every(s => s.sourceId === v.id) || playedBy({ shapes: next.shapes.filter(s => !linked.includes(s)), scenes: next.scenes, performance: next.performance }, v.id));
         if (stays.length >= MAX_VIDEOS) return { reason: 'too-many-videos' };
         next.videos = [...next.videos, { id: content.videoId, path: content.path, name: cleanName(content.name).slice(0, 120), speed: 1, tempoSync: null }];
         for (const s of linked) s.sourceId = content.videoId;
@@ -658,7 +658,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (!project) return { reason: 'unknown-preset' };
       const old = shape.sourceId;
       // Live is no source of the show's, so leaving it frees no room.
-      const oldGoes = old !== null && old !== LIVE_SOURCE_ID && !playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes }, old);
+      const oldGoes = old !== null && old !== LIVE_SOURCE_ID && !playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes, performance: next.performance }, old);
       if (next.sources.length - (oldGoes ? 1 : 0) >= MAX_SOURCES) return { reason: 'too-many-sources' };
       next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0, tempoSync: null });
       // Several shapes on Live take the new look together, as one new instrument.
@@ -830,7 +830,7 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const sharedMedia = isVideoId(shape.sourceId) || (!!shape.sourceId && isPictureSource(next, shape.sourceId));
   if (source && !action.spread && !sharedMedia) {
     if (action.sourceIds.length !== count || new Set(action.sourceIds).size !== count || action.sourceIds.some(id => taken.has(id) || action.ids.includes(id))) return { reason: 'duplicate-id' };
-    const sharedElsewhere = playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes }, source.id);
+    const sharedElsewhere = playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes, performance: next.performance }, source.id);
     if (next.sources.length - (sharedElsewhere ? 0 : 1) + count > MAX_SOURCES) return { reason: 'too-many-sources' };
   }
   let groupId = shape.groupId;

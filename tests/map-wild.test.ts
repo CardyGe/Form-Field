@@ -28,7 +28,7 @@ test('version 8 round-trips; version 7 opens with every option off, unrepaired',
   show = ok(show, { type: 'setBorder', shapeId: 'a', border: { width: 4, colour: 'shape', glow: 0 } });
   show = ok(show, { type: 'setBorderRun', shapeId: 'a', run: { lapsPerMinute: 30, beats: null, length: .2 } });
   show = ok(show, { type: 'setAutoAdvance', autoAdvance: { every: 30, unit: 'seconds', order: 'random' } });
-  assert.equal(show.version, 8);
+  assert.equal(show.version, 9);
   const again = validateShow(JSON.parse(JSON.stringify(show)));
   assert.equal(again.repaired, false);
   assert.deepEqual(again.show.groups[0], show.groups[0]);

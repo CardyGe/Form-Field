@@ -5,6 +5,7 @@ import { EMBER_SMOKE_INPUTS } from '../react/ember-smoke';
 import { acceptSignals, type Signals } from '../react/signals';
 import { ownCornersPinnable } from './placement';
 import type { LiveSettings } from '../live/settings';
+import { clipSourceIds } from '../perform/set';
 
 export type MapMessage =
   /** fadeMs: this show is a scene switch, crossfading over that long. */
@@ -78,6 +79,7 @@ export function toWire(show: ShowDocument): WireShow {
     stageCorners: show.stageCorners,
     usesLive: usesLive(show),
     videos: show.videos,
+    clipSourceIds: clipSourceIds(show.performance),
   };
 }
 
