@@ -1,10 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EditAction } from '../map/editor';
 import { applyStudioEdit, initialMapState, mapReducer, type MapState } from '../map/state';
 import type { Project } from '../shared/types';
 import { autosaveSchedule, canEdit } from '../map/autosave';
-import { acceptMapMessage, sourcesToSend, toWire, type MapMessage } from '../map/messages';
-import { createShow, validateShow, type ShowDocument } from '../map/show';
+import { acceptMapMessage, sourcesToSend, toWire, wallInputs, type MapMessage } from '../map/messages';
+import { useLiveSettings } from './useLiveSettings';
+import type { LiveSettings } from '../live/settings';
+import { createShow, usesLive, validateShow, type ShowDocument } from '../map/show';
+import { reactivity, type ReactivityEngine } from '../react/engine';
+import { fire, type TriggerAction } from '../react/links';
+import type { Signals } from '../react/signals';
+import { MeterStore } from '../react/meter';
+import { usesEmberSmokeAudio } from '../react/ember-smoke';
+import { autoAdvanceDue, nextAutoScene } from '../map/wild';
+
+/** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
+export const showReacts = (show: ShowDocument) => show.links.length > 0 || show.triggers.length > 0 || show.sources.some(s => s.tempoSync !== null || s.project.layers.some(usesEmberSmokeAudio))
+  // Stage 7: a border run with the tempo, or auto-advance by bars, follows the beat.
+  || show.shapes.some(s => !!s.border.run?.beats) || show.autoAdvance?.unit === 'bars';
 
 export type MapTool = 'select' | 'rectangle' | 'triangle' | 'ellipse' | 'pen';
 /** The shapes soloed, directly or through their group, that are still in the show. */
@@ -264,6 +277,18 @@ export function useMap(onError: (message: string) => void) {
   };
   useEffect(() => () => { if (frame.current !== null) cancelAnimationFrame(frame.current); }, []);
   const showMessage = (s: ShowDocument): MapMessage => ({ type: 'show', show: toWire(s) });
+  /** A scene switch's fade time, for the wall: it travels on the switch's own show message. */
+  const wallFade = useRef<number | null>(null);
+  /** What the wall was last told of Live: its settings, null (not used), or undefined (nothing yet, since it opened). */
+  const sentLive = useRef<LiveSettings | null | undefined>(undefined);
+  const sendLive = () => {
+    const want = usesLive(stateRef.current.show) ? liveRef.current : null;
+    if (want === sentLive.current) return;
+    if (want === null && sentLive.current === undefined) { sentLive.current = null; return; }
+    const message: MapMessage = { type: 'liveSettings', settings: want };
+    if (acceptMapMessage(message as unknown)) { bridge?.send(message); sentLive.current = want; }
+  };
+
   /**
    * Compositions the output does not have yet go first, so the show never names one the wall cannot play.
    * The record of what the wall has is the session's (emptied whenever an output opens), shared with Studio edits.
@@ -290,6 +315,9 @@ export function useMap(onError: (message: string) => void) {
     // Solo before the show, so the wall never paints one frame of the shapes solo hides.
     sendNow({ type: 'solo', ids: soloIds(latest.current.shown, kept.solo) });
     sendSources(latest.current.shown);
+    // Live's settings before the show, so a Live shape can start at once.
+    sentLive.current = undefined;
+    sendLive();
     sendNow(showMessage(latest.current.shown));
   }, [outputOpen, outputEpoch]);
   // Then the whole show again after every edit, and the trial show while a drag is in progress.
@@ -298,7 +326,11 @@ export function useMap(onError: (message: string) => void) {
     if (!outputOpen || !bridge) return;
     sendSources(shown);
     if (dragging) sendNextFrame(showMessage(shown) as MapMessage & { type: 'show' });
-    else sendNow(showMessage(shown));
+    else {
+      const fadeMs = wallFade.current;
+      wallFade.current = null;
+      sendNow(fadeMs === null ? showMessage(shown) : { ...showMessage(shown), fadeMs } as MapMessage);
+    }
   }, [shown, outputOpen]);
 
   // Solo reaches the wall as the shapes it covers, sent again whenever that changes.
@@ -331,10 +363,11 @@ export function useMap(onError: (message: string) => void) {
     if (after.show !== before.show) { saver.save(after.show); setNotice(null); }
     return after;
   }, []);
-  const dispatch = useCallback((action: EditAction) => {
+  const dispatch = useCallback((action: EditAction, merge?: string) => {
     if (!canEdit(loadedRef.current)) { setLastRefusal('Loading the show…'); return false; }
-    const after = step({ type: 'edit', action });
-    setLastRefusal(after.refusal);
+    const after = step({ type: 'edit', action, merge });
+    // What triggers and auto-advance do never clears a note the operator may be reading.
+    if (merge !== 'trigger' || after.refusal !== null) setLastRefusal(after.refusal);
     return after.refusal === null;
   }, [step]);
   const undo = useCallback(() => { if (canEdit(loadedRef.current)) step({ type: 'undo' }); }, [step]);
@@ -344,6 +377,115 @@ export function useMap(onError: (message: string) => void) {
   const setTestGrid = (on: boolean) => { kept.testGrid = on; setTestGridState(on); if (outputOpen) bridge?.send({ type: 'testGrid', on }); };
   /** Freeze holds the wall's picture: the instruments stop where they are. */
   const setFreeze = (on: boolean) => { kept.freeze = on; setFreezeState(on); if (outputOpen) bridge?.send({ type: 'freeze', on }); };
+
+  // ---- Scenes and reactivity (stage 5) ----
+  /** This screen's own compositor is told of a scene switch's fade through this, as the wall is through a message. */
+  const pendingFade = useRef<number | null>(null);
+  /** Switches scene: the wall and this screen crossfade over the scene's own fade time, or the show's. */
+  const switchScene = (sceneId: string, merge?: string) => {
+    const s = stateRef.current.show, scene = s.scenes.find(sc => sc.id === sceneId);
+    if (!scene || s.sceneId === sceneId) return false;
+    const ms = Math.round((scene.fadeSeconds ?? s.sceneFade) * 1000);
+    if (!dispatch({ type: 'switchScene', sceneId }, merge)) return false;
+    // Only once the switch is made. The wall gets the fade with the next whole show it is sent (never a drag's
+    // trial show), so it can only ever belong to this switch.
+    if (outputOpen) wallFade.current = ms;
+    else pendingFade.current = ms;
+    return true;
+  };
+  const stepScene = (by: 1 | -1, merge?: string) => {
+    const s = stateRef.current.show;
+    if (!s.scenes.length) return;
+    const at = s.scenes.findIndex(sc => sc.id === s.sceneId);
+    const next = s.scenes[((at < 0 ? (by > 0 ? -1 : 0) : at) + by + s.scenes.length) % s.scenes.length];
+    switchScene(next.id, merge);
+  };
+  const [engine, setEngine] = useState<ReactivityEngine | null>(null);
+  const meter = useMemo(() => new MeterStore(), []);
+  /** This screen's compositor hears the signals here. */
+  const onSignals = useRef<((signals: Signals) => void) | null>(null);
+  // Live in Map: the Live screen's settings, sent to the wall while the show plays Live anywhere.
+  const liveSettings = useLiveSettings();
+  const live = liveSettings.settings;
+  const liveRef = useRef<LiveSettings | null>(live);
+  liveRef.current = live;
+  const showUsesLive = usesLive(show);
+  const reacts = showReacts(show) || (showUsesLive && !!live?.links.some(l => l.on));
+  const [panelOpen, setPanelOpen] = useState(false);
+  useEffect(() => { if (outputOpen) sendLive(); }, [live, showUsesLive, outputOpen]);
+  /** This screen's own compositor hears Live's Clear and Capture empty room here, as the wall does through messages. */
+  const onLiveAction = useRef<((action: 'clear' | 'captureRoom' | 'retry' | 'videoRetry') => void) | null>(null);
+  const clearLive = () => { onLiveAction.current?.('clear'); if (outputOpen) bridge?.send({ type: 'liveClear' }); };
+  const retryVideos = () => { onLiveAction.current?.('videoRetry'); if (outputOpen) bridge?.send({ type: 'videoRetry' }); };
+  const retryLive = () => { onLiveAction.current?.('retry'); if (outputOpen) bridge?.send({ type: 'liveRetry' }); };
+  const captureLiveRoom = () => { onLiveAction.current?.('captureRoom'); if (outputOpen) bridge?.send({ type: 'liveCaptureRoom' }); };
+  useEffect(() => { if ((reacts || panelOpen) && !engine) setEngine(reactivity()); }, [reacts, panelOpen, engine]);
+  // Once a frame: signals to the wall and to this screen, and triggers fired as ordinary actions.
+  const triggerAct = useRef<(action: TriggerAction) => void>(() => {});
+  triggerAct.current = action => {
+    switch (action.kind) {
+      // What triggers do is one undo step however often they fire, so the beat never pushes the operator's edits out.
+      case 'scene': switchScene(action.sceneId, 'trigger'); break;
+      case 'next-scene': stepScene(1, 'trigger'); break;
+      case 'previous-scene': stepScene(-1, 'trigger'); break;
+      case 'vary': dispatch({ type: 'varySource', sourceId: action.sourceId, entropy: Math.floor(Math.random() * 1e6) }, 'trigger'); break;
+      case 'blackout': setBlackout(!latest.current.blackout); break;
+      case 'freeze': setFreeze(!latest.current.freeze); break;
+      case 'tap': engine?.tap(); break;
+    }
+  };
+  // Scene auto-advance: counts only while neither Freeze nor Blackout is on; any scene change starts the count again.
+  // What it does is one undo step with the triggers, so it never pushes the operator's edits out.
+  const switchRef = useRef(switchScene);
+  switchRef.current = switchScene;
+  const engineRef = useRef(engine);
+  engineRef.current = engine;
+  const auto = show.autoAdvance, autoKey = auto ? `${auto.unit}:${auto.every}:${auto.order}` : '';
+  useEffect(() => {
+    if (!auto) return;
+    let elapsed = 0, bars = 0, last = performance.now(), lastBeat: number | null = null, sceneAt = stateRef.current.show.sceneId;
+    const id = setInterval(() => {
+      const t = performance.now(), s = stateRef.current.show, { freeze, blackout } = latest.current;
+      const signals = engineRef.current?.signals, beat = signals?.['tempo.beat'] !== undefined && signals?.['tempo.phase'] !== undefined ? signals['tempo.beat'] + signals['tempo.phase'] : null;
+      if (s.sceneId !== sceneAt) { sceneAt = s.sceneId; elapsed = 0; bars = 0; }
+      if (!freeze && !blackout) {
+        elapsed += (t - last) / 1000;
+        if (beat !== null && lastBeat !== null && beat > lastBeat) bars += (beat - lastBeat) / 4;
+      }
+      last = t; lastBeat = beat;
+      if (!autoAdvanceDue(auto, elapsed, bars)) return;
+      elapsed = 0; bars = 0;
+      const next = nextAutoScene(s, s.sceneId, Math.random);
+      if (next && switchRef.current(next, 'trigger')) sceneAt = next;
+    }, 100);
+    return () => clearInterval(id);
+  }, [autoKey]);
+  const listening = useRef({ panelOpen, outputOpen, reacts });
+  listening.current = { panelOpen, outputOpen, reacts };
+  const active = !!engine && (reacts || panelOpen);
+  useEffect(() => {
+    if (!engine || !active) return;
+    // Triggers compare with the signals as they were, so a control already past halfway does not fire at once.
+    let prev: Signals = { ...engine.signals }, shown = 0;
+    // One subscription while anything reacts; the panel and the output are read as they are now, so opening either
+    // never restarts the sound input.
+    const off = engine.subscribe(now => {
+      const { panelOpen, outputOpen, reacts } = listening.current;
+      // The wall gets only the signals the show uses, so a controller with many knobs never makes the message too large.
+      if (outputOpen && reacts) {
+        const used = wallInputs(stateRef.current.show, liveRef.current);
+        bridge?.send({ type: 'signals', signals: Object.fromEntries(Object.entries(now).filter(([k]) => used.has(k))) });
+      }
+      onSignals.current?.(now);
+      for (const action of fire(stateRef.current.show.triggers, prev, now)) triggerAct.current(action);
+      prev = now;
+      // The panel's meters update a few times a second, not every frame.
+      const t = performance.now();
+      if (panelOpen && t - shown > 100) { shown = t; meter.set(now); }
+    });
+    // Leaving Map, or nothing reacting any more: the wall goes back to the set values at once.
+    return () => { off(); if (listening.current.outputOpen) bridge?.send({ type: 'signals', signals: {} }); };
+  }, [engine, active]);
   const openOutput = async () => {
     if (display === null) return;
     try { await bridge?.openOutput(display); }
@@ -410,7 +552,8 @@ export function useMap(onError: (message: string) => void) {
   const setSnap = (on: boolean) => { kept.snap = on; setSnapState(on); };
   const setPhotoShown = (on: boolean) => { kept.photoShown = on; setPhotoShownState(on); };
 
-  return { show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
+  return { currentShow: () => stateRef.current.show, live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, retryVideos, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
+    show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
     solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

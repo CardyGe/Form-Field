@@ -1,12 +1,13 @@
 import {FINISH_KEYS} from '../src/core/finishing';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPreset, createLayer, createProject, MAX_ASSET_BYTES, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
+import { applyPreset, createLayer, createProject, FRACTAL_PROJECTION_LOOK_IDS, MAX_ASSET_BYTES, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { evaluateLayer, frameCount, phaseAtFrame, sampleModulation } from '../src/core/timeline';
 import type { LayerKind, Modulation, Project } from '../src/shared/types';
 
 const TAU = Math.PI * 2;
 const FRACTAL_V5_FIELDS = ['variant', 'quality', 'density', 'juliaReal', 'juliaImag', 'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth'];
+const FRACTAL_PROJECTION_FIELDS = ['focalX', 'focalY', 'cutout', 'evolution', 'reveal', 'passage', 'depth', 'bank', 'position', 'autoTravel', 'afterglow'];
 const V6_FIELDS: Partial<Record<LayerKind, string[]>> = {
   surface: ['variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', 'saturation', 'hue', 'exposure'],
   sculpture: ['form', 'lobes', 'thickness', 'stretch', 'curl', 'foldFrequency', 'asymmetry', 'ridgeScale', 'metallic', 'clearcoat', 'sheen', 'filmScale', 'lightPower', 'shadowStrength', 'shadowSoftness', 'saturation', 'hue', 'exposure'],
@@ -378,15 +379,18 @@ test('fractal defaults and all family variants roundtrip alongside existing laye
     'style', 'scale', 'detail', 'fold', 'symmetry', 'twist', 'morph', 'travel', 'cycles',
     'offset', 'relief', 'glow', 'contrast', 'cameraYaw', 'cameraPitch', 'zoom',
     'variant', 'quality', 'density', 'juliaReal', 'juliaImag', 'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth',
-    'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue', 'zoomFlight', 'approach', 'outside', 'swirl', 'lens', 'melt', 'dance', 'colorRun', 'neon',...FINISH_KEYS,
+    'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue', 'zoomFlight', 'approach', 'outside', ...FRACTAL_PROJECTION_FIELDS, 'swirl', 'lens', 'melt', 'dance', 'colorRun', 'neon', ...FINISH_KEYS,
   ].sort());
   assert.equal(layer.params.quality, 2);
   assert.equal(layer.params.morph, 0.1);
-  assert.deepEqual(parameterDefinitions('fractal').filter((definition) => definition.step === 1).map((definition) => definition.key).sort(), ['colorMode', 'colorRun', 'colorSteps', 'cycles', 'echoBlend', 'echoBlock', 'echoKeep', 'echoPixel', 'echoStreakAxis', 'glowTint', 'printArea', 'printColour', 'printDot', 'printInk', 'printInvert', 'printMatrix', 'printPaper', 'printScroll', 'printType', 'quality', 'radial', 'slitBlocks', 'slitScroll', 'slitShape', 'slitSlices', 'slitSpan', 'style', 'symmetry', 'toonBands', 'toonCycles', 'toonOutlineColor', 'variant']);
+  assert.deepEqual(parameterDefinitions('fractal').filter((definition) => definition.step === 1).map((definition) => definition.key).sort(), ['autoTravel', 'colorMode', 'colorRun', 'colorSteps', 'cycles', 'echoBlend', 'echoBlock', 'echoKeep', 'echoPixel', 'echoStreakAxis', 'glowStreakAngle', 'glowStreakShape', 'glowTint', 'gradCycles', 'gradKeep', 'gradPalette', 'gradeHighlightColour', 'gradeShadowColour', 'keyHue', 'keyHueRange', 'keyInvert', 'keyMode', 'printArea', 'printColour', 'printDot', 'printInk', 'printInvert', 'printMatrix', 'printPaper', 'printScroll', 'printType', 'quality', 'radial', 'slitBlocks', 'slitDirection', 'slitMode', 'slitScroll', 'slitShape', 'slitSlices', 'slitSpan', 'splitAngle', 'splitBlocks', 'splitOrder', 'splitSamples', 'splitShape', 'splitTravel', 'splitWaves', 'style', 'symmetry', 'toonBands', 'toonCycles', 'toonOutlineColor', 'variant']);
   const presets = PRESETS.filter((preset) => preset.kind === 'fractal');
-  assert.equal(presets.length, 23);
-  assert.equal(new Set(presets.map((preset) => preset.id)).size, 23);
-  for (const family of [0, 1, 2]) assert.deepEqual([...new Set(presets.filter((preset) => preset.params.style === family).map((preset) => preset.params.variant))].sort(), [0, 1, 2]);
+  assert.equal(presets.length, 23 + FRACTAL_PROJECTION_LOOK_IDS.length);
+  assert.equal(new Set(presets.map((preset) => preset.id)).size, presets.length);
+  assert.ok(layer.params.evolution >= .72);
+  // The wild looks (ids starting fractal-) keep the original motion they were tuned on.
+  assert.ok(presets.every(preset => (preset.id.startsWith('fractal-') ? preset.params.evolution === 0 : preset.params.evolution >= .72) && preset.params.bank === 0));
+  for (const family of [0, 1, 2, 3]) assert.deepEqual([...new Set(presets.filter((preset) => preset.params.style === family).map((preset) => preset.params.variant))].sort(), [0, 1, 2]);
   const project = createProject();
   const before = clone(project.layers[0]);
   project.layers.push(createLayer('sculpture'), layer, createLayer('image'));
@@ -410,7 +414,7 @@ test('fractal saves reject missing original controls, invalid ranges, fractional
   const project = createProject(); project.layers = [createLayer('fractal')];
   const saved = clone(project);
   for (const [key, value] of [
-    ['style', -1], ['style', 3], ['style', 0.5], ['symmetry', 2], ['symmetry', 13], ['symmetry', 6.5],
+    ['style', -1], ['style', 4], ['style', 0.5], ['symmetry', 2], ['symmetry', 13], ['symmetry', 6.5],
     ['cycles', 0], ['cycles', 9], ['cycles', 1.5], ['scale', 0.49], ['scale', 5.01],
     ['twist', -1.01], ['twist', 1.01], ['cameraPitch', -1.11], ['cameraPitch', 1.11],
     ['cameraYaw', -Math.PI - 0.01], ['cameraYaw', Math.PI + 0.01], ['zoom', 0.49], ['zoom', 2.01],
@@ -428,14 +432,14 @@ test('fractal saves reject missing original controls, invalid ranges, fractional
   }
   for (const definition of parameterDefinitions('fractal')) {
     const missing = clone(project); delete missing.layers[0].params[definition.key];
-    if ([...FRACTAL_V5_FIELDS, ...(V6_FIELDS.fractal ?? []),...FINISH_KEYS,'zoomFlight','approach','outside','swirl','lens','melt','dance','colorRun','neon'].includes(definition.key)) assert.equal(validateProject(missing).layers[0].params[definition.key], definition.default);
+    if ([...FRACTAL_V5_FIELDS, ...FRACTAL_PROJECTION_FIELDS, ...(V6_FIELDS.fractal ?? []), ...FINISH_KEYS, 'zoomFlight', 'approach', 'outside', 'swirl', 'lens', 'melt', 'dance', 'colorRun', 'neon'].includes(definition.key)) assert.equal(validateProject(missing).layers[0].params[definition.key], definition.default);
     else assert.throws(() => validateProject(missing), new RegExp(`params.${definition.key}`), 'Only additive fields may receive legacy defaults');
     for (const boundary of [definition.min, definition.max]) {
       const valid = clone(project); valid.layers[0].params[definition.key] = boundary;
       assert.equal(validateProject(valid).layers[0].params[definition.key], boundary);
     }
   }
-  for (const key of ['style', 'variant', 'quality', 'radial', 'symmetry', 'cycles', 'colorMode', 'colorSteps', 'seed']) {
+  for (const key of ['style', 'variant', 'quality', 'radial', 'symmetry', 'cycles', 'colorMode', 'colorSteps', 'autoTravel', 'seed']) {
     const invalid = clone(project); invalid.layers[0].modulations[key] = modulation('sine');
     assert.throws(() => validateProject(invalid), /modulations.*not supported/, 'Discrete Fractal controls cannot acquire discontinuous modulation');
   }
@@ -522,6 +526,12 @@ test('family inspectors reveal relevant controls while saved hidden values remai
   assert.ok(!keys().includes('lineWidth')); assert.ok(!keys().includes('trap')); assert.ok(!keys().includes('juliaReal')); assert.ok(!keys().includes('symmetry'));
   layer.params.radial = 1;
   assert.ok(keys().includes('symmetry'), 'Mandelbox symmetry appears only when radial fold is enabled');
+  assert.ok(keys().includes('passage') && !keys().includes('position'));
+  layer.params.style = 3;
+  assert.ok(keys().includes('position') && !keys().includes('passage') && !keys().includes('afterglow'));
+  layer.params.variant = 2;
+  layer.params.autoTravel = 0;
+  assert.ok(keys().includes('afterglow') && !keys().includes('cycles'));
   const project = createProject(); project.layers = [layer];
   assert.deepEqual(validateProject(project).layers[0].params, layer.params, 'Visibility never deletes saved controls');
 });
@@ -681,7 +691,7 @@ test('Fractal contour controls appear only for contour coloring without deleting
 });
 
 test('the curated library covers every Surface pattern, four Sculpture forms and three Fractal colorings', () => {
-  assert.equal(PRESETS.filter(p => p.kind !== 'graphic').length, 73);
+  assert.equal(PRESETS.filter(p => p.kind !== 'graphic').length, 79 + 32 + FRACTAL_PROJECTION_LOOK_IDS.length);
   assert.equal(new Set(PRESETS.map(preset => preset.id)).size, PRESETS.length);
   const surfaces = PRESETS.filter(preset => preset.kind === 'surface');
   assert.equal(surfaces.length, 14);

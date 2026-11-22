@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Stage } from '../live/Stage';
 import { chooseDisplay, defaultLiveSettings, validateLiveSettings, type LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
+import { reactivity, type ReactivityEngine } from '../react/engine';
+import { MeterStore } from '../react/meter';
 
 export interface Display { id: number; label: string; primary: boolean }
 
@@ -113,6 +115,34 @@ export function useLive(onError: (message: string) => void) {
   useEffect(() => () => { if (unsaved.current) void bridge?.saveSettings(unsaved.current).catch(() => {}); }, []);
   useEffect(() => { if (stage.current) stage.current.renderer.view = view; }, [view, outputOpen, canvas, ready]);
 
+  // Sound, the beat, tempo and MIDI: heard only while a link needs them or the operator has the sound panel open.
+  const links = settings?.links ?? [];
+  const reacts = links.some(l => l.on);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [engine, setEngine] = useState<ReactivityEngine | null>(null);
+  const meter = useMemo(() => new MeterStore(), []);
+  useEffect(() => { if ((reacts || panelOpen) && !engine) setEngine(reactivity()); }, [reacts, panelOpen, engine]);
+  const usedInputs = [...new Set(links.map(l => l.input))].sort().join(' ');
+  // Read as they are now, so opening the panel or the output, or a new link, never interrupts the links on screen.
+  const listening = useRef({ panelOpen, outputOpen, reacts, usedInputs });
+  listening.current = { panelOpen, outputOpen, reacts, usedInputs };
+  const active = !!engine && (reacts || panelOpen);
+  useEffect(() => {
+    if (!engine || !active) return;
+    let shown = 0, usedKey = '', used = new Set<string>();
+    const off = engine.subscribe(now => {
+      const { panelOpen, outputOpen, reacts, usedInputs } = listening.current;
+      if (usedInputs !== usedKey) { usedKey = usedInputs; used = new Set(usedInputs.split(' ').filter(Boolean)); }
+      const only = Object.fromEntries(Object.entries(now).filter(([k]) => used.has(k)));
+      if (stage.current) stage.current.renderer.signals = only;
+      if (outputOpen && reacts) bridge?.send({ type: 'signals', signals: only });
+      const t = performance.now();
+      if (panelOpen && t - shown > 100) { shown = t; meter.set(now); }
+    });
+    // With nothing driving them, the looks go back to their sliders as set.
+    return () => { off(); if (stage.current) stage.current.renderer.signals = {}; if (listening.current.outputOpen) bridge?.send({ type: 'signals', signals: {} }); };
+  }, [engine, active]);
+
   const update = useCallback((change: (value: LiveSettings) => LiveSettings) => setSettings(value => value && validateLiveSettings(change(value))), []);
   const setBlackout = (on: boolean) => { setBlackoutState(on); if (stage.current) stage.current.renderer.blackout = on; if (outputOpen) bridge?.send({ type: 'blackout', on }); };
   const clear = () => { stage.current?.renderer.clear(); if (outputOpen) bridge?.send({ type: 'clear' }); };
@@ -130,5 +160,6 @@ export function useLive(onError: (message: string) => void) {
   const chooseFile = (chosen: File) => { setFile(chosen); update(s => ({ ...s, source: { kind: 'file', deviceId: s.source.deviceId } })); };
 
   return { settings: settings ?? defaultLiveSettings(), ready, access, update, sourceState, cameras, displays, outputOpen, blackout, setBlackout, clear,
-    openOutput, closeOutput, view, setView, people, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge };
+    openOutput, closeOutput, view, setView, people, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge,
+    engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen };
 }

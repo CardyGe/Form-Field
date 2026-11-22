@@ -4,6 +4,7 @@
  */
 import { STAGE_SIZE, isShapeLocked, isShapeShown, type Group, type Point, type Shape } from './show';
 import { flatten, hitShape, nearestSide, ringBounds, rotateAbout, scaleAbout, type Matrix } from './outline';
+import { ownCornersPinnable } from './placement';
 
 type Shapes = { shapes: Shape[]; groups: Group[] };
 /** The selected shapes; ring and index name the chosen point of the first one (ring -1 is its outline). */
@@ -12,6 +13,7 @@ export type BoxHandle = 'nw' | 'ne' | 'se' | 'sw' | 'turn';
 export type Picked =
   | { kind: 'handle'; shapeId: string; ring: number; index: number; which: 'in' | 'out' }
   | { kind: 'point'; shapeId: string; ring: number; index: number }
+  | { kind: 'pin'; shapeId: string; index: number }
   | { kind: 'box'; handle: BoxHandle }
   | { kind: 'side'; shapeId: string; ring: number; index: number; t: number }
   | { kind: 'shape'; shapeId: string }
@@ -55,6 +57,12 @@ export function pick(at: Point, show: Shapes, selection: Selection, reach: Reach
       const h = point[which];
       if (h && dist(p, toPx({ x: point.x + h.x, y: point.y + h.y })) <= reach.reachPx) return { kind: 'handle', shapeId: single.id, ring: selection.ring, index: selection.index, which };
     }
+  }
+  // A pinned shape that does not pin by its own corners has four handles of its own; they come before its points,
+  // since they start on its box's corners, where points often are.
+  if (single && single.placement.kind === 'pin' && single.placement.pin && !ownCornersPinnable(single)) {
+    const i = single.placement.pin.findIndex(q => dist(p, toPx(q)) <= reach.reachPx);
+    if (i >= 0) return { kind: 'pin', shapeId: single.id, index: i };
   }
   if (single) {
     let best: { ring: number; index: number; d: number } | null = null;

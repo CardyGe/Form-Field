@@ -172,7 +172,7 @@ try {
   await check('the old Kaleidoscope fractal style reads Folded Lace', async () => {
     await page.getByRole('button', {name: 'Open library', exact: true}).click().catch(() => {});
     await page.getByLabel('Search library', {exact: true}).fill('fractal');
-    assert.equal(await page.getByText('Folded Lace · Julia · Mandelbox', {exact: true}).count(), 1);
+    assert.equal(await page.getByText('Folded Lace · Julia · Mandelbox · Portal', {exact: true}).count(), 1);
     await page.getByRole('button', {name: 'Add fractal', exact: true}).click();
     const fractal = await saved(x => x.layers.length === 3 && x.layers[2].kind === 'fractal');
     assert.equal(fractal.layers[2].params.style, 0);

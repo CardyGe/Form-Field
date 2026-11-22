@@ -39,6 +39,11 @@ const { acceptPreview } = require('./live.cjs');
 // tests/map-messages.test.ts runs one table of messages against both copies, so they stay in step.
 const MESSAGE_LIMIT = 512 * 1024; // MAP_MESSAGE_LIMIT
 const SOURCE_MESSAGE_LIMIT = 256 * 1024 * 1024; // up to four layers, each with images of up to 20 MB, as text
+const SIGNALS_LIMIT = 16 * 1024; // SIGNALS_LIMIT
+// A copy of acceptSignals in src/react/signals.ts.
+const SIGNAL_NAME = /^[a-z]+(\.[a-z0-9]+){1,3}$/;
+const acceptSignals = value => !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length <= 600
+  && Object.entries(value).every(([k, v]) => k.length <= 32 && SIGNAL_NAME.test(k) && typeof v === 'number' && Number.isFinite(v));
 const SHOW_TEXT_LIMIT = 1024 * 1024 * 1024; // a show's compositions can hold many images
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const within = (value, limit) => { try { const text = JSON.stringify(value); return typeof text === 'string' && text.length < limit; } catch { return false; } };
@@ -55,7 +60,7 @@ function acceptMapMessage(value) {
   if (!plain(value)) return false;
   if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MESSAGE_LIMIT)) return false;
   switch (value.type) {
-    case 'show': return plain(value.show);
+    case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && value.fadeMs >= 0 && value.fadeMs <= 30000));
     case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && value.revision >= 0 && plain(value.project);
     case 'blackout':
     case 'testGrid':
@@ -63,6 +68,10 @@ function acceptMapMessage(value) {
     case 'identify': return idOrNull(value.shapeId);
     case 'crosshair': return idOrNull(value.shapeId) && (value.point === null || (plain(value.point) && finite(value.point.x) && finite(value.point.y)));
     case 'solo': return Array.isArray(value.ids) && value.ids.every(id => typeof id === 'string');
+    case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
+    case 'fade': return finite(value.ms) && value.ms >= 0 && value.ms <= 30000;
+    case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, 16 * 1024);
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
     default: return false;
   }
 }
@@ -74,7 +83,7 @@ const FILTERS = [{ name: 'Form & Field Map show', extensions: ['formshow'] }];
  * `open(window)` loads the app page into the output window with the hash #map-output;
  * `closeLiveOutput()` closes Live's output window. Map never holds Live's window.
  */
-function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath, preload, studio, open, closeLiveOutput }) {
+function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath, preload, studio, open, closeLiveOutput, videoFiles }) {
   let output = null;
   let showPath = null;
   // Every write, and the autosave read, goes through one queue, so two saves never overlap
@@ -102,7 +111,10 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
   };
   const checkText = text => { if (typeof text !== 'string' || text.length > SHOW_TEXT_LIMIT) throw new Error('This show cannot be saved.'); };
 
-  handle('loadAutosave', () => queued(() => loadShowFile(autosavePath)));
+  // Stage 6: the videos a show names may play once the show is opened through the app (Open, or its own autosave).
+  // The autosave is written by the page, so it only restores videos granted before; a show Greg opens grants its own.
+  const grantVideos = (show, trusted) => { if (show && videoFiles) videoFiles.allowFromShow(show, { trusted }); return show; };
+  handle('loadAutosave', async () => { await videoFiles?.ready; return grantVideos(await queued(() => loadShowFile(autosavePath)), false); });
   handle('saveAutosave', text => { checkText(text); return queuedSave(autosavePath, text); });
   // The parsed show; null when the person cancelled; { damaged: true } when the chosen file cannot be read.
   handle('openShow', async () => {
@@ -113,7 +125,7 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     try { show = await queued(() => loadShowFile(file)); } catch { show = null; }
     if (!show) return { damaged: true };
     showPath = file;
-    return show;
+    return grantVideos(show, true);
   });
   // Returns the file written, or null when the person cancelled the dialog.
   handle('saveShow', async (text, saveAs) => {
@@ -150,6 +162,17 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     open(window);
   });
   handle('closeOutput', () => closeOutput());
+  // Video… and Find…: a video file Greg picks may be played from now on.
+  const VIDEO_FILTERS = [{ name: 'Video', extensions: ['mp4', 'mov', 'm4v', 'webm'] }];
+  const pickVideo = async title => {
+    const result = await dialog.showOpenDialog(studio(), { title, properties: ['openFile'], filters: VIDEO_FILTERS });
+    if (result.canceled || !result.filePaths?.length) return null;
+    const file = result.filePaths[0];
+    if (!videoFiles || !videoFiles.allow(file, { record: true })) return null;
+    return { path: file, name: path.basename(file) };
+  };
+  handle('chooseVideo', () => pickVideo('Choose a video'));
+  handle('findVideo', name => pickVideo(typeof name === 'string' && name ? `Find ${name.slice(0, 120)}` : 'Find the video'));
 
   // The output page says when it is ready; only then is the studio told the output is open (and sends the show).
   ipcMain.on('studio:map:ready', event => { if (fromOutput(event)) tellStudio('studio:map:output', true); });

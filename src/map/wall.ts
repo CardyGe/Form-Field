@@ -1,8 +1,10 @@
 import type { Project } from '../shared/types';
 import { validateProject } from '../core/project';
 import { acceptMapMessage, type MapMessage } from './messages';
+import type { Signals } from '../react/signals';
 import { MAX_SOURCE_LAYERS, validateWireShow, type WireShow } from './show';
 import type { DrawOptions } from './draw';
+import { validateLiveSettings, type LiveSettings } from '../live/settings';
 
 /** What the wall shows: the show, the compositions it has been sent (by revision), and the overlays. */
 export interface WallState {
@@ -10,14 +12,22 @@ export interface WallState {
   projects: Map<string, { revision: number; project: Project }>;
   options: DrawOptions;
   freeze: boolean;
+  /** The latest signals, and the fade time the next show change should use (a scene switch), if any. */
+  signals: Signals;
+  fadeMs: number | null;
+  /** Live in Map: the Live screen's settings while the show plays Live, else null. */
+  live: LiveSettings | null;
 }
 
 export function initialWall(): WallState {
   return {
-    show: validateWireShow({ format: 'formshow', version: 4, shapes: [], sources: [], groups: [] }),
+    show: validateWireShow({ format: 'formshow', version: 4, shapes: [], sources: [], groups: [], stageCorners: null }),
     projects: new Map(),
     options: { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: null, selectedIndex: null, outlinesOnly: false, invalidIds: [] },
     freeze: false,
+    signals: {},
+    fadeMs: null,
+    live: null,
   };
 }
 
@@ -51,5 +61,9 @@ export function applyMapMessage(state: WallState, value: unknown): WallState {
     case 'identify': return { ...state, options: { ...state.options, identifyId: message.shapeId } };
     case 'crosshair': return { ...state, options: { ...state.options, crosshair: message.point, selectedId: message.shapeId } };
     case 'solo': return { ...state, options: { ...state.options, solo: message.ids } };
+    case 'signals': return { ...state, signals: message.signals };
+    case 'fade': return { ...state, fadeMs: message.ms };
+    case 'liveSettings': return { ...state, live: message.settings === null ? null : validateLiveSettings(message.settings) };
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return state;
   }
 }

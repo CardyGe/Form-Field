@@ -1,9 +1,14 @@
 import type { Project } from '../shared/types';
-import type { CurvePoint, Point, ShowDocument, WireShow } from './show';
+import { usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow } from './show';
 import { shapeValidity } from './outline';
+import { EMBER_SMOKE_INPUTS } from '../react/ember-smoke';
+import { acceptSignals, type Signals } from '../react/signals';
+import { ownCornersPinnable } from './placement';
+import type { LiveSettings } from '../live/settings';
 
 export type MapMessage =
-  | { type: 'show'; show: WireShow }
+  /** fadeMs: this show is a scene switch, crossfading over that long. */
+  | { type: 'show'; show: WireShow; fadeMs?: number }
   /** One source's composition, sent once per revision. */
   | { type: 'source'; id: string; revision: number; project: Project }
   | { type: 'blackout'; on: boolean }
@@ -12,7 +17,22 @@ export type MapMessage =
   | { type: 'identify'; shapeId: string | null }
   | { type: 'crosshair'; point: Point | null; shapeId: string | null }
   /** Only these shapes reach the wall; none means no solo. Not saved. */
-  | { type: 'solo'; ids: string[] };
+  | { type: 'solo'; ids: string[] }
+  /** What sound, the beat, tempo and MIDI are doing, once a frame while something reacts. */
+  | { type: 'signals'; signals: Signals }
+  /** The next show change is a scene switch: its crossfade takes this long. */
+  | { type: 'fade'; ms: number }
+  /** Live in Map: the Live screen's settings (null: the show no longer uses Live), and its Clear and Capture empty room. */
+  | { type: 'liveSettings'; settings: unknown }
+  | { type: 'liveClear' }
+  | { type: 'liveCaptureRoom' }
+  /** Open Live's camera again (after it was unplugged, or refused and then allowed). */
+  | { type: 'liveRetry' }
+  /** Stage 6: every video that cannot play loads again. */
+  | { type: 'videoRetry' };
+
+/** Live's settings travel under the same limit as on Live's own output. */
+export const LIVE_SETTINGS_LIMIT = 16 * 1024;
 
 /**
  * Map's own limit, larger than Live's 16 KB settings cap: the largest valid show (64 shapes of 32 curve points with
@@ -20,6 +40,8 @@ export type MapMessage =
  * refused. Tested.
  */
 export const MAP_MESSAGE_LIMIT = 512 * 1024;
+/** A frame of signals is small; anything larger is refused. */
+export const SIGNALS_LIMIT = 16 * 1024;
 /**
  * A composition can hold up to four layers, each with an image and a mask of up to 20 MB (Studio's MAX_ASSET_BYTES),
  * stored as text about a third larger: so its message has its own, much larger limit.
@@ -43,16 +65,19 @@ const roundPoint = (p: CurvePoint): CurvePoint => {
  */
 export function toWire(show: ShowDocument): WireShow {
   return {
-    format: show.format, version: 4, stage: show.stage,
+    format: show.format, version: show.version, stage: show.stage,
     shapes: show.shapes.map(shape => {
       const rounded = { ...shape, points: shape.points.map(roundPoint), holes: shape.holes.map(h => h.map(roundPoint)) };
       // Rounding moves points by up to 0.1 projector pixels; a shape that would then touch itself goes as it is.
-      return shapeValidity(rounded.points, rounded.holes).ok ? rounded : shape;
+      return shapeValidity(rounded.points, rounded.holes).ok && ownCornersPinnable(rounded) === ownCornersPinnable(shape) ? rounded : shape;
     }),
-    sources: show.sources.map(({ id, kind, speed, revision }) => ({ id, kind, speed, revision })),
+    sources: show.sources.map(({ id, kind, speed, revision, tempoSync, followOutline }) => ({ id, kind, speed, revision, tempoSync, ...(followOutline ? { followOutline } : {}) })),
+    links: show.links,
     groups: show.groups,
-    // Four points each: small, so they travel at full precision.
+    // Not rounded: a pinnable quad at the edge of the rules could round to one that is not.
     stageCorners: show.stageCorners,
+    usesLive: usesLive(show),
+    videos: show.videos,
   };
 }
 
@@ -81,7 +106,7 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
   if (!plain(value)) return false;
   if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MAP_MESSAGE_LIMIT)) return false;
   switch (value.type) {
-    case 'show': return plain(value.show);
+    case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && (value.fadeMs as number) >= 0 && (value.fadeMs as number) <= 30000));
     case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && (value.revision as number) >= 0 && plain(value.project);
     case 'blackout':
     case 'testGrid':
@@ -89,6 +114,21 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'identify': return idOrNull(value.shapeId);
     case 'crosshair': return idOrNull(value.shapeId) && (value.point === null || (plain(value.point) && finite(value.point.x) && finite(value.point.y)));
     case 'solo': return Array.isArray(value.ids) && value.ids.every(id => typeof id === 'string');
+    case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
+    case 'fade': return finite(value.ms) && (value.ms as number) >= 0 && (value.ms as number) <= 30000;
+    case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, LIVE_SETTINGS_LIMIT);
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
     default: return false;
   }
+}
+
+/**
+ * The signals the wall needs each frame: what Map's links listen to, the tempo (for tempo sync), and, while the show
+ * plays Live, what Live's own links listen to.
+ */
+export function wallInputs(show: ShowDocument, live: LiveSettings | null): Set<string> {
+  const inputs = new Set<string>(['tempo.beat', 'tempo.phase', ...show.links.map(l => l.input)]);
+  if (live && usesLive(show)) for (const l of live.links) inputs.add(l.input);
+  if (show.sources.some(s => s.project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1))) for (const input of EMBER_SMOKE_INPUTS) inputs.add(input);
+  return inputs;
 }

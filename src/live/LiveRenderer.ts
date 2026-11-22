@@ -16,8 +16,13 @@ import { Paint } from './Paint';
 import { Signal } from './Signal';
 import { Smoke } from './Smoke';
 import { Kaleidoscope } from './Kaleidoscope';
+import { Relief } from './Relief';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
+import { LiveModulator } from './modulate';
+import type { Signals } from '../react/signals';
+
+const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal, kaleidoscope: Kaleidoscope };
 
 /** Operator setup view: the camera dimmed, people in blue with a pink outline. Never shown in the artwork window. */
 const peopleViewFragment = /* glsl */`
@@ -46,6 +51,11 @@ void main() {
 export class LiveRenderer {
   settings: LiveSettings = defaultLiveSettings();
   blackout = false;
+  /** This frame's sound, beat, tempo and MIDI; the settings' links read them. */
+  signals: Signals = {};
+  private readonly modulator = new LiveModulator();
+  /** The settings the last frame was drawn with (links applied), for the scripted checks. */
+  drawn: LiveSettings = this.settings;
   /** 'tracking' and 'people' are the operator's setup views. The artwork window never uses them. */
   view: 'art' | 'tracking' | 'people' = 'art';
 
@@ -70,8 +80,12 @@ export class LiveRenderer {
   private counted = { frames: 0, since: 0, worst: 0 };
 
   /** `makeProvider` starts person finding when a look needs people. Without it, people are never found. */
-  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource, makeProvider?: () => MaskProvider) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+  /** How many frames have been drawn: Map waits for one before it shows Live. */
+  framesDrawn = 0;
+
+  /** preserveDrawingBuffer: keep the picture after it is shown, so Map's compositor can copy this canvas (Live in Map). */
+  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource, makeProvider?: () => MaskProvider, options: { preserveDrawingBuffer?: boolean } = {}) {
+    this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: options.preserveDrawingBuffer === true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(1);
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;
@@ -106,17 +120,19 @@ export class LiveRenderer {
     const step = capStep(seconds);
     this.time += step;
     this.resize();
-    this.tracking.update(this.source, this.settings, step);
+    // The settings as set, with this frame's links applied to a copy. Everything below draws from the copy.
+    const settings = this.drawn = this.modulator.apply(this.settings, this.signals, step);
+    this.tracking.update(this.source, settings, step);
     if (this.lookKind !== this.settings.look) {
       // Switching looks starts the new one fresh; each keeps its own settings.
       this.look?.dispose();
-      this.look = this.settings.look === 'signal' ? new Signal(this.passes, this.width, this.height) : this.settings.look === 'smoke' ? new Smoke(this.passes, this.width, this.height) : this.settings.look === 'kaleidoscope' ? new Kaleidoscope(this.passes, this.width, this.height) : new Paint(this.passes, this.width, this.height);
+      this.look = new looks[this.settings.look](this.passes, this.width, this.height);
       this.lookKind = this.settings.look;
     }
     if (!this.look) return;
     if (this.settings.look === 'signal' && this.signalSource !== this.source.element) this.look.clear();
     this.signalSource = this.source.element;
-    this.look.step(step, this.time, this.tracking, this.settings);
+    this.look.step(step, this.time, this.tracking, settings);
     let image: THREE.Texture = this.look.output, encode = 1;
     if (this.view === 'tracking') {
       const u = this.trackingView.uniforms, box = this.settings.box;
@@ -136,11 +152,14 @@ export class LiveRenderer {
     this.final.uniforms.uEncode.value = encode;
     this.final.uniforms.uBlackout.value = this.blackout ? 1 : 0;
     this.passes.draw(this.final, null);
+    this.framesDrawn++;
     this.counted.frames++;
   }
 
   /** Wipes the artwork back to its ground. */
   clear(): void { this.look?.clear(); }
+  /** Gives the graphics context back at once, for a canvas that will not be used again (Map's Live). */
+  loseContext(): void { this.renderer.forceContextLoss(); }
 
   /** Frame rate and the longest gap between frames since the last call. */
   stats(): { fps: number; worstMs: number; frames: number } {

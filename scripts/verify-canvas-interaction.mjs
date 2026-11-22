@@ -231,8 +231,9 @@ try {
     await app.evaluate(({ dialog }, { projectFile, stillFile }) => {
       dialog.showSaveDialog = async (_window, options) => ({ canceled: false, filePath: options.title.includes('PNG') ? stillFile : projectFile });
     }, { projectFile, stillFile });
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
-    await page.getByText('Project saved.', { exact: true }).waitFor();
+    // The project came from Open, so plain Save would write back to the fixture. Save As asks for a new file.
+    await canvas.focus(); await page.keyboard.press('Meta+Shift+S');
+    await page.getByText('Saved to interactive.formfield.', { exact: true }).waitFor();
     assert.deepEqual(JSON.parse(await fs.readFile(projectFile, 'utf8')), edited);
     await page.getByTitle('Undo · ⌘Z', { exact: true }).click();
     await saved(p => p.layers[0].transform.x === 0);

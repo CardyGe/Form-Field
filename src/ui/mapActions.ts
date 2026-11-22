@@ -2,14 +2,38 @@
 import type { useMap } from './useMap';
 import { selectionBox } from '../map/gestures';
 import { scaleAbout } from '../map/outline';
+import { linksLeftBehind } from '../map/targets';
 
 type Map = ReturnType<typeof useMap>;
 
 const stamp = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 export const newId = () => `shape-${stamp()}`;
 export const newSourceId = () => `source-${stamp()}`;
-export const newGroupId = () => `group-${stamp()}`;
+const newGroupId = () => `group-${stamp()}`;
+export const newItemId = (kind: 'link' | 'trigger' | 'scene') => `${kind}-${stamp()}`;
 export const randomSeed = () => Math.floor(Math.random() * 1e6);
+
+/** Stage 6: a PNG or JPEG picked by Greg, read as a data URL with its size; null when cancelled or unreadable. */
+function pickImage(): Promise<{ name: string; dataUrl: string; width: number; height: number } | null> {
+  return new Promise(resolve => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/png,image/jpeg';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) { resolve(null); return; }
+      const reader = new FileReader();
+      reader.onerror = () => resolve(null);
+      reader.onload = () => {
+        const dataUrl = String(reader.result), img = new Image();
+        img.onload = () => resolve({ name: file.name, dataUrl, width: img.naturalWidth, height: img.naturalHeight });
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  });
+}
 const several = (n: number, make: () => string) => Array.from({ length: n }, make);
 
 export function mapActions(map: Map) {
@@ -45,10 +69,26 @@ export function mapActions(map: Map) {
     ungroup(groupId: string | null) {
       if (groupId) map.dispatch({ type: 'ungroup', groupId });
     },
-    makeGrid(shapeId: string, rows: number, cols: number, gapPx: number) {
+    makeGrid(shapeId: string, rows: number, cols: number, gapPx: number, spread = false) {
       const n = rows * cols;
       const ids = several(n, newId);
-      if (map.dispatch({ type: 'makeGrid', shapeId, rows, cols, gapPx, ids, sourceIds: several(n, newSourceId), groupId: newGroupId() })) map.selectMany(ids);
+      if (map.dispatch({ type: 'makeGrid', shapeId, rows, cols, gapPx, ids, sourceIds: several(n, newSourceId), groupId: newGroupId(), spread })) map.selectMany(ids);
+    },
+    /** What a shape plays: 'grid', 'colour', 'live' or 'preset:<id>'. linked: shapes sharing its instrument change with it. */
+    /**
+     * Make separate: this shape gets its own copy of its effect, with the effect's reactions as far as the link limit
+     * allows. Returns the new effect's id and how many reactions stayed behind (for a note), or null when refused.
+     */
+    separate(shapeId: string, merge?: string): { id: string; left: number } | null {
+      const before = map.show, from = before.shapes.find(s => s.id === shapeId)?.sourceId, id = newSourceId();
+      if (!from || !map.dispatch({ type: 'makeSeparate', shapeId, sourceId: id }, merge)) return null;
+      return { id, left: linksLeftBehind(before, map.currentShow(), from, id) };
+    },
+    play(shapeId: string, value: string, linked = true) {
+      if (value === 'image') { void pickImage().then(image => { if (image) map.dispatch({ type: 'setContent', shapeId, content: { kind: 'image', sourceId: newSourceId(), image, linked } }); }); return; }
+      if (value === 'video') { void window.studio?.map?.chooseVideo().then(file => { if (file) map.dispatch({ type: 'setContent', shapeId, content: { kind: 'video', videoId: `video-${stamp()}`, path: file.path, name: file.name, linked } }); }); return; }
+      if (value === 'colour' || value === 'grid' || value === 'live') map.dispatch({ type: 'setContent', shapeId, content: { kind: value, linked } });
+      else if (value.startsWith('preset:')) map.dispatch({ type: 'setContent', shapeId, content: { kind: 'preset', presetId: value.slice('preset:'.length), sourceId: newSourceId(), seed: randomSeed(), linked } });
     },
     toggleSolo(shapeId: string) {
       const s = map.solo;

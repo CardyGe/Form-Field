@@ -84,7 +84,13 @@ try {
   await studio.mouse.move(...at(.4, .4), { steps: 6 }); await studio.mouse.move(...at(BOX.x1, BOX.y1), { steps: 6 }); await studio.mouse.up();
   await studio.getByRole('button', { name: 'Select', exact: true }).click();
   // The layer below the Kaleidoscope: an ordinary instrument.
-  await studio.getByLabel('Plays').selectOption('preset:porcelain-shutters');
+  await studio.getByRole('tablist', { name: 'Shape panels' }).getByRole('tab', { name: /^Effect$/ }).click();
+  await studio.evaluate(() => { const d = document.querySelector('details[data-section="effect"]'); if (d && !d.open) d.open = true; });
+  await studio.getByRole('button', { name: 'Change look' }).click();
+  await studio.locator('[data-look="preset:porcelain-shutters"]').click();
+  await sleep(150);
+  await studio.keyboard.press('Escape');
+  await studio.locator('.look-browser').waitFor({ state: 'detached', timeout: 2000 }).catch(async () => { await studio.getByRole('button', { name: 'Close looks' }).click(); });
   await sleep(1500);
   await studio.getByRole('button', { name: 'Edit in Studio', exact: true }).click();
   await studio.locator('.shape-edit-bar').waitFor();

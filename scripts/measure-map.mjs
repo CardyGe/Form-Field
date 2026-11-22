@@ -1,7 +1,12 @@
 // Performance record for Map: eight shapes playing four instruments (two shapes each, each with its own source)
 // on a 1920 × 1080 stage, measured in the output window for 30 s after a warm-up.
 // Run: npm run build && node scripts/measure-map.mjs [--seconds 30] [--edges]
-// --pins pins every shape to a skewed quad (stage 4).
+// --pin pins every shape and sets the stage corners.
+// --react gives every shape a reaction (pulse, bass zoom, highs flicker, instrument on the bass, in turn) driven by
+//   the test beat (stage 5).
+// --video adds two shapes playing one test video each (stage 6), made with the system ffmpeg.
+// --live adds a ninth shape playing Live on the test pattern (Live in Map).
+// --wild (stage 7) groups the first four shapes with a 0.5 s Stagger and gives two others a border run.
 // --edges gives every shape a 40 px soft edge and a 6 px border with an 8 px glow (stage 3).
 // Uses a throwaway user-data folder under work/map-measure/. Prints a table and writes work/map-measure/results.json.
 import fs from 'node:fs/promises';
@@ -9,12 +14,43 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 
+// The look browser and the Details panel's folding sections (Map UI pass).
+const playLook = async (page, value) => {
+  await openSection(page, 'effect');
+  await page.getByRole('button', { name: 'Change look' }).click();
+  await page.locator(`[data-look="${value}"]`).click();
+  // A person presses Escape well after the click; pressed within milliseconds it can arrive before the page settles.
+  await new Promise(r => setTimeout(r, 150));
+  await page.keyboard.press('Escape');
+  // If the key was lost, the panel's own close button.
+  await page.locator('.look-browser').waitFor({ state: 'detached', timeout: 2000 }).catch(async () => {
+    await page.getByRole('button', { name: 'Close looks' }).click();
+    await page.locator('.look-browser').waitFor({ state: 'detached' });
+  });
+};
+// Details has Shape, Effect and Sound tabs: a section opens its tab first ('effect' and 'reacts' are tabs of their own).
+const openSection = async (page, id) => {
+  const tab = { reacts: /^Sound/, effect: /^Effect$/, live: /^Effect$/ }[id] ?? /^Shape$/;
+  const button = page.getByRole('tablist', { name: 'Shape panels' }).getByRole('tab', { name: tab });
+  if (await button.count()) await button.click();
+  await page.evaluate(id => { const d = document.querySelector(`details[data-section="${id}"]`); if (d && !d.open) d.open = true; }, id);
+};
+
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'work/map-measure');
 const arg = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? Number(process.argv[i + 1]) : fallback; };
 const SECONDS = arg('--seconds', 30), WARMUP = 4;
 const EDGES = process.argv.includes('--edges');
-const PINS = process.argv.includes('--pins');
+const REACT = process.argv.includes('--react');
+const LIVE = process.argv.includes('--live');
+const VIDEO = process.argv.includes('--video');
+const WILD = process.argv.includes('--wild');
+const REACTIONS = ['pulse', 'bass-zoom', 'highs-flicker', 'instrument-bass'];
+// --pin pins every shape in perspective and sets the stage corners (stage 4).
+const PIN = process.argv.includes('--pin');
+// --corners sets the stage corners (on its own, or with --pin).
+const CORNERS = process.argv.includes('--corners') || PIN && !process.argv.includes('--no-corners');
 const MIXES = {
   medium: ['ivory-coral', 'porcelain-shutters', 'salt-mandala', 'rapid-cuts'],
   heavy: ['prismatic-fold', 'pearl-organism', 'ivory-coral', 'acid-slide'],
@@ -29,6 +65,12 @@ for (const [mix, presets] of Object.entries(MIXES)) {
   const env = { ...process.env, STUDIO_LIVE_TEST_WINDOW: '1' };
   delete env.ELECTRON_RUN_AS_NODE; delete env.STUDIO_DEV_URL;
   const app = await electron.launch({ args: [root, `--user-data-dir=${userData}`], env });
+  if (VIDEO) {
+    const { execFileSync } = await import('node:child_process');
+    await fs.mkdir(out, { recursive: true });
+    for (const n of [1, 2]) execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `testsrc2=size=1280x720:rate=30:duration=${n * 2}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(out, `measure-${n}.mp4`)]);
+    await app.evaluate(({ dialog }) => { globalThis.__picks = []; dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [globalThis.__picks.shift()] }); });
+  }
   try {
     const studio = await app.firstWindow();
     await studio.setViewportSize({ width: 1500, height: 900 }).catch(() => {});
@@ -50,20 +92,64 @@ for (const [mix, presets] of Object.entries(MIXES)) {
       await studio.getByRole('button', { name: 'Rectangle', exact: true }).click();
       await studio.mouse.move(...at(0.03 + col * 0.24, 0.05 + row * 0.47)); await studio.mouse.down();
       await studio.mouse.move(...at(0.24 + col * 0.24, 0.47 + row * 0.47), { steps: 4 }); await studio.mouse.up();
-      await studio.getByLabel('Plays').selectOption(`preset:${presets[i % 4]}`);
+      await playLook(studio, `preset:${presets[i % 4]}`);
+      if (PIN) { await openSection(studio, 'placement'); await studio.getByLabel('Placement', { exact: true }).selectOption('pin'); }
+      if (REACT) { await openSection(studio, 'reacts'); await studio.getByLabel('Add a reaction', { exact: true }).selectOption(REACTIONS[i % 4]); }
       if (EDGES) {
-        const slider = async (label, value) => { const el = studio.getByLabel(label, { exact: true }); await el.fill(String(value)); await el.dispatchEvent('pointerup'); };
+        const slider = async (label, value) => { await openSection(studio, label === 'Brightness' ? 'look' : 'edge'); const el = studio.getByLabel(label, { exact: true }); await el.fill(String(value)); await el.dispatchEvent('pointerup'); };
         await slider('Soft edge', 40); await slider('Border', 6); await slider('Glow', 8);
       }
-      if (PINS) {
-        // Stage 4: every shape pinned to a slightly skewed quad, so each one takes the triangle grid.
-        await studio.getByLabel('Picture placement', { exact: true }).selectOption('pin');
-        const pin = async (label, px) => { const el = studio.getByLabel(label, { exact: true }); await el.fill(String(px)); await el.press('Enter'); };
-        await pin('Pin bottom right X', Math.round((0.24 + col * 0.24) * 1920) - 40);
-        await pin('Pin top left X', Math.round((0.03 + col * 0.24) * 1920) + 30);
-      }
     }
-    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 8, null, { timeout: 30000 });
+    if (CORNERS) {
+      // Every shape is already pinned (with --pin); the stage corners go in a little, as after a nudged projector.
+      await studio.getByRole('button', { name: 'Stage corners', exact: true }).click();
+      await studio.mouse.move(...at(0, 0)); await studio.mouse.down(); await studio.mouse.move(...at(.02, .03), { steps: 4 }); await studio.mouse.up();
+      await studio.getByRole('button', { name: 'Stage corners', exact: true }).click();
+    }
+    if (VIDEO) {
+      for (const [n, box] of [[1, [0.3, 0.3, 0.45, 0.6]], [2, [0.55, 0.3, 0.7, 0.6]]]) {
+        await app.evaluate((_e, f) => { globalThis.__picks.push(f); }, path.join(out, `measure-${n}.mp4`));
+        // Nothing selected, so the drag draws a new shape over the others instead of working on the selected one.
+        await studio.locator('main.map-stage').focus(); await studio.keyboard.press('Escape');
+        await studio.getByRole('button', { name: 'Rectangle', exact: true }).click();
+        await studio.mouse.move(...at(box[0], box[1])); await studio.mouse.down(); await studio.mouse.move(...at(box[2], box[3]), { steps: 4 }); await studio.mouse.up();
+        await playLook(studio, 'video');
+      }
+      await output.waitForFunction(() => Object.values(window.__mapStats?.videos ?? {}).filter(v => v.state === 'playing').length === 2, null, { timeout: 30000 });
+    }
+    if (LIVE) {
+      await studio.getByRole('button', { name: 'Rectangle', exact: true }).click();
+      await studio.mouse.move(...at(0.4, 0.35)); await studio.mouse.down(); await studio.mouse.move(...at(0.6, 0.65), { steps: 4 }); await studio.mouse.up();
+      await playLook(studio, 'live');
+      await openSection(studio, 'live');
+      await studio.getByLabel('Live camera', { exact: true }).selectOption({ label: 'Test pattern' });
+      await output.waitForFunction(() => window.__mapStats?.live?.running === true, null, { timeout: 30000 });
+    }
+    await output.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 8, null, { timeout: 30000 })
+      .catch(async error => { console.error('instruments did not all start:', JSON.stringify(await output.evaluate(() => window.__mapStats)), await studio.locator('.map-shape-list li .map-row-plays').allTextContents()); throw error; });
+    if (WILD) {
+      const rows = studio.locator('.map-shape-list li:not(.map-group-row)');
+      const slide = async (label, value) => { const el = studio.getByLabel(label, { exact: true }); await el.fill(String(value)); await el.dispatchEvent('pointerup'); };
+      await rows.nth(0).click();
+      for (const i of [1, 2, 3]) await rows.nth(i).click({ modifiers: ['Shift'] });
+      await studio.getByRole('button', { name: 'Group', exact: true }).click();
+      await studio.locator('.map-group-row').waitFor();
+      await studio.locator('.map-group-row').click();
+      await openSection(studio, 'group');
+      await slide('Stagger', 0.5);
+      for (const i of [4, 5]) {
+        await rows.nth(i).click();
+        await openSection(studio, 'edge');
+        await slide('Border', 6);
+        await studio.getByLabel('Border run', { exact: true }).selectOption('laps');
+        await slide('Run speed', 30);
+      }
+      await output.waitForFunction(() => (window.__mapStats?.delayed ?? 0) === 3, null, { timeout: 10000 });
+    }
+    if (REACT) {
+      await studio.waitForFunction(() => !!window.__studioTest?.react, null, { timeout: 5000 });
+      await studio.evaluate(() => window.__studioTest.react.testBeat(true));
+    }
     await sleep(WARMUP * 1000);
 
     const edgeBuildsBefore = await output.evaluate(() => window.__mapStats?.edgeBuilds ?? 0);
@@ -76,7 +162,7 @@ for (const [mix, presets] of Object.entries(MIXES)) {
         requestAnimationFrame(tick);
         const every = setInterval(() => { const s = window.__mapStats; if (s) { levels.push(s.level); fps.push(s.fps); } if (performance.now() >= end) clearInterval(every); }, 1000);
       });
-      return { intervals, levels, fps, failing: window.__mapStats?.failing ?? [], edgeBuilds: window.__mapStats?.edgeBuilds ?? 0 };
+      return { intervals, levels, fps, failing: window.__mapStats?.failing ?? [], edgeBuilds: window.__mapStats?.edgeBuilds ?? 0, staggered: window.__mapStats?.staggered ?? 0 };
     }, SECONDS);
     const sorted = [...record.intervals].sort((a, b) => a - b);
     const pick = q => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
@@ -85,14 +171,14 @@ for (const [mix, presets] of Object.entries(MIXES)) {
       medianMs: +pick(0.5).toFixed(2), p95Ms: +pick(0.95).toFixed(2), maxMs: +sorted.at(-1).toFixed(1),
       over16_7: record.intervals.filter(v => v > 16.7).length,
       fpsReported: record.fps, governorLevels: [...new Set(record.levels)], failing: record.failing,
-      edges: EDGES, pins: PINS, edgeBuildsDuringRun: record.edgeBuilds - edgeBuildsBefore,
+      edges: EDGES, react: REACT, live: LIVE, wild: WILD, histories: record.staggered, edgeBuildsDuringRun: record.edgeBuilds - edgeBuildsBefore,
     };
   } finally { await app.close().catch(() => {}); }
 }
 
 await fs.mkdir(out, { recursive: true });
-await fs.writeFile(path.join(out, PINS ? 'results-pins.json' : EDGES ? 'results-edges.json' : 'results.json'), JSON.stringify(results, null, 2));
+await fs.writeFile(path.join(out, PIN ? 'results-pin.json' : WILD ? 'results-wild.json' : VIDEO ? 'results-video.json' : LIVE ? 'results-live.json' : REACT ? 'results-react.json' : EDGES ? 'results-edges.json' : 'results.json'), JSON.stringify(results, null, 2));
 for (const [mix, r] of Object.entries(results)) {
   console.log(`${mix.padEnd(7)} ${r.presets.join(', ')}`);
-  console.log(`        ${r.frames} frames in ${r.seconds} s · median ${r.medianMs} ms · p95 ${r.p95Ms} ms · max ${r.maxMs} ms · ${r.over16_7} frames over 16.7 ms · governor levels ${r.governorLevels.join(',')} · fps reported ${Math.min(...r.fpsReported)}–${Math.max(...r.fpsReported)} · failing ${r.failing.length}${r.edges ? ` · soft edges made during the run ${r.edgeBuildsDuringRun}` : ''}`);
+  console.log(`        ${r.frames} frames in ${r.seconds} s · median ${r.medianMs} ms · p95 ${r.p95Ms} ms · max ${r.maxMs} ms · ${r.over16_7} frames over 16.7 ms · governor levels ${r.governorLevels.join(',')} · fps reported ${Math.min(...r.fpsReported)}–${Math.max(...r.fpsReported)} · failing ${r.failing.length}${r.edges ? ` · soft edges made during the run ${r.edgeBuildsDuringRun}` : ''}${r.wild ? ` · histories kept ${r.histories}` : ''}`);
 }

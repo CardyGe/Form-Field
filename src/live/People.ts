@@ -100,7 +100,9 @@ export class People {
     }
     this.ready = this.haveMask && provider.ready;
     const wasPresent = this.presence > 0;
-    this.presence = Math.min(1, Math.max(0, this.presence + (this.ready ? 1 : -1) * step / PRESENCE_SECONDS));
+    const relief = settings.look === 'relief';
+    const fadeSeconds = relief ? (this.ready ? .18 : .45) : PRESENCE_SECONDS;
+    this.presence = Math.min(1, Math.max(0, this.presence + (this.ready ? 1 : -1) * step / fadeSeconds));
     // Once faded right out, the old mask is forgotten, so the next person found does not start from a ghost of the last.
     if (wasPresent && this.presence === 0 && !this.ready) {
       (this.fill.uniforms.uValue.value as THREE.Vector4).set(0, 0, 0, 1);
@@ -139,7 +141,7 @@ export class People {
     const f = this.filter.uniforms, box = settings.box;
     f.uSmoothed.value = this.smoothed.read.texture; f.uStill.value = this.timers.read.texture; f.uCamera.value = inputs.camera;
     (f.uBox.value as THREE.Vector4).set(box.left, box.right, box.bottom, box.top);
-    f.uIgnore.value = personStillTimeout(settings) ?? -1;
+    f.uIgnore.value = relief ? -1 : personStillTimeout(settings) ?? -1;
     f.uUseRoom.value = settings.people.useEmptyRoom ? 1 : 0; f.uCaptured.value = this.captured ? 1 : 0; f.uReady.value = this.presence;
     this.passes.draw(this.filter, this.output);
   }

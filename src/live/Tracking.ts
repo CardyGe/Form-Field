@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import type { Passes, Pair } from './passes';
 import type { FrameSource, TrackingFeed } from './look';
-import { wantsPeople, type LiveSettings } from './settings';
+import { usesPeople, type LiveSettings } from './settings';
 import { cameraFragment, flowFragment, lumaFragment, smoothFragment } from './tracking-shaders';
 import type { MaskProvider, PeopleStatus } from './MaskProvider';
 import { People } from './People';
@@ -42,6 +42,7 @@ export class Tracking implements TrackingFeed {
   private readonly peopleStage: People;
   private providerElement: FrameSource['element'] = null;
   private provider: MaskProvider | null = null;
+  private providerKind = '';
   private epoch = 0;
   /** Counts restarts after a stalled camera, so people settle again. */
   private restarts = 0;
@@ -80,16 +81,19 @@ export class Tracking implements TrackingFeed {
 
   /** One display frame: movement from new camera frames, and people when the look wants them. `step` is the capped time step. */
   update(source: FrameSource, settings: LiveSettings, step = 0): void {
-    const wants = wantsPeople(settings) && !!this.makeProvider;
-    if (this.provider && this.providerElement !== source.element) {
-      this.provider.dispose(); this.provider = null; this.peopleStage.reset();
+    const kind = usesPeople(settings) ? settings.look + ':' + settings.source.kind : '';
+    // A new look, a new kind of source, or a different source element starts person finding afresh.
+    if (kind !== this.providerKind || (this.provider && this.providerElement !== source.element)) {
+      this.provider?.dispose();
+      this.provider = null;
+      this.peopleStage.reset();
+      this.providerKind = kind;
+      if (kind && this.makeProvider) {
+        try { this.provider = this.makeProvider(); }
+        catch (error) { this.provider = new FailedProvider(error); }
+      }
     }
     this.providerElement = source.element;
-    if (wants && !this.provider) {
-      try { this.provider = this.makeProvider!(); }
-      catch (error) { this.provider = new FailedProvider(error); }
-    }
-    if (!wants && this.provider) { this.provider.dispose(); this.provider = null; this.peopleStage.reset(); }
     const before = this.frameId, restartsBefore = this.restarts;
     this.analyse(source, settings);
     if (!this.provider) return;

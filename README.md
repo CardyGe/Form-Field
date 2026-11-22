@@ -1,6 +1,17 @@
 # Form & Field
 
-A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.16 alpha.
+A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.17 alpha.
+
+## What's new in 0.17
+
+- **Map:** a new screen for projection mapping. Switch to **Map** in the header, draw shapes and drag their corners to fit the surfaces in the room, using a room photo, Snap, a test grid and Identify. The artwork shows on a projector while the controls stay on your screen, with Blackout.
+- **Anything can play on a shape:** give each shape a Studio instrument, an image, a video or the Live picture.
+- **Groups and scenes:** link shapes so they share one instrument, use **Make a grid** to spread one picture across many cells, and move between saved scenes by hand or with Auto-advance.
+- **Wild options:** Stagger, Vary each, Palette shift, Border runs with Chase, and instruments driven by a shape's outline. Each is off until you turn it on.
+- **Sound and MIDI:** Live and Map can follow sound bands, the beat and tempo, and MIDI controllers with learn.
+- **New Live looks:** **Relief** turns the camera into a kinetic metal wall, and **Signal Melt** adds live pose echoes.
+- **New in Studio:** the Ember Pulse Oscilloscope look, Copper Concertina in Kinetic Relief, and more projection-focused Fractals.
+- **Graphics recovery:** if the graphics context is lost, the Studio preview now comes back by itself, including instruments that build up a picture over time.
 
 ## What's new in 0.16
 
@@ -38,7 +49,7 @@ A local visual instrument studio for Apple Silicon Macs. Create looping liquid f
 Open **Form & Field.app**. The packaged application includes its rendering and encoding tools and works offline.
 
 1. Start with the current surface, or choose a look in **Presets**. A preset replaces the selected instrument of the same kind. Selecting a different kind adds a layer when there is room.
-2. Choose **Bands**, **Contours**, **Drips**, or **Fusion**, then explore its three **Variant** options. **Folded Sculpture** offers Shell, Bloom, Ribbon and Knot forms. **Fractal Worlds** combines three fractal families with variants and colour treatments.
+2. Choose **Bands**, **Contours**, **Drips**, or **Fusion**, then explore its three **Variant** options. **Folded Sculpture** offers Shell, Bloom, Ribbon and Knot forms. **Fractals** offers Kaleidoscope, Julia Bloom, Mandelbox and Portal.
 3. Select a layer in the composition list. The top row is the foreground. **Finish** contains blending, transforms and masks. Imported PNGs retain transparency; PNG/JPEG artwork is embedded in the project.
 4. Click a wave button beside a parameter to animate it. **Motion** offers sine, pulse, smooth periodic noise and cyclic keyframes. Depth offsets the base value; the result stays inside the parameter's bounds. Keyframes drag vertically and interpolate smoothly through the loop boundary.
 5. **Randomize effect** makes coherent variations of the selected effect. Choose Subtle, Balanced or Bold, or use the shuffle button beside any layer. **Keep** locks retain palette, structure, motion and material independently. The source seed stays fixed when structure or motion is locked; repeated clicks still produce fresh variations. Effect modes, quality, coverage, transforms, masks and authored animation routes stay intact. Imported images receive colour grading variations.
@@ -243,6 +254,8 @@ Family-specific controls add ink seed coverage, development and edge pigment; st
 
 Each new instrument has a fourth exploration look that demonstrates these controls. Neutral migration defaults preserve existing artwork.
 
+**Finish** also has **Colour split**, **Gradient map**, **Colour balance** and **Key**, and Glow gains **Glow colour spread** and **Glow streak**. **Time displacement** gains **Time mode** (Delay map, Echo, Median, Darkest, Brightest), **Direction**, **Twist**, **Time zoom**, **Colour reach** and **Colour lag**. All of them start off, so existing projects look the same. Seven new finish looks use them: Neon Map, Anamorphic, Time Vortex, Ghosts, Long Exposure, Premonition and Brightness Time. Results are in [the colour and time proof](docs/colour-and-time-proof.md).
+
 Volume Banding suppression uses deterministic sampling dither; High quality reduces the resulting sampling texture. Directional highlights are filtered against rapid normal changes to reduce sparkle. All render and grading changes use the shared compositor and native output pipeline. The detailed audit and research are in [the professional effect audit](docs/professional-effect-audit-0.10.md).
 
 ## Per-element timing
@@ -363,6 +376,10 @@ Check it with `node scripts/verify-liquid.mjs` (add `--quick` for stills only).
 
 ## Oscilloscope controls
 
+**Ember Pulse** is an Oscilloscope look with a hollow filament bloom, outward-travelling rings and rolling smoke. Find Ember Pulse, Glacier Vapour, Orchid Static, Acid Plume and Silver Ash in Studio's Looks or Map's look browser. The Colour scheme menu changes the palette independently of the effect settings.
+
+Smoke controls the amount of vapour. Use Smoke curl and Smoke lift for its movement, Smoke spread and Smoke persistence for its reach and wake, and Smoke thickness, Smoke detail and Smoke lighting for its appearance. Use **Smoke audio input** in Studio or **Sound & MIDI** in Map. Detected kicks emit new plumes, sustained bass gives them body, and highs brighten fine wisps. Smoke audio response sets how much they react. Exports use the repeating authored smoke phrase. For a four-bar loop, set Phrases per loop to four in Studio and Loop with the tempo to 16 beats in Map.
+
 **Oscilloscope** draws one glowing line the way an oscilloscope does in X-Y mode: the beam is steered by three oscillators, one each for across, up and depth. The figure is not an object that turns. It moves because the oscillators slip against each other, so it folds, opens and collapses. The core burns to white, the halo keeps the line colour, and parts the beam crosses slowly are brighter. Looks: **Twin Orbit**, **Atom**, **Ember Ring**, **Cyan Tangle**, **Signal Burst** and **Morse Weave**.
 
 - **Figure** picks the frequency ratio of the oscillators (Ellipse 1:1, Eight 1:2, Pretzel 3:2, Trefoil 1:3, Knot 3:4, Weave 5:3, Star 5:4, Tangle 7:5). Simple ratios are calm; larger ones are dense. **Overtones** bends the oscillators away from a pure sine for lopsided, less regular figures.
@@ -442,17 +459,22 @@ Sphere-based and periodic-grid forms use matching colour and shadow deformation.
 
 ## Fractal controls
 
-Fractal Worlds has three families, each with three variants, plus Palette, Duotone and Contours colouring. There are eleven curated Fractal starting looks. The inspector shows the controls used by the selected family; switching family retains your other settings. Filter **Presets** to the selected family to explore its looks.
+Fractals has four families, each with three variants, plus Palette, Duotone and Contours colouring. Open **Library → Presets → Fractals for projection** for six looks arranged around unfolding petals, travelling contours, vaults, bead tunnels, mosaics and light echoes. The inspector shows the controls used by the selected family. Switching family retains your settings.
 
 - **Kaleidoscope** offers **Lace**, **Petals** and **Weave**: recursive rings, elliptical petal bodies and intersecting ribbons. **Fold**, **Symmetry**, **Twist**, **Detail** and **Line width** shape the pattern. Thin strokes integrate their coverage at the pixel limit.
 - **Julia Bloom** offers a genuine quadratic **Classic** set, a mirrored **Radial** arrangement and a smoothly warped **Spiral**. **Julia real** and **Julia imaginary** choose the complex constant, with five decimal places for fine adjustment. Small changes can transform the whole set. **Orbit detail**, **Fold**, **Line width** and **Color density** shape its ornament and colouring. Start with small Morph values to retain intricate filaments throughout a loop.
 - **Mandelbox** offers **Architecture**, **Sphere Fold** and **Lattice**, with cubic, stronger spherical and elongated fold structures. **Box scale** and **Fold radius** change the fractal itself; **Fold** changes the folding volume and **Detail** changes recursion. **Radial fold** is an optional mirrored arrangement. **Roughness**, **Light angle**, **Relief** and **Exposure** shape the shaded material, including shadows and ambient occlusion. Space around it is transparent when the composition uses transparent output.
+- **Portal** offers **Beaded Tunnel**, **Mosaic Spiral** and **Light Halo**. **Depth** and **Bank** shape the view. Set **Travel mode** to **Manual** to hold or scrub a pose with **Travel position**. **Loop** follows the project duration and uses **Travel position** as a phase offset. **Afterglow** controls the Halo’s staggered copies.
+
+Use **Focal point X/Y** to place the centre of the effect. With Portal selected, dragging on the canvas moves that point directly. **Dark-space cutout** clears the gaps for layering or transparent export. **Reveal** stages Kaleidoscope and Julia Bloom, and shapes the pacing of the Portal variants. **Camera passage** on Mandelbox holds a wide view, approaches the folded surface, then pulls back.
 
 **Coloring** selects the original **Palette** treatment, **Duotone** using the first and last palette colours, or **Contours** with stepped colours and fine contour lines. The new treatments retain the source lighting and fine detail. **Coloring amount** blends back to the original treatment and can be animated. **Contour colors** changes the number of steps. **Finish → Color finish** has Exposure, Saturation and Hue shift.
 
-**Render quality** chooses Draft, Standard or High sampling. High gives the cleanest fine edges and takes longer. This setting applies to preview and export and is preserved by **Randomize effect**. **Scale**, **Orbit**, **Elevation** and **Framing** change the view. The 2D families fill the source canvas; use masks for transparent cutouts.
+**Render quality** chooses Draft, Standard or High export sampling. High gives the cleanest fine edges and takes longer. Preview uses lighter sampling. **Randomize effect** preserves the quality choice. **Scale**, **Orbit**, **Elevation** and **Framing** change the view.
 
-**Morph** periodically changes structure. **Travel** adds a periodic pan/orbit/dolly and returns to its starting position. With both at zero, intrinsic Fractal motion stops. You can still animate any continuous control through the shared Motion routes. Family, variant, quality, radial fold, symmetry and intrinsic cycle settings remain discrete. **Color drift** offsets the cyclic palette; **Color density**, **Relief**, **Glow**, **Contrast** and **Exposure** shape the finish.
+**Evolution** animates the fractal’s geometry on all four families. New layers and re-applied presets start with it enabled. Existing projects can raise **Evolution** to adopt the new motion. In Portal and Mandelbox, **Bank** sets a fixed tilt while Evolution is active.
+
+**Morph** periodically changes structure. **Travel** adds a pan, orbit or dolly and returns to its starting position. Continuous controls can be animated through the shared Motion routes. Family, variant, quality, radial fold, symmetry and intrinsic cycle settings remain discrete. **Color drift** offsets the cyclic palette. **Color density**, **Relief**, **Glow**, **Contrast** and **Exposure** shape the finish.
 
 These are finite fractal renderers designed for controllable loops. They do not provide unlimited numerical zoom or an endless forward flight. Saved settings and the app version determine the image, with no accumulated simulation state unless a Feedback finish is applied.
 

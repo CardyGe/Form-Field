@@ -5,29 +5,48 @@ vec2 juliaSquare(vec2 z) { return vec2(z.x*z.x-z.y*z.y,2.*z.x*z.y); }
 vec2 cMul(vec2 a,vec2 b){return vec2(a.x*b.x-a.y*b.y,a.x*b.y+a.y*b.x);}
 vec2 cDiv(vec2 a,vec2 b){return vec2(a.x*b.x+a.y*b.y,a.y*b.x-a.x*b.y)/max(dot(b,b),1e-30);}
 vec2 cSqrt(vec2 z){float r=length(z);return vec2(sqrt(max(.5*(r+z.x),0.)),(z.y<0.?-1.:1.)*sqrt(max(.5*(r-z.x),0.)));}
-vec2 juliaConstant() {
+vec2 juliaBaseConstant() {
   float seed=mod(uSeed,997.)*.0137;
   float reference=mod(1729.,997.)*.0137;
   vec2 c=vec2(uJuliaReal,uJuliaImag);
   c+=.0009*(vec2(sin(seed),cos(seed))-vec2(sin(reference),cos(reference)));
+  return c;
+}
+vec2 juliaConstant() {
+  vec2 c=juliaBaseConstant()+uMorph*.014*vec2(cos(uPhase)-1.,sin(uPhase));
   c+=uDance*vec2(.17*(cos(uPhase)-1.),.23*sin(uPhase)+.06*sin(2.*uPhase));
-  return c+uMorph*.014*vec2(cos(uPhase)-1.,sin(uPhase));
+  if(uEvolution>0.){
+    float progress=fract(uPhase/TAU);
+    float open=fractalCue(progress,vec4(.06,.36,.51,.75));
+    float divide=fractalCue(progress,vec4(.40,.65,.78,.98));
+    vec2 emergence=mix(vec2(-.066,.048),vec2(.066,-.054),uVariant*.50);
+    vec2 branching=mix(vec2(.044,.085),vec2(-.060,-.053),uVariant*.50);
+    c+=uEvolution*(.69+.31*uMorph)*(emergence*open+branching*divide);
+  }
+  return c;
 }
 // Zoom flight dives toward a repelling period-2 point z1 of z²+c. Near it the
 // Julia set repeats exactly under the inverse map, scaled by the cycle's
 // multiplier 4(c+1). Each loop goes 2k inverse steps deep, so the last frame
 // is the first frame's own preimage: same image, no crossfade. Returns false
 // when that cycle is not repelling enough to zoom.
-float juliaDiveMultiplier() { return length(4.*(juliaConstant()+vec2(1.,0.))); }
-bool juliaCanDive() { return uZoomFlight>0.&&juliaDiveMultiplier()>1.03; }
+float juliaDiveMultiplier() {
+  vec2 c=uEvolution>0.?juliaBaseConstant():juliaConstant();
+  return length(4.*(c+vec2(1.,0.)));
+}
+bool juliaCanDive() { return uZoomFlight>0.&&juliaDiveMultiplier()>(uEvolution>0.?1.25:1.03); }
 
 vec2 juliaDomainPlane(vec2 pixelOffset) {
-  vec2 p=fractalBend((sourceUV(vUv+pixelOffset/uResolution)-.5)*vec2(uAspect,1.));
+  vec2 p=fractalView(vUv+pixelOffset/uResolution);
   float denominator=1.+p.y*.18*tan(uCameraPitch);
   p/=(denominator<0.?-1.:1.)*max(abs(denominator),.08);
-  p=turn(uCameraYaw+uTravel*.12*sin(uPhase))*p;
+  float sway=uTravel*legacyCameraMotion();
+  p=turn(uCameraYaw+sway*.12*sin(uPhase))*p;
   p*=2.8*uScale/1.7/max(uZoom,.5)*.78*gZoom;
-  p+=uTravel*.18*vec2(sin(uPhase),cos(uPhase));
+  p+=sway*.18*vec2(sin(uPhase),cos(uPhase));
+  // Frame the unfolding arms slightly closer during their transition.
+  float open=fractalCue(fract(uPhase/TAU),vec4(.12,.43,.66,.99));
+  p*=1.-uEvolution*(.18+.19*uTravel)*open;
   return turn(uTwist*.6)*p;
 }
 vec2 juliaPlane(vec2 pixelOffset) {
@@ -75,7 +94,8 @@ vec3 juliaSample(vec2 pixelOffset) {
   if(juliaCanDive()) {
     vec2 d=cSqrt(vec2(-3.,0.)-4.*c),zp=.5*(vec2(-1.,0.)+d),zq=.5*(vec2(-1.,0.)-d);
     vec2 lambda2=4.*(c+vec2(1.,0.));
-    float k=clamp(ceil(log(1.+5.*uZoomFlight)/log(length(lambda2))),1.,8.),n=2.*k;
+    // Hold the number of inverse steps while the constant evolves.
+    float k=clamp(ceil(log(1.+5.*uZoomFlight)/log(juliaDiveMultiplier())),1.,8.),n=2.*k;
     float f=fract(uPhase/TAU);
     vec2 delta=domain,start=zp+delta,back=start;
     for(int j=0;j<16;j++) {
@@ -92,7 +112,7 @@ vec3 juliaSample(vec2 pixelOffset) {
     vec2 residual=cMul(lambda,back-zp)-delta;
     z=zp+cMul(inward,delta+f*residual);
     shift=n*f;
-    ratio=length(fwidth(z))/max(length(fwidth(domain)),1e-12);
+    ratio=max(1.e-6,length(fwidth(z))/max(length(fwidth(domain)),1e-12));
     pixel*=ratio;
   }
 
@@ -100,6 +120,8 @@ vec3 juliaSample(vec2 pixelOffset) {
   float trap=8.,orbitSum=0.,orbitWeight=0.,weight=pow(.87,-shift);
   vec3 filigree=vec3(0.);
   float trapRadius=.28+.58*uFold;
+  float crestPhase=uPhase-length(domain)*(2.1+2.8*uTravel);
+  trapRadius+=uEvolution*.19*cos(crestPhase+.85);
   float iterations=uQuality<.5?128.:(uQuality<1.5?192.:256.);
   for(int i=0;i<256;i++) {
     if(float(i)>=iterations||r2>256.)break;
@@ -165,6 +187,37 @@ vec3 juliaSample(vec2 pixelOffset) {
   color+=filigree*uTrap*ornamentMask*.3;
   float detailGlow=exp(-distance*45.)*escaped;
   color+=pigment(exteriorCoordinate+.12,exteriorAA)*detailGlow*uGlow*.065;
+  if(uReveal>0.){
+    // The bright crest advances along the same escape levels as the filigree.
+    // A second, wider envelope keeps one part of the field readable at a time.
+    float crest=exteriorCoordinate*1.65-uPhase/TAU;
+    float ripple=juliaStroke(crest,exteriorAA*1.65,.13+.055*uLineWidth);
+    float sweep=.5+.5*cos(uPhase-length(domain)*6.5-domain.y*2.);
+    float emphasis=smoothstep(.20,.88,sweep);
+    float band=exp(-distance*mix(28.,15.,emphasis))*escaped;
+    vec3 tracer=pigment(exteriorCoordinate+.025*cos(uPhase),exteriorAA);
+    color=color*mix(1.,.48+.52*emphasis,uReveal*.76)
+      +tracer*ripple*band*uReveal*(.14+.62*emphasis);
+  }
+  if(uEvolution>0.){
+    // A metallic edge, a darker basin and a spreading light front make
+    // the branching forms readable at different scales.
+    float progress=fract(uPhase/TAU);
+    float opening=fractalCue(progress,vec4(.14,.42,.64,.94));
+    float bandCoordinate=smoothCount*.29-progress+.09*cos(crestPhase);
+    float bandFootprint=max(.00001,fwidth(bandCoordinate));
+    float filament=juliaStroke(bandCoordinate,bandFootprint,.10+.056*uLineWidth);
+    float bevel=juliaStroke(bandCoordinate-.19,bandFootprint,.056+.028*uLineWidth);
+    float basin=juliaStroke(interiorCoordinate*4.-progress,interiorAA*4.,.14);
+    float reach=mix(40.,15.,opening);
+    float field=exp(-distance*reach);
+    vec3 plated=pigment(exteriorCoordinate+.07+.19*opening,exteriorAA);
+    vec3 lip=mix(plated,vec3(1.,.96,.86),.32+.25*uRelief);
+    vec3 inlay=pigment(interiorCoordinate-.17+.18*opening,interiorAA);
+    vec3 inside=(inlay*(.034+.25*basin)+filigree*.42*uTrap);
+    vec3 outside=plated*(.025+uOutside*.12)+field*(plated*(.095+.63*filament)+lip*bevel*.43);
+    color=mix(color,mix(inside,outside,escaped),uEvolution*.83);
+  }
 
   // This unfiltered height contains no derivative calls. Filtered colour and
   // footprint values never feed the material derivative inside glaze().

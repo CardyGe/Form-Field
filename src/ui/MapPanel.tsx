@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
-import { useMap, type MapTool } from './useMap';
+import { useMap, showReacts, type MapTool } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
 import MapShapeList from './MapShapeList';
+import MapIcon from './mapIcons';
+import { Icon } from './LayerControls';
 import MapDetails from './MapDetails';
+import MapSoundStrip from './MapSoundStrip';
+import MapLookBrowser from './MapLookBrowser';
+import { PRESETS } from '../core/project';
 import { mapActions, newId, newSourceId } from './mapActions';
 import { paint, ringPx, shownOnWall, traceRing } from '../map/draw';
 import { applyEdit, attemptEdit, type EditAction } from '../map/editor';
@@ -11,7 +16,8 @@ import { shortcutFor } from '../map/keys';
 import { ellipseRing, hitShape, isCurved, squareBox, triangleRing } from '../map/outline';
 import { joinedAnchors, snapMove, snapPoint, type SnapTarget } from '../map/snap';
 import { boxHandles, marqueeSelect, pick, selectionBox, transformFor, type Box, type BoxHandle } from '../map/gestures';
-import { MAX_NAME_LENGTH, STAGE_SIZE, isShapeLocked, isShapeShown, type CurvePoint, type Point, type ShowDocument } from '../map/show';
+import { ownCornersPinnable } from '../map/placement';
+import { LIVE_SOURCE_ID, isVideoId, usesLive, MAX_NAME_LENGTH, STAGE_SIZE, isShapeLocked, isShapeShown, type CurvePoint, type Point, type ShowDocument } from '../map/show';
 import { MapCompositor } from '../map/compositor';
 import { GOVERNOR_SCALES } from '../map/playout';
 
@@ -24,8 +30,17 @@ const REASONS: Record<string, string> = {
   'bad-colour': 'That colour could not be used', 'bad-photo': 'That picture could not be used',
   'not-found': 'That shape is gone', 'too-many-shapes': 'Too many shapes', 'duplicate-id': 'That shape already exists',
   'name-too-long': `Names can be at most ${MAX_NAME_LENGTH} characters`,
-  'too-many-sources': 'Too many instruments in this show', 'needs-source-id': 'That shape could not be copied',
+  'too-many-sources': 'Too many instruments in this show',
+  'nothing-to-vary': 'No shape in this group plays an effect to vary',
+  'image-too-large': 'That picture is over 8 MB: save it smaller (a JPEG of the size the projector shows is plenty)',
+  'images-over-budget': 'The show already holds 32 MB of pictures: use smaller ones, or fewer',
+  'bad-image': 'That file could not be read as a PNG or JPEG picture',
+  'too-many-videos': 'A show can hold 16 videos',
+  'not-a-video': 'That is not a video file (MP4, MOV, M4V or WebM)', 'needs-source-id': 'That shape could not be copied',
   'unknown-preset': 'That look is not in the Library', 'bad-palette': 'That palette could not be used',
+  'pin-folded': 'Those four corners fold over: the picture cannot be laid on them', 'pin-flat': 'Those four corners are too close to a line to carry a picture',
+  'pin-own-corners': 'This shape pins by its own four corners: drag those', 'not-pinned': 'Choose Pin first', 'nothing-to-share': 'That shape plays no instrument to share',
+  'corners-folded': 'The stage corners would fold over', 'corners-outside': 'Stage corners can go at most half a stage past the edge',
   'too-many-layers': 'A shape\'s composition can have at most four layers', 'bad-composition': 'That composition could not be read',
 };
 const COLOURS = ['#ff3b30', '#34c759', '#0a84ff', '#ffcc00', '#bf5af2', '#ff9f0a'];
@@ -49,12 +64,27 @@ type Drag =
   | { kind: 'point'; shapeId: string; ring: number; index: number; start: Point; alt: boolean }
   | { kind: 'handle'; shapeId: string; ring: number; index: number; which: 'in' | 'out' }
   | { kind: 'box'; handle: BoxHandle; start: Point; box: Box; shapeIds: string[] }
+  | { kind: 'pin'; shapeId: string; index: number; start: Point }
+  | { kind: 'corner'; index: number; start: Point }
   | { kind: 'marquee'; start: Point; now: Point; additive: boolean }
   | { kind: 'pen-handle' };
 /** A Pen outline being drawn: its points so far, and the shape it will cut a hole in, if any. */
 type Pen = { points: CurvePoint[]; hole: string | null };
 
 const stagePx = (p: Point) => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height });
+const CORNER_PX = 16;        // stage-corner handle radius (pixels on screen)
+/** Where the stage's corners go on the projector: the show's stage corners, or the stage's own. */
+const stageCornerPoints = (show: { stageCorners: Point[] | null }): Point[] => show.stageCorners ?? [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+/** A corner past the stage's edge is shown, and grabbed, at the edge. */
+/** A stage corner as shown: where it is, kept inside the stage area around the stage so it can always be grabbed. */
+function visibleCorner(p: Point, stage: Element, area: Element): Point {
+  const cr = stage.getBoundingClientRect(), ar = area.getBoundingClientRect();
+  if (!cr.width || !cr.height) return p;
+  const inset = CORNER_PX + 2;
+  const x0 = (ar.left + inset - cr.left) / cr.width, x1 = (ar.right - inset - cr.left) / cr.width;
+  const y0 = (ar.top + inset - cr.top) / cr.height, y1 = (ar.bottom - inset - cr.top) / cr.height;
+  return { x: Math.min(x1, Math.max(x0, p.x)), y: Math.min(y1, Math.max(y0, p.y)) };
+}
 const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
 /** The photo, decoded once per picture, and the rectangle it fills: as large as fits on the stage, centred. */
@@ -92,6 +122,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const map = useMap(onError);
   const act = mapActions(map);
   const canvas = useRef<HTMLCanvasElement>(null);
+  /** A see-through layer over the whole stage area, for handles that sit outside the stage (box handles, stage corners). */
+  const handles = useRef<HTMLCanvasElement>(null);
 
   const drag = useRef<Drag | null>(null);
   // While a drag is in progress the canvas (and the wall) show map.preview; the real show changes only on release.
@@ -105,6 +137,13 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const setPen = (next: Pen | null) => { penRef.current = next; setPenState(next); };
   const [hover, setHover] = useState<Point | null>(null);
   const [marquee, setMarquee] = useState<{ a: Point; b: Point } | null>(null);
+  // Stage corners: while on, the four corner handles are shown and the shape tools rest; the last one touched takes the arrow keys.
+  // The look browser, open for the selected shape.
+  const [looksOpen, setLooksOpen] = useState(false);
+  // Linked shapes are one instrument: a change of look reaches them all, unless this is turned off.
+  const [linkedChanges, setLinkedChanges] = useState(true);
+  const [cornersMode, setCornersMode] = useState(false);
+  const [cornerIndex, setCornerIndex] = useState(0);
   const [snapMark, setSnapMark] = useState<SnapTarget | null>(null);
   const [inspectorNote, setInspectorNote] = useState<string | null>(null);
   const shown = map.shown;
@@ -119,13 +158,33 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
 
   // With the output closed, this screen plays the instruments itself, with the same compositor as the wall.
   const compositor = useRef<MapCompositor | null>(null);
+  const pendingFadeRef = useRef<{ current: number | null } | null>(null);
+  pendingFadeRef.current = map.pendingFade;
+  // Signals reach this screen's compositor directly.
+  map.onSignals.current = signals => compositor.current?.setSignals(signals);
+  // Live's Clear and Capture empty room reach this screen's Live directly.
+  // This screen's own Live, as the Live card's status line shows it while the output is closed.
+  const [localLive, setLocalLive] = useState<{ running: boolean; state: string } | null>(null);
+  const [localVideos, setLocalVideos] = useState<Record<string, { state: string; playsAs: number | null }>>({});
+  useEffect(() => {
+    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); return; }
+    const timer = setInterval(() => {
+      const next = compositor.current?.stats().live ?? null;
+      setLocalLive(old => old?.running === next?.running && old?.state === next?.state ? old : next);
+      const videos = compositor.current?.stats().videos ?? {};
+      setLocalVideos(old => JSON.stringify(old) === JSON.stringify(videos) ? old : videos);
+    }, 500);
+    return () => clearInterval(timer);
+  }, [map.outputOpen]);
+  map.onLiveAction.current = action => { if (action === 'clear') compositor.current?.liveClear(); else if (action === 'retry') compositor.current?.liveRetry(); else if (action === 'videoRetry') compositor.current?.videoRetry(); else compositor.current?.liveCaptureRoom(); };
   useEffect(() => {
     if (!canvas.current) return;
-    try { compositor.current = new MapCompositor(canvas.current); } catch { compositor.current = null; }
+    // It draws on its own hidden canvas; this screen copies that picture and draws its marks over it.
+    try { compositor.current = new MapCompositor(document.createElement('canvas')); } catch { compositor.current = null; }
     return () => { compositor.current?.dispose(); compositor.current = null; };
   }, []);
-  const drawInputs = { shown, refused, selectedId: map.selectedId, selectedIds: map.selectedIds, selectedIndex: map.selectedIndex, selectedRing: map.selectedRing, outputOpen: map.outputOpen, wallPicture: map.wallPicture,
-    freeze: map.freeze, soloed: map.soloed, pen, hover, marquee, snapMark, photo: map.photoShown && map.show.photo && photo?.complete ? { image: photo, opacity: map.show.photo.opacity } : null, tool: map.tool };
+  const drawInputs = { cornersMode, cornerIndex, shown, refused, selectedId: map.selectedId, selectedIds: map.selectedIds, selectedIndex: map.selectedIndex, selectedRing: map.selectedRing, outputOpen: map.outputOpen, wallPicture: map.wallPicture,
+    freeze: map.freeze, live: map.live, soloed: map.soloed, pen, hover, marquee, snapMark, photo: map.photoShown && map.show.photo && photo?.complete ? { image: photo, opacity: map.show.photo.opacity } : null, tool: map.tool };
   const inputs = useRef(drawInputs);
   inputs.current = drawInputs;
   const playedShow = useRef<ShowDocument | null>(null);
@@ -141,14 +200,22 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     const picture = d.refused?.show ?? d.shown;
     const options = { blackout: false, testGrid: false, identifyId: null, crosshair: null, selectedId: d.selectedId, selectedIndex: null,
       outlinesOnly: !!background, invalidIds: d.refused ? d.refused.ids : [], solo: d.soloed, operator: true };
-    const local = compositor.current && !d.outputOpen && picture.sources.length > 0 ? compositor.current : null;
+    // With the output closed this screen draws the stage as the wall would (placement, pins, look), instruments or not.
+    const local = compositor.current && !d.outputOpen && !compositor.current.stats().contextLost ? compositor.current : null;
     if (local) {
-      if (playedShow.current !== picture) { local.setShow(picture, new Map(picture.sources.map(s => [s.id, s.project]))); playedShow.current = picture; }
+      if (playedShow.current !== picture) {
+        // A scene switch crossfades over its fade time here as on the wall.
+        local.setShow(picture, new Map(picture.sources.map(s => [s.id, s.project])), pendingFadeRef.current?.current ?? undefined);
+        if (pendingFadeRef.current) pendingFadeRef.current.current = null;
+        playedShow.current = picture;
+      }
       local.setOptions(options);
       local.setFrozen(d.freeze);
+      local.setLive(d.live);
       // This screen draws its marks over the stage, so the stage is drawn again under them every time.
       local.invalidate();
       local.frame(now);
+      ctx.drawImage(local.canvas, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
     } else {
       // Not playing here (the wall plays them, or nothing does): the instruments here give their graphics contexts back.
       if (playedShow.current && compositor.current) { compositor.current.setShow({ shapes: [], sources: [], groups: [] }, new Map()); playedShow.current = null; }
@@ -191,17 +258,6 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         ctx.fill(); ctx.stroke();
       }));
     }
-    // The scale-and-turn box around the selection.
-    const editable = d.tool === 'select' && d.selectedIds.length > 0 && picture.shapes.filter(s => d.selectedIds.includes(s.id)).every(s => isShapeShown(picture, s) && !isShapeLocked(picture, s));
-    const box = editable ? selectionBox(picture, d.selectedIds) : null;
-    if (box) {
-      const h = boxHandles(box, { outsetPx: BOX_OUTSET_PX * k, turnPx: TURN_PX * k });
-      ctx.save(); ctx.setLineDash([6 * k, 4 * k]); ctx.strokeStyle = 'rgba(255,212,0,0.7)'; ctx.lineWidth = 1 * k;
-      ctx.strokeRect(h.nw.x, h.nw.y, h.se.x - h.nw.x, h.se.y - h.nw.y); ctx.restore();
-      ctx.strokeStyle = 'rgba(255,212,0,0.7)'; ctx.beginPath(); ctx.moveTo(h.turn.x, h.nw.y); ctx.lineTo(h.turn.x, h.turn.y); ctx.stroke();
-      for (const name of ['nw', 'ne', 'se', 'sw'] as const) { ctx.fillStyle = '#ffd400'; ctx.fillRect(h[name].x - handle / 2.5, h[name].y - handle / 2.5, handle / 1.25, handle / 1.25); }
-      ctx.beginPath(); ctx.arc(h.turn.x, h.turn.y, handle / 2, 0, Math.PI * 2); ctx.fillStyle = '#ffd400'; ctx.fill();
-    }
     // The Pen outline so far, with a line to the pointer; the first point is ringed, since clicking it closes the shape.
     if (d.pen && d.pen.points.length) {
       const pts = ringPx(d.pen.points);
@@ -215,6 +271,16 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       pts.forEach((p, i) => { ctx.fillStyle = i === 0 ? '#00e0ff' : '#ffffff'; ctx.fillRect(p.x - handle / 2, p.y - handle / 2, handle, handle); });
       ctx.strokeStyle = '#00e0ff'; ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, REACH_PX * k, 0, Math.PI * 2); ctx.stroke();
     }
+    // A pinned shape's own pin handles: diamonds joined by a dashed line.
+    if (selected && d.selectedIds.length === 1 && selected.placement.kind === 'pin' && selected.placement.pin && !ownCornersPinnable(selected)) {
+      const pin = selected.placement.pin.map(stagePx);
+      ctx.save(); ctx.setLineDash([8 * k, 6 * k]); ctx.strokeStyle = '#ff7ad9'; ctx.lineWidth = 1.5 * k;
+      ctx.beginPath(); pin.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.closePath(); ctx.stroke(); ctx.restore();
+      for (const q of pin) {
+        ctx.beginPath(); ctx.moveTo(q.x, q.y - handle * .7); ctx.lineTo(q.x + handle * .7, q.y); ctx.lineTo(q.x, q.y + handle * .7); ctx.lineTo(q.x - handle * .7, q.y); ctx.closePath();
+        ctx.fillStyle = '#ff7ad9'; ctx.fill(); ctx.strokeStyle = '#000000'; ctx.lineWidth = 2 * k; ctx.stroke();
+      }
+    }
     if (d.marquee) {
       const a = stagePx(d.marquee.a), b = stagePx(d.marquee.b);
       ctx.save(); ctx.setLineDash([6 * k, 4 * k]); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1 * k; ctx.fillStyle = 'rgba(255,255,255,0.08)';
@@ -224,17 +290,57 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       const c = stagePx(d.snapMark.at);
       ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 2 * k; ctx.beginPath(); ctx.arc(c.x, c.y, 7 * k, 0, Math.PI * 2); ctx.stroke();
     }
+    // The handles that may sit outside the stage are drawn on the layer over the whole stage area, in stage pixels.
+    const o = handles.current, area = o?.parentElement, c = canvas.current;
+    const octx = o?.getContext('2d');
+    if (o && area && c && octx) {
+      const ar = area.getBoundingClientRect(), cr = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+      const w = Math.round(ar.width * dpr), h = Math.round(ar.height * dpr);
+      if (o.width !== w || o.height !== h) { o.width = w; o.height = h; }
+      octx.setTransform(1, 0, 0, 1, 0, 0);
+      octx.clearRect(0, 0, w, h);
+      const toArea = cr.width > 0 ? cr.width / STAGE_SIZE.width * dpr : 1;
+      octx.setTransform(toArea, 0, 0, toArea, (cr.left - ar.left) * dpr, (cr.top - ar.top) * dpr);
+      const ctx = octx;
+    // The scale-and-turn box around the selection.
+    const editable = d.tool === 'select' && d.selectedIds.length > 0 && picture.shapes.filter(s => d.selectedIds.includes(s.id)).every(s => isShapeShown(picture, s) && !isShapeLocked(picture, s));
+    const box = editable ? selectionBox(picture, d.selectedIds) : null;
+    if (box && !d.cornersMode) {
+      const h = boxHandles(box, { outsetPx: BOX_OUTSET_PX * k, turnPx: TURN_PX * k });
+      ctx.save(); ctx.setLineDash([6 * k, 4 * k]); ctx.strokeStyle = 'rgba(255,212,0,0.7)'; ctx.lineWidth = 1 * k;
+      ctx.strokeRect(h.nw.x, h.nw.y, h.se.x - h.nw.x, h.se.y - h.nw.y); ctx.restore();
+      ctx.strokeStyle = 'rgba(255,212,0,0.7)'; ctx.beginPath(); ctx.moveTo(h.turn.x, h.nw.y); ctx.lineTo(h.turn.x, h.turn.y); ctx.stroke();
+      for (const name of ['nw', 'ne', 'se', 'sw'] as const) { ctx.fillStyle = '#ffd400'; ctx.fillRect(h[name].x - handle / 2.5, h[name].y - handle / 2.5, handle / 1.25, handle / 1.25); }
+      ctx.beginPath(); ctx.arc(h.turn.x, h.turn.y, handle / 2, 0, Math.PI * 2); ctx.fillStyle = '#ffd400'; ctx.fill();
+    }
+    // Stage corners: where the stage's corners go on the projector, numbered, joined by a dashed line.
+    if (d.cornersMode) {
+      const corners = stageCornerPoints(picture).map(p => visibleCorner(p, c, area)).map(stagePx);
+      ctx.save(); ctx.setLineDash([10 * k, 6 * k]); ctx.strokeStyle = '#00e0ff'; ctx.lineWidth = 2 * k;
+      ctx.beginPath(); corners.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.closePath(); ctx.stroke(); ctx.restore();
+      corners.forEach((q, i) => {
+        ctx.beginPath(); ctx.arc(q.x, q.y, CORNER_PX * k, 0, Math.PI * 2);
+        ctx.fillStyle = i === d.cornerIndex ? '#00e0ff' : 'rgba(0,224,255,0.35)'; ctx.fill(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2 * k; ctx.stroke();
+        ctx.fillStyle = i === d.cornerIndex ? '#000000' : '#ffffff'; ctx.font = `600 ${14 * k}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i + 1), q.x, q.y);
+      });
+    }
+    }
   }, []);
-  useEffect(() => { drawStage(performance.now()); }, [shown, refused, map.selectedIds, map.selectedIndex, map.selectedRing, map.outputOpen, map.wallPicture, redrawTick, pen, hover, marquee, snapMark, map.soloed.join(), map.photoShown, map.tool, drawStage]);
+  useEffect(() => { drawStage(performance.now()); }, [cornersMode, cornerIndex, shown, refused, map.selectedIds, map.selectedIndex, map.selectedRing, map.outputOpen, map.wallPicture, redrawTick, pen, hover, marquee, snapMark, map.soloed.join(), map.photoShown, map.tool, drawStage]);
   // Instruments move, so while they play here the stage is drawn every frame.
-  const playsHere = !map.outputOpen && (refused?.show ?? shown).sources.length > 0;
+  const playsHere = !map.outputOpen && ((refused?.show ?? shown).sources.length > 0 || showReacts(shown) || usesLive(shown));
   useEffect(() => {
     if (!playsHere) return;
     let raf = requestAnimationFrame(function loop(now) { drawStage(now); raf = requestAnimationFrame(loop); });
     return () => cancelAnimationFrame(raf);
   }, [playsHere, drawStage]);
 
-  const pointerAt = (e: { clientX: number; clientY: number; currentTarget: Element }): Point => stageFromPointer(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
+  /** Where the pointer is on the stage, kept to the stage; and the same without keeping it there (it may be beside the stage). */
+  const pointerAt = (e: { clientX: number; clientY: number }): Point => stageFromPointer(canvas.current!.getBoundingClientRect(), e.clientX, e.clientY);
+  const pointerFree = (e: { clientX: number; clientY: number }): Point => {
+    const r = canvas.current!.getBoundingClientRect();
+    return { x: r.width ? (e.clientX - r.left) / r.width : 0, y: r.height ? (e.clientY - r.top) / r.height : 0 };
+  };
   const reasonText = (reason: string) => REASONS[reason] ?? reason;
   const reach = () => ({ reachPx: REACH_PX * screenScale(), outsetPx: BOX_OUTSET_PX * screenScale(), turnPx: TURN_PX * screenScale() });
   /** Snapping is on unless switched off, or Ctrl is held. */
@@ -264,6 +370,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         const exclude = [d.shapeId, ...(joined && from ? joinedAnchors(map.show, d.shapeId, from).map(j => j.shapeId) : [])];
         return { type: 'movePoint', shapeId: d.shapeId, ring: d.ring, index: d.index, to: snapped(raw, e, exclude), joined };
       }
+      case 'pin': setSnapMark(null); return { type: 'movePin', shapeId: d.shapeId, index: d.index, to: snapped(raw, e, [d.shapeId]) };
+      case 'corner': setSnapMark(null); return { type: 'moveStageCorner', index: d.index, to: raw };
       case 'handle': setSnapMark(null); return { type: 'moveHandle', shapeId: d.shapeId, ring: d.ring, index: d.index, which: d.which, to: raw, mirror: !e.altKey };
       case 'box': {
         const m = transformFor(d.handle, d.start, stagePx(raw), d.box, e.shiftKey);
@@ -303,11 +411,18 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     return s && isShapeShown(map.show, s) && !isShapeLocked(map.show, s) && hitShape(at, s.points, s.holes) ? s.id : null;
   };
 
-  const onPointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
+  const onPointerDown = (e: PointerEvent<HTMLElement>) => {
     if (e.button !== 0 || !map.loaded) return;
     const raw = pointerAt(e);
     map.setLastRefusal(null); setDragNote(null);
     const tool = map.tool;
+    // Stage corners: only the four corner handles answer, and the corner keeps pointing at the projector's picture.
+    if (cornersMode) {
+      const free = pointerFree(e), here = stagePx(free), r = CORNER_PX * 1.5 * screenScale(), area = e.currentTarget;
+      const i = stageCornerPoints(map.show).findIndex(q => { const c = stagePx(visibleCorner(q, canvas.current!, area)); return Math.hypot(c.x - here.x, c.y - here.y) <= r; });
+      if (i >= 0) { setCornerIndex(i); drag.current = { kind: 'corner', index: i, start: free }; e.currentTarget.setPointerCapture(e.pointerId); }
+      return;
+    }
     if (tool === 'pen') {
       const p = penRef.current;
       const at = snapped(raw, e, []);
@@ -327,14 +442,15 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     } else if (tool !== 'select') {
       drag.current = { kind: 'draw', tool, start: snapped(raw, e, []), id: newId(), hole: holeTarget(raw, e.altKey) };
     } else {
-      const picked = pick(raw, map.show, selection(), reach());
-      if (picked.kind === 'handle') drag.current = { kind: 'handle', shapeId: picked.shapeId, ring: picked.ring, index: picked.index, which: picked.which };
+      const picked = pick(pointerFree(e), map.show, selection(), reach());
+      if (picked.kind === 'pin') drag.current = { kind: 'pin', shapeId: picked.shapeId, index: picked.index, start: raw };
+      else if (picked.kind === 'handle') drag.current = { kind: 'handle', shapeId: picked.shapeId, ring: picked.ring, index: picked.index, which: picked.which };
       else if (picked.kind === 'point') {
         map.setSelection(picked.shapeId, picked.index, picked.ring);
         drag.current = { kind: 'point', shapeId: picked.shapeId, ring: picked.ring, index: picked.index, start: raw, alt: e.altKey };
       } else if (picked.kind === 'box') {
         const ids = act.selected();
-        drag.current = { kind: 'box', handle: picked.handle, start: stagePx(raw), box: selectionBox(map.show, ids)!, shapeIds: ids };
+        drag.current = { kind: 'box', handle: picked.handle, start: stagePx(pointerFree(e)), box: selectionBox(map.show, ids)!, shapeIds: ids };
       } else if (picked.kind === 'side' || picked.kind === 'shape') {
         const id = picked.shapeId;
         if (e.shiftKey) { map.toggleSelected(id); return; }
@@ -351,7 +467,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     if (drag.current) e.currentTarget.setPointerCapture(e.pointerId);
   };
 
-  const onPointerMove = (e: PointerEvent<HTMLCanvasElement>) => {
+  const onPointerMove = (e: PointerEvent<HTMLElement>) => {
     const raw = pointerAt(e);
     const d = drag.current;
     if (map.tool === 'pen' && penRef.current) setHover(snapping(e) ? snapPoint(raw, map.show, { shapeIds: [] }, REACH_PX * screenScale()).at : raw);
@@ -368,7 +484,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       setPen({ ...p, points: [...p.points.slice(0, -1), point] });
       return;
     }
-    const action = editFor(d, raw, e);
+    const action = editFor(d, d.kind === 'box' || d.kind === 'corner' ? pointerFree(e) : raw, e);
     if (!action) { setPreview(null); setDragNote(null); setRefused(null); return; }
     const result = applyEdit(map.show, action);
     // A refused position keeps the last valid picture on the wall, draws the refused outline in red here, and says why.
@@ -380,11 +496,11 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     }
   };
 
-  const finishDrag = (e: PointerEvent<HTMLCanvasElement>, commit: boolean) => {
+  const finishDrag = (e: PointerEvent<HTMLElement>, commit: boolean) => {
     const d = drag.current;
     clearDrag();
     if (!d || !commit) return;
-    const raw = pointerAt(e);
+    const raw = d.kind === 'box' || d.kind === 'corner' ? pointerFree(e) : pointerAt(e);
     if (d.kind === 'pen-handle') return;
     if (d.kind === 'marquee') {
       const moved = Math.hypot((raw.x - d.start.x) * STAGE_SIZE.width, (raw.y - d.start.y) * STAGE_SIZE.height) >= MIN_DRAG_PX;
@@ -403,7 +519,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       if (point) map.dispatch({ type: 'setCurve', shapeId: d.shapeId, ring: d.ring, index: d.index, curved: !isCurved(point) });
       return;
     }
-    if ((d.kind === 'point' || d.kind === 'move' || d.kind === 'box') && !moved) return; // a plain click only selects
+    if ((d.kind === 'point' || d.kind === 'move' || d.kind === 'box' || d.kind === 'pin' || d.kind === 'corner') && !moved) return; // a plain click only selects
     const action = editFor(d, raw, e);
     if (!action) return;
     if (!map.dispatch(action)) return;
@@ -414,7 +530,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
 
   /** Double-click: on a point removes it, on a side adds one there. */
   const onDoubleClick = (e: MouseEvent<HTMLCanvasElement>) => {
-    if (map.tool !== 'select' || !map.loaded) return;
+    if (map.tool !== 'select' || !map.loaded || cornersMode) return;
     const picked = pick(pointerAt(e), map.show, selection(), reach());
     if (picked.kind === 'point') {
       if (map.dispatch({ type: 'removePoint', shapeId: picked.shapeId, ring: picked.ring, index: picked.index })) map.setSelection(picked.shapeId);
@@ -426,9 +542,11 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   /** Changing tool abandons an open Pen outline; choosing the Pen again keeps it. */
   const chooseTool = (tool: MapTool) => { if (tool === 'pen' && penRef.current) return; setPen(null); setHover(null); map.setTool(tool); };
 
+  // The Details panel or the Sound & MIDI panel; the meters run only while the second is open.
+
   // Shortcuts work from anywhere in Map, unless the key press belongs to a text box.
   const onKeyDown = (e: globalThis.KeyboardEvent) => {
-    if (menu) return; // the open menu handles its own keys
+    if (menu || looksOpen) return; // the open menu, or the look browser, handles its own keys
     const target = e.target as HTMLElement | null;
     // Delete, Backspace, Tab and Enter act on shapes only while the stage has focus (or nothing does), never from a button.
     const onStage = !target || target === document.body || !!target.closest?.('.map-stage');
@@ -442,18 +560,24 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     const action = shortcutFor({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, onStage, target });
     if (!action) return;
     const shape = map.show.shapes.find(s => s.id === map.selectedId) ?? null;
+    // In Stage corners only the corner keys, Escape, undo and redo act: the shapes cannot be grabbed in this mode.
+    if (cornersMode && !['arrow', 'next-corner', 'previous-corner', 'deselect', 'undo', 'redo'].includes(action)) return;
     switch (action) {
+      case 'scene': { const scene = map.show.scenes[Number(e.key) - 1]; if (scene) { e.preventDefault(); map.switchScene(scene.id); } break; }
+      case 'tap': e.preventDefault(); map.startEngine().tap(); break;
       case 'undo': e.preventDefault(); map.undo(); break;
       case 'redo': e.preventDefault(); map.redo(); break;
       case 'select': case 'rectangle': case 'triangle': case 'ellipse': case 'pen': chooseTool(action); break;
       case 'close': if (penRef.current) { e.preventDefault(); closePen(); } break;
-      case 'deselect': if (penRef.current) { setPen(null); setHover(null); } else map.setSelection(null); break;
+      case 'deselect': if (cornersMode) { setCornersMode(false); clearDrag(); } else if (penRef.current) { setPen(null); setHover(null); } else map.setSelection(null); break;
       case 'select-all': e.preventDefault(); map.selectMany(map.show.shapes.filter(s => isShapeShown(map.show, s)).map(s => s.id)); break;
       case 'group': e.preventDefault(); act.group(); break;
       case 'ungroup': e.preventDefault(); act.ungroup(shape?.groupId ?? null); break;
       case 'duplicate': if (map.selectedIds.length) { e.preventDefault(); act.duplicate(); } break;
       case 'delete': if (map.selectedIds.length) { e.preventDefault(); act.remove(); } break;
       case 'next-corner': case 'previous-corner': {
+        // In Stage corners, Tab steps between the four corners for the arrow keys.
+        if (cornersMode) { e.preventDefault(); setCornerIndex(i => (i + (action === 'next-corner' ? 1 : 3)) % 4); break; }
         if (!shape) return;
         e.preventDefault();
         // Every point of the shape in one sequence: its outline, then each hole.
@@ -464,6 +588,14 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         break;
       }
       case 'arrow': {
+        if (cornersMode) {
+          const step = ARROWS[e.key], q = stageCornerPoints(map.show)[cornerIndex];
+          if (!step) return;
+          e.preventDefault();
+          const size = e.shiftKey ? 10 : 1;
+          map.dispatch({ type: 'moveStageCorner', index: cornerIndex, to: { x: q.x + step[0] * size / STAGE_SIZE.width, y: q.y + step[1] * size / STAGE_SIZE.height } });
+          break;
+        }
         const step = ARROWS[e.key];
         if (!step || !map.selectedIds.length) return;
         e.preventDefault();
@@ -499,7 +631,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   };
   const onStageMenu = (e: MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    if (!map.loaded) return;
+    if (!map.loaded || cornersMode) return;
     const at = stageFromPointer(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
     // The topmost visible shape under the pointer, as a left click would pick.
     const hit = [...map.show.shapes].reverse().find(s => isShapeShown(map.show, s) && hitShape(at, s.points, s.holes));
@@ -524,7 +656,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
     const reorder = (to: 'front' | 'back' | 'forward' | 'backward') => () => map.dispatch({ type: 'reorder', shapeId: shape.id, to });
     return [
       { kind: 'item', label: single ? 'Duplicate' : `Duplicate ${ids.length} shapes`, shortcut: '⌘D', onSelect: () => act.duplicate(ids) },
-      ...(single && shape.sourceId ? [
+      ...(single && shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID ? [
         { kind: 'item', label: 'Vary', disabled: locked, onSelect: () => map.dispatch({ type: 'varySource', sourceId: shape.sourceId!, entropy: Math.floor(Math.random() * 1e6) }) } as const,
         ...(onEditInStudio ? [{ kind: 'item', label: 'Edit in Studio', disabled: locked, onSelect: () => onEditInStudio(shape.sourceId!, shape.id) } as const] : []),
       ] : []),
@@ -535,6 +667,13 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       { kind: 'item', label: 'Mirror copy, left to right', onSelect: () => act.mirror('vertical', ids) },
       { kind: 'item', label: 'Mirror copy, top to bottom', onSelect: () => act.mirror('horizontal', ids) },
       ...(single ? [{ kind: 'item', label: 'Make a grid…', disabled: locked, onSelect: openGrid } as const] : []),
+      ...(single ? [
+        { kind: 'separator' } as const,
+        ...([['fit', 'Fit'], ['pin', 'Pin in perspective'], ['across-group', 'Across group'], ['across-stage', 'Across stage']] as const).map(([kind, label]) =>
+          ({ kind: 'item', label, checked: shape.placement.kind === kind, disabled: locked, onSelect: () => map.dispatch({ type: 'setPlacement', shapeId: shape.id, placement: { kind } }) }) as const),
+        { kind: 'item', label: 'Share with…', disabled: locked || shape.blocker || !map.show.shapes.some(s => s !== shape && s.sourceId !== null && s.sourceId !== shape.sourceId), onSelect: () => requestAnimationFrame(() => document.querySelector<HTMLSelectElement>('.map-inspector select[aria-label="Share with"]')?.focus()) } as const,
+        ...(shape.sourceId && shape.sourceId !== LIVE_SOURCE_ID && map.show.shapes.some(s => s !== shape && s.sourceId === shape.sourceId) ? [{ kind: 'item', label: 'Make separate', disabled: locked, onSelect: () => { const made = act.separate(shape.id); if (made?.left) setInspectorNote(`${made.left} of the effect's reactions stayed with the other shapes: the show has as many reactions as it can hold`); } } as const] : []),
+      ] : []),
       { kind: 'separator' },
       { kind: 'item', label: 'Group', shortcut: '⌘G', disabled: locked, onSelect: () => act.group(ids) },
       ...(shape.groupId ? [{ kind: 'item', label: 'Ungroup', shortcut: '⇧⌘G', disabled: locked, onSelect: () => act.ungroup(shape.groupId) } as const] : []),
@@ -572,51 +711,61 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const wallText = wall ? `Showing on the projector · ${wall.fps} fps${wall.level ? ` · instruments drawn at ${Math.round(GOVERNOR_SCALES[wall.level] * 100)} %${wall.level === 3 ? ', every other frame' : ''}` : ''}` : 'Showing on the projector';
   const failing = wall?.failing[0] ? `An instrument could not start, so its shape plays its colour: ${wall.failing[0].reason}` : null;
   const penHint = pen ? `Pen: ${pen.points.length} point${pen.points.length === 1 ? '' : 's'}${pen.hole ? ' (a hole)' : ''} · click the first point or press Enter to close · Backspace takes back a point · Esc abandons` : null;
-  const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
+  const cornersHint = cornersMode ? `Stage corners: drag a numbered corner, or use the arrow keys on corner ${cornerIndex + 1} (Shift for 10 pixels, Tab for the next corner). This screen stays flat; the projector bends.` : null;
+  const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? cornersHint ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
+  // The browser follows the single selected shape; it closes when there is none, or a Blocker or locked shape is picked.
+  // Several shapes playing one instrument count as that one instrument: the browser changes it through the first of them.
+  const sharedSelection = map.selectedIds.length > 1 && (() => { const first = map.show.shapes.find(s => s.id === map.selectedId); return !!first?.sourceId && map.selectedIds.every(id => map.show.shapes.find(s => s.id === id)?.sourceId === first.sourceId); })();
+  const lookShape = map.selectedIds.length === 1 || sharedSelection ? map.show.shapes.find(s => s.id === map.selectedId && !s.blocker && !isShapeLocked(map.show, s)) ?? null : null;
+  /** What the shape plays, as the browser names it: a preset's id when its instrument is still that one-layer preset. */
+  const currentLook = (shape: typeof lookShape & {}) => {
+    if (!shape.sourceId) return shape.fill;
+    if (shape.sourceId === LIVE_SOURCE_ID) return 'live';
+    if (isVideoId(shape.sourceId)) return 'video';
+    if (map.show.sources.find(s => s.id === shape.sourceId)?.project.layers[0]?.kind === 'image') return 'image';
+    const project = map.show.sources.find(s => s.id === shape.sourceId)?.project;
+    const preset = project && project.layers.length === 1 ? PRESETS.find(p => p.name === project.name) : undefined;
+    return preset ? `preset:${preset.id}` : '';
+  };
 
   return <section className="live-shell map-shell" role="region" aria-label="Map">
-    <header className="app-header">{header}<div className="live-actions">
-      <button className="text-button" disabled={!map.desktop || !map.loaded} title="Open a show file; it replaces the shapes here" onClick={() => void map.openShow()}>Open</button>
-      <button className="text-button" disabled={!map.desktop || !map.loaded} title="Save the show to a file you name" onClick={() => void map.saveShowAs()}>Save As</button>
-      <label className="live-inline">Projector<select aria-label="Projector" value={map.display ?? ''} disabled={map.outputOpen || !map.displays.length} onChange={e => map.setDisplay(Number(e.target.value))}>
-        {map.displays.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
-      {map.outputOpen ? <button className="primary-button" onClick={map.closeOutput}>Close output</button>
-        : <button className="primary-button" disabled={!map.desktop || map.display === null} title="Show the stage on the chosen projector, full screen · On this screen it opens as a window you can move · Esc closes it" onClick={() => void map.openOutput()}>Open output</button>}
-      <button className={`text-button live-toggle ${map.blackout ? 'on' : ''}`} aria-pressed={map.blackout} onClick={() => map.setBlackout(!map.blackout)}>Blackout</button>
-      <button className={`text-button live-toggle ${map.freeze ? 'on' : ''}`} aria-pressed={map.freeze} title="Hold the picture: the instruments stop where they are" onClick={() => map.setFreeze(!map.freeze)}>Freeze</button>
-      <button className="text-button" aria-pressed={map.testGrid} onClick={() => map.setTestGrid(!map.testGrid)}>Test grid</button>
-      {soloOn && <button className="text-button live-toggle on" title="Only soloed shapes are shown, on the projector too · click to show everything" onClick={() => map.setSolo({ shapes: [], groups: [] })}>Solo on · Clear</button>}
-      <button className="text-button" disabled={!map.selectedId || !map.desktop} title="Flash the selected shape on the projector" onClick={map.identify}>Identify</button>
-      <button className="text-button" disabled={!map.canUndo} title="Undo · ⌘Z" onClick={map.undo}>Undo</button>
-      <button className="text-button" disabled={!map.canRedo} title="Redo · ⇧⌘Z" onClick={map.redo}>Redo</button>
-    </div></header>
+    <header className="app-header">{header}
+      <div className="live-actions map-actions">
+        <button className="text-button" disabled={!map.desktop || !map.loaded} title="Open a show file; it replaces the shapes here" onClick={() => void map.openShow()}><Icon name="folder" size={16} /><span>Open</span></button>
+        <button className="text-button" disabled={!map.desktop || !map.loaded} title="Save the show to a file you name" onClick={() => void map.saveShowAs()}><Icon name="save" size={16} /><span>Save As</span></button>
+        <span className="divider" />
+        <label className="live-inline">Projector<select aria-label="Projector" value={map.display ?? ''} disabled={map.outputOpen || !map.displays.length} onChange={e => map.setDisplay(Number(e.target.value))}>
+          {map.displays.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></label>
+        {map.outputOpen ? <button className="primary-button" onClick={map.closeOutput}>Close output</button>
+          : <button className="primary-button" disabled={!map.desktop || map.display === null} title="Show the stage on the chosen projector, full screen · On this screen it opens as a window you can move · Esc closes it" onClick={() => void map.openOutput()}>Open output</button>}
+        <span className="divider" />
+        <button className={`text-button live-toggle ${map.blackout ? 'on' : ''}`} aria-pressed={map.blackout} title="Black out the projector" onClick={() => map.setBlackout(!map.blackout)}><Icon name="eyeOff" size={16} /><span>Blackout</span></button>
+        <button className={`text-button live-toggle ${map.freeze ? 'on' : ''}`} aria-pressed={map.freeze} title="Hold the picture: the instruments stop where they are" onClick={() => map.setFreeze(!map.freeze)}><Icon name="pause" size={16} /><span>Freeze</span></button>
+        <button className="text-button" aria-pressed={map.testGrid} title="Show a numbered grid and each shape's outline on the projector" onClick={() => map.setTestGrid(!map.testGrid)}><Icon name="grid" size={16} /><span>Test grid</span></button>
+        <button className={`text-button live-toggle ${cornersMode ? 'on' : ''}`} aria-pressed={cornersMode} title="Fix a projector that was nudged: drag the four numbered corners (or use the arrow keys) until the picture lands where it did" onClick={() => { setCornersMode(!cornersMode); clearDrag(); }}><Icon name="focus" size={16} /><span>Stage corners</span></button>
+        {(cornersMode || map.show.stageCorners) && <button className="text-button" disabled={!map.show.stageCorners} title="Put the stage corners back at the projector's corners" onClick={() => map.dispatch({ type: 'setStageCorners', corners: null })}><Icon name="reset" size={16} /><span>Reset corners</span></button>}
+        {soloOn && <button className="text-button live-toggle on" title="Only soloed shapes are shown, on the projector too · click to show everything" onClick={() => map.setSolo({ shapes: [], groups: [] })}>Solo on · Clear</button>}
+        <button className="text-button" disabled={!map.selectedId || !map.desktop} title="Flash the selected shape on the projector" onClick={map.identify}><Icon name="eye" size={16} /><span>Identify</span></button>
+        <span className="divider" />
+        <button className="icon-button" aria-label="Undo" disabled={!map.canUndo} title="Undo · ⌘Z" onClick={map.undo}><Icon name="undo" /></button>
+        <button className="icon-button" aria-label="Redo" disabled={!map.canRedo} title="Redo · ⇧⌘Z" onClick={map.redo}><Icon name="redo" /></button>
+      </div></header>
     <div className="map-body">
       <aside className="live-column map-shapes" aria-label="Shapes">
-        <h2>Shapes</h2>
+        <div className="map-list-head"><h2>Shapes <span className="muted-text">{map.show.shapes.length || ''}</span></h2>
+          <button className="map-icon" disabled={!map.selectedIds.length} aria-label="Group selected shapes" title="Put the selected shapes in a folder · ⌘G" onClick={() => act.group()}><MapIcon name="folderPlus" size={16} /></button></div>
         {map.show.shapes.length === 0 && <p className="muted-text">No shapes yet. Add a photo of the room to trace over (Room photo, or drop one on the stage), then pick a drawing tool above the stage.</p>}
         <MapShapeList map={map} onMenu={(e, id) => openMenu(e.clientX, e.clientY, id)} />
-        {map.selectedIds.length > 0 && <div className="map-toggles map-list-actions">
-          <button className="text-button" title="Put the selected shapes in a folder · ⌘G" onClick={() => act.group()}>Group</button>
-        </div>}
       </aside>
       <div className="map-centre">
         <div className="map-tools" role="toolbar" aria-label="Tools">
-          {TOOLS.map(t => <button key={t.tool} className="text-button" aria-pressed={map.tool === t.tool} title={`${t.title} · ${t.key}`} onClick={() => chooseTool(t.tool)}>{t.label}</button>)}
+          {TOOLS.map(t => <button key={t.tool} className="text-button map-tool" aria-label={t.label} aria-pressed={map.tool === t.tool} title={`${t.title} · ${t.key}`} onClick={() => chooseTool(t.tool)}><MapIcon name={t.tool} size={15} /><span aria-hidden="true">{t.label}</span><kbd aria-hidden="true">{t.key}</kbd></button>)}
           <button className="text-button map-photo-button" disabled={!map.loaded} title="A photograph of the room or object you are mapping, to trace over. Only on this screen: it never reaches the projector. You can also drop a picture on the stage." onClick={() => photoInput.current?.click()}>{map.show.photo ? 'Room photo ✓' : 'Room photo…'}</button>
-          <span className="muted-text map-tool-hint">{map.tool === 'select' ? 'Alt-drag copies · double-click a side to add a point' : map.tool === 'pen' ? 'Alt on the first click inside the selected shape cuts a hole' : 'Alt-drag inside the selected shape cuts a hole'}</span>
-        </div>
-        <main className="map-stage" tabIndex={0} aria-label="Stage area"
-          onDragOver={e => { if ([...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); }}
-          onDrop={e => { e.preventDefault(); const file = [...e.dataTransfer.files].find(f => /^image\/(jpeg|png)$/.test(f.type)); if (file) void choosePhoto(file); else setInspectorNote('Drop a JPEG or PNG photo of the room.'); }}><canvas ref={canvas} aria-label="Stage" data-wall={map.outputOpen && map.wallPicture ? 'picture' : 'local'} style={{ cursor: map.tool === 'select' ? 'default' : 'crosshair', touchAction: 'none' }}
-          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} onLostPointerCapture={e => { if (drag.current) finishDrag(e, false); }} onPointerLeave={() => setHover(null)}
-          onDoubleClick={onDoubleClick} onContextMenu={onStageMenu} width={STAGE_SIZE.width} height={STAGE_SIZE.height} /></main>
-        <div className="map-stage-bar">
+          {(() => { const hint = map.tool === 'select' ? 'Alt-drag copies · double-click a side to add a point' : map.tool === 'pen' ? 'Alt on the first click inside the selected shape cuts a hole' : 'Alt-drag inside the selected shape cuts a hole'; return <span className="muted-text map-tool-hint" title={hint}>{hint}</span>; })()}
+          <span className="map-bar-gap" />
           <label className="map-check" title="Points join other shapes' points and sides, and the stage's edges and centre. Corners on the same spot move together. Hold Ctrl to switch it off for a moment.">
             <input type="checkbox" aria-label="Snap" checked={map.snap} onChange={e => map.setSnap(e.target.checked)} />Snap</label>
-          <span className="map-bar-gap" />
-          <span className="muted-text">Room photo (this screen only)</span>
-          <button className="text-button" disabled={!map.loaded} title="A photograph of the scene to trace over. It never reaches the projector." onClick={() => photoInput.current?.click()}>{map.show.photo ? 'Change…' : 'Choose…'}</button>
           <input ref={photoInput} type="file" accept="image/jpeg,image/png" hidden aria-label="Photo file" onChange={e => { void choosePhoto(e.target.files?.[0]); e.target.value = ''; }} />
           {map.show.photo && <>
             <label className="map-check"><input type="checkbox" aria-label="Show photo" checked={map.photoShown} onChange={e => map.setPhotoShown(e.target.checked)} />Shown</label>
@@ -625,13 +774,20 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
             <button className="text-button" onClick={() => map.dispatch({ type: 'setPhoto', photo: null })}>Remove photo</button>
           </>}
         </div>
+        <main className="map-stage" tabIndex={0} aria-label="Stage area" style={{ cursor: map.tool === 'select' && !cornersMode ? 'default' : 'crosshair', touchAction: 'none' }}
+          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={e => finishDrag(e, true)} onPointerCancel={e => finishDrag(e, false)} onLostPointerCapture={e => { if (drag.current) finishDrag(e, false); }} onPointerLeave={() => setHover(null)}
+          onDragOver={e => { if ([...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); }}
+          onDrop={e => { e.preventDefault(); const file = [...e.dataTransfer.files].find(f => /^image\/(jpeg|png)$/.test(f.type)); if (file) void choosePhoto(file); else setInspectorNote('Drop a JPEG or PNG photo of the room.'); }}><canvas ref={canvas} aria-label="Stage" data-wall={map.outputOpen && map.wallPicture ? 'picture' : 'local'}
+          onDoubleClick={onDoubleClick} onContextMenu={onStageMenu} width={STAGE_SIZE.width} height={STAGE_SIZE.height} />
+          <canvas ref={handles} className="map-handles" aria-hidden="true" /></main>
+        <MapSoundStrip map={map} />
       </div>
       <aside className="live-column map-inspector" aria-label="Details">
-        <h2>Details</h2>
-        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} />
+        <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} liveStatus={localLive} videoStatus={map.outputOpen ? map.wallState?.videos ?? {} : localVideos} />
       </aside>
     </div>
-    <footer className="map-status" role="status">{status}</footer>
+    <footer className="map-status" role="status"><span>{status}</span>{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
+    {looksOpen && lookShape && <MapLookBrowser current={currentLook(lookShape)} colour={lookShape.colour} onPick={value => act.play(lookShape.id, value, sharedSelection || linkedChanges)} onClose={() => setLooksOpen(false)} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label={menu.shapeId ? 'Shape' : 'Stage'} entries={menuEntries(menu.shapeId)} onClose={() => setMenu(null)} />}
   </section>;
 }

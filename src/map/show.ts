@@ -3,7 +3,12 @@
  * damaged or outdated file field by field, so the Map always opens.
  */
 import { shapeValidity, MAX_HOLES } from './outline';
-import { quadUsable, clampBrightness } from './placement';
+import { capture, MAX_SCENES, FADE_RANGE, type Scene, type SceneState } from './scenes';
+import { targetRange, targetNamesKnown } from './targets';
+import type { Link, Trigger, TriggerAction } from '../react/links';
+import { isPinnable } from './homography';
+import { ownCornersPinnable, pinCorners } from './placement';
+import { ringBounds } from './outline';
 import { validateProject } from '../core/project';
 import type { Project } from '../shared/types';
 
@@ -15,44 +20,66 @@ export interface CurvePoint extends Point { in?: Handle; out?: Handle }
 /** A closed outline: a shape's own, or a hole in it. */
 export type Ring = CurvePoint[];
 /** How a border looks: drawn inside the outline, in projector pixels. colour: the shape's own, its instrument's first palette colour, or fixed. */
-export interface Border { width: number; colour: 'shape' | 'palette' | string; glow: number }
+/** Stage 7: a border run, a stretch of light travelling round the outline (beats: one lap every that many beats instead). */
+export interface BorderRun { lapsPerMinute: number; beats: number | null; length: number }
+export interface Border { width: number; colour: 'shape' | 'palette' | string; glow: number; run?: BorderRun | null }
 /**
  * sourceId: the instrument source the shape plays, or null when it plays its own colour.
  * holes: outlines cut out of the shape. blocker: plays nothing and blacks out everything beneath it.
  * softEdge: projector pixels over which the content fades in from the outline.
  * fill: what a shape that plays no instrument shows: its plain colour, or a grid pattern in its colour (new shapes).
  */
-/**
- * How the picture sits in the shape (stage 4). fit: fills the shape's box. pin: four stage corners take it with
- * perspective (pins are stage fractions, always four). group / stage: laid over the shape's group, or the whole
- * stage, so the shape is a window on to it.
- */
-export type PlacementMode = 'fit' | 'pin' | 'group' | 'stage';
-export interface Placement { mode: PlacementMode; pins: Point[] }
-/** Brightness: a multiplier, 1 as designed. Tint: a colour mixed in by tintAmount (0 to 1); null for none. */
-export interface Look { brightness: number; tint: string | null; tintAmount: number }
 export interface Shape {
   id: string; name: string; points: CurvePoint[]; colour: string; visible: boolean; locked: boolean; sourceId: string | null;
   holes: Ring[]; groupId: string | null; blocker: boolean; softEdge: number; border: Border; fill: 'colour' | 'grid';
-  placement: Placement; look: Look;
+  /** Where the picture sits in the shape (stage 4). brightness: 0 to 2; tint: multiplies the picture, white for none. */
+  placement: Placement; brightness: number; tint: string;
 }
+/**
+ * Fit: the shape's box, with zoom, offset (stage fractions) and turn (degrees). Pin: four corners in perspective;
+ * pin null uses the shape's own four corners (or its box's). Across group / stage: the group's or stage's box.
+ */
+export type PlacementKind = 'fit' | 'pin' | 'across-group' | 'across-stage';
+export interface Placement { kind: PlacementKind; zoom: number; offset: Point; turn: number; pin: Point[] | null }
 /** A folder of shapes, one level deep. Hidden or locked, it hides or locks its members without changing their own settings. */
-export interface Group { id: string; name: string; visible: boolean; locked: boolean }
+/** stagger (stage 7): seconds from the first shape to the last; chase: border runs pass from shape to shape. */
+export interface Group { id: string; name: string; visible: boolean; locked: boolean; stagger?: number; chase?: boolean }
+/** Stage 7: scenes change by themselves. */
+export interface AutoAdvance { every: number; unit: 'seconds' | 'bars'; order: 'next' | 'random' }
+export type FollowOutline = 'obstacle' | 'emitter' | 'edge';
 /** A photograph to trace over, on the operator screen only: a JPEG or PNG as a data URL. */
 export interface Photo { data: string; opacity: number }
 /** A Studio composition playing in one or more shapes. revision goes up with every change, so the wall knows what it has. */
-export interface InstrumentSource { id: string; kind: 'instrument'; project: Project; speed: number; revision: number }
+/** tempoSync: null plays at its own speed; a number of beats runs one loop in that many beats of the tempo clock. */
+export interface InstrumentSource { id: string; kind: 'instrument'; project: Project; speed: number; revision: number; tempoSync: number | null;
+  /** Stage 7: the shape's outline drives the instrument (its surface), when drawn. Not saved in the composition. */
+  followOutline?: FollowOutline | null }
 export type Source = InstrumentSource;
-/**
- * The stage's four corners on the wall, as fractions of the output (stage 4). Moving them re-pins the whole stage when
- * the projector moves; the outlines stay where they are on the stage. Identity: the stage fills the output.
- */
-export const IDENTITY_CORNERS: Point[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
-export interface ShowDocument { format: 'formshow'; version: 4; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] }
+/** stageCorners: where the stage's four corners go on the projector (to fix a nudged projector), or null for none. */
+/** Stage 5: scenes (with the live one and the default fade in seconds), and the links and triggers sound and MIDI drive. */
+/** Stage 6: a video file a shape plays, left where it is on disk. Its id begins `video-`; shapes name it as their sourceId. */
+export interface VideoSource { id: string; path: string; name: string; speed: number; tempoSync: number | null }
+export interface ShowDocument { format: 'formshow'; version: 8; stage: { width: number; height: number }; shapes: Shape[]; sources: Source[]; groups: Group[]; photo: Photo | null; stageCorners: Point[] | null; videos: VideoSource[];
+  autoAdvance?: AutoAdvance | null;
+  scenes: Scene[]; sceneId: string | null; sceneFade: number; links: Link[]; triggers: Trigger[] }
 /** A source as the wall first hears of it: everything but the composition, which travels in its own message. */
-export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number }
+export interface WireSource { id: string; kind: 'instrument'; speed: number; revision: number; tempoSync: number | null; followOutline?: FollowOutline | null }
 /** The show as sent to the wall: no compositions, and never the photo. */
-export interface WireShow { format: 'formshow'; version: 4; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] }
+export interface WireShow { format: 'formshow'; version: 8; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[];
+  /** The show plays Live somewhere (a shape, or a scene): the wall keeps Live's camera running. */
+  usesLive: boolean;
+  /** Stage 6: the videos shapes play, with their paths (the wall fetches them through the app). */
+  videos: VideoSource[] }
+
+/**
+ * Live in Map: a shape that plays the Live screen's look names this as its sourceId. There is one Live, shared, and it
+ * has no entry in `sources` (it has no composition). Version 6 and later.
+ */
+export const LIVE_SOURCE_ID = 'live';
+/** True when a shape, or any scene, plays Live. */
+export function usesLive(show: Pick<ShowDocument, 'shapes'> & { scenes?: Scene[] }): boolean {
+  return playedBy(show, LIVE_SOURCE_ID);
+}
 
 export const MAX_SHAPES = 64;
 export const MAX_POINTS = 32;
@@ -69,55 +96,49 @@ export const SPEED_RANGE = { min: 0.1, max: 4 };
 export const MIN_OUTLINE_AREA = 1 / (1920 * 1080);
 export { MAX_HOLES } from './outline';
 export const MAX_GROUPS = 32;
+export const MAX_LINKS = 64;
+/** Stage 6: videos in a show, and pictures stored in it (by decoded size). */
+export const MAX_VIDEOS = 16;
+/** Stage 7 limits. */
+export const STAGGER_MAX = 1;
+export const RUN_LAPS = { min: 1, max: 120 };
+export const RUN_LENGTH = { min: 0.02, max: 0.5 };
+export const AUTO_SECONDS = { min: 5, max: 600 };
+export const AUTO_BARS = { min: 1, max: 64 };
+export const IMAGE_FILE_LIMIT = 8 * 1024 * 1024;
+export const IMAGE_SHOW_LIMIT = 32 * 1024 * 1024;
+export const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.webm'];
+export const isVideoId = (id: string | null | undefined): id is string => !!id && id.startsWith('video-');
+export const isVideoPath = (path: string) => typeof path === 'string' && VIDEO_EXTENSIONS.some(e => path.toLowerCase().endsWith(e));
+/** The decoded size of a data URL's base64 payload. */
+export const dataUrlBytes = (dataUrl: string) => { const i = dataUrl.indexOf(','); return i < 0 ? 0 : Math.floor((dataUrl.length - i - 1) * 3 / 4); };
+/** The pictures stored in the show, by decoded size. Shapes sharing a picture share its one copy. */
+export function imageBytes(show: Pick<ShowDocument, 'sources'>): number {
+  // Every stored copy counts: a picture made separate is stored, saved and sent again.
+  let bytes = 0;
+  for (const s of show.sources) for (const l of s.project.layers) if (l.image?.dataUrl) bytes += dataUrlBytes(l.image.dataUrl);
+  return bytes;
+}
+
+export const MAX_TRIGGERS = 32;
+export const DEFAULT_SCENE_FADE = 2;
+/** Loops an instrument can run in, in beats of the tempo clock. */
+export const TEMPO_SYNC_BEATS = [1, 2, 4, 8, 16];
 export const SOFT_EDGE_MAX = 200;
 export const BORDER_MAX = 40;
 export const GLOW_MAX = 40;
 /** A photo is stored shrunk to the stage as a JPEG, well under this. */
 export const PHOTO_TEXT_LIMIT = 8 * 1024 * 1024;
 export const DEFAULT_BORDER: Border = { width: 0, colour: 'shape', glow: 0 };
-export const DEFAULT_LOOK: Look = { brightness: 1, tint: null, tintAmount: 0.5 };
-export const DEFAULT_PLACEMENT: Placement = { mode: 'fit', pins: [] };
 /** The stage 3 fields of a new shape, at their defaults. */
-export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'softEdge' | 'border' | 'fill' | 'placement' | 'look'> => ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour', placement: { ...DEFAULT_PLACEMENT, pins: [] }, look: { ...DEFAULT_LOOK } });
+export const DEFAULT_PLACEMENT: Placement = { kind: 'fit', zoom: 1, offset: { x: 0, y: 0 }, turn: 0, pin: null };
+export const ZOOM_RANGE = { min: 0.25, max: 4 };
+export const BRIGHTNESS_MAX = 2;
+export const shapeExtras = (): Pick<Shape, 'holes' | 'groupId' | 'blocker' | 'softEdge' | 'border' | 'fill' | 'placement' | 'brightness' | 'tint'> =>
+  ({ holes: [], groupId: null, blocker: false, softEdge: 0, border: { ...DEFAULT_BORDER }, fill: 'colour', placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, brightness: 1, tint: '#ffffff' });
 
 export function createShow(): ShowDocument {
-  return { format: 'formshow', version: 4, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: IDENTITY_CORNERS.map(p => ({ ...p })) };
-}
-
-/** Stage corners from a file: four finite points inside the output and forming a usable quad, else the identity. */
-function readStageCorners(value: unknown): { corners: Point[]; repaired: boolean } {
-  if (value === undefined) return { corners: IDENTITY_CORNERS.map(p => ({ ...p })), repaired: false };
-  const ok = Array.isArray(value) && value.length === 4 && value.every(p => isRecord(p) && typeof p.x === 'number' && typeof p.y === 'number' && Number.isFinite(p.x) && Number.isFinite(p.y));
-  if (!ok) return { corners: IDENTITY_CORNERS.map(p => ({ ...p })), repaired: true };
-  const corners = (value as Record<string, number>[]).map(p => ({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) }));
-  const repaired = corners.some((c, i) => c.x !== (value as Record<string, number>[])[i].x || c.y !== (value as Record<string, number>[])[i].y);
-  if (!quadUsable(corners, 0.01)) return { corners: IDENTITY_CORNERS.map(p => ({ ...p })), repaired: true };
-  return { corners, repaired };
-}
-
-/** A placement from a file: an unknown mode is fit; pins that do not form a usable quad turn it back to fit. */
-function readPlacement(value: unknown): { placement: Placement; repaired: boolean } {
-  const fit = { placement: { mode: 'fit' as PlacementMode, pins: [] as Point[] }, repaired: true };
-  if (value === undefined) return { placement: { mode: 'fit', pins: [] }, repaired: false };
-  if (!isRecord(value) || !['fit', 'pin', 'group', 'stage'].includes(value.mode as string)) return fit;
-  const mode = value.mode as PlacementMode;
-  const pins: Point[] = [];
-  if (Array.isArray(value.pins) && value.pins.length === 4 && value.pins.every(p => isRecord(p) && typeof p.x === 'number' && typeof p.y === 'number' && Number.isFinite(p.x) && Number.isFinite(p.y))) {
-    for (const p of value.pins as Record<string, number>[]) pins.push({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) });
-  }
-  if (mode === 'pin' && !quadUsable(pins, MIN_OUTLINE_AREA)) return fit;
-  return { placement: { mode, pins: mode === 'pin' ? pins : [] }, repaired: false };
-}
-
-/** A look from a file: brightness clamped, tint a valid colour or none. */
-function readLook(value: unknown): { look: Look; repaired: boolean } {
-  if (value === undefined) return { look: { ...DEFAULT_LOOK }, repaired: false };
-  if (!isRecord(value)) return { look: { ...DEFAULT_LOOK }, repaired: true };
-  const brightness = clampBrightness(typeof value.brightness === 'number' ? value.brightness : 1);
-  const tintOk = value.tint === null || (typeof value.tint === 'string' && HEX.test(value.tint));
-  const tint = tintOk ? value.tint as string | null : null;
-  const amount = clampNumber(value.tintAmount, 1, 0.5);
-  return { look: { brightness, tint, tintAmount: amount.value }, repaired: brightness !== value.brightness || !tintOk || amount.repaired };
+  return { format: 'formshow', version: 8, stage: { ...STAGE_SIZE }, shapes: [], sources: [], groups: [], photo: null, stageCorners: null, scenes: [], sceneId: null, sceneFade: DEFAULT_SCENE_FADE, links: [], triggers: [], videos: [] };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -172,7 +193,10 @@ function readBorder(value: unknown): { border: Border; repaired: boolean } {
   if (!isRecord(value)) return { border: { ...DEFAULT_BORDER }, repaired: true };
   const width = clampNumber(value.width, BORDER_MAX), glow = clampNumber(value.glow, GLOW_MAX);
   const colourOk = value.colour === 'shape' || value.colour === 'palette' || (typeof value.colour === 'string' && HEX.test(value.colour));
-  return { border: { width: width.value, colour: colourOk ? value.colour as string : 'shape', glow: glow.value }, repaired: width.repaired || glow.repaired || !colourOk };
+  const run = readBorderRun(value.run);
+  const border: Border = { width: width.value, colour: colourOk ? value.colour as string : 'shape', glow: glow.value };
+  if (run.run) border.run = run.run;
+  return { border, repaired: width.repaired || glow.repaired || !colourOk || run.repaired };
 }
 
 function readGroups(value: unknown): { groups: Group[]; repaired: boolean } {
@@ -186,7 +210,11 @@ function readGroups(value: unknown): { groups: Group[]; repaired: boolean } {
     const visible = typeof raw.visible === 'boolean' ? raw.visible : true;
     const locked = typeof raw.locked === 'boolean' ? raw.locked : false;
     if (name !== raw.name || visible !== raw.visible || locked !== raw.locked) repaired = true;
-    groups.push({ id: raw.id, name, visible, locked });
+    const group: Group = { id: raw.id, name, visible, locked };
+    // Stage 7: saved only when on.
+    if (raw.stagger !== undefined) { const st = clampNumber(raw.stagger, STAGGER_MAX); if (st.repaired) repaired = true; if (st.value > 0) group.stagger = st.value; }
+    if (raw.chase !== undefined) { if (typeof raw.chase !== 'boolean') repaired = true; else if (raw.chase) group.chase = true; }
+    groups.push(group);
   }
   return { groups, repaired };
 }
@@ -196,6 +224,41 @@ function readPhoto(value: unknown): { photo: Photo | null; repaired: boolean } {
   if (!isRecord(value) || typeof value.data !== 'string' || value.data.length > PHOTO_TEXT_LIMIT || !/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(value.data)) return { photo: null, repaired: true };
   const opacity = clampNumber(value.opacity, 1, 0.5);
   return { photo: { data: value.data, opacity: opacity.value }, repaired: opacity.repaired };
+}
+
+/** Four points in stage fractions that can carry a picture (convex, not flat, in projector pixels), or null. */
+function readQuad(value: unknown): Point[] | null {
+  if (!Array.isArray(value) || value.length !== 4) return null;
+  const pts: Point[] = [];
+  for (const p of value) {
+    if (!isRecord(p) || typeof p.x !== 'number' || typeof p.y !== 'number' || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+    // Pins and stage corners may reach a little past the stage, never further.
+    if (p.x < -0.5 || p.x > 1.5 || p.y < -0.5 || p.y > 1.5) return null;
+    pts.push({ x: p.x, y: p.y });
+  }
+  return isPinnable(pts.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }))).ok ? pts : null;
+}
+function readCorners(value: unknown): { corners: Point[] | null; repaired: boolean } {
+  if (value === undefined || value === null) return { corners: null, repaired: false };
+  // Stage corners may reach a little past the stage, as a nudged projector needs.
+  const corners = readQuad(value);
+  const inReach = corners?.every(p => p.x >= -0.5 && p.x <= 1.5 && p.y >= -0.5 && p.y <= 1.5) ? corners : null;
+  return { corners: inReach, repaired: inReach === null };
+}
+const PLACEMENT_KINDS = ['fit', 'pin', 'across-group', 'across-stage'];
+function readPlacement(value: unknown): { placement: Placement; repaired: boolean } {
+  if (value === undefined) return { placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, repaired: false };
+  if (!isRecord(value)) return { placement: { ...DEFAULT_PLACEMENT, offset: { x: 0, y: 0 } }, repaired: true };
+  const kind = (PLACEMENT_KINDS.includes(value.kind as string) ? value.kind : 'fit') as PlacementKind;
+  const finite = (v: unknown, fallback: number) => typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+  const zoom = Math.min(ZOOM_RANGE.max, Math.max(ZOOM_RANGE.min, finite(value.zoom, 1)));
+  const turn = Math.min(180, Math.max(-180, finite(value.turn, 0)));
+  const offsetIn = isRecord(value.offset) ? value.offset : {};
+  const offset = { x: Math.min(1, Math.max(-1, finite(offsetIn.x, 0))), y: Math.min(1, Math.max(-1, finite(offsetIn.y, 0))) };
+  const pin = value.pin === null || value.pin === undefined ? null : readQuad(value.pin);
+  const placement: Placement = { kind, zoom, offset, turn, pin };
+  const repaired = kind !== value.kind || zoom !== value.zoom || turn !== value.turn || !isRecord(value.offset) || offset.x !== offsetIn.x || offset.y !== offsetIn.y || (value.pin !== null && value.pin !== undefined && pin === null);
+  return { placement, repaired };
 }
 
 /** Whether a shape is drawn: its own setting and its group's. */
@@ -233,7 +296,7 @@ export function normaliseGroups<T extends { shapes: Shape[]; groups: Group[] }>(
 function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaired: boolean; ok: boolean } {
   if (!isRecord(value)) return { shapes: [], groups: [], repaired: true, ok: false };
   // Version 1 and 2 shows open with every later field at its default, which is not a repair.
-  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4);
+  let repaired = value.format !== 'formshow' || (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4 && value.version !== 5 && value.version !== 6 && value.version !== 7 && value.version !== 8);
   if (!isRecord(value.stage) || value.stage.width !== STAGE_SIZE.width || value.stage.height !== STAGE_SIZE.height) repaired = true;
   if (!Array.isArray(value.shapes)) return { shapes: [], groups: [], repaired: true, ok: false };
   if (value.shapes.length > MAX_SHAPES) repaired = true;
@@ -281,9 +344,19 @@ function readShapes(value: unknown): { shapes: Shape[]; groups: Group[]; repaire
     // Shapes from before the grid pattern keep their plain colour.
     const fill = raw.fill === 'grid' ? 'grid' : 'colour';
     if (raw.fill !== undefined && raw.fill !== 'grid' && raw.fill !== 'colour') repaired = true;
-    const placement = readPlacement(raw.placement), look = readLook(raw.look);
-    if (placement.repaired || look.repaired) repaired = true;
-    shapes.push({ id, name, points, colour: colourOk ? raw.colour as string : '#ffffff', visible, locked, sourceId, holes, groupId, blocker, softEdge: softEdge.value, border: border.border, fill, placement: placement.placement, look: look.look });
+    const placement = readPlacement(raw.placement), brightness = clampNumber(raw.brightness, BRIGHTNESS_MAX, 1);
+    const tintOk = raw.tint === undefined || (typeof raw.tint === 'string' && HEX.test(raw.tint));
+    if (placement.repaired || brightness.repaired || !tintOk) repaired = true;
+    // A Pin that cannot carry a picture would block every edit of the shape: it opens as Fit.
+    if (placement.placement.kind === 'pin' && !isPinnable(pinCorners({ points, placement: placement.placement } as Shape)).ok) { placement.placement.kind = 'fit'; repaired = true; }
+    // Four corners that cannot carry a picture, with no handles of their own: they get handles at the box, so the shape can still be edited.
+    else if (placement.placement.kind === 'pin' && points.length === 4 && !ownCornersPinnable({ points } as Shape) && !placement.placement.pin) {
+      const b = ringBounds([points]);
+      placement.placement.pin = [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }, { x: b.x0, y: b.y1 }];
+      repaired = true;
+    }
+    shapes.push({ id, name, points, colour: colourOk ? raw.colour as string : '#ffffff', visible, locked, sourceId, holes, groupId, blocker, softEdge: softEdge.value, border: border.border, fill,
+      placement: placement.placement, brightness: brightness.value, tint: typeof raw.tint === 'string' && HEX.test(raw.tint) ? raw.tint : '#ffffff' });
   }
   const normal = normaliseGroups({ shapes, groups: readG.groups });
   if (normal.shapes !== shapes) repaired = true;
@@ -300,7 +373,7 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
   const photo = readPhoto(value.photo);
   show.photo = photo.photo;
   if (photo.repaired) repaired = true;
-  const corners = readStageCorners(value.stageCorners);
+  const corners = readCorners(value.stageCorners);
   show.stageCorners = corners.corners;
   if (corners.repaired) repaired = true;
 
@@ -316,9 +389,28 @@ export function validateShow(value: unknown): { show: ShowDocument; repaired: bo
       sources.set(checked.source.id, checked.source);
     }
   } else if (value.sources !== undefined) repaired = true;
-  if (linkSources(show.shapes, sources)) repaired = true;
-  show.sources = [...sources.values()].filter(source => show.shapes.some(s => s.sourceId === source.id));
+  // From version 6 a shape (or a scene) may play Live, which is no source of the file's.
+  if (sources.has(LIVE_SOURCE_ID)) { sources.delete(LIVE_SOURCE_ID); repaired = true; }
+  const known = new Map<string, unknown>(sources);
+  if (value.version === 6 || value.version === 7 || value.version === 8) known.set(LIVE_SOURCE_ID, true);
+  // Videos (version 7): each is known by its id, as a source is.
+  const videos = readVideos(value.videos);
+  if (videos.repaired) repaired = true;
+  for (const v of videos.videos) known.set(v.id, true);
+  if (linkSources(show.shapes, known)) repaired = true;
+  // Scenes, then the instruments any shape or scene plays, then the links and triggers that name what is left.
+  const scenes = readScenes(value, show, known);
+  if (scenes.repaired) repaired = true;
+  show.sources = [...sources.values()].filter(source => playedBy(show, source.id));
   if (show.sources.length !== sources.size) repaired = true;
+  show.videos = videos.videos.filter(v => playedBy(show, v.id));
+  if (show.videos.length !== videos.videos.length) repaired = true;
+  const auto = readAutoAdvance(value.autoAdvance);
+  if (auto.value) show.autoAdvance = auto.value;
+  if (auto.repaired) repaired = true;
+  const links = readLinks(value.links, show), triggers = readTriggers(value.triggers, show);
+  show.links = links.links; show.triggers = triggers.triggers;
+  if (links.repaired || triggers.repaired) repaired = true;
   return { show, repaired };
 }
 
@@ -333,12 +425,20 @@ export function validateWireShow(value: unknown): WireShow {
     for (const raw of value.sources) {
       if (sources.size >= MAX_SOURCES) break;
       if (!isRecord(raw) || raw.kind !== 'instrument' || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH || sources.has(raw.id)) continue;
-      sources.set(raw.id, { id: raw.id, kind: 'instrument', speed: readSpeed(raw.speed).speed, revision: readRevision(raw.revision) });
+      sources.set(raw.id, { id: raw.id, kind: 'instrument', speed: readSpeed(raw.speed).speed, revision: readRevision(raw.revision), tempoSync: readTempoSync(raw.tempoSync).value, ...(readFollowOutline(raw.followOutline).value ? { followOutline: readFollowOutline(raw.followOutline).value } : {}) });
     }
   }
   const shapes = read.shapes;
-  linkSources(shapes, sources);
-  return { format: 'formshow', version: 4, stage: { ...STAGE_SIZE }, shapes, sources: [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id)), groups: read.groups, stageCorners: isRecord(value) ? readStageCorners(value.stageCorners).corners : IDENTITY_CORNERS.map(p => ({ ...p })) };
+  const known = new Map<string, unknown>(sources);
+  known.set(LIVE_SOURCE_ID, true);
+  const videos = isRecord(value) ? readVideos(value.videos).videos : [];
+  for (const v of videos) known.set(v.id, true);
+  linkSources(shapes, known);
+  const kept = [...sources.values()].filter(source => shapes.some(s => s.sourceId === source.id));
+  return { format: 'formshow', version: 8, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
+    links: isRecord(value) ? readLinks(value.links, { shapes, sources: [...kept, ...videos] }, true).links : [],
+    usesLive: (isRecord(value) && value.usesLive === true) || shapes.some(s => s.sourceId === LIVE_SOURCE_ID),
+    videos };
 }
 
 /** Shapes that name a source the show does not have play their colour. True when any had to. */
@@ -362,5 +462,169 @@ function validateSource(value: unknown): { source: Source; repaired: boolean } |
   if (project.layers.length > MAX_SOURCE_LAYERS) return null;
   const { speed, repaired: speedRepaired } = readSpeed(value.speed);
   const revision = readRevision(value.revision);
-  return { source: { id: value.id, kind: 'instrument', project, speed, revision }, repaired: speedRepaired || revision !== value.revision };
+  const sync = readTempoSync(value.tempoSync);
+  const follow = readFollowOutline(value.followOutline);
+  const source: Source = { id: value.id, kind: 'instrument', project, speed, revision, tempoSync: sync.value };
+  if (follow.value) source.followOutline = follow.value;
+  return { source, repaired: speedRepaired || revision !== value.revision || sync.repaired || follow.repaired };
+}
+
+
+// ---- Stage 5: scenes, links, triggers, tempo sync ----
+
+/** Whether any shape, or any scene, plays a source: such a source stays in the show. */
+export function playedBy(show: { shapes: Shape[]; scenes?: Scene[] }, sourceId: string): boolean {
+  return show.shapes.some(s => s.sourceId === sourceId) || (show.scenes ?? []).some(sc => Object.values(sc.shapes).some(st => st.sourceId === sourceId));
+}
+
+function readTempoSync(value: unknown): { value: number | null; repaired: boolean } {
+  if (value === undefined || value === null) return { value: null, repaired: false };
+  return TEMPO_SYNC_BEATS.includes(value as number) ? { value: value as number, repaired: false } : { value: null, repaired: true };
+}
+
+function readSceneState(raw: unknown, sources: Map<string, unknown>, points: CurvePoint[]): { state: SceneState; repaired: boolean } | null {
+  if (!isRecord(raw)) return null;
+  const sourceId = typeof raw.sourceId === 'string' && sources.has(raw.sourceId) ? raw.sourceId : null;
+  const lostSource = raw.sourceId !== null && raw.sourceId !== undefined && sourceId === null;
+  const placement = readPlacement(raw.placement).placement;
+  // A scene's Pin must fit the shape's outline as it is now, as on the stage.
+  if (placement.kind === 'pin' && !isPinnable(pinCorners({ points, placement } as Shape)).ok) placement.kind = 'fit';
+  return { repaired: lostSource, state: {
+    sourceId, fill: raw.fill === 'grid' ? 'grid' : 'colour', placement,
+    brightness: clampNumber(raw.brightness, BRIGHTNESS_MAX, 1).value, tint: typeof raw.tint === 'string' && HEX.test(raw.tint) ? raw.tint : '#ffffff',
+    softEdge: clampNumber(raw.softEdge, SOFT_EDGE_MAX).value, border: readBorder(raw.border).border,
+    visible: raw.visible !== false, blocker: raw.blocker === true,
+  } };
+}
+
+/** Scenes field by field: shapes no longer in the show are left out of each scene; a scene with a bad id or name is dropped. */
+function readScenes(value: Record<string, unknown>, show: ShowDocument, sources: Map<string, unknown>): { repaired: boolean } {
+  let repaired = false;
+  const fade = value.sceneFade === undefined ? DEFAULT_SCENE_FADE : value.sceneFade;
+  show.sceneFade = typeof fade === 'number' && Number.isFinite(fade) ? Math.min(FADE_RANGE.max, Math.max(FADE_RANGE.min, fade)) : DEFAULT_SCENE_FADE;
+  if (show.sceneFade !== fade) repaired = true;
+  if (value.scenes === undefined) return { repaired };
+  if (!Array.isArray(value.scenes)) return { repaired: true };
+  const byId = new Map(show.shapes.map(s => [s.id, s]));
+  for (const raw of value.scenes.slice(0, MAX_SCENES)) {
+    if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH || show.scenes.some(s => s.id === raw.id) || !isRecord(raw.shapes)) { repaired = true; continue; }
+    const shapes: Record<string, SceneState> = {};
+    for (const [id, st] of Object.entries(raw.shapes)) {
+      const shape = byId.get(id), read = shape ? readSceneState(st, sources, shape.points) : null;
+      if (read) { shapes[id] = read.state; if (read.repaired) repaired = true; } else repaired = true;
+    }
+    const name = typeof raw.name === 'string' ? cleanName(raw.name).slice(0, MAX_NAME_LENGTH) : `Scene ${show.scenes.length + 1}`;
+    const f = raw.fadeSeconds;
+    const fadeSeconds = typeof f === 'number' && Number.isFinite(f) ? Math.min(FADE_RANGE.max, Math.max(FADE_RANGE.min, f)) : null;
+    if (name !== raw.name || (f !== null && f !== fadeSeconds)) repaired = true;
+    show.scenes.push({ id: raw.id, name, fadeSeconds, shapes });
+  }
+  if (value.scenes.length > MAX_SCENES) repaired = true;
+  show.sceneId = typeof value.sceneId === 'string' && show.scenes.some(s => s.id === value.sceneId) ? value.sceneId : null;
+  if (value.sceneId !== undefined && value.sceneId !== null && show.sceneId === null) repaired = true;
+  return { repaired };
+}
+
+const SIGNAL = /^[a-z]+(\.[a-z0-9]+){1,3}$/;
+const num = (v: unknown, lo: number, hi: number, fallback: number) => typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback;
+
+/** One link, checked; null when it cannot be read or names nothing in the show. */
+export function readLink(raw: unknown, show: { shapes: Shape[]; sources: { id: string }[] }, wire = false): Link | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH) return null;
+  if (typeof raw.input !== 'string' || !SIGNAL.test(raw.input) || raw.input.length > 32 || typeof raw.target !== 'string') return null;
+  if (wire ? !targetNamesKnown(show, raw.target) : !targetRange(show as Pick<ShowDocument, 'shapes' | 'sources'>, raw.target)) return null;
+  return {
+    id: raw.id, input: raw.input, target: raw.target, mode: raw.mode === 'control' ? 'control' : 'modulate',
+    amount: num(raw.amount, -1, 1, 0.5), low: num(raw.low, 0, 1, 0), high: num(raw.high, 0, 1, 1),
+    attackMs: num(raw.attackMs, 0, 5000, 20), releaseMs: num(raw.releaseMs, 0, 5000, 200), on: raw.on !== false,
+    name: typeof raw.name === 'string' ? cleanName(raw.name).slice(0, MAX_NAME_LENGTH) : '',
+  };
+}
+function readLinks(value: unknown, show: { shapes: Shape[]; sources: { id: string }[] }, wire = false): { links: Link[]; repaired: boolean } {
+  if (value === undefined) return { links: [], repaired: false };
+  if (!Array.isArray(value)) return { links: [], repaired: true };
+  const links: Link[] = [];
+  let repaired = value.length > MAX_LINKS;
+  for (const raw of value.slice(0, MAX_LINKS)) {
+    const l = readLink(raw, show, wire);
+    if (!l || links.some(x => x.id === l.id)) { repaired = true; continue; }
+    if (JSON.stringify(l) !== JSON.stringify(raw)) repaired = true;
+    links.push(l);
+  }
+  return { links, repaired };
+}
+
+/** A trigger's action is valid when what it names is still in the show. */
+function actionValid(action: unknown, show: Pick<ShowDocument, 'scenes' | 'sources'>): action is TriggerAction {
+  if (!isRecord(action)) return false;
+  switch (action.kind) {
+    case 'scene': return typeof action.sceneId === 'string' && show.scenes.some(s => s.id === action.sceneId);
+    case 'vary': return typeof action.sourceId === 'string' && show.sources.some(s => s.id === action.sourceId);
+    case 'next-scene': case 'previous-scene': case 'blackout': case 'freeze': case 'tap': return Object.keys(action).length === 1;
+    default: return false;
+  }
+}
+export function readTrigger(raw: unknown, show: Pick<ShowDocument, 'scenes' | 'sources'>): Trigger | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '' || raw.id.length > MAX_ID_LENGTH) return null;
+  if (typeof raw.input !== 'string' || !SIGNAL.test(raw.input) || raw.input.length > 32 || !actionValid(raw.action, show)) return null;
+  const when = raw.when === 'beats' ? 'beats' : 'on';
+  // The action is rebuilt with only its own fields.
+  const a = raw.action;
+  const action: TriggerAction = a.kind === 'scene' ? { kind: 'scene', sceneId: a.sceneId } : a.kind === 'vary' ? { kind: 'vary', sourceId: a.sourceId } : { kind: a.kind };
+  return { id: raw.id, input: raw.input, when, every: Math.round(num(raw.every, 1, 64, 1)), action, on: raw.on !== false };
+}
+function readTriggers(value: unknown, show: Pick<ShowDocument, 'scenes' | 'sources'>): { triggers: Trigger[]; repaired: boolean } {
+  if (value === undefined) return { triggers: [], repaired: false };
+  if (!Array.isArray(value)) return { triggers: [], repaired: true };
+  const triggers: Trigger[] = [];
+  let repaired = value.length > MAX_TRIGGERS;
+  for (const raw of value.slice(0, MAX_TRIGGERS)) {
+    const t = readTrigger(raw, show);
+    if (!t || triggers.some(x => x.id === t.id)) { repaired = true; continue; }
+    if (JSON.stringify(t) !== JSON.stringify(raw)) repaired = true;
+    triggers.push(t);
+  }
+  return { triggers, repaired };
+}
+export { capture as captureScene };
+
+/** A show file's videos, checked field by field: an unreadable one is left out (its shapes play their colour). */
+function readVideos(value: unknown): { videos: VideoSource[]; repaired: boolean } {
+  if (value === undefined) return { videos: [], repaired: false };
+  if (!Array.isArray(value)) return { videos: [], repaired: true };
+  const videos: VideoSource[] = [];
+  let repaired = value.length > MAX_VIDEOS;
+  for (const raw of value.slice(0, MAX_VIDEOS)) {
+    if (!isRecord(raw) || !isVideoId(raw.id as string) || (raw.id as string).length > MAX_ID_LENGTH || typeof raw.path !== 'string' || !isVideoPath(raw.path) || videos.some(v => v.id === raw.id)) { repaired = true; continue; }
+    const speed = readSpeed(raw.speed), sync = readTempoSync(raw.tempoSync);
+    const name = typeof raw.name === 'string' ? cleanName(raw.name).slice(0, 120) : raw.path.split(/[\\/]/).pop() ?? 'Video';
+    if (speed.repaired || sync.repaired || name !== raw.name) repaired = true;
+    videos.push({ id: raw.id as string, path: raw.path, name, speed: speed.speed, tempoSync: sync.value });
+  }
+  return { videos, repaired };
+}
+
+// ---- Stage 7: the wild options, each saved only when on ----
+const clampTo = (v: unknown, lo: number, hi: number): { value: number; repaired: boolean } => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return { value: lo, repaired: true };
+  const c = Math.min(hi, Math.max(lo, v));
+  return { value: c, repaired: c !== v };
+};
+export function readBorderRun(value: unknown): { run: BorderRun | null; repaired: boolean } {
+  if (value === undefined || value === null) return { run: null, repaired: false };
+  if (!isRecord(value)) return { run: null, repaired: true };
+  const laps = clampTo(value.lapsPerMinute, RUN_LAPS.min, RUN_LAPS.max), length = clampTo(value.length, RUN_LENGTH.min, RUN_LENGTH.max);
+  const beats = value.beats === null || value.beats === undefined ? null : TEMPO_SYNC_BEATS.includes(value.beats as number) ? value.beats as number : null;
+  return { run: { lapsPerMinute: laps.value, beats, length: length.value }, repaired: laps.repaired || length.repaired || (value.beats !== null && value.beats !== undefined && beats === null) };
+}
+export function readFollowOutline(value: unknown): { value: FollowOutline | null; repaired: boolean } {
+  if (value === undefined || value === null) return { value: null, repaired: false };
+  return value === 'obstacle' || value === 'emitter' || value === 'edge' ? { value, repaired: false } : { value: null, repaired: true };
+}
+export function readAutoAdvance(value: unknown): { value: AutoAdvance | null; repaired: boolean } {
+  if (value === undefined || value === null) return { value: null, repaired: false };
+  if (!isRecord(value) || (value.unit !== 'seconds' && value.unit !== 'bars')) return { value: null, repaired: true };
+  const range = value.unit === 'bars' ? AUTO_BARS : AUTO_SECONDS, every = clampTo(value.every, range.min, range.max);
+  const order = value.order === 'random' ? 'random' : 'next';
+  return { value: { every: value.unit === 'bars' ? Math.round(every.value) : every.value, unit: value.unit, order }, repaired: every.repaired || order !== value.order };
 }

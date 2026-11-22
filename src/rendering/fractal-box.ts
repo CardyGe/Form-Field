@@ -3,16 +3,27 @@
 export const boxFunctions = /* glsl */`
 vec3 boxLimits() {
   float limit=.72+.38*uFold;
-  if(uVariant>.5&&uVariant<1.5)return vec3(limit*.82);
-  if(uVariant>1.5)return limit*vec3(1.18,.72,.94);
-  return vec3(limit);
+  vec3 proportions=vec3(1.);
+  if(uVariant>.5&&uVariant<1.5)proportions=vec3(.82);
+  if(uVariant>1.5)proportions=vec3(1.18,.72,.94);
+  if(uEvolution>0.){
+    // The chamber and its silhouette change proportions with the fold.
+    // The same animated limits are used by the camera's enclosure.
+    float progress=fract(uPhase/TAU);
+    float opening=fractalCue(progress,vec4(.10,.39,.63,.99));
+    float unfold=fractalCue(progress,vec4(.41,.61,.74,.97));
+    vec3 reach=mix(vec3(.13,-.10,.25),vec3(-.08,.18,.27),uVariant*.5);
+    proportions*=1.+uEvolution*(opening*reach+unfold*vec3(-.07,.12,-.14));
+  }
+  return limit*proportions;
 }
 vec3 boxDomain(vec3 position) {
   vec3 p=position*(uScale/1.7);
   float seed=mod(uSeed,997.)*.0137;
-  float angle=uTwist*.9+.035*sin(seed)+uMorph*.12*sin(uPhase);
+  float sway=uMorph*legacyCameraMotion();
+  float angle=uTwist*.9+.035*sin(seed)+sway*.12*sin(uPhase);
   p.xy=turn(angle)*p.xy;
-  p.yz=turn(uTwist*.38+uMorph*.045*cos(uPhase))*p.yz;
+  p.yz=turn(uTwist*.38+sway*.045*cos(uPhase))*p.yz;
   // A full radial reflection preserves radius and is an isometry in each
   // sector. Blending folded and original coordinates could collapse opposite
   // rays, so radial folding is deliberately a discrete option.
@@ -23,13 +34,16 @@ vec2 boxField(vec3 position) {
   float size=uScale/1.7;
   vec3 p=boxDomain(position),z=p,limits=boxLimits();
   float derivative=1.,orbit=0.,weight=1.,totalWeight=0.;
-  float magnitude=uBoxScale+uMorph*.12*sin(uPhase);
+  float change=uEvolution*(.72+.28*uMorph);
+  float opening=fractalCue(fract(uPhase/TAU),vec4(.17,.46,.56,.96));
+  float chamber=fractalCue(fract(uPhase/TAU),vec4(.47,.64,.76,.98));
+  float magnitude=uBoxScale+uMorph*.12*sin(uPhase)+change*(.27*opening-.22*chamber);
   // Shape dance breathes the fold itself, kept above the scale where the surface stays solid.
   if(uDance>0.)magnitude=max(magnitude+uDance*.4*sin(uPhase),1.35);
   float scale=-magnitude;
   float outer=uVariant>.5&&uVariant<1.5?1.25:1.;
-  float foldRadius=max(uBoxRadius+uDance*.08*cos(uPhase),.12);
-  float minimum2=foldRadius*foldRadius,outer2=outer*outer;
+  float inner=clamp(uBoxRadius+change*(.11*opening-.14*chamber)+uDance*.08*cos(uPhase),.16,.90);
+  float minimum2=inner*inner,outer2=outer*outer;
   // Detail changes the geometric recursion, never the render resolution.
   // Keep the estimator converged even when artistic Detail is low. Fewer
   // than twelve passes can turn smooth surfaces into hit/normal stippling at 4K.
@@ -74,16 +88,33 @@ float boxShadow(vec3 p,vec3 light,float epsilon) {
 }
 vec4 traceBox(vec2 offset) {
   float size=uScale/1.7;
-  // Inside the box the camera also turns once per loop, so the space keeps changing.
-  float yaw=uCameraYaw+uTravel*.25*sin(uPhase)+(uApproach>0.?uPhase:0.);
-  float pitch=uCameraPitch+uTravel*.12*cos(uPhase);
+  float oldMotion=legacyCameraMotion();
+  float yaw=uCameraYaw+oldMotion*(uTravel*.25*sin(uPhase)+(uApproach>0.?uPhase:0.));
+  float pitch=uCameraPitch+oldMotion*uTravel*.12*cos(uPhase);
   float radius=2.*length(boxLimits())/size+.01/size;
-  float framing=radius+3.6/max(uZoom,.5)-uTravel*.35*cos(uPhase);
+  float framing=radius+3.6/max(uZoom,.5)-oldMotion*uTravel*.35*cos(uPhase);
   // Fly in: the camera moves inside the bounding sphere toward the folded core.
-  if(uApproach>0.)framing=mix(framing,radius*(.62-.12*uApproach)-uTravel*.35*radius*.3*cos(uPhase),uApproach);
+  if(uApproach>0.)framing=mix(framing,radius*(.62-.12*uApproach)-uTravel*.35*radius*.3*cos(uPhase),uApproach*oldMotion);
+  float phase=fract(uPhase/TAU);
+  float route=smoothstep(.13,.49,phase)*(1.-smoothstep(.62,.95,phase));
+  float oldBank=.39*uBank*sin(uPhase)*(.32+.68*route);
+  if(oldMotion>0.&&(uPassage>0.||uBank!=0.)){
+    framing=mix(framing,radius+mix(3.7/max(uZoom,.5),.18/max(uZoom,.5),route),uPassage*oldMotion);
+    yaw+=oldMotion*uPassage*(.25+.22*uBank)*sin(uPhase-.32)*(.3+.7*route);
+    pitch+=oldMotion*uPassage*.15*sin(uPhase+.5);
+  }
+  if(uEvolution>0.){
+    // Establish the full object and travel toward the same point on its
+    // surface. No phase-driven pan, yaw, pitch, or roll on the new path.
+    float journey=fractalCue(phase,vec4(.04,.65-.25*uTravel,.76,1.));
+    float strength=max(uPassage,uApproach*.79)*(1.-oldMotion);
+    framing=mix(framing,radius+mix(5.2,-.26,pow(journey,1.17))/max(uZoom,.5),strength);
+  }
+  float bank=mix(uBank*.42,oldBank,oldMotion);
   vec3 origin=framing*vec3(sin(yaw)*cos(pitch),sin(pitch),cos(yaw)*cos(pitch));
   vec3 forward=normalize(-origin),right=normalize(cross(forward,vec3(0,1,0))),up=cross(right,forward);
-  vec2 uv=fractalBend((sourceUV(vUv+offset/uResolution)-.5)*vec2(uAspect,1.));
+  vec2 uv=fractalView(vUv+offset/uResolution);
+  if(bank!=0.)uv=turn(bank)*uv;
   vec3 ray=normalize(forward*1.65+right*uv.x+up*uv.y);
   // A negative-scale Mandelbox lies within [-2L,2L] on each fold axis.
   // Global rotations and the optional radial reflection preserve this radius.
@@ -131,6 +162,38 @@ vec4 traceBox(vec2 offset) {
   vec3 rimLight=normalize(vec3(.8,.3,-.7));
   color+=pigment(coordinate+.18,.002)*max(dot(n,rimLight),0.)*ao*materialWeight*.15;
   color+=pigment(coordinate+.2,.002)*rim*uGlow*.32;
+  if(uDepth>0.){
+    float separation=exp(-max(0.,t-framing+radius*.56)*.86*size);
+    float stripe=length(domain.xy)*7.+domain.z*.62+field.y*1.6;
+    float line=abs(fract(stripe+.5)-.5);
+    float aa=clamp(epsilon*size*12.,.006,.42);
+    float band=(1.-smoothstep(.09-aa,.09+aa,line))*(1.-smoothstep(.16,.42,aa));
+    vec3 edge=pigment(coordinate+.27+.10*separation,aa*.13);
+    vec3 fillDirection=normalize(vec3(-.8,.28,.52));
+    float fill=pow(max(0.,dot(n,fillDirection)),1.6)*(.33+.67*sqrt(ao));
+    color=color*mix(1.,.48+.52*separation,uDepth*.82)
+      +edge*band*uDepth*(.14+.28*separation)*(.48+.52*sqrt(ao))
+      +uPalette[0]*fill*uDepth*.33;
+  }
+  if(uEvolution>0.){
+    // Dark metal around the recess gives the moving edge light an
+    // independent geometry. Successive bands expose deeper folds.
+    float shutter=fractalCue(phase,vec4(.22,.49,.80,.97));
+    float radial=length(domain.xy),surface=radial*2.45+domain.z*.83+field.y*1.22;
+    float wavelength=surface*3.25-phase*2.;
+    float aa=clamp(epsilon*size*14.,.016,.34);
+    float groove=abs(fract(wavelength+.5)-.5);
+    float definition=1.-smoothstep(.14,.34,aa);
+    float crest=(1.-smoothstep(.065-aa,.065+aa,groove))*definition;
+    float ledge=(1.-smoothstep(.23-aa,.23+aa,groove))*definition;
+    float exposure=.31+.69*max(facing,.44*rim);
+    vec3 signal=pigment(coordinate+surface*.105-phase,aa*.16);
+    vec3 edge=mix(signal,vec3(1.,.97,.92),.25+.27*shine);
+    vec3 polished=base*(.035+.38*diffuse*shadow)*ao
+      +(ledge*.43*signal+crest*.68*edge)*exposure*(.55+.45*shutter)
+      +edge*(.11*rim+.66*shine*shadow);
+    color=mix(color,polished,uEvolution*.87);
+  }
   return vec4(color,1.);
 }
 vec4 mandelbox() {

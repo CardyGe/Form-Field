@@ -94,7 +94,7 @@ function ringsMeet(a: Point[], b: Point[]): boolean {
   }
   return false;
 }
-export function polygonArea(points: Point[]): number {
+function polygonArea(points: Point[]): number {
   let twice = 0;
   for (let i = 0; i < points.length; i++) { const a = points[i], b = points[(i + 1) % points.length]; twice += a.x * b.y - b.x * a.y; }
   return Math.abs(twice) / 2;
@@ -281,7 +281,7 @@ export function transformRing(ring: Ring, m: Matrix): Ring {
 // ---- Make a grid ----------------------------------------------------------------------------------------------
 
 /** The four corners starting from the top-left one, clockwise on screen. */
-function orderQuad(quad: Point[]): Point[] {
+export function orderQuad(quad: Point[]): Point[] {
   let q = quad.map(anchor);
   let twice = 0;
   for (let i = 0; i < 4; i++) { const a = toPx(q[i]), b = toPx(q[(i + 1) % 4]); twice += a.x * b.y - b.x * a.y; }

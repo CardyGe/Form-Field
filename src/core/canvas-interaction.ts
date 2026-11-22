@@ -30,6 +30,7 @@ export function canvasAxes(layer: Layer, locks: VariationLocks): ParameterDefini
   if(layer.kind==='liquid'&&layer.params.press>0)keys=['pressX','pressY'];
   if (layer.kind === 'fractal' && layer.params.style === 1) keys = ['juliaReal', 'juliaImag'];
   if (layer.kind === 'fractal' && layer.params.style === 2) keys = ['boxScale', 'boxRadius'];
+  if (layer.kind === 'fractal' && layer.params.style === 3) keys = ['focalX', 'focalY'];
   if (layer.kind === 'graphic') keys = [
     ['waveCount', 'amplitude'], ['coil', 'orbit'], ['roundness', 'tileGap'],
     ['spacing', 'glyphSize'], ['size', 'stretch'],

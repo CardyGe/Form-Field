@@ -32,6 +32,10 @@ export class TestSource implements FrameSource {
   moving = true;
   /** Draws a person-shaped figure (and a poster on the wall) instead of the discs. */
   figure = false;
+  /** Two performers for the Relief rehearsal pattern. */
+  audience = false;
+  /** Opposing sweeps on one row for the Ricochet rehearsal. */
+  volley = false;
   /** The public Signal demo uses moving arms and a clean synthetic person mask. */
   signalDemo = false;
   /** Holds the figure in place with a slight sway, like a person standing still. */
@@ -58,6 +62,14 @@ export class TestSource implements FrameSource {
   /** The discs in uv, origin bottom-left, x not mirrored. vx is uv per second. */
   discs(): Disc[] {
     const t = this.time;
+    if (this.volley) {
+      const advance = .19*(1-Math.cos(1.9*t))*.5;
+      const velocity = .19*.95*Math.sin(1.9*t);
+      return [
+        { x: .21+advance, y: .54, radius: .085, vx: velocity },
+        { x: .79-advance, y: .54, radius: .085, vx: -velocity },
+      ];
+    }
     return [
       { x: .5 + .32 * Math.sin(t * 1.7), y: .7, radius: .11, vx: .32 * 1.7 * Math.cos(t * 1.7) },
       { x: .5 - .32 * Math.sin(t * 1.3), y: .3, radius: .11, vx: -.32 * 1.3 * Math.cos(t * 1.3) },
@@ -93,6 +105,7 @@ export class TestSource implements FrameSource {
 
   /** Fills the figure's silhouette, and optionally the poster, in the current fill style, at canvas size w × h (row 0 at the top). */
   drawPeople(c: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number, poster: boolean): void {
+    if (this.audience) { this.drawAudience(c, w, h); return; }
     const f = this.figurePlace(), cx = f.x * w, cy = (1 - f.y) * h, u = f.height * h;
     c.beginPath(); c.arc(cx, cy - u * .36, u * .09, 0, Math.PI * 2); c.fill();                       // head
     c.beginPath(); c.roundRect(cx - u * .13, cy - u * .26, u * .26, u * .42, u * .06); c.fill();      // body
@@ -132,6 +145,29 @@ export class TestSource implements FrameSource {
     if (poster) { const p = TestSource.POSTER; c.fillRect(p.left * w, (1 - p.top) * h, (p.right - p.left) * w, (p.top - p.bottom) * h); }
   }
 
+  private drawAudience(c: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number): void {
+    const phase = (this.time % 5) / 5;
+    const reach = Math.sin(Math.PI * phase) ** 6;
+    for (const side of [-1,1]) {
+      const x = w * (.5 + side * (.255 - .075 * reach));
+      const shoulder = h * (side < 0 ? .4 : .42);
+      c.beginPath(); c.ellipse(x, shoulder-h*.115, h*.050, h*.066, 0, 0, Math.PI*2); c.fill();
+      c.beginPath(); c.roundRect(x-h*.074, shoulder-h*.045, h*.148, h*.29, h*.045); c.fill();
+      for (const leg of [-1,1]) {
+        c.beginPath(); c.roundRect(x+leg*h*.045-h*.031, shoulder+h*.185, h*.063, h*.26, h*.027); c.fill();
+      }
+      const inward = -side;
+      const arm = new Path2D();
+      arm.moveTo(x+inward*h*.041, shoulder);
+      arm.quadraticCurveTo(x+inward*h*.16, shoulder+h*.12*(1-reach), x+inward*h*(.08+.29*reach), shoulder+h*(.19-.23*reach));
+      arm.moveTo(x+side*h*.045, shoulder);
+      arm.quadraticCurveTo(x+side*h*.105, shoulder+h*.08, x+side*h*.12, shoulder+h*.19);
+      c.save();
+      c.strokeStyle = c.fillStyle; c.lineWidth = h*.056; c.lineCap = 'round';
+      c.stroke(arm); c.restore();
+    }
+  }
+
   advance(seconds: number): void {
     this.clock += seconds;
     const frame = Math.floor(this.clock * TEST_FPS + 1e-6);
@@ -151,6 +187,12 @@ export class TestSource implements FrameSource {
   private paint(): void {
     const c = this.context, w = this.element.width, h = this.element.height;
     c.fillStyle = '#16181c'; c.fillRect(0, 0, w, h);
+    if (this.audience) {
+      const cloth = c.createLinearGradient(0,0,w,h);
+      cloth.addColorStop(0,'#eadac1'); cloth.addColorStop(1,'#887db5');
+      c.fillStyle = cloth; this.drawAudience(c,w,h);
+      return;
+    }
     if (this.figure) this.paintFigure(w, h);
     if (this.field) {
       for (let x = -80; x < w + 80; x += 40) { c.fillStyle = (x / 40) % 2 ? '#fff4d0' : '#ffe0f0'; c.fillRect(x + (this.time * 120) % 80, 0, 20, h); }

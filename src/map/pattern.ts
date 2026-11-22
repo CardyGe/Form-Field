@@ -64,3 +64,30 @@ export function drawPattern(ctx: CanvasRenderingContext2D | OffscreenCanvasRende
   ctx.fillStyle = '#ffffff'; ctx.fillText(shape.name, c.x, c.y);
   ctx.restore();
 }
+
+/**
+ * The grid pattern drawn flat on a w × h picture, for a pinned shape: seen through the pin's perspective, its evenly
+ * spaced lines bunch up towards the far side, as a real grid painted on an angled surface does. The name is left out
+ * here: it would be stretched by the perspective.
+ */
+export function drawFlatPattern(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number, colour: string, landedPx: { w: number; h: number }): void {
+  ctx.save();
+  ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = tint(colour, 0.2); ctx.fillRect(0, 0, w, h);
+  // Spacing follows the size the picture lands at on the stage, so a pinned grid matches an unpinned one.
+  const nu = divisions(landedPx.w), nv = divisions(landedPx.h);
+  const sx = w / Math.max(1, landedPx.w), sy = h / Math.max(1, landedPx.h);
+  ctx.strokeStyle = tint(colour, 0.45); ctx.lineWidth = 2 * sx;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(w, h); ctx.moveTo(w, 0); ctx.lineTo(0, h); ctx.stroke();
+  ctx.strokeStyle = colour;
+  for (const major of [false, true]) {
+    ctx.beginPath();
+    for (let k = 1; k < nu; k++) if ((k * 2 === nu) === major) { const x = w * k / nu; ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+    ctx.lineWidth = (major ? 5 : 2) * sx; ctx.stroke();
+    ctx.beginPath();
+    for (let k = 1; k < nv; k++) if ((k * 2 === nv) === major) { const y = h * k / nv; ctx.moveTo(0, y); ctx.lineTo(w, y); }
+    ctx.lineWidth = (major ? 5 : 2) * sy; ctx.stroke();
+  }
+  ctx.lineWidth = 8 * Math.max(sx, sy); ctx.strokeRect(0, 0, w, h);
+  ctx.restore();
+}

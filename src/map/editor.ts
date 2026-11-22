@@ -1,13 +1,21 @@
 import {
   BORDER_MAX, GLOW_MAX, MAX_GROUPS, MAX_NAME_LENGTH, MAX_SHAPES, MAX_SOURCES, MAX_SOURCE_LAYERS, PHOTO_TEXT_LIMIT, SOFT_EDGE_MAX, SPEED_RANGE, STAGE_SIZE,
-  cleanName, isShapeLocked, normaliseGroups, shapeExtras, IDENTITY_CORNERS, MIN_OUTLINE_AREA,
-  type Border, type Look, type PlacementMode, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source,
+  BRIGHTNESS_MAX, ZOOM_RANGE, MAX_LINKS, MAX_TRIGGERS, TEMPO_SYNC_BEATS, playedBy, readLink, readTrigger, cleanName, isShapeLocked, normaliseGroups, shapeExtras,
+  type Border, type BorderRun, type AutoAdvance, type FollowOutline, STAGGER_MAX, readBorderRun, readAutoAdvance, type Placement, type CurvePoint, type Photo, type Point, type Ring, type Shape, type ShowDocument, type Source, LIVE_SOURCE_ID,
+  IMAGE_FILE_LIMIT, IMAGE_SHOW_LIMIT, MAX_VIDEOS, dataUrlBytes, imageBytes, isVideoId, isVideoPath,
 } from './show';
 import { clampToStage, nudge, rectangleFromDrag } from './geometry';
-import { gridCells, insertPoint, isCurved, moveHandle, removePoint, ringBounds, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
+import { rotatePalette } from './wild';
+import { gridCells, insertPoint, isCurved, moveHandle, removePoint, setCurve, shapeValidity, transformRing, type Matrix } from './outline';
 import { joinedAnchors } from './snap';
-import { clampBrightness, quadUsable } from './placement';
-import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer } from '../core/project';
+import { capture, withState, MAX_SCENES, FADE_RANGE } from './scenes';
+import { parseTarget, reactionLinks, type Reaction } from './targets';
+import type { Link, Trigger } from '../react/links';
+import { isPinnable } from './homography';
+import { ownCornersPinnable, pinCorners } from './placement';
+/** Pin handles at the corners of the shape's box, in stage fractions. */
+const boxPin = (shape: Shape): Point[] => pinCorners({ ...shape, points: shape.points.length === 4 ? [...shape.points, shape.points[0]] : shape.points, placement: { ...shape.placement, pin: null } }).map(q => ({ x: q.x / STAGE_SIZE.width, y: q.y / STAGE_SIZE.height }));
+import { PRESETS, applyPreset, createLayer, createProject, readParameterDefinitions, validateProject, varyLayer } from '../core/project';
 import type { Project } from '../shared/types';
 
 /** ring: which outline of a shape a point belongs to. Missing or -1 is the shape's own outline; 0 and up are its holes. */
@@ -41,7 +49,8 @@ export type EditAction =
   | { type: 'duplicateShapes'; shapeIds: string[]; ids: string[]; sourceIds: string[]; offset?: { dx: number; dy: number } }
   /** Mirrored copies across the stage's centre line: vertical mirrors left and right, horizontal top and bottom. */
   | { type: 'mirrorShapes'; shapeIds: string[]; axis: 'vertical' | 'horizontal'; ids: string[]; sourceIds: string[] }
-  | { type: 'makeGrid'; shapeId: string; rows: number; cols: number; gapPx: number; ids: string[]; sourceIds: string[]; groupId: string }
+  /** spread: the cells share the shape's own instrument, laid across the grid (Across group), so one picture runs through them all. */
+  | { type: 'makeGrid'; shapeId: string; rows: number; cols: number; gapPx: number; ids: string[]; sourceIds: string[]; groupId: string; spread?: boolean }
   | { type: 'reorder'; shapeId: string; to: 'front' | 'back' | 'forward' | 'backward' }
   | { type: 'group'; shapeIds: string[]; groupId: string; name: string }
   | { type: 'ungroup'; groupId: string }
@@ -55,18 +64,55 @@ export type EditAction =
   | { type: 'setPhoto'; photo: Photo | null }
   | { type: 'setPhotoOpacity'; opacity: number }
   /** What a shape plays: its own colour, or a Library preset in a new source of its own. */
-  | { type: 'setContent'; shapeId: string; content: { kind: 'colour' } | { kind: 'grid' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number } }
+  /**
+   * linked (the default): when the shape shares its instrument with others, they are one instrument and all change;
+   * false changes this shape only (a new look gets an instrument of its own).
+   */
+  | { type: 'setContent'; shapeId: string; content: ({ kind: 'colour' } | { kind: 'grid' } | { kind: 'live' } | { kind: 'preset'; presetId: string; sourceId: string; seed: number }
+    | { kind: 'image'; sourceId: string; image: { name: string; dataUrl: string; width: number; height: number } }
+    | { kind: 'video'; videoId: string; path: string; name: string }) & { linked?: boolean } }
   | { type: 'varySource'; sourceId: string; entropy: number }
   | { type: 'setSourcePalette'; sourceId: string; palette: string[] }
   | { type: 'setSourceSpeed'; sourceId: string; speed: number }
   | { type: 'setSourceProject'; sourceId: string; project: Project }
-  /** Placement (stage 4). pins: the four corners for pin; when omitted, the shape's own corners, or its box's corners. */
-  | { type: 'setPlacement'; shapeId: string; mode: PlacementMode; pins?: Point[] }
+  /** Stage 4: where the picture sits, its pin handles, sharing an instrument, look, and the stage corners. */
+  | { type: 'setPlacement'; shapeId: string; placement: Partial<Placement> }
   | { type: 'movePin'; shapeId: string; index: number; to: Point }
-  | { type: 'setLook'; shapeId: string; look: Look }
-  /** One of the stage's four corners on the wall, in output fractions. */
-  | { type: 'setStageCorner'; index: number; to: Point }
-  | { type: 'resetStageCorners' };
+  | { type: 'shareSource'; shapeId: string; withShapeId: string }
+  | { type: 'makeSeparate'; shapeId: string; sourceId: string }
+  /** Find…: every video that played `path` plays `to` from now on. */
+  | { type: 'relinkVideo'; path: string; to: string; name: string }
+  /** Stage 7: the wild options. */
+  | { type: 'setFollowOutline'; sourceId: string; mode: FollowOutline | null }
+  | { type: 'setGroupStagger'; groupId: string; seconds: number }
+  | { type: 'setGroupChase'; groupId: string; on: boolean }
+  | { type: 'setBorderRun'; shapeId: string; run: BorderRun | null }
+  | { type: 'setAutoAdvance'; autoAdvance: AutoAdvance | null }
+  | { type: 'varyEach'; groupId: string; sourceIds: string[]; entropy: number }
+  | { type: 'paletteShift'; groupId: string; sourceIds: string[] }
+  /** Map's Effect tab: some of one layer's settings, each kept inside its own range. */
+  | { type: 'setSourceLayer'; sourceId: string; layer: number; params: Record<string, number> }
+  | { type: 'setLook'; shapeId: string; brightness?: number; tint?: string }
+  | { type: 'setStageCorners'; corners: Point[] | null }
+  /** Stage 5: scenes. Adding one takes in the live state; switching keeps the live scene, then brings the other back. */
+  | { type: 'addScene'; sceneId: string; name: string }
+  | { type: 'renameScene'; sceneId: string; name: string }
+  | { type: 'deleteScene'; sceneId: string }
+  /** sceneId null: the show's own fade time. seconds null (for a scene): use the show's. */
+  | { type: 'setSceneFade'; sceneId: string | null; seconds: number | null }
+  | { type: 'switchScene'; sceneId: string }
+  /** Stage 5: what sound, the beat, tempo and MIDI drive. */
+  | { type: 'addLink'; link: Link }
+  | { type: 'updateLink'; linkId: string; change: Partial<Omit<Link, 'id'>> }
+  | { type: 'removeLink'; linkId: string }
+  /** Every link driving one setting, as one undo step (Stop reacting). */
+  | { type: 'removeLinks'; target: string }
+  | { type: 'addTrigger'; trigger: Trigger }
+  | { type: 'updateTrigger'; triggerId: string; change: Partial<Omit<Trigger, 'id'>> }
+  | { type: 'removeTrigger'; triggerId: string }
+  | { type: 'addReaction'; reaction: Reaction; shapeId: string; ids: string[] }
+  | { type: 'setTempoSync'; sourceId: string; beats: number | null }
+  | { type: 'moveStageCorner'; index: number; to: Point };
 
 export type EditResult = { ok: true; show: ShowDocument } | { ok: false; reason: string };
 
@@ -102,7 +148,11 @@ const copyRing = (ring: CurvePoint[]): Ring => ring.map(p => {
 const anchors = (shape: Shape): Point[] => [...shape.points, ...shape.holes.flat()];
 /** A ring moved by a fraction of the stage; handles move with their points. */
 const shiftRing = (ring: Ring, dx: number, dy: number): Ring => ring.map(p => ({ ...p, ...clampToStage({ x: p.x + dx, y: p.y + dy }) }));
-const shiftShape = (shape: Shape, dx: number, dy: number) => { shape.points = shiftRing(shape.points, dx, dy); shape.holes = shape.holes.map(h => shiftRing(h, dx, dy)); };
+const shiftShape = (shape: Shape, dx: number, dy: number) => {
+  shape.points = shiftRing(shape.points, dx, dy); shape.holes = shape.holes.map(h => shiftRing(h, dx, dy));
+  // A stored pin moves with its shape (it may reach past the stage, so it is not clamped).
+  if (shape.placement.pin) shape.placement.pin = shape.placement.pin.map(p => ({ x: p.x + dx, y: p.y + dy }));
+};
 
 /** How far a set of shapes may move by (dx, dy) so no anchor leaves the stage: the whole amount, limited at the edge. */
 function limitMove(shapes: Shape[], dx: number, dy: number): { dx: number; dy: number } {
@@ -124,24 +174,66 @@ const PHOTO = /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/;
 const MAX_GRID_SIDE = 16;
 
 /** Sources no shape plays any more are dropped. */
-const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => show.shapes.some(s => s.sourceId === src.id)); };
+const dropUnplayed = (show: ShowDocument) => { show.sources = show.sources.filter(src => playedBy(show, src.id)); show.videos = show.videos.filter(v => playedBy(show, v.id)); };
+
+/** True when a source is one of Greg's pictures (a one-layer image composition). */
+/** A group is locked when it, or any of its shapes, is. */
+const groupLocked = (show: ShowDocument, groupId: string) => show.groups.some(g => g.id === groupId && g.locked) || show.shapes.some(s => s.groupId === groupId && isShapeLocked(show, s));
+
+const isPictureSource = (show: ShowDocument, id: string) => { const p = show.sources.find(s => s.id === id)?.project; return !!p && p.layers.length === 1 && p.layers[0].kind === 'image'; };
+
+/** A one-layer composition of a picture (Studio's image layer, cover fit), as a file would load it; null if it is not valid. */
+function imageComposition(image: { name: string; dataUrl: string; width: number; height: number }): Project | null {
+  const project = createProject();
+  const layer = { ...createLayer('image'), name: cleanName(image.name).slice(0, 60) || 'Image', image: { name: cleanName(image.name).slice(0, 120) || 'image', dataUrl: image.dataUrl, width: image.width, height: image.height, fit: 'cover' as const } };
+  try { return validateProject({ ...project, name: layer.name, background: '#000000', layers: [layer] }); } catch { return null; }
+}
 
 /** A one-layer composition of a Library preset, in the canonical form a file would load as. */
-function presetComposition(presetId: string, seed: number): Project | null {
+export function presetComposition(presetId: string, seed: number): Project | null {
   const preset = PRESETS.find(p => p.id === presetId);
   if (!preset) return null;
   const project = createProject();
   const layer = applyPreset(createLayer(preset.kind), preset.id);
   layer.params.seed = seed;
   Object.assign(project, { name: preset.name, seed, layers: [layer] });
+  if (preset.kind === 'scope' && preset.params.scopeMode === 1) {
+    project.background = '#000000';
+    project.transparent = true;
+  }
   return validateProject(project);
 }
 
 /** Changes to a source itself. Refused while any shape playing it is locked. */
-function stageSource(next: ShowDocument, action: Extract<EditAction, { sourceId: string; type: 'varySource' | 'setSourcePalette' | 'setSourceSpeed' | 'setSourceProject' }>): Staged {
+function stageSource(next: ShowDocument, action: Extract<EditAction, { sourceId: string; type: 'varySource' | 'setSourcePalette' | 'setSourceSpeed' | 'setSourceProject' | 'setSourceLayer' }>): Staged {
+  // A video has a speed and nothing else a composition has.
+  if (isVideoId(action.sourceId)) {
+    const v = next.videos.findIndex(x => x.id === action.sourceId);
+    if (v < 0 || action.type !== 'setSourceSpeed') return { reason: 'not-found' };
+    if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+    const speed = Number.isFinite(action.speed) ? clamp(action.speed, SPEED_RANGE.min, SPEED_RANGE.max) : 1;
+    next.videos = next.videos.map((x, n) => n === v ? { ...x, speed } : x);
+    return { show: next, touched: [] };
+  }
   const i = next.sources.findIndex(s => s.id === action.sourceId);
   if (i < 0) return { reason: 'not-found' };
   if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+  if (action.type === 'setSourceLayer') {
+    const layer = next.sources[i].project.layers[action.layer];
+    if (!layer || !Number.isInteger(action.layer)) return { reason: 'not-found' };
+    const defs = readParameterDefinitions(layer.kind), params = { ...layer.params };
+    for (const [key, raw] of Object.entries(action.params)) {
+      // The seed is every layer's, not one of its definitions: a whole number, as Studio keeps it.
+      if (key === 'seed') { if (!Number.isFinite(raw)) return { reason: 'bad-setting' }; params.seed = clamp(Math.round(raw), 0, 4294967295); continue; }
+      const d = defs.find(x => x.key === key);
+      if (!d || !Number.isFinite(raw)) return { reason: 'bad-setting' };
+      const v = clamp(raw, d.min, d.max);
+      params[key] = d.step >= 1 ? Math.round(v) : v;
+    }
+    const project = { ...next.sources[i].project, layers: next.sources[i].project.layers.map((l, n) => n === action.layer ? { ...l, params } : l) };
+    next.sources[i] = { ...next.sources[i], project, revision: next.sources[i].revision + 1 };
+    return { show: next, touched: [] };
+  }
   const source = next.sources[i];
   // Sources are never changed in place: undo snapshots share them.
   const replace = (changes: Partial<Source>): Staged => { next.sources[i] = { ...source, ...changes }; return { show: next, touched: [] }; };
@@ -180,7 +272,7 @@ type Staged = { show: ShowDocument; touched: Shape[] } | { reason: string };
  * Copies of shapes, each placed right after its original (so a copy stays in its original's group), with its own
  * source when the original plays one. `place` gives each copy's points.
  */
-function addCopies(next: ShowDocument, originals: Shape[], ids: string[], sourceIds: (string | undefined)[], place: (shape: Shape) => Pick<Shape, 'points' | 'holes'>, name: (shape: Shape) => string): Staged {
+function addCopies(next: ShowDocument, originals: Shape[], ids: string[], sourceIds: (string | undefined)[], place: (shape: Shape) => Pick<Shape, 'points' | 'holes' | 'placement'>, name: (shape: Shape) => string): Staged {
   if (ids.length !== originals.length) return { reason: 'not-found' };
   if (next.shapes.length + originals.length > MAX_SHAPES) return { reason: 'too-many-shapes' };
   const taken = new Set([...next.shapes.map(s => s.id), ...next.sources.map(s => s.id)]);
@@ -189,7 +281,9 @@ function addCopies(next: ShowDocument, originals: Shape[], ids: string[], source
   for (const [n, shape] of originals.entries()) {
     const copy: Shape = { ...structuredClone(shape), ...place(shape), id: ids[n], name: name(shape), visible: true, locked: false };
     // The copy gets its own source, so from here on its settings are its own.
-    if (shape.sourceId !== null) {
+    // A copy of a Live shape plays Live: there is only one. A copy of a video or a picture shares it: one player, one
+    // stored copy (Make separate gives it its own).
+    if (shape.sourceId !== null && shape.sourceId !== LIVE_SOURCE_ID && !isVideoId(shape.sourceId) && !isPictureSource(next, shape.sourceId)) {
       const original = next.sources.find(s => s.id === shape.sourceId);
       const sourceId = sourceIds[n];
       if (!sourceId) return { reason: 'needs-source-id' };
@@ -211,6 +305,9 @@ function addCopies(next: ShowDocument, originals: Shape[], ids: string[], source
   }
   return { show: next, touched: copies };
 }
+
+/** The shape's placement with its stored pin (if any) moved by `move`. */
+const movedPin = (shape: Shape, move: (p: Point) => Point): Placement => ({ ...shape.placement, pin: shape.placement.pin && shape.placement.pin.map(move) });
 
 /** The list as items: an ungrouped shape, or a whole group's block of members. */
 function blocks(shapes: Shape[]): Shape[][] {
@@ -254,7 +351,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
   const done = (touched: Shape[] = []): Staged => ({ show: next, touched });
 
   switch (action.type) {
-    case 'varySource': case 'setSourcePalette': case 'setSourceSpeed': case 'setSourceProject': return stageSource(next, action);
+    case 'varySource': case 'setSourcePalette': case 'setSourceSpeed': case 'setSourceProject': case 'setSourceLayer': return stageSource(next, action);
     case 'addRectangle': return stage(show, { type: 'addShape', id: action.id, points: rectangleFromDrag(clampToStage(action.a), clampToStage(action.b)), colour: action.colour });
     case 'addShape': {
       if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
@@ -267,6 +364,139 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     case 'setPhoto': {
       if (action.photo !== null && (typeof action.photo.data !== 'string' || action.photo.data.length > PHOTO_TEXT_LIMIT || !PHOTO.test(action.photo.data))) return { reason: 'bad-photo' };
       next.photo = action.photo && { data: action.photo.data, opacity: clamp(Number.isFinite(action.photo.opacity) ? action.photo.opacity : .5, 0, 1) };
+      return done();
+    }
+    case 'addScene': case 'renameScene': case 'deleteScene': case 'setSceneFade': case 'switchScene': return stageScene(next, action, show);
+    case 'addLink': case 'updateLink': {
+      const old = action.type === 'updateLink' ? next.links.find(l => l.id === action.linkId) : undefined;
+      if (action.type === 'updateLink' && !old) return { reason: 'not-found' };
+      if (action.type === 'addLink' && (next.links.length >= MAX_LINKS)) return { reason: 'too-many-links' };
+      if (action.type === 'addLink' && next.links.some(l => l.id === action.link.id)) return { reason: 'duplicate-id' };
+      // A locked shape (or an instrument a locked shape plays) cannot be made to move.
+      if (targetLocked(next, action.type === 'addLink' ? action.link.target : action.change.target ?? '')) return { reason: 'locked' };
+      const link = readLink(action.type === 'addLink' ? action.link : { ...old, ...action.change, id: old!.id }, next);
+      if (!link) return { reason: 'bad-target' };
+      next.links = action.type === 'addLink' ? [...next.links, link] : next.links.map(l => l.id === link.id ? link : l);
+      return done();
+    }
+    case 'removeLinks': {
+      if (!next.links.some(l => l.target === action.target)) return { reason: 'not-found' };
+      next.links = next.links.filter(l => l.target !== action.target);
+      return done();
+    }
+    case 'removeLink': {
+      if (!next.links.some(l => l.id === action.linkId)) return { reason: 'not-found' };
+      next.links = next.links.filter(l => l.id !== action.linkId);
+      return done();
+    }
+    case 'addTrigger': case 'updateTrigger': {
+      const old = action.type === 'updateTrigger' ? next.triggers.find(t => t.id === action.triggerId) : undefined;
+      if (action.type === 'updateTrigger' && !old) return { reason: 'not-found' };
+      if (action.type === 'addTrigger' && next.triggers.length >= MAX_TRIGGERS) return { reason: 'too-many-triggers' };
+      if (action.type === 'addTrigger' && next.triggers.some(t => t.id === action.trigger.id)) return { reason: 'duplicate-id' };
+      const trigger = readTrigger(action.type === 'addTrigger' ? action.trigger : { ...old, ...action.change, id: old!.id }, next);
+      if (!trigger) return { reason: 'bad-target' };
+      next.triggers = action.type === 'addTrigger' ? [...next.triggers, trigger] : next.triggers.map(t => t.id === trigger.id ? trigger : t);
+      return done();
+    }
+    case 'removeTrigger': {
+      if (!next.triggers.some(t => t.id === action.triggerId)) return { reason: 'not-found' };
+      next.triggers = next.triggers.filter(t => t.id !== action.triggerId);
+      return done();
+    }
+    case 'addReaction': {
+      const links = reactionLinks(next, action.reaction, action.shapeId, action.ids);
+      if (typeof links === 'string') return { reason: links };
+      if (next.links.length + links.length > MAX_LINKS) return { reason: 'too-many-links' };
+      if (links.some(l => next.links.some(x => x.id === l.id))) return { reason: 'duplicate-id' };
+      if (links.some(l => targetLocked(next, l.target))) return { reason: 'locked' };
+      next.links = [...next.links, ...links];
+      return done();
+    }
+    case 'setFollowOutline': {
+      const i = next.sources.findIndex(s => s.id === action.sourceId);
+      if (i < 0) return { reason: 'not-found' };
+      if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+      const mode = action.mode === 'obstacle' || action.mode === 'emitter' || action.mode === 'edge' ? action.mode : null;
+      const { followOutline: _old, ...rest } = next.sources[i];
+      next.sources[i] = mode ? { ...rest, followOutline: mode } : rest;
+      return { show: next, touched: [] };
+    }
+    case 'setGroupStagger': case 'setGroupChase': {
+      const g = next.groups.findIndex(x => x.id === action.groupId);
+      if (g < 0) return { reason: 'not-found' };
+      if (groupLocked(next, action.groupId)) return { reason: 'locked' };
+      const { stagger: _s, chase: _c, ...rest } = next.groups[g];
+      const stagger = action.type === 'setGroupStagger' ? clamp(Number.isFinite(action.seconds) ? action.seconds : 0, 0, STAGGER_MAX) : next.groups[g].stagger ?? 0;
+      const chase = action.type === 'setGroupChase' ? action.on : next.groups[g].chase ?? false;
+      next.groups[g] = { ...rest, ...(stagger > 0 ? { stagger } : {}), ...(chase ? { chase: true } : {}) };
+      return { show: next, touched: [] };
+    }
+    case 'setAutoAdvance': {
+      next.autoAdvance = readAutoAdvance(action.autoAdvance).value;
+      if (!next.autoAdvance) delete next.autoAdvance;
+      return { show: next, touched: [] };
+    }
+    case 'varyEach': case 'paletteShift': {
+      // Every shape in the group gets its own copy of what it plays: varied, or its palette turned one step further.
+      if (!next.groups.some(g => g.id === action.groupId)) return { reason: 'not-found' };
+      if (groupLocked(next, action.groupId)) return { reason: 'locked' };
+      const members = next.shapes.filter(s => s.groupId === action.groupId && s.sourceId && next.sources.some(src => src.id === s.sourceId));
+      if (!members.length) return { reason: 'nothing-to-vary' };
+      if (action.sourceIds.length < members.length || new Set(action.sourceIds).size !== action.sourceIds.length) return { reason: 'needs-source-id' };
+      if (action.sourceIds.some(id => next.sources.some(s => s.id === id) || isVideoId(id) || id === LIVE_SOURCE_ID)) return { reason: 'duplicate-id' };
+      const leaving = new Set(members.map(m => m.sourceId!));
+      const stays = next.sources.filter(src => !leaving.has(src.id) || playedBy({ shapes: next.shapes.filter(s => !members.includes(s)), scenes: next.scenes }, src.id)).length;
+      if (stays + members.length > MAX_SOURCES) return { reason: 'too-many-sources' };
+      members.forEach((shape, i) => {
+        const source = next.sources.find(s => s.id === shape.sourceId)!;
+        const project = structuredClone(source.project);
+        project.layers = project.layers.map((layer, n) => action.type === 'varyEach'
+          ? varyLayer(layer, VARY_STRENGTH, NO_LOCKS, action.entropy + i * 101 + n)
+          : { ...layer, palette: rotatePalette(layer.palette, i) });
+        next.sources.push({ ...source, id: action.sourceIds[i], project, revision: 0 });
+        shape.sourceId = action.sourceIds[i];
+      });
+      dropUnplayed(next);
+      return { show: next, touched: [] };
+    }
+    case 'relinkVideo': {
+      if (!isVideoPath(action.to)) return { reason: 'not-a-video' };
+      if (!next.videos.some(v => v.path === action.path)) return { reason: 'not-found' };
+      next.videos = next.videos.map(v => v.path === action.path ? { ...v, path: action.to, name: cleanName(action.name).slice(0, 120) || v.name } : v);
+      return { show: next, touched: [] };
+    }
+    case 'setTempoSync': {
+      if (isVideoId(action.sourceId)) {
+        const v = next.videos.findIndex(x => x.id === action.sourceId);
+        if (v < 0) return { reason: 'not-found' };
+        if (action.beats !== null && !TEMPO_SYNC_BEATS.includes(action.beats)) return { reason: 'bad-tempo' };
+        if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+        next.videos = next.videos.map((x, n) => n === v ? { ...x, tempoSync: action.beats } : x);
+        return { show: next, touched: [] };
+      }
+      const i = next.sources.findIndex(s => s.id === action.sourceId);
+      if (i < 0) return { reason: 'not-found' };
+      if (action.beats !== null && !TEMPO_SYNC_BEATS.includes(action.beats)) return { reason: 'bad-tempo' };
+      if (next.shapes.some(s => s.sourceId === action.sourceId && isShapeLocked(next, s))) return { reason: 'locked' };
+      next.sources[i] = { ...next.sources[i], tempoSync: action.beats };
+      return done();
+    }
+    case 'setStageCorners': {
+      if (action.corners === null) { next.stageCorners = null; return done(); }
+      if (action.corners.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < -0.5 || p.x > 1.5 || p.y < -0.5 || p.y > 1.5)) return { reason: 'corners-outside' };
+      const px = action.corners.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }));
+      if (action.corners.length !== 4 || !isPinnable(px).ok) return { reason: 'corners-folded' };
+      next.stageCorners = action.corners.map(p => ({ x: p.x, y: p.y }));
+      return done();
+    }
+    case 'moveStageCorner': {
+      if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3 || !Number.isFinite(action.to.x) || !Number.isFinite(action.to.y)) return { reason: 'not-found' };
+      const corners = (next.stageCorners ?? [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]).map(p => ({ ...p }));
+      // A nudged projector may need a corner a little past the stage.
+      corners[action.index] = { x: clamp(action.to.x, -0.5, 1.5), y: clamp(action.to.y, -0.5, 1.5) };
+      if (!isPinnable(corners.map(p => ({ x: p.x * STAGE_SIZE.width, y: p.y * STAGE_SIZE.height }))).ok) return { reason: 'corners-folded' };
+      next.stageCorners = corners;
       return done();
     }
     case 'setPhotoOpacity': {
@@ -285,7 +515,10 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     case 'transformShapes': {
       const shapes = many(action.shapeIds);
       if ('reason' in shapes) return shapes;
-      for (const s of shapes) { s.points = transformRing(s.points, action.matrix); s.holes = s.holes.map(h => transformRing(h, action.matrix)); }
+      for (const s of shapes) {
+        s.points = transformRing(s.points, action.matrix); s.holes = s.holes.map(h => transformRing(h, action.matrix));
+        if (s.placement.pin) s.placement.pin = transformRing(s.placement.pin, action.matrix).map(p => ({ x: p.x, y: p.y }));
+      }
       return done(shapes);
     }
     case 'deleteShapes': {
@@ -299,7 +532,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const shape = find(action.shapeId);
       if (!shape) return { reason: 'not-found' };
       const { dx, dy } = copyStep([shape]);
-      return addCopies(next, [shape], [action.id], [action.sourceId], s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)) }), s => copyName(s.name));
+      return addCopies(next, [shape], [action.id], [action.sourceId], s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)), placement: movedPin(s, p => ({ x: p.x + dx, y: p.y + dy })) }), s => copyName(s.name));
     }
     case 'duplicateShapes': {
       // A copy leaves the original untouched, so locked shapes can be copied; the copies start unlocked.
@@ -307,7 +540,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if ('reason' in shapes) return shapes;
       const order = shapes.map(s => action.shapeIds.indexOf(s.id));
       const { dx, dy } = action.offset ? limitMove(shapes, action.offset.dx, action.offset.dy) : copyStep(shapes);
-      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)) }), s => copyName(s.name));
+      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: shiftRing(s.points, dx, dy), holes: s.holes.map(h => shiftRing(h, dx, dy)), placement: movedPin(s, p => ({ x: p.x + dx, y: p.y + dy })) }), s => copyName(s.name));
     }
     case 'mirrorShapes': {
       const shapes = many(action.shapeIds, true);
@@ -315,7 +548,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       const order = shapes.map(s => action.shapeIds.indexOf(s.id));
       const { width: W, height: H } = STAGE_SIZE;
       const m: Matrix = action.axis === 'vertical' ? [-1, 0, 0, 1, W, 0] : [1, 0, 0, -1, 0, H];
-      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: transformRing(s.points, m), holes: s.holes.map(h => transformRing(h, m)) }), s => copyName(s.name));
+      return addCopies(next, shapes, order.map(i => action.ids[i]), order.map(i => action.sourceIds[i]), s => ({ points: transformRing(s.points, m), holes: s.holes.map(h => transformRing(h, m)), placement: movedPin(s, p => { const [q] = transformRing([p], m); return { x: q.x, y: q.y }; }) }), s => copyName(s.name));
     }
     case 'makeGrid': return stageGrid(next, action);
     case 'group': {
@@ -352,16 +585,6 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     }
   }
 
-  if (action.type === 'setStageCorner') {
-    if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3) return { reason: 'bad-corner' };
-    const corners = next.stageCorners.map(p => ({ ...p }));
-    corners[action.index] = clampToStage(action.to);
-    if (!quadUsable(corners, MIN_OUTLINE_AREA)) return { reason: 'bad-corners' };
-    next.stageCorners = corners;
-    return done();
-  }
-  if (action.type === 'resetStageCorners') { next.stageCorners = IDENTITY_CORNERS.map(p => ({ ...p })); return done(); }
-
   const shape = find(action.shapeId);
   if (!shape) return { reason: 'not-found' };
 
@@ -375,16 +598,71 @@ function stage(show: ShowDocument, action: EditAction): Staged {
     case 'delete': next.shapes = next.shapes.filter(s => s !== shape); dropUnplayed(next); return { show: normaliseGroups(next), touched: [] };
     case 'setContent': {
       const content = action.content;
-      if (content.kind === 'colour' || content.kind === 'grid') { shape.sourceId = null; shape.fill = content.kind; dropUnplayed(next); return done(); }
+      // Shapes sharing this shape's instrument are one instrument: a change reaches them all, unless asked otherwise.
+      const linked = content.linked !== false && shape.sourceId !== null ? next.shapes.filter(s => s.sourceId === shape.sourceId) : [shape];
+      if (linked.some(s => isShapeLocked(next, s))) return { reason: 'locked' };
+      if (content.kind === 'colour' || content.kind === 'grid') { for (const s of linked) { s.sourceId = null; s.fill = content.kind; } dropUnplayed(next); return done(); }
+      // A picture of Greg's own: a one-layer image composition, stored in the show. The same picture is stored once.
+      if (content.kind === 'image') {
+        if (shape.blocker) return { reason: 'blocker' };
+        const bytes = dataUrlBytes(content.image.dataUrl);
+        if (!/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(content.image.dataUrl)) return { reason: 'bad-image' };
+        if (bytes > IMAGE_FILE_LIMIT) return { reason: 'image-too-large' };
+        const same = next.sources.find(s => s.project.layers.length === 1 && s.project.layers[0].image?.dataUrl === content.image.dataUrl);
+        let id = same?.id;
+        if (!id) {
+          if (imageBytes(next) + bytes > IMAGE_SHOW_LIMIT) return { reason: 'images-over-budget' };
+          if (content.sourceId === LIVE_SOURCE_ID || isVideoId(content.sourceId) || next.sources.some(s => s.id === content.sourceId)) return { reason: 'duplicate-id' };
+          const project = imageComposition(content.image);
+          if (!project) return { reason: 'bad-image' };
+          next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0, tempoSync: null });
+          id = content.sourceId;
+        }
+        for (const s of linked) s.sourceId = id;
+        dropUnplayed(next);
+        if (next.sources.length > MAX_SOURCES) return { reason: 'too-many-sources' };
+        return done();
+      }
+      // A video of Greg's own, left on disk: shapes name it by its id.
+      if (content.kind === 'video') {
+        if (shape.blocker) return { reason: 'blocker' };
+        if (!isVideoPath(content.path)) return { reason: 'not-a-video' };
+        if (!isVideoId(content.videoId) || next.videos.some(v => v.id === content.videoId)) return { reason: 'duplicate-id' };
+        const stays = next.videos.filter(v => !linked.every(s => s.sourceId === v.id) || playedBy({ shapes: next.shapes.filter(s => !linked.includes(s)), scenes: next.scenes }, v.id));
+        if (stays.length >= MAX_VIDEOS) return { reason: 'too-many-videos' };
+        next.videos = [...next.videos, { id: content.videoId, path: content.path, name: cleanName(content.name).slice(0, 120), speed: 1, tempoSync: null }];
+        for (const s of linked) s.sourceId = content.videoId;
+        dropUnplayed(next);
+        return done();
+      }
+      // Live: the Live screen's one look. Every linked shape plays it; it is no source of the show's.
+      if (content.kind === 'live') {
+        if (shape.blocker) return { reason: 'blocker' };
+        if (linked.every(s => s.sourceId === LIVE_SOURCE_ID)) return { show, touched: [] };
+        for (const s of linked) s.sourceId = LIVE_SOURCE_ID;
+        dropUnplayed(next);
+        return done();
+      }
+      if (linked.length > 1 && shape.sourceId !== LIVE_SOURCE_ID) {
+        if (shape.blocker) return { reason: 'blocker' };
+        const project = presetComposition(content.presetId, content.seed);
+        if (!project) return { reason: 'unknown-preset' };
+        const i = next.sources.findIndex(s => s.id === shape.sourceId);
+        // The shared instrument takes the new look in place, so every linked shape plays it (and fades to it).
+        next.sources[i] = { ...next.sources[i], project, revision: next.sources[i].revision + 1 };
+        return done();
+      }
       if (shape.blocker) return { reason: 'blocker' };
-      if (next.sources.some(s => s.id === content.sourceId)) return { reason: 'duplicate-id' };
+      if (content.sourceId === LIVE_SOURCE_ID || next.sources.some(s => s.id === content.sourceId)) return { reason: 'duplicate-id' };
       const project = presetComposition(content.presetId, content.seed);
       if (!project) return { reason: 'unknown-preset' };
       const old = shape.sourceId;
-      const oldGoes = old !== null && !next.shapes.some(s => s !== shape && s.sourceId === old);
+      // Live is no source of the show's, so leaving it frees no room.
+      const oldGoes = old !== null && old !== LIVE_SOURCE_ID && !playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes }, old);
       if (next.sources.length - (oldGoes ? 1 : 0) >= MAX_SOURCES) return { reason: 'too-many-sources' };
-      next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0 });
-      shape.sourceId = content.sourceId;
+      next.sources.push({ id: content.sourceId, kind: 'instrument', project, speed: 1, revision: 0, tempoSync: null });
+      // Several shapes on Live take the new look together, as one new instrument.
+      for (const s of linked) s.sourceId = content.sourceId;
       dropUnplayed(next);
       return done();
     }
@@ -392,41 +670,92 @@ function stage(show: ShowDocument, action: EditAction): Staged {
       if (action.name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
       shape.name = cleanName(action.name); return done();
     case 'setColour': shape.colour = action.colour; return done();
+    case 'setPlacement': {
+      const p = { ...shape.placement, ...action.placement };
+      const finite = (v: number, fallback: number) => Number.isFinite(v) ? v : fallback;
+      const placement: Placement = {
+        kind: ['fit', 'pin', 'across-group', 'across-stage'].includes(p.kind) ? p.kind : 'fit',
+        zoom: clamp(finite(p.zoom, 1), ZOOM_RANGE.min, ZOOM_RANGE.max),
+        offset: { x: clamp(finite(p.offset?.x, 0), -1, 1), y: clamp(finite(p.offset?.y, 0), -1, 1) },
+        turn: clamp(finite(p.turn, 0), -180, 180),
+        pin: p.pin ? p.pin.map(q => ({ x: q.x, y: q.y })) : null,
+      };
+      // Choosing Pin on a shape without four points starts its handles at its box's corners; four points use their own.
+      if (ownCornersPinnable(shape)) placement.pin = null;
+      else if (placement.kind === 'pin' && (!placement.pin || !isPinnable(placement.pin.map(q => ({ x: q.x * STAGE_SIZE.width, y: q.y * STAGE_SIZE.height }))).ok)) placement.pin = boxPin(shape);
+      shape.placement = placement;
+      return done([shape]);
+    }
+    case 'movePin': {
+      if (shape.placement.kind !== 'pin') return { reason: 'not-pinned' };
+      if (!shape.placement.pin || ownCornersPinnable(shape)) return { reason: 'pin-own-corners' };
+      if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3 || !Number.isFinite(action.to.x) || !Number.isFinite(action.to.y)) return { reason: 'not-found' };
+      const pin = shape.placement.pin.map(q => ({ ...q }));
+      pin[action.index] = { x: clamp(action.to.x, -0.5, 1.5), y: clamp(action.to.y, -0.5, 1.5) };
+      shape.placement = { ...shape.placement, pin };
+      return done([shape]);
+    }
+    case 'shareSource': {
+      if (shape.blocker) return { reason: 'blocker' };
+      const other = next.shapes.find(s => s.id === action.withShapeId);
+      if (!other) return { reason: 'not-found' };
+      if (other.sourceId === null) return { reason: 'nothing-to-share' };
+      if (other.sourceId === shape.sourceId) return { show, touched: [] };
+      shape.sourceId = other.sourceId;
+      dropUnplayed(next);
+      return done();
+    }
+    case 'makeSeparate': {
+      // A video: this shape gets its own copy, its own player, speed and tempo loop.
+      if (isVideoId(shape.sourceId)) {
+        const v = next.videos.find(x => x.id === shape.sourceId)!;
+        if (!next.shapes.some(s => s !== shape && s.sourceId === v.id)) return { show, touched: [] };
+        const id = isVideoId(action.sourceId) ? action.sourceId : `video-${action.sourceId}`;
+        if (next.videos.some(x => x.id === id)) return { reason: 'duplicate-id' };
+        if (next.videos.length >= MAX_VIDEOS) return { reason: 'too-many-videos' };
+        next.videos = [...next.videos, { ...v, id }];
+        shape.sourceId = id;
+        const from = `source.${v.id}.`, room = MAX_LINKS - next.links.length;
+        next.links = [...next.links, ...next.links.filter(l => l.target.startsWith(from)).slice(0, Math.max(0, room)).map(l => ({ ...l, id: `${l.id}~${id}`.slice(0, 64), target: `source.${id}.${l.target.slice(from.length)}` }))];
+        return done();
+      }
+      const source = shape.sourceId ? next.sources.find(src => src.id === shape.sourceId) : undefined;
+      // The only player of its instrument is already separate: nothing changes.
+      if (!source || !next.shapes.some(s => s !== shape && s.sourceId === source.id)) return { show, touched: [] };
+      if (next.sources.some(src => src.id === action.sourceId) || next.shapes.some(s => s.id === action.sourceId)) return { reason: 'duplicate-id' };
+      if (next.sources.length >= MAX_SOURCES) return { reason: 'too-many-sources' };
+      next.sources.push({ ...source, id: action.sourceId, revision: 0 });
+      shape.sourceId = action.sourceId;
+      // A picture made separate is stored again, so it counts against the show's budget.
+      if (imageBytes(next) > IMAGE_SHOW_LIMIT) return { reason: 'images-over-budget' };
+      // The effect's reactions come with the copy, as far as the link limit allows.
+      const from = `source.${source.id}.`, room = MAX_LINKS - next.links.length;
+      const copies = next.links.filter(l => l.target.startsWith(from)).slice(0, Math.max(0, room))
+        .map(l => ({ ...l, id: `${l.id}~${action.sourceId}`.slice(0, 64), target: `source.${action.sourceId}.${l.target.slice(from.length)}` }));
+      next.links = [...next.links, ...copies.filter(c => !next.links.some(l => l.id === c.id))];
+      return done();
+    }
+    case 'setLook': {
+      if (action.tint !== undefined && !HEX.test(action.tint)) return { reason: 'bad-colour' };
+      if (action.brightness !== undefined) shape.brightness = clamp(Number.isFinite(action.brightness) ? action.brightness : 1, 0, BRIGHTNESS_MAX);
+      if (action.tint !== undefined) shape.tint = action.tint;
+      return done();
+    }
     case 'setBlocker':
       shape.blocker = action.blocker;
       if (action.blocker) { shape.sourceId = null; dropUnplayed(next); }
       return done();
-    case 'setPlacement': {
-      if (!['fit', 'pin', 'group', 'stage'].includes(action.mode)) return { reason: 'bad-placement' };
-      if (action.mode !== 'pin') { shape.placement = { mode: action.mode, pins: [] }; return done(); }
-      // A pin takes four corners: the ones given, or the shape's own corners, or the corners of its box.
-      const b = ringBounds([shape.points]);
-      const boxCorners = [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }, { x: b.x0, y: b.y1 }];
-      const pins = action.pins ?? (shape.points.length === 4 ? shape.points.map(p => ({ x: p.x, y: p.y })) : boxCorners);
-      if (!quadUsable(pins, MIN_OUTLINE_AREA)) return { reason: 'bad-pins' };
-      shape.placement = { mode: 'pin', pins: pins.map(p => clampToStage(p)) };
-      return done();
-    }
-    case 'movePin': {
-      if (shape.placement.mode !== 'pin') return { reason: 'not-pinned' };
-      if (!Number.isInteger(action.index) || action.index < 0 || action.index > 3) return { reason: 'bad-corner' };
-      const pins = shape.placement.pins.map(p => ({ ...p }));
-      pins[action.index] = clampToStage(action.to);
-      if (!quadUsable(pins, MIN_OUTLINE_AREA)) return { reason: 'bad-pins' };
-      shape.placement = { mode: 'pin', pins };
-      return done();
-    }
-    case 'setLook': {
-      const { brightness, tint, tintAmount } = action.look;
-      if (tint !== null && !HEX.test(tint)) return { reason: 'bad-colour' };
-      shape.look = { brightness: clampBrightness(brightness), tint, tintAmount: clamp(Number.isFinite(tintAmount) ? tintAmount : 0.5, 0, 1) };
-      return done();
-    }
     case 'setSoftEdge': shape.softEdge = clamp(Number.isFinite(action.px) ? action.px : 0, 0, SOFT_EDGE_MAX); return done();
+    case 'setBorderRun': {
+      const run = readBorderRun(action.run).run;
+      const { run: _old, ...rest } = shape.border;
+      shape.border = run ? { ...rest, run } : rest;
+      return done();
+    }
     case 'setBorder': {
       const { width, colour, glow } = action.border;
       if (colour !== 'shape' && colour !== 'palette' && !HEX.test(colour)) return { reason: 'bad-colour' };
-      shape.border = { width: clamp(Number.isFinite(width) ? width : 0, 0, BORDER_MAX), colour, glow: clamp(Number.isFinite(glow) ? glow : 0, 0, GLOW_MAX) };
+      shape.border = { width: clamp(Number.isFinite(width) ? width : 0, 0, BORDER_MAX), colour, glow: clamp(Number.isFinite(glow) ? glow : 0, 0, GLOW_MAX), ...(shape.border.run ? { run: shape.border.run } : {}) };
       return done();
     }
     case 'reorder': {
@@ -497,9 +826,11 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const taken = new Set([...next.shapes.filter(s => s !== shape).map(s => s.id), ...next.sources.map(s => s.id)]);
   if (action.ids.some(id => taken.has(id))) return { reason: 'duplicate-id' };
   const source = shape.sourceId ? next.sources.find(s => s.id === shape.sourceId) : undefined;
-  if (source) {
+  // A video or a picture is shared by every cell, as one picture across them or each on its own.
+  const sharedMedia = isVideoId(shape.sourceId) || (!!shape.sourceId && isPictureSource(next, shape.sourceId));
+  if (source && !action.spread && !sharedMedia) {
     if (action.sourceIds.length !== count || new Set(action.sourceIds).size !== count || action.sourceIds.some(id => taken.has(id) || action.ids.includes(id))) return { reason: 'duplicate-id' };
-    const sharedElsewhere = next.shapes.some(s => s !== shape && s.sourceId === source.id);
+    const sharedElsewhere = playedBy({ shapes: next.shapes.filter(s => s !== shape), scenes: next.scenes }, source.id);
     if (next.sources.length - (sharedElsewhere ? 0 : 1) + count > MAX_SOURCES) return { reason: 'too-many-sources' };
   }
   let groupId = shape.groupId;
@@ -514,12 +845,115 @@ function stageGrid(next: ShowDocument, action: Extract<EditAction, { type: 'make
   const base = shape.name.slice(0, MAX_NAME_LENGTH - String(count).length - 1);
   const made: Shape[] = cells.map((points, k) => ({
     ...structuredClone(shape), id: action.ids[k], name: `${base} ${k + 1}`, points, holes: [], groupId, locked: false, visible: true,
-    sourceId: source ? action.sourceIds[k] : null,
+    placement: { ...shape.placement, pin: null },
+    sourceId: shape.sourceId === LIVE_SOURCE_ID || isVideoId(shape.sourceId) ? shape.sourceId : source ? (action.spread || sharedMedia ? source.id : action.sourceIds[k]) : null,
+    ...(action.spread ? { placement: { ...shape.placement, kind: 'across-group' as const, pin: null } } : {}),
   }));
-  if (source) next.sources.push(...action.sourceIds.map(id => ({ ...source, id, revision: 0 })));
+  if (source && !action.spread && !sharedMedia) next.sources.push(...action.sourceIds.map(id => ({ ...source, id, revision: 0 })));
   next.shapes.splice(next.shapes.indexOf(shape), 1, ...made);
   dropUnplayed(next);
   return { show: normaliseGroups(next), touched: made };
+}
+
+/**
+ * A shape brought back by a scene keeps its Pin only if its corners can carry the picture now (its outline may have been
+ * edited since): four corners that cannot get handles at the box, and failing that it plays Fit.
+ */
+function pinnable(shape: Shape): Shape {
+  if (shape.placement.kind !== 'pin' || isPinnable(pinCorners(shape)).ok) return shape;
+  const boxed: Shape = { ...shape, placement: { ...shape.placement, pin: boxPin(shape) } };
+  return isPinnable(pinCorners(boxed)).ok ? boxed : { ...shape, placement: { ...shape.placement, kind: 'fit' } };
+}
+
+/** Scene edits. The shapes on screen are the live scene, so it is written back before another is brought in. */
+function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'addScene' | 'renameScene' | 'deleteScene' | 'setSceneFade' | 'switchScene' }>, original: ShowDocument): Staged {
+  const keepLive = () => { if (next.sceneId) next.scenes = next.scenes.map(sc => sc.id === next.sceneId ? { ...sc, shapes: capture(next.shapes) } : sc); };
+  if (action.type === 'setSceneFade' && action.sceneId === null) {
+    if (action.seconds === null || !Number.isFinite(action.seconds)) return { reason: 'bad-fade' };
+    const fade = clamp(action.seconds, FADE_RANGE.min, FADE_RANGE.max);
+    if (fade === original.sceneFade) return { show: original, touched: [] };
+    next.sceneFade = fade;
+    return { show: next, touched: [] };
+  }
+  if (action.type === 'addScene') {
+    if (next.scenes.length >= MAX_SCENES) return { reason: 'too-many-scenes' };
+    if (next.scenes.some(s => s.id === action.sceneId)) return { reason: 'duplicate-id' };
+    keepLive();
+    const name = cleanName(action.name).trim().slice(0, MAX_NAME_LENGTH) || `Scene ${next.scenes.length + 1}`;
+    next.scenes = [...next.scenes, { id: action.sceneId, name, fadeSeconds: null, shapes: capture(next.shapes) }];
+    next.sceneId = action.sceneId;
+    return { show: next, touched: [] };
+  }
+  const scene = next.scenes.find(s => s.id === action.sceneId);
+  if (!scene) return { reason: 'not-found' };
+  switch (action.type) {
+    case 'renameScene': {
+      const name = cleanName(action.name).trim();
+      if (!name || name.length > MAX_NAME_LENGTH) return { reason: 'name-too-long' };
+      if (name === scene.name) return { show: original, touched: [] };
+      next.scenes = next.scenes.map(s => s === scene ? { ...s, name } : s);
+      return { show: next, touched: [] };
+    }
+    case 'setSceneFade': {
+      const fadeSeconds = action.seconds === null || !Number.isFinite(action.seconds) ? null : clamp(action.seconds, FADE_RANGE.min, FADE_RANGE.max);
+      if (fadeSeconds === scene.fadeSeconds) return { show: original, touched: [] };
+      next.scenes = next.scenes.map(s => s === scene ? { ...s, fadeSeconds } : s);
+      return { show: next, touched: [] };
+    }
+    case 'deleteScene':
+      // The live scene going leaves the shapes as they are, with no scene live.
+      next.scenes = next.scenes.filter(s => s !== scene);
+      if (next.sceneId === scene.id) next.sceneId = null;
+      dropUnplayed(next);
+      return { show: next, touched: [] };
+    case 'switchScene': {
+      if (next.sceneId === scene.id) return { show: original, touched: [] };
+      keepLive();
+      const target = next.scenes.find(s => s.id === scene.id)!;
+      // A locked shape keeps its state; a shape the scene has never seen keeps its own.
+      next.shapes = next.shapes.map(sh => isShapeLocked(next, sh) ? sh : pinnable(withState(sh, target.shapes[sh.id])));
+      for (const sh of next.shapes) if (sh.sourceId !== null && sh.sourceId !== LIVE_SOURCE_ID && !next.sources.some(src => src.id === sh.sourceId) && !next.videos.some(v => v.id === sh.sourceId)) sh.sourceId = null;
+      next.sceneId = scene.id;
+      return { show: next, touched: [] };
+    }
+  }
+}
+
+/**
+ * After every edit: scenes forget shapes that have gone, and links and triggers that name something gone are dropped.
+ * The same show comes back when nothing needed tidying.
+ */
+/** True when the target is a locked shape, or an instrument a locked shape plays. */
+function targetLocked(show: ShowDocument, target: string): boolean {
+  const t = parseTarget(target);
+  if (!t) return false;
+  return t.kind === 'shape' ? show.shapes.some(s => s.id === t.shapeId && isShapeLocked(show, s)) : show.shapes.some(s => s.sourceId === t.sourceId && isShapeLocked(show, s));
+}
+
+function tidy(show: ShowDocument): ShowDocument {
+  const ids = new Set(show.shapes.map(s => s.id));
+  const scenesOk = show.scenes.every(sc => Object.keys(sc.shapes).every(id => ids.has(id)));
+  const scenes = scenesOk ? show.scenes : show.scenes.map(sc => ({ ...sc, shapes: Object.fromEntries(Object.entries(sc.shapes).filter(([id]) => ids.has(id))) }));
+  const base = scenesOk ? show : { ...show, scenes };
+  const sources = base.sources.filter(src => playedBy(base, src.id)), videos = base.videos.filter(v => playedBy(base, v.id));
+  const withSources = sources.length === base.sources.length && videos.length === base.videos.length ? base : { ...base, sources, videos };
+  const links = withSources.links.filter(l => readLink(l, withSources));
+  // A trigger whose scene or instrument has gone is kept, switched off and set to Next scene, for the operator to see.
+  let changedTriggers = false;
+  const triggers = withSources.triggers.flatMap(t => {
+    if (readTrigger(t, withSources)) return [t];
+    const kept = readTrigger({ ...t, action: { kind: 'next-scene' }, on: false }, withSources);
+    changedTriggers = true;
+    return kept ? [kept] : [];
+  });
+  if (links.length === withSources.links.length && !changedTriggers) return withSources;
+  return { ...withSources, links, triggers };
+}
+
+/** A pinned shape's four corners must be able to carry its picture: convex and not flat. */
+function pinValidity(shape: Shape): { ok: true } | { ok: false; reason: string } {
+  if (shape.placement.kind !== 'pin') return { ok: true };
+  return isPinnable(pinCorners(shape));
 }
 
 /** Applies one action to a copy of the show. The input is never changed. */
@@ -527,10 +961,22 @@ export function applyEdit(show: ShowDocument, action: EditAction): EditResult {
   const staged = stage(show, action);
   if ('reason' in staged) return refuse(staged.reason);
   for (const shape of staged.touched) {
+    // A pinned shape uses its own corners while it has four points; gaining or losing one gives it pin handles at its box, or takes them away.
+    if (shape.placement.kind === 'pin') {
+      const before = show.shapes.find(s => s.id === shape.id);
+      if (ownCornersPinnable(shape)) shape.placement = { ...shape.placement, pin: null };
+      // Folding the four corners a shape was pinned by is refused, in red; any other change of points gives it handles at its box.
+      else if (shape.points.length === 4 && before && before.points.length === 4 && before.placement.kind === 'pin' && ownCornersPinnable(before)) return refuse('pin-folded');
+      else if (!shape.placement.pin) shape.placement = { ...shape.placement, pin: boxPin(shape) };
+    }
     const valid = shapeValidity(shape.points, shape.holes);
     if (!valid.ok) return refuse(valid.reason);
+    // A stored pin may reach half a stage past the edge, as the show file keeps it, never further.
+    if (shape.placement.pin?.some(q => q.x < -0.5 || q.x > 1.5 || q.y < -0.5 || q.y > 1.5)) return refuse('pin-outside');
+    const pin = pinValidity(shape);
+    if (!pin.ok) return refuse(pin.reason);
   }
-  return { ok: true, show: staged.show };
+  return { ok: true, show: staged.show === show ? show : tidy(staged.show) };
 }
 
 /**

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { applyEdit } from '../src/map/editor';
 import { createShow, validateWireShow, type ShowDocument } from '../src/map/show';
-import { acceptMapMessage, toWire, sourcesToSend, MAP_MESSAGE_LIMIT, SOURCE_MESSAGE_LIMIT } from '../src/map/messages';
+import { acceptMapMessage, toWire, sourcesToSend, wallInputs, MAP_MESSAGE_LIMIT, SOURCE_MESSAGE_LIMIT } from '../src/map/messages';
 import { applyMapMessage, initialWall } from '../src/map/wall';
 
 const mainProcess = createRequire(import.meta.url)('../electron/map.cjs') as { acceptMapMessage: (value: unknown) => boolean };
@@ -23,7 +23,7 @@ function showWithInstruments(count = 2): ShowDocument {
 test('toWire leaves the compositions out and keeps speed and revision', () => {
   const show = showWithInstruments();
   const wire = toWire(show);
-  assert.deepEqual(wire.sources, show.sources.map(s => ({ id: s.id, kind: 'instrument', speed: s.speed, revision: s.revision })));
+  assert.deepEqual(wire.sources, show.sources.map(s => ({ id: s.id, kind: 'instrument', speed: s.speed, revision: s.revision, tempoSync: s.tempoSync })));
   assert.ok(!('project' in wire.sources[0]));
   assert.equal(wire.shapes[0].sourceId, 'src0');
   // What the wall reads back is the same show without the compositions.
@@ -83,6 +83,19 @@ const PARITY: [string, unknown, boolean][] = [
   ['solo none', { type: 'solo', ids: [] }, true],
   ['solo bad', { type: 'solo', ids: [3] }, false],
   ['solo not a list', { type: 'solo', ids: 'a' }, false],
+  ['signals', { type: 'signals', signals: { 'audio.bass': 0.4, 'midi.cc.1.7': 1 } }, true],
+  ['signals bad name', { type: 'signals', signals: { 'Audio Bass': 0.4 } }, false],
+  ['signals not numbers', { type: 'signals', signals: { 'audio.bass': 'loud' } }, false],
+  ['fade', { type: 'fade', ms: 2000 }, true],
+  ['fade too long', { type: 'fade', ms: 99999 }, false],
+  ['live settings', { type: 'liveSettings', settings: { look: 'smoke' } }, true],
+  ['live settings off', { type: 'liveSettings', settings: null }, true],
+  ['live settings not a record', { type: 'liveSettings', settings: 'smoke' }, false],
+  ['live settings over 16 KB', { type: 'liveSettings', settings: { padding: 'x'.repeat(16 * 1024) } }, false],
+  ['live clear', { type: 'liveClear' }, true],
+  ['live capture room', { type: 'liveCaptureRoom' }, true],
+  ['live retry', { type: 'liveRetry' }, true],
+  ['video retry', { type: 'videoRetry' }, true],
   ['unknown', { type: 'explode' }, false],
   ['null', null, false],
   ['array', [], false],
@@ -176,4 +189,17 @@ test('a shape that rounding would make touch itself goes to the wall at full pre
   }] };
   const wire = toWire(show);
   assert.equal(wire.shapes[0].holes[0][0].y, top);
+});
+
+test('Ember preset smoke receives the live kick and bands on the wall without a manual link', () => {
+  const result = applyEdit(showWithInstruments(1), { type: 'setContent', shapeId: 's0',
+    content: { kind: 'preset', presetId: 'ember-glacier', sourceId: 'ember', seed: 67 } });
+  assert.ok(result.ok);
+  assert.equal(result.show.links.length, 0);
+  assert.equal(result.show.sources[0].project.transparent, true);
+  const inputs = wallInputs(result.show, null);
+  const signals = { 'beat.count': 4, 'beat.pulse': .9, 'audio.bass': .6, 'audio.highs': .4 };
+  assert.ok(Object.keys(signals).every(key => inputs.has(key)));
+  assert.ok(acceptMapMessage({type: 'signals', signals}));
+  assert.ok(mainProcess.acceptMapMessage({type: 'signals', signals}));
 });

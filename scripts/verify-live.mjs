@@ -1,5 +1,5 @@
 // Real Electron/WebGL checks for Live mode.
-// Run: node scripts/verify-live.mjs [--performance]
+// Run: node scripts/verify-live.mjs [--performance [--relief]]
 // Drives LiveRenderer frame by frame with the synthetic TestSource and reads the canvas back.
 // Writes work/live/*.png for review by eye.
 import fs from 'node:fs/promises';
@@ -10,14 +10,16 @@ import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const reliefPerf = process.argv.includes('--relief');
 const performanceRun = process.argv.includes('--performance');
 const out = path.join(root, 'work/live');
 await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {LiveRenderer} from './src/live/LiveRenderer';
 export {TestSource, TestMaskProvider} from './src/live/test-source';
-export {defaultLiveSettings} from './src/live/settings';
+export {defaultLiveSettings, RELIEF_PRESETS} from './src/live/settings';
 export {recolourGLSL, setRamp} from './src/live/recolour';
 export {Passes} from './src/live/passes';
+export {audienceFragment, ricochetFragment} from './src/live/relief-shaders';
 export * as THREE from 'three';
 export {HOT_SIGNAL, POUR, NEON_STRATA} from './src/core/palettes';
 export const fromHalf = v => { const s = v >> 15, e = (v >> 10) & 31, f = v & 1023; return (s ? -1 : 1) * (e ? Math.pow(2, e - 15) * (1 + f / 1024) : Math.pow(2, -14) * f / 1024); };`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'live.js'), logLevel: 'silent' });
@@ -90,9 +92,9 @@ try {
   });
 
   if (performanceRun) {
-    // Real display frames, Paint at defaults, 1920 × 1080, the synthetic source. Not a substitute for a real camera and projector.
-    const measure = (seconds, relay) => page.evaluate(async ([seconds, relay]) => {
-      const { source, renderer, canvas } = window.live.make(s => { s.quality = 1080; });
+    // Drive real display frames with the synthetic source and optionally encode the operator preview.
+    const measure = (seconds, relay, quality = 1080, preset = null) => page.evaluate(async ([seconds, relay, quality, preset]) => {
+      const { source, renderer, canvas } = window.live.make(s => { s.quality = quality; if (preset) { s.look = 'relief'; s.relief = preset.settings; } });
       let last = performance.now(), sent = 0, busy = false, running = true; const gaps = [];
       const small = new OffscreenCanvas(480, 270), context = small.getContext('2d');
       renderer.start();
@@ -103,15 +105,232 @@ try {
       await new Promise(r => setTimeout(r, 2000)); gaps.length = 0; renderer.stats();
       await new Promise(r => setTimeout(r, seconds * 1000)); running = false;
       const stats = renderer.stats(); renderer.stop(); renderer.frame(0); const painted = window.live.painted(0).fraction; gaps.sort((a, b) => a - b);
-      return { seconds, relay, fps: stats.fps, worstMs: stats.worstMs, medianMs: gaps[gaps.length >> 1], p99Ms: gaps[Math.floor(gaps.length * .99)], over25ms: gaps.filter(g => g > 25).length, frames: stats.frames, painted };
-    }, [seconds, relay]);
+      return { seconds, relay, quality, preset: preset?.name, fps: stats.fps, worstMs: stats.worstMs, medianMs: gaps[gaps.length >> 1], p99Ms: gaps[Math.floor(gaps.length * .99)], over25ms: gaps.filter(g => g > 25).length, frames: stats.frames, painted };
+    }, [seconds, relay, quality, preset]);
     const length = Number(process.env.LIVE_PERF_SECONDS) || 120;
-    const runs = [await measure(length, false), await measure(Math.ceil(length / 2), true)];
-    await fs.writeFile(path.join(out, 'performance.json'), JSON.stringify(runs, null, 2));
+    const runs = [];
+    if (reliefPerf) {
+      const presets = await page.evaluate(() => window.live.m.RELIEF_PRESETS);
+      runs.push(await measure(length, true, 720, presets[0]));
+      for (const preset of presets) runs.push(await measure(length, true, 1080, preset));
+    } else runs.push(await measure(length, false), await measure(Math.ceil(length / 2), true));
+    await fs.writeFile(path.join(out, reliefPerf ? 'relief-performance.json' : 'performance.json'), JSON.stringify(runs, null, 2));
     console.log(JSON.stringify(runs, null, 2));
     await app.close();
     process.exit(0);
   }
+  await check('Relief responds at both tracked positions, mirrors, settles and clears', async () => {
+    for (const mirror of [true, false]) {
+      const result = await page.evaluate(async mirror => {
+        const { renderer, made } = window.live.make(s => { s.look = 'relief'; s.mirror = mirror; });
+        renderer.frame(0);
+        const idle = window.live.pixels();
+        function difference() {
+          const { data, width, height } = window.live.pixels();
+          const bands = [{ sum: 0, moment: 0 }, { sum: 0, moment: 0 }];
+          for (let y = 0; y < height; y += 3) for (let x = 0; x < width; x += 3) {
+            const i = 4*(y*width+x), diff = Math.abs(data[i] - idle.data[i]);
+            const band = bands[Number(y >= height/2)];
+            band.sum += diff; band.moment += diff*x/width;
+          }
+          return bands.map(b => ({ energy: b.sum, x: b.moment / Math.max(1,b.sum) }));
+        }
+        window.live.run(40);
+        const moving = difference(), picture = await window.live.png();
+        for (let i=0; i<180; i++) renderer.frame(1/60); // source stopped sending frames
+        const settled = difference();
+        window.live.run(10);
+        renderer.clear(); renderer.frame(0);
+        const cleared = difference();
+        window.live.make(s => { s.look = 'relief'; s.box = { left: 0, right: 1, bottom: 0, top: .12 }; });
+        window.live.run(40);
+        const boxed = difference();
+        return { moving, settled, cleared, boxed, providers: made.providers, picture };
+      }, mirror);
+      if (!mirror) await save('relief', result.picture);
+      const [upper, lower] = result.moving;
+      assert.ok(upper.energy > 10000 && lower.energy > 10000, 'both moving patches should bend the wall');
+      assert.ok((upper.x - lower.x) * (mirror ? -1 : 1) > .16, 'folds should follow the mirrored camera');
+      assert.ok(result.settled.every((b,i) => b.energy < result.moving[i].energy * .02), 'stale input kept driving the wall');
+      assert.ok(result.cleared.every(b => b.energy === 0), 'clear left part of a wake');
+      assert.ok(result.boxed.every(b => b.energy === 0), 'movement outside the interaction box bent the wall');
+      assert.equal(result.providers, 0);
+    }
+  });
+  await check('Relief presets each render a different surface and react to movement', async () => {
+    const presets = await page.evaluate(() => window.live.m.RELIEF_PRESETS);
+    const { count } = await page.evaluate(() => {
+      window.live.make(s => { s.look = 'relief'; });
+      window.reliefIdle = [];
+      return { count: window.live.m.RELIEF_PRESETS.length };
+    });
+    for (const preset of presets) {
+      const result = await page.evaluate(async preset => {
+        const { renderer } = window.live.current;
+        renderer.settings.relief = preset.settings;
+        renderer.clear(); renderer.frame(0);
+        function sample() {
+          const { data } = window.live.pixels();
+          const rgb = [];
+          for (let i = 0; i < data.length; i += 1012) rgb.push(data[i], data[i+1], data[i+2]);
+          return rgb;
+        }
+        const idle = sample();
+        const distance = (a,b) => a.reduce((sum,v,i) => sum+Math.abs(v-b[i]),0)/a.length;
+        const separate = window.reliefIdle.every(previous => distance(idle,previous) > 7);
+        window.reliefIdle.push(idle);
+        window.live.run(42);
+        const delta = distance(sample(),idle), picture = await window.live.png();
+        for (let i=0; i<180; i++) renderer.frame(1/30);
+        const tail = distance(sample(),idle);
+        return { separate, delta, tail, picture };
+      }, preset);
+      await save('relief-' + preset.name.toLowerCase().replaceAll(' ','-'), result.picture);
+      assert.ok(result.separate, preset.name + ' repeats another preset');
+      assert.ok(result.delta > .7, preset.name + ' barely reacted: ' + result.delta);
+      assert.ok(result.tail < .45, preset.name + ' failed to settle: ' + result.tail);
+    }
+    assert.ok(count >= 5);
+  });
+  await check('Relief shows a standing person on each surface and switches back to motion only', async () => {
+    for (const surface of ['blades','scales','weave']) {
+      const result = await page.evaluate(async surface => {
+        const { source, renderer, made } = window.live.make(s => {
+          s.look = 'relief'; s.relief.surface = surface; s.relief.size = 'extraFine';
+        });
+        source.audience = true; source.moving = false;
+        source.advance(1/30); // Prime with the performers already in place.
+        window.live.run(30);
+        const idle = window.live.pixels();
+        function difference() {
+          const { data, width, height } = window.live.pixels();
+          let body = 0, other = 0;
+          for (let y=0; y<height; y+=4) for (let x=0; x<width; x+=4) {
+            const i = 4*(y*width+x);
+            const delta = Math.abs(data[i+1]-idle.data[i+1]);
+            if (x > .12*width && x < .37*width || x > .63*width && x < .88*width) body += delta;
+            else other += delta;
+          }
+          return { body, other };
+        }
+        renderer.settings.reliefPresence = true;
+        window.live.run(90);
+        const standing = difference(), image = await window.live.png();
+        renderer.settings.reliefPresence = false;
+        renderer.frame(1/60);
+        return { standing, off: difference(), image, providers: made.providers };
+      }, surface);
+      await save('relief-presence-'+surface,result.image);
+      assert.ok(result.standing.body > 10000, surface + ' imprint too faint');
+      assert.ok(result.standing.body > 2*result.standing.other, surface + ' imprint spread too far');
+      assert.deepEqual(result.off, { body: 0, other: 0 });
+      assert.equal(result.providers, 1);
+    }
+  });
+  await check('Relief encounter lights up only when two inward sweeps meet', async () => {
+    const result = await page.evaluate(() => {
+      const { THREE, Passes, audienceFragment } = window.live.m;
+      const width = 160, height = 90;
+      const gpu = new THREE.WebGLRenderer({ canvas: new OffscreenCanvas(width,height) });
+      const passes = new Passes(gpu), pair = passes.pair(width,height);
+      const mask = new THREE.DataTexture(new Uint8Array(width*height).fill(255),width,height,THREE.RedFormat);
+      const flowData = new Float32Array(width*height*4);
+      const flow = new THREE.DataTexture(flowData,width,height,THREE.RGBAFormat,THREE.FloatType);
+      mask.needsUpdate = true;
+      const uniforms = { uPrevious: {value:null}, uPeople: {value:mask}, uFlow: {value:flow},
+        uStep: {value:1/60}, uFresh: {value:1}, uBox: {value:new THREE.Vector4(0,1,0,1)} };
+      const sim = passes.material(audienceFragment,uniforms);
+      const zero = passes.material('void main(){gl_FragColor=vec4(0.);}',{});
+      function trial(two) {
+        flowData.fill(0);
+        for (let y=36;y<52;y++) for (let x=0;x<width;x++) {
+          const left = x>=57 && x<64, right = two && x>=96 && x<103;
+          if (!left && !right) continue;
+          const i = 4*(y*width+x); flowData[i] = left ? .012 : -.012; flowData[i+2] = .9;
+        }
+        flow.needsUpdate = true;
+        passes.draw(zero,pair.read);
+        let peak = 0;
+        for (let frame=0;frame<60;frame++) {
+          uniforms.uPrevious.value = pair.read.texture; uniforms.uFresh.value = Number(frame<7);
+          passes.draw(sim,pair.write); pair.swap();
+          const pixel = new Uint16Array(4);
+          gpu.readRenderTargetPixels(pair.read,80,44,1,1,pixel);
+          peak = Math.max(peak,THREE.DataUtils.fromHalfFloat(pixel[3]));
+        }
+        return peak;
+      }
+      try { return { solo: trial(false), pair: trial(true) }; }
+      finally { sim.dispose(); zero.dispose(); mask.dispose(); flow.dispose(); pair.dispose(); passes.dispose(); gpu.dispose(); }
+    });
+    assert.equal(result.solo,0);
+    assert.ok(result.pair > .2, 'overlapping wakes did not light up');
+  });
+  await check('Ricochet reflects a crest at each edge and preserves opposing crests', async () => {
+    const results = await page.evaluate(() => {
+      const { THREE, Passes, ricochetFragment } = window.live.m;
+      const width = 160, height = 90;
+      const gpu = new THREE.WebGLRenderer({ canvas: new OffscreenCanvas(width,height) });
+      const passes = new Passes(gpu), field = passes.pair(width,height);
+      const cells = new Float32Array(width*height*4);
+      const seed = new THREE.DataTexture(cells,width,height,THREE.RGBAFormat,THREE.FloatType);
+      const uniforms = { uState: { value: seed }, uFlow: { value: seed }, uStep: { value:1/60 },
+        uReach: { value: .8 }, uSettle: { value: 1.65 }, uFresh: { value: 0 } };
+      const pass = passes.material(ricochetFragment,uniforms);
+      const pixel = new Uint16Array(4);
+      function advance(frames) {
+        seed.needsUpdate = true;
+        uniforms.uState.value = seed;
+        for (let i=0; i<frames; i++) {
+          passes.draw(pass,field.write); field.swap();
+          uniforms.uState.value = field.read.texture;
+        }
+      }
+      function stamp(x,y,channel) {
+        for (let j=y-3; j<=y+3; j++) for (let i=x-4; i<=x+4; i++)
+          cells[4*(j*width+i)+channel] = 1;
+      }
+      function at(x,y,channel) {
+        gpu.readRenderTargetPixels(field.read,x,y,1,1,pixel);
+        return THREE.DataUtils.fromHalfFloat(pixel[channel]);
+      }
+      try {
+        // The pulse travels just under 40 cells in 15 frames on either axis.
+        const edges = [[136,45,0,144,45,1],[24,45,1,16,45,0],
+          [80,74,2,80,66,3],[80,16,3,80,24,2]].map(([x,y,d,rx,ry,reflected]) => {
+          cells.fill(0); stamp(x,y,d); advance(15);
+          return at(rx,ry,reflected);
+        });
+        cells.fill(0); stamp(40,45,0); stamp(120,45,1); advance(15);
+        return { edges, opposing: [at(80,45,0),at(80,45,1)] };
+      } finally {
+        seed.dispose(); pass.dispose(); field.dispose(); passes.dispose(); gpu.dispose();
+      }
+    });
+    assert.ok(results.edges.every(e => e > .3), 'reflected crests: ' + results.edges);
+    assert.ok(results.opposing.every(e => e > .45), 'opposing crests: ' + results.opposing);
+  });
+  await check('Relief recolours existing motion across all three Nano surfaces', async () => {
+    for (const [surface,motion] of [['blades','sweep'],['scales','ricochet'],['weave','ripple']]) {
+      const result = await page.evaluate(([surface,motion]) => {
+        const { renderer } = window.live.make(s => { s.look = 'relief'; s.relief.surface = surface; s.relief.motion = motion; s.relief.size = 'nano'; });
+        window.live.run(32);
+        function capture(palette) {
+          renderer.settings.reliefPalette = palette;
+          renderer.frame(0);
+          const { data } = window.live.pixels();
+          const sample = [];
+          for (let i=0;i<data.length;i+=1012) sample.push(data[i],data[i+1],data[i+2]);
+          return sample;
+        }
+        const material = capture('material'), neon = capture('neon'), pastel = capture('pastel'), restored = capture('material');
+        const distance = (a,b) => a.reduce((sum,v,i)=>sum+Math.abs(v-b[i]),0)/a.length;
+        return { neon:distance(material,neon), pastel:distance(neon,pastel), restored:distance(material,restored) };
+      },[surface,motion]);
+      assert.ok(result.neon>12 && result.pastel>12, surface + ' lost its palette difference');
+      assert.ok(result.restored<.2, surface + ' reset movement when changing colour');
+    }
+  });
   await check('bare pipeline: the picture is not uniform', async () => {
     const r = await page.evaluate(() => { window.live.make(); window.live.current.renderer.view = 'tracking'; window.live.run(30); const p = window.live.painted(0); return { p, frames: window.live.current.renderer.stats().frames }; });
     assert.ok(r.p.fraction > .01, `only ${r.p.fraction} of pixels lit`); assert.ok(r.frames >= 30, `${r.frames} frames`);

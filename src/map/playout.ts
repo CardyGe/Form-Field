@@ -5,6 +5,8 @@
 import { playbackPhase } from '../core/playback';
 import { frameCount } from '../core/timeline';
 import type { Project } from '../shared/types';
+import { visibleParameterDefinitions } from '../core/project';
+import { reactable } from './targets';
 import { STAGE_SIZE, type Point } from './show';
 
 const TAU = Math.PI * 2;
@@ -80,6 +82,8 @@ export const drawsThisFrame = (level: Governor['level'], frameIndex: number) => 
 
 /** How far a crossfade has gone, 0 to 1. */
 export function fadeAlpha(startedMs: number, nowMs: number, durationMs = 400): number {
+  // A fade of no time is a cut: done at once (never 0 / 0).
+  if (!(durationMs > 0)) return 1;
   return Math.min(1, Math.max(0, (nowMs - startedMs) / durationMs));
 }
 
@@ -90,4 +94,27 @@ export interface Playing { sourceId: string | null; kinds: string }
 export function shouldFade(before: Playing | undefined, after: Playing): boolean {
   if (!before) return false;
   return before.sourceId !== after.sourceId || before.kinds !== after.kinds;
+}
+
+/**
+ * Whether a changed composition must be prepared again before it plays. Not when only settings that can follow sound
+ * changed (the same as links change them for drawing): the effect is adjusted in place, never restarted.
+ */
+export function needsPrepare(before: Project, after: Project): boolean {
+  if (before === after) return false;
+  const { layers: a, ...restA } = before, { layers: b, ...restB } = after;
+  if (JSON.stringify(restA) !== JSON.stringify(restB) || a.length !== b.length) return true;
+  for (let i = 0; i < a.length; i++) {
+    // Opacity is read each frame when the effect is drawn, as its settings are.
+    const { params: pa, opacity: _oa, ...la } = a[i], { params: pb, opacity: _ob, ...lb } = b[i];
+    if (JSON.stringify(la) !== JSON.stringify(lb)) return true;
+    const visible = visibleParameterDefinitions(b[i]);
+    for (const key of new Set([...Object.keys(pa), ...Object.keys(pb)])) {
+      if (pa[key] === pb[key]) continue;
+      // The definition as shown for this layer: some settings restart the effect only in some modes.
+      const d = visible.find(x => x.key === key);
+      if (!d || typeof pb[key] !== 'number' || !reactable(d).ok) return true;
+    }
+  }
+  return false;
 }

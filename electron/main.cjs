@@ -1,6 +1,10 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu, screen, systemPreferences, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, screen, systemPreferences, powerSaveBlocker, protocol } = require('electron');
+const { createVideoFiles } = require('./video-files.cjs');
+// Stage 6: Map's video files reach the page only through this scheme, which answers only files Greg chose.
+protocol.registerSchemesAsPrivileged([{ scheme: 'formfield-video', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true } }]);
+let videoFiles = createVideoFiles({ fs: require('node:fs/promises') });
 const { version: applicationVersion } = require('../package.json');
 const fs = require('node:fs/promises');
 const { mkdirSync } = require('node:fs');
@@ -208,11 +212,14 @@ function createWindow() {
   const devURL = process.env.STUDIO_DEV_URL;
   if (devURL && (!/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(devURL))) throw new Error('STUDIO_DEV_URL must be a local development server.');
   const session = window.webContents.session;
-  // Everything is refused except camera video for this app's own windows (Live mode). Map's output window never uses the camera, so it is not one of them.
-  const ours = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents || !!liveControl?.isOutput(contents);
-  session.setPermissionRequestHandler((contents, permission, callback, details) => callback(live.allowPermission(permission, details, ours(contents))));
-  session.setPermissionCheckHandler((contents, permission, _origin, details) => live.allowPermissionCheck(permission, details, ours(contents)));
-  const csp = ["default-src 'self'", `script-src 'self' 'wasm-unsafe-eval'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "media-src 'self' blob:", "font-src 'self' data:", `connect-src 'self'${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');
+  // Everything is refused except camera video for this app's own windows: the studio, Live's output, and Map's output (Live in Map).
+  const ours = contents => live.isCameraWindow(contents, { studio: () => window, isLiveOutput: c => !!liveControl?.isOutput(c), isMapOutput: c => !!mapControl?.isOutput(c) });
+  // The studio window may also listen to sound and MIDI for reactivity; output windows never do.
+  const studioWindow = contents => !!contents && !!window && !window.isDestroyed() && contents === window.webContents;
+  if (!session.protocol.isProtocolHandled('formfield-video')) session.protocol.handle('formfield-video', request => videoFiles.handle(request));
+  session.setPermissionRequestHandler((contents, permission, callback, details) => callback(live.allowPermission(permission, details, ours(contents), studioWindow(contents))));
+  session.setPermissionCheckHandler((contents, permission, _origin, details) => live.allowPermissionCheck(permission, details, ours(contents), studioWindow(contents)));
+  const csp = ["default-src 'self'", `script-src 'self' 'wasm-unsafe-eval'${devURL ? " 'unsafe-inline'" : ''}`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "media-src 'self' blob: formfield-video:", "font-src 'self' data:", `connect-src 'self' formfield-video:${devURL ? ` ${devURL} ${devURL.replace(/^http/, 'ws')}` : ''}`, "worker-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-src 'none'"].join('; ');
   session.webRequest.onHeadersReceived((details, callback) => callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [csp] } }));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-attach-webview', event => event.preventDefault());
@@ -227,6 +234,8 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Videos Greg granted are kept in the app's own data, so a restored autosave can play them again (and nothing else).
+  videoFiles = createVideoFiles({ fs: require('node:fs/promises'), recordFile: path.join(app.getPath('userData'), 'granted-videos.json') });
   const tools = resolveMediaTools({ allowSystemFallback: !app.isPackaged && process.env.STUDIO_ALLOW_SYSTEM_FFMPEG === '1' });
   manager = new ExportManager({ ...tools, rendererFingerprint: await rendererFingerprint(), jobsDirectory: path.join(app.getPath('userData'), 'export-jobs'), defaultExportDir: defaultExportDir(), onProgress: progress => { if (window && !window.isDestroyed()) window.webContents.send('studio:export', progress); } });
   await manager.initializing;
@@ -235,7 +244,7 @@ app.whenReady().then(async () => {
   liveControl = live.setupLive({ closeOtherOutput: () => mapControl?.closeOutput(), BrowserWindow, ipcMain, screen, systemPreferences, powerSaveBlocker, settingsFile: path.join(app.getPath('userData'), 'live-settings.json'),
     preload: path.join(__dirname, 'preload.cjs'), studio: () => window,
     open: pageOpener('live-output') });
-  mapControl = map.setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath: path.join(app.getPath('userData'), 'map-autosave.formshow'),
+  mapControl = map.setupMap({ videoFiles, BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath: path.join(app.getPath('userData'), 'map-autosave.formshow'),
     preload: path.join(__dirname, 'preload.cjs'), studio: () => window, open: pageOpener('map-output'), closeLiveOutput: () => liveControl?.closeOutput() });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: 'Form & Field', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },

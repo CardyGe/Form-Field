@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SCOPE_FIGURES, SCOPE_PLAIN, scopeWave, scopeCurve, scopeDash, scopeFigurePoint, scopeLine, scopeMorphWeight, scopePerspective, scopeRotation } from '../src/rendering/scope-curve';
-import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions, validateProject } from '../src/core/project';
+import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
+
+import { emberPhrase, SCOPE_POINT_STRIDE, writeEmberPoints } from '../src/rendering/scope-ember';
+import { emberSmokeFrame } from '../src/rendering/scope-ember-smoke';
+import { EmberSmokeAudio } from '../src/react/ember-smoke';
 
 const TAU = Math.PI * 2;
 const motion = { tilt: .4, tumbleX: 1, tumbleY: 2 };
@@ -157,4 +161,119 @@ test('float changes the pace of the tumble but still closes the loop', () => {
   // It still rocks when the tumble is off.
   const rest = { tilt: 0, tumbleX: 0, tumbleY: 0, float: 1 };
   assert.ok(scopeRotation(rest, 1).some((v, i) => Math.abs(v - scopeRotation(rest, 2.5)[i]) > .1));
+});
+
+const emberLayer = () => applyPreset(createLayer('scope'), 'ember-pulse');
+
+test('older Oscilloscope layers open in Classic and the Ember mode has its own persisted controls', () => {
+  const layer = createLayer('scope');
+  for (const key of Object.keys(layer.params)) if (key === 'scopeMode' || key.startsWith('ember')) delete layer.params[key];
+  const classic = validateProject({ ...createProject(), layers: [layer] }).layers[0];
+  assert.equal(classic.params.scopeMode, 0);
+  assert.ok(visibleParameterDefinitions(classic).some(d => d.key === 'figure'));
+  assert.ok(!visibleParameterDefinitions(classic).some(d => d.key === 'emberOpening'));
+
+  const ember = emberLayer();
+  assert.equal(ember.params.scopeMode, 1);
+  assert.ok(visibleParameterDefinitions(ember).some(d => d.key === 'emberOpening'));
+  assert.ok(!visibleParameterDefinitions(ember).some(d => d.key === 'figure'));
+  assert.deepEqual(validateProject({ ...createProject(), layers: [ember] }).layers[0], ember);
+  const varied = varyLayer(ember, .6, { palette: false, structure: false, motion: false, material: false }, 90);
+  assert.equal(varied.params.scopeMode, 1);
+  assert.equal(varied.params.emberPhrases, ember.params.emberPhrases);
+  assert.ok(PRESETS.some(p => p.params.scopeMode === 1 && p.palette.every((colour, i) => colour === varied.palette[i])));
+});
+
+function emberFrame(params: Record<string, number>, phase: number, aspect = 9 / 16) {
+  const buffer = new Float32Array(8000 * SCOPE_POINT_STRIDE).fill(NaN);
+  const frame = writeEmberPoints(buffer, params, phase, aspect);
+  assert.ok(frame.points > 0 && frame.points <= 8000);
+  const samples = buffer.slice(0, frame.points * SCOPE_POINT_STRIDE);
+  assert.ok(samples.every(Number.isFinite));
+  return { ...frame, samples };
+}
+
+test('Ember geometry has bounded, closed paths and a deterministic loop including afterglow', () => {
+  const params = { ...emberLayer().params, emberDensity: 1, afterglow: 1 };
+  const start = emberFrame(params, 0);
+  assert.deepEqual(start, emberFrame(params, TAU));
+  for (const phase of [0, .1, .65, 1.1, 2.7, 4.4, TAU - .001]) {
+    const { samples } = emberFrame(params, phase);
+    let start = 0;
+    for (let index = 0; index < samples.length; index += SCOPE_POINT_STRIDE) {
+      if (samples[index + 3] !== 0) continue;
+      assert.deepEqual(samples.slice(index, index + 3), samples.slice(start, start + 3));
+      start = index + SCOPE_POINT_STRIDE;
+    }
+    assert.equal(start, samples.length);
+  }
+  assert.notDeepEqual(start.samples, emberFrame(params, TAU / 5).samples, 'later phrases evolve in shape');
+  assert.deepEqual(start, emberFrame(params, 0), 'seeking gives the same frame');
+});
+
+test('Ember phrase separates the hollow and hot accents, and rings leave the moving body intact', () => {
+  const params = emberLayer().params, phase = (bar: number) => TAU * bar / params.emberPhrases;
+  const open = emberPhrase(phase(.255), params.emberPhrases);
+  const crest = emberPhrase(phase(.78), params.emberPhrases);
+  assert.ok(open.opening > crest.opening && crest.heat > open.heat);
+
+  const bodyOnly = emberFrame({ ...params, emberRings: 0, emberOuter: 0 }, phase(.8));
+  const rings = emberFrame({ ...params, emberOuter: 0 }, phase(.8));
+  assert.ok(rings.points > bodyOnly.points);
+  assert.deepEqual(rings.samples.slice(0, bodyOnly.samples.length), bodyOnly.samples);
+  const outer = emberFrame({ ...params, emberRings: 0 }, phase(.8));
+  assert.ok(outer.points > bodyOnly.points);
+  const portrait = emberFrame(params, phase(.8));
+  const landscape = emberFrame(params, phase(.8), 16 / 9);
+  assert.ok(Math.abs(portrait.radius / (9 / 16) - landscape.radius) < 1e-10);
+});
+
+test('Older Ember layers pick up smoke defaults, and Classic hides the smoke controls', () => {
+  const old = emberLayer();
+  delete old.params.emberSmoke;
+  delete old.params.emberSmokeSpread;
+  const updated = validateProject({ ...createProject(), layers: [old] }).layers[0];
+  assert.ok(updated.params.emberSmoke > 0 && updated.params.emberSmokeSpread > 0);
+  assert.ok(visibleParameterDefinitions(updated).some(d => d.key === 'emberSmoke'));
+  assert.ok(!visibleParameterDefinitions(createLayer('scope')).some(d => d.key === 'emberSmoke'));
+  updated.params.emberSmoke = 0;
+  assert.equal(validateProject({ ...createProject(), layers: [updated] }).layers[0].params.emberSmoke, 0);
+});
+
+test('Ember smoke keeps the same launch direction as puffs age and fades across the loop seam', () => {
+  const at = (phase: number) => emberSmokeFrame(phase, 5, 1729);
+  assert.deepEqual(at(0), at(TAU));
+  const last = at(TAU - 1e-6), first = at(0);
+  assert.ok(first.puffs.some(puff => puff.gain > .1), 'smoke survives the seam');
+  for (let i = 0; i < first.puffs.length; i++) {
+    const a = last.puffs[i], b = first.puffs[i];
+    assert.ok(Math.abs(a.gain - b.gain) < 1e-4);
+    if (b.gain > .1) {
+      assert.ok(Math.hypot(a.x - b.x, a.y - b.y) < 1e-5);
+      assert.ok(b.age > a.age, 'puffs continue travelling across the seam');
+    }
+  }
+  assert.notDeepEqual(at(0).puffs, at(TAU / 5).puffs, 'launch directions vary by phrase');
+});
+
+test('live Ember smoke emits once per detected beat and ages after the input goes quiet', () => {
+  const smoke = new EmberSmokeAudio();
+  const heard = { 'audio.bass': .72, 'audio.highs': .62, 'beat.pulse': 1, 'beat.count': 1 };
+  assert.equal(smoke.advance({ ...heard, 'beat.count': 0 }, 0).beats.length, 0);
+  const on = smoke.advance(heard, 17);
+  assert.equal(on.beats.length, 1);
+  assert.ok(on.bass > 0 && on.highs > 0);
+  const later = smoke.advance({ ...heard, 'beat.pulse': .8 }, 117);
+  assert.equal(later.beats.length, 1);
+  assert.ok(later.beats[0].age > .09);
+  const older = emberSmokeFrame(0, 5, 1729, .55, later);
+  const authored = emberSmokeFrame(0, 5, 1729);
+  assert.deepEqual(older.puffs.slice(0, authored.puffs.length), authored.puffs);
+  assert.equal(older.puffs.length, authored.puffs.length + 1);
+  assert.ok(older.puffs.at(-1)!.gain > 0);
+  assert.deepEqual(emberSmokeFrame(0, 5, 1729, .55, later, 0), authored);
+  for (let ms = 217; ms <= 2817; ms += 100) smoke.advance({}, ms);
+  const quiet = smoke.advance({}, 2917);
+  assert.equal(quiet.beats.length, 0);
+  assert.ok(quiet.bass < .001 && quiet.highs < .001);
 });

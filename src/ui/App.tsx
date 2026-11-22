@@ -6,13 +6,15 @@ import { supportsPrint } from '../rendering/print-screen';
 import { PALETTE_LIBRARY } from '../core/palettes';
 import { KALEIDOSCOPE_MORPHS, KALEIDOSCOPE_MOTIFS, KALEIDOSCOPE_OWN_KEYS, KALEIDOSCOPE_SOURCES, KALEIDOSCOPE_SYMMETRIES, kaleidoscopeDrawsMotif, kaleidoscopeHidden, kaleidoscopeRouteHidden } from './kaleidoscope-controls';
 import { INSTRUMENTS, isInstrument, PROJECTION_LOOK_IDS } from '../core/instruments';
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from 'react';
 import type { ExportFormat, Supersample, ExportJob, ExportProgress, Layer, LayerKind, Modulation, ParameterDefinition, Project, StudioStatus } from '../shared/types';
-import { KALEIDOSCOPE_INPUT, applyPreset, createLayer, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported } from '../core/project';
+import { KALEIDOSCOPE_INPUT, applyPreset, createLayer, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FRACTAL_FAMILIES, FRACTAL_VARIANTS, FRACTAL_PROJECTION_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported } from '../core/project';
 import { frameCount, phaseAtFrame, sampleModulation } from '../core/timeline';
 import { isEvolving } from '../core/playback';
 import { SurfaceEditor } from './SurfaceEditor';
-import { GRAPHIC_FAMILIES, GRAPHIC_VARIANTS, GRAPHIC_LOOKS } from '../core/graphics';
+import { LayerShapeControls, Parameter, ChoiceParameter, Icon, patterns, mirrorModes, surfaceVariants, sculptureForms } from './LayerControls';
+import { FinishSections } from './FinishControls';
+import { GRAPHIC_FAMILIES, GRAPHIC_VARIANTS } from '../core/graphics';
 import graphicThumb from './assets/graphics.png';
 import surfaceThumb from './assets/surface.png';
 import sculptureThumb from './assets/sculpture.png';
@@ -24,6 +26,9 @@ import scopeThumb from './assets/scope.png';
 import super8Thumb from './assets/super8.png';
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import { Preview } from './Preview';
+import { ReactDevices } from './ReactControls';
+import { reactivity, type ReactivityEngine } from '../react/engine';
+import { MeterStore } from '../react/meter';
 import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
 import LivePanel from './LivePanel';
@@ -40,116 +45,6 @@ const resolutions = ['3840x2160', '4096x2160', '3840x2400', '2160x3840', '2160x2
 const rates = ['24/1', '25/1', '30/1', '50/1', '60/1', '30000/1001', '60000/1001'];
 const actualDuration = (p: Project) => frameCount(p) * p.fps.den / p.fps.num;
 const kindLabels = KIND_LABELS;
-const patterns: Partial<Record<LayerKind, string[]>> = {
-  surface: ['Bands', 'Contours', 'Drips', 'Fusion'],
-  fractal: ['Folded Lace', 'Julia Bloom', 'Mandelbox'],
-};
-const fractalVariants = [['Lace', 'Petals', 'Weave'], ['Classic', 'Radial', 'Spiral'], ['Architecture', 'Sphere Fold', 'Lattice']];
-const surfaceVariants = [['Flow', 'Braids', 'Ribbons'], ['Terrace', 'Ripples', 'Vortex'], ['Melt', 'Beads', 'Strands'], ['Portal', 'Twin Portals', 'Lens']];
-const sculptureForms = ['Shell', 'Bloom', 'Ribbon', 'Knot'];
-const coloringModes = ['Palette', 'Duotone', 'Contours'];
-const mirrorModes = ['Original', 'Flip horizontal', 'Flip vertical', 'Flip both'];
-const gradingKeys = ['saturation', 'hue', 'exposure',...FINISH_KEYS];
-const graphicChoiceKeys = ['profile', 'fill', 'sweep', 'corners'];
-const choiceKeys = ['simulationQuality','flowMode','inkMode','reliefMode','phrase','style', 'variant', 'form', 'quality', 'radial', 'colorMode', 'mirror', 'substrate', 'mode', 'gateMode', 'seed'];
-const super8ControlGroups: [string, string[]][] = [
-  ['Paint geometry', ['scale', 'steps', 'coverage', 'erosion', 'rotation']],
-  ['Paint texture', ['texture', 'textureScale', 'roughness', 'bleed', 'emulsion']],
-  ['Film motion & feedback', ['travel', 'cycles', 'filmFps', 'feedback', 'feedbackSpacing', 'feedbackZoom', 'feedbackRotation']],
-  ['Rolling shutter', ['rollAmount', 'rollBands', 'rollOrigin', 'rollSmear']],
-  ['Projector transport', ['pullDown', 'shutter', 'shutterBlades', 'reelLoops', 'weave', 'flicker', 'frameLines']],
-  ['Film gate', ['gateInset', 'gateRoundness', 'sprockets']],
-  ['Film wear', ['scratches', 'grain', 'dust', 'hair']],
-  ['Projector lens', ['lensSoftness', 'halation', 'vignette', 'lightLeak', 'colorFade']],
-];
-const super8PaletteLabels = ['Paint 1', 'Paint 2', 'Paint 3', 'Paint 4', 'Ink', 'Paper'];
-const scopePaletteLabels = ['Line', 'Halo', 'Bloom', 'Hot core', 'Second line', 'Unused'];
-const liquidPaletteLabels = ['Rim', 'Body', 'Mid', 'Hot', 'Wash', 'Ground'];
-const oilPaletteLabels = ['Paint', 'Secondary paint', 'Ink', 'Substrate', 'Shadow tint', 'Rim tint'];
-const oilFineControls = ['lensAspect', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion', 'lift', 'filaments', 'softness', 'lightAngle', 'shadow', 'grain'];
-const secondaryShapeControls: Partial<Record<LayerKind, string[]>> = {
-  surface: ['rotation', 'density', 'stretch', 'turbulence', 'centerX', 'centerY'],
-  graphic: ['stretch', 'orientation', 'centerX', 'centerY'],
-  sculpture: ['lobes', 'thickness', 'stretch', 'curl', 'foldFrequency', 'asymmetry', 'ridgeScale'],
-};
-
-function ChoiceParameter({ label, name, options, value, onChange }: { label: string; name: string; options: string[]; value: number; onChange: (n: number) => void }) {
-  return <label className="stacked-label">{label}<select aria-label={name} value={Math.round(value)} onChange={e => onChange(Number(e.target.value))}>{options.map((option, index) => <option key={index} value={index}>{option}</option>)}</select></label>;
-}
-
-/** The Kaleidoscope's own controls: where it takes its picture from, and how it folds it. */
-function KaleidoscopePanel({ layer, isBottom, onParam, onChoose, onRemove, onFit, echo }: {
-  layer: Layer; isBottom: boolean; onParam: (key: string, value: number) => void; onChoose: () => void; onRemove: () => void; onFit: (fit: 'contain' | 'cover') => void; echo: ReactNode;
-}) {
-  const input = kaleidoscopeInput(layer.params), spiral = Math.round(layer.params.spiral ?? 0) === 1;
-  const [failed, setFailed] = useState<string | null>(null);
-  const image = layer.image, unreadable = !!image && failed === image.dataUrl;
-  // Decode on its own, so a failure that happens before the preview mounts is still noticed.
-  useEffect(() => {
-    if (!image) return;
-    const probe = new Image(), url = image.dataUrl;
-    probe.onerror = () => setFailed(url);
-    probe.src = url;
-    probe.decode().catch(() => setFailed(url));
-  }, [image?.dataUrl]);
-  return <div className="kaleidoscope-options">
-    <ChoiceParameter label="Source" name="Source" options={KALEIDOSCOPE_SOURCES} value={input} onChange={n => onParam('input', n)} />
-    {input === KALEIDOSCOPE_INPUT.image && <div className="image-settings kaleidoscope-image">
-      {image && !unreadable && <img src={image.dataUrl} alt={image.name} onError={() => setFailed(image.dataUrl)} />}
-      <p className="muted-text" role={unreadable || !image ? 'status' : undefined}>{!image ? 'No image chosen. Showing the motif instead.' : unreadable ? 'This image could not be loaded. Showing the motif instead.' : image.name}</p>
-      <div className="button-row"><button className="secondary-button" onClick={onChoose}>{image ? 'Replace image' : 'Choose image'}</button>{image && <button className="secondary-button" onClick={onRemove}>Remove image</button>}</div>
-      {image && <label className="stacked-label">Image fit<select aria-label="Image fit" value={image.fit} onChange={e => onFit(e.target.value as 'contain' | 'cover')}><option value="cover">Cover</option><option value="contain">Contain</option></select></label>}
-    </div>}
-    {input === KALEIDOSCOPE_INPUT.below && <p className="muted-text">{isBottom ? 'Nothing is below this layer yet, so it shows empty. ' : 'Folds the picture drawn beneath this layer. '}Echo does not apply to the layer below.</p>}
-    {input === KALEIDOSCOPE_INPUT.feedback && <><p className="muted-text">Each frame folds a faded copy of the last one. Raise Echo amount to see it; at 0 the motif shows.</p>{echo}</>}
-    {kaleidoscopeDrawsMotif(layer.params) && <ChoiceParameter label="Motif" name="Motif" options={KALEIDOSCOPE_MOTIFS} value={layer.params.motif ?? 0} onChange={n => onParam('motif', n)} />}
-    {kaleidoscopeDrawsMotif(layer.params) && <ChoiceParameter label="Morphs into" name="Morphs into" options={KALEIDOSCOPE_MORPHS} value={layer.params.morphTo ?? 0} onChange={n => onParam('morphTo', n)} />}
-    <label className="checkbox-row"><input type="checkbox" aria-label="Spiral" checked={spiral} onChange={e => onParam('spiral', e.target.checked ? 1 : 0)} />Spiral</label>
-    {spiral ? <p className="muted-text">The spiral replaces the mirrors with a repeating spiral. Motif scale moves in whole steps here.</p> : <ChoiceParameter label="Symmetry" name="Symmetry" options={KALEIDOSCOPE_SYMMETRIES} value={layer.params.group ?? 0} onChange={n => onParam('group', n)} />}
-  </div>;
-}
-
-const PRINT_CHOICES: Record<string, string[]> = {
-  printType: ['Dots', 'Lines', 'Dither'],
-  printDot: ['Round', 'Classic', 'Diamond', 'Square'],
-  printMatrix: ['2×2', '4×4', '8×8'],
-  printColour: ['Layer colour', 'Palette ink', 'RGB light', 'CMYK ink'],
-  printArea: ['Everywhere', 'Edges only', 'Away from edges'],
-};
-const PRINT_GROUPS: [string, string[]][] = [
-  ['Screen', ['printMix', 'printType', 'printSize', 'printAngle', 'printDot', 'printMatrix', 'printScroll']],
-  ['Tone', ['printFloor', 'printCeiling', 'printMax', 'printGain', 'printSoft', 'printInvert']],
-  ['Colour', ['printColour', 'printInk', 'printPaper']],
-  ['Where it prints', ['printArea', 'printEdgeWidth', 'printEdgeSense', 'printEdgeFeather']],
-];
-/** Whether a print control applies, given the layer's other print choices. */
-function printControlShown(layer: Layer, key: string): boolean {
-  const p = layer.params, type = Math.round(p.printType ?? 0), colour = Math.round(p.printColour ?? 0);
-  if (key === 'printMix') return true;
-  if (!((p.printMix ?? 0) > 0 || !!layer.modulations.printMix)) return false;
-  if (key === 'printDot') return type === 0;
-  if (key === 'printMatrix') return type === 2;
-  if (key === 'printInk') return colour === 1;
-  if (key === 'printInvert') return colour < 2;
-  if (key.startsWith('printEdge')) return Math.round(p.printArea ?? 0) > 0;
-  return true;
-}
-function PrintScreenSection({ layer, definitions, edit, animate, onStart, onEnd }: { layer: Layer; definitions: ParameterDefinition[]; edit: (change: (layer: Layer) => Layer) => void; animate: (key: string) => void; onStart: () => void; onEnd: () => void }) {
-  const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
-  const on = (layer.params.printMix ?? 0) > 0 || !!layer.modulations.printMix;
-  return <section className="control-section"><h3>Print screen</h3><p className="muted-text">Halftone dots, line screens and ordered dither, sized in pixels of a 1080-line frame. Loops close exactly.</p>
-    {PRINT_GROUPS.map(([group, keys]) => {
-      const shown = keys.filter(key => printControlShown(layer, key));
-      if (!shown.length) return null;
-      return <div key={group}>{on && <h4 className="control-subheading">{group}</h4>}{shown.map(key => {
-        const d = definitions.find(item => item.key === key);
-        if (!d) return null;
-        if (PRINT_CHOICES[key]) return <ChoiceParameter key={key} label={d.label} name={d.label} options={PRINT_CHOICES[key]} value={layer.params[key] ?? d.default} onChange={n => set(key, n)} />;
-        return <Parameter key={key} definition={d} value={layer.params[key] ?? d.default} animated={!!layer.modulations[key]} onChange={n => set(key, n)} onAnimate={d.step === 1 ? undefined : () => animate(key)} onStart={onStart} onEnd={onEnd} />;
-      })}</div>;
-    })}
-  </section>;
-}
 
 function lookCaption(preset: typeof PRESETS[number]): string {
   const style = Math.round(preset.params.style ?? 0), variant = Math.round(preset.params.variant ?? 0);
@@ -159,8 +54,9 @@ function lookCaption(preset: typeof PRESETS[number]): string {
   if (preset.kind === 'graphic') return `${GRAPHIC_FAMILIES[style]} · ${GRAPHIC_VARIANTS[style][variant] ?? 'Custom'}`;
   if (preset.kind === 'oil') return 'Paint · glass · cellular ink';
   if (preset.kind === 'liquid') return 'Oil droplets · dye · projector';
-  if (preset.kind === 'scope') return 'Glowing line · signal · beam';
-  if (preset.kind === 'fractal') return `${patterns.fractal![style]} · ${fractalVariants[style][variant]}`;
+  if (preset.kind === 'scope') return preset.params.scopeMode === 1 ? 'Filaments · rolling smoke' : 'Glowing line · signal · beam';
+  if (preset.kind === 'fractal') return FRACTAL_PROJECTION_LOOK_IDS.includes(preset.id)
+    ? preset.description : `${FRACTAL_FAMILIES[style]} · ${FRACTAL_VARIANTS[style][variant]}`;
   if (preset.kind === 'kaleidoscope') return `${KALEIDOSCOPE_MOTIFS[Math.round(preset.params.motif ?? 0)]} · ${preset.params.spiral ? 'Spiral' : KALEIDOSCOPE_SYMMETRIES[Math.round(preset.params.group ?? 0)]}`;
   return `${sculptureForms[Math.round(preset.params.form ?? 0)]} · Sculpture`;
 }
@@ -171,51 +67,6 @@ function EditableName({ value, label, maxLength, onCommit }: { value: string; la
   return <input aria-label={label} value={draft} maxLength={maxLength} onChange={e => setDraft(e.target.value)} onBlur={() => { if (cancelled.current) { cancelled.current = false; setDraft(value); return; } const next = draft.trim() || value; setDraft(next); if (next !== value) onCommit(next); }} onKeyDown={e => { if (e.key === 'Escape') { cancelled.current = true; e.currentTarget.blur(); } else if (e.key === 'Enter' || ((e.metaKey || e.ctrlKey) && ['s', 'o'].includes(e.key.toLowerCase()))) e.currentTarget.blur(); }} />;
 }
 
-function Icon({ name, size = 18 }: { name: string; size?: number }) {
-  const paths: Record<string, React.ReactNode> = {
-    play: <path d="m8 5 11 7-11 7Z" />, pause: <><path d="M8 5v14M16 5v14" /></>,
-    plus: <path d="M12 5v14M5 12h14" />, close: <path d="m6 6 12 12M18 6 6 18" />,
-    save: <><path d="M5 3h12l4 4v14H3V3h2ZM7 3v6h9V3M7 21v-8h10v8" /></>,
-    folder: <path d="M3 7V4h6l2 3h10v13H3V7Zm0 3h18" />,
-    download: <><path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4" /></>,
-    undo: <path d="m8 4-5 5 5 5M3 9h10c8 0 8 11 0 11h-3" />, redo: <path d="m16 4 5 5-5 5m5-5H11c-8 0-8 11 0 11h3" />,
-    eye: <><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>,
-    eyeOff: <><path d="m3 3 18 18M9 5.4A10 10 0 0 1 12 5c6 0 10 7 10 7a20 20 0 0 1-3 3.8M6 7c-2.5 2-4 5-4 5s4 7 10 7a12 12 0 0 0 5-1.2" /></>,
-    layers: <><path d="m12 3 10 5-10 5L2 8l10-5ZM2 12l10 5 10-5M2 16l10 5 10-5" /></>,
-    surface: <><path d="M3 5c6-6 12 6 18 0M3 12c6-6 12 6 18 0M3 19c6-6 12 6 18 0" /></>,
-    sculpture: <><path d="M12 2c8 0 10 7 6 11s1 8-6 9S2 16 6 11 4 2 12 2Z" /><path d="M12 3c-4 6 6 9 0 18" /></>,
-    fractal: <><path d="m12 2 9 5v10l-9 5-9-5V7Z" /><path d="m12 6 5 3v6l-5 3-5-3V9Zm0 4 2 2-2 2-2-2Z" /></>,
-    kaleidoscope: <><circle cx="12" cy="12" r="9" /><path d="M12 3v18M4.2 7.5l15.6 9M19.8 7.5l-15.6 9" /><circle cx="12" cy="12" r="3.5" /></>,
-    super8: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 8h18M3 16h18M7 4v4m5-4v4m5-4v4M7 16v4m5-4v4m5-4v4M7 14h3v-2h3v-2h4" /></>,
-    oil: <><path d="M12 2C9 7 4 10 4 15a8 8 0 0 0 16 0c0-5-5-8-8-13Z" /><path d="M8 15a4 4 0 0 0 4 4" /><circle cx="14" cy="12" r="2" /></>,
-    liquid: <><circle cx="9" cy="9" r="6" /><circle cx="17.5" cy="16.5" r="3.5" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="6" r="1.5" /></>,
-    scope: <><circle cx="12" cy="12" r="9" /><path d="M3 12c3-8 6-8 9 0s6 8 9 0" /></>,
-    graphic: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><path d="M12 3v4m9 5h-4m-5 9v-4M3 12h4" /></>,
-    livingink: <><circle cx="8" cy="8" r="4"/><circle cx="16" cy="15" r="5"/></>,
-    relief: <><path d="m3 6 7-3v15l-7 3Zm11 0 7-3v15l-7 3Z"/></>,
-    resonance: <><circle cx="12" cy="12" r="9"/><path d="M5 5c14 0 0 14 14 14M19 5C5 5 19 19 5 19"/></>,
-    glitchtunnel: <><rect x="3" y="3" width="18" height="18" rx="3"/><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10.5 10.5h3v3h-3zM3 12h4M17 12h4"/></>,
-    texturecuts: <><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h6V3M15 21v-6h6M9 9l6 6M12 3v4M3 15h4"/></>,
-    image: <><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8" cy="8" r="1.5" /><path d="m3 17 6-6 4 4 3-3 5 5" /></>,
-    trash: <><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7" /></>,
-    copy: <><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V3H3v13h5" /></>,
-    wave: <path d="M2 12c4-13 6-13 10 0s6 13 10 0" />,
-    unlock: <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V6a4 4 0 0 1 8 0" /></>,
-    lock: <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V6a4 4 0 0 1 8 0v4" /></>,
-    shuffle: <><path d="M3 6h3c6 0 6 12 12 12h3m-4-4 4 4-4 4M3 18h3c2 0 3-1 4-3m4-6c1-2 2-3 4-3h3m-4-4 4 4-4 4" /></>,
-    library: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16M12 8h5M12 12h5"/></>,
-    inspector: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16M6 8h6M6 12h4"/></>,
-    focus: <path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>,
-    settings: <><path d="M3 6h18M3 12h18M3 18h18"/><circle cx="8" cy="6" r="2" fill="currentColor"/><circle cx="16" cy="12" r="2" fill="currentColor"/><circle cx="10" cy="18" r="2" fill="currentColor"/></>,
-    search: <><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></>,
-    check: <path d="m4 12 5 5L20 6" />, arrow: <path d="m9 5 7 7-7 7" />,
-    up: <path d="m6 15 6-6 6 6" />, down: <path d="m6 9 6 6 6-6" />,
-    grid: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 12h18M12 3v18" /></>,
-    reset: <><path d="M3 11a9 9 0 1 1 3 8M3 4v7h7" /></>,
-    info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7v.1" /></>,
-  };
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] ?? paths.info}</svg>;
-}
 
 function ExportDialog({ busy, onClose, children }: { busy: boolean; onClose: () => void; children: ReactNode }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -246,49 +97,6 @@ function Transport({ project, phase, playing, onPlaying, onDuration, children }:
   </div>;
 }
 
-function Parameter({ definition: d, value, animated, onChange, onAnimate, onStart, onEnd }: { definition: ParameterDefinition; value: number; animated: boolean; onChange: (n: number) => void; onAnimate?: () => void; onStart: () => void; onEnd: () => void }) {
-  const percent = (value - d.min) / (d.max - d.min) * 100;
-  // Fine control works in tenths of a slider step, so values show one more decimal place.
-  const fineStep = d.step === 1 ? 1 : d.step / 10;
-  const precision = Math.min(7, Math.max(0, Math.ceil(-Math.log10(fineStep))));
-  // The slider itself steps in fineStep so fine values are representable; ordinary drags and keys still land on d.step.
-  const snapTo = (n: number, step: number) => clamp(Number((d.min + Math.round((n - d.min) / step) * step).toFixed(7)), d.min, d.max);
-  const snapFine = (n: number) => snapTo(n, fineStep);
-  const fine = useRef<{ x: number; value: number } | null>(null), latest = useRef(value);
-  latest.current = value;
-  const reset = () => { if (value !== d.default) onChange(d.default); };
-  const formatted = String(Number(value.toFixed(precision)));
-  const [draft, setDraft] = useState(formatted), editing = useRef(false), cancelled = useRef(false), dirty = useRef(false);
-  useEffect(() => { if (!editing.current) setDraft(formatted); }, [formatted]);
-  const commit = () => {
-    editing.current = false;
-    if (cancelled.current || !dirty.current) { cancelled.current = false; dirty.current = false; setDraft(formatted); return; }
-    dirty.current = false;
-    const n = draft.trim() ? Number(draft) : NaN;
-    if (!Number.isFinite(n)) { setDraft(formatted); return; }
-    const next = clamp(d.step === 1 ? Math.round(n) : n, d.min, d.max);
-    setDraft(String(Number(next.toFixed(precision))));
-    if (next !== value) onChange(next);
-  };
-  return <div className={`parameter${d.step < 0.001 ? ' precise-parameter' : ''}`}><div className="parameter-label"><label title={`${d.description ? `${d.label}: ${d.description}` : d.label}\nDouble-click to reset`} htmlFor={`parameter-${d.key}`} onDoubleClick={reset}>{d.label}</label><div><button className="parameter-reset" aria-label={`Reset ${d.label}`} title={`Reset ${d.label}`} disabled={value===d.default} onClick={()=>onChange(d.default)}>↺</button>{onAnimate && <button className={`mod-button ${animated ? 'active' : ''}`} onClick={onAnimate} title={`Animate ${d.label}`} aria-pressed={animated}><Icon name="wave" size={14} /></button>}<input aria-label={`${d.label} value`} type="number" min={d.min} max={d.max} step={d.step} value={draft} onFocus={() => { editing.current = true; dirty.current = false; }} onChange={e => { dirty.current = true; setDraft(e.target.value); }} onBlur={commit} onKeyDown={e => { if (e.key === 'Escape') { cancelled.current = true; e.currentTarget.blur(); } else if (e.key === 'Enter' || ((e.metaKey || e.ctrlKey) && ['s', 'o'].includes(e.key.toLowerCase()))) e.currentTarget.blur(); }} /></div></div><input id={`parameter-${d.key}`} aria-label={d.label} type="range" min={d.min} max={d.max} step={fineStep} value={value} style={{ '--fill': `${percent}%` } as CSSProperties} title="Double-click to reset · hold Shift for fine control"
-    onPointerDown={() => { fine.current = null; onStart(); }}
-    onPointerMove={e => {
-      // Holding Shift during a drag moves the value at a tenth of the pointer's speed, from where Shift went down.
-      if (!(e.buttons & 1) || !e.shiftKey) { fine.current = null; return; }
-      if (!fine.current) { fine.current = { x: e.clientX, value: latest.current }; return; }
-      const next = snapFine(fine.current.value + (e.clientX - fine.current.x) / e.currentTarget.getBoundingClientRect().width * (d.max - d.min) * .1);
-      if (next !== latest.current) onChange(next);
-    }}
-    onPointerUp={() => { fine.current = null; onEnd(); }} onPointerCancel={() => { fine.current = null; onEnd(); }}
-    onDoubleClick={reset}
-    onKeyDown={e => {
-      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
-      e.preventDefault(); onStart();
-      const by = e.shiftKey ? fineStep : d.step;
-      onChange(snapFine(value + (['ArrowRight', 'ArrowUp'].includes(e.key) ? by : -by)));
-    }}
-    onKeyUp={onEnd} onChange={e => { if (!fine.current) onChange(snapTo(Number(e.target.value), d.step)); }} /></div>;
-}
 
 function KeyframeCurve({ mod, onChange, onStart, onEnd }: { mod: Modulation; onChange: (m: Modulation) => void; onStart: () => void; onEnd: () => void }) {
   const dragging = useRef<number | null>(null);
@@ -321,7 +129,7 @@ const startingLooks:Partial<Record<LayerKind,string>>={livingink:'tidal-pigment'
 const instrumentCatalogue = [
   { kind: 'surface', name: 'Surface', caption: '4 patterns · 12 variants', image: surfaceThumb, label: 'Add surface' },
   { kind: 'sculpture', name: 'Sculpture', caption: 'Shell · bloom · ribbon · knot', image: sculptureThumb, label: 'Add sculpture' },
-  { kind: 'fractal', name: 'Fractals', caption: 'Folded Lace · Julia · Mandelbox', image: fractalThumb, label: 'Add fractal' },
+  { kind: 'fractal', name: 'Fractals', caption: 'Folded Lace · Julia · Mandelbox · Portal', image: fractalThumb, label: 'Add fractal' },
   { kind: 'kaleidoscope', name: 'Kaleidoscope', caption: 'Mirrors · tiles · spirals', image: kaleidoscopeThumb, label: 'Add Kaleidoscope' },
   { kind: 'super8', name: 'Super 8 Paint', caption: 'Paint · moving film · projector', image: super8Thumb, label: 'Add Super 8 Paint' },
   { kind: 'oil', name: 'Oil Slides', caption: 'Paint · glass · cellular ink', image: oilThumb, label: 'Add oil slides' },
@@ -359,6 +167,17 @@ export default function App() {
   const [playing, setPlaying] = useState(true), phase = useRef(0), rendererRef = useRef<StudioRenderer | null>(null);
   /** Live is a separate screen over the studio; the studio pauses underneath it. */
   const [mode, setMode] = useState<'studio' | 'live' | 'map'>('studio');
+  const [emberSound, setEmberSound] = useState<ReactivityEngine | null>(null);
+  const emberMeters = useMemo(() => new MeterStore(), []);
+  const hasEmber = project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1);
+  useEffect(() => {
+    if (!emberSound || mode !== 'studio' || !hasEmber) return;
+    let shown = 0;
+    return emberSound.subscribe(signals => {
+      const now = performance.now();
+      if (now - shown > 100) { shown = now; emberMeters.set(signals); }
+    });
+  }, [emberSound, emberMeters, mode, hasEmber]);
   /** A Map shape's composition being edited here. Studio's own project is set aside meanwhile, and saved, not this one. */
   const [shapeEdit, setShapeEdit] = useState<ShapeEdit | null>(null);
   const shapeEditRef = useRef<ShapeEdit | null>(null);
@@ -374,19 +193,15 @@ export default function App() {
   const selected = project.layers.find(l => l.id === selectedId) ?? project.layers[0];
   const allDefinitions = selected ? parameterDefinitions(selected.kind) : [];
   const definitions = selected ? visibleParameterDefinitions(selected) : [];
-  const controlGroups = selected?.kind === 'super8'
-    ? super8ControlGroups.filter(([title]) => title !== 'Film gate' || selected.params.gateMode > 0)
-      .map(([title, keys]) => ({ title, defs: keys.map(key => definitions.find(d => d.key === key)!).filter(d => d.key !== 'sprockets' || selected.params.gateMode === 2) }))
-    : (['Shape', 'Motion', 'Material', 'Camera'] as const).map(title => ({ title, defs: definitions.filter(d => d.section === title) }));
   // A Kaleidoscope offers motion only for controls that act right now; saved routes wait for their control to return.
   const routeHidden = selected?.kind === 'kaleidoscope' ? kaleidoscopeRouteHidden(selected.params) : null;
   const routeDefinitions = definitions.filter(d => d.step !== 1 && !d.preparation && !routeHidden?.has(d.key));
-  const selectedModKey = routeHidden?.has(modKey) ? routeDefinitions[0]?.key ?? 'opacity' : modKey === 'opacity' || modKey.startsWith('transform.') || definitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation) || (selected?.modulations[modKey] && allDefinitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation)) ? modKey : routeDefinitions[0]?.key ?? 'opacity';
+  const selectedModKey = routeHidden?.has(modKey) ? routeDefinitions[0]?.key ?? 'opacity' : modKey === 'opacity' || modKey.startsWith('transform.') || definitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation) || (selected?.modulations[modKey] && allDefinitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation)) ? modKey : definitions.find(d => d.step !== 1 && !d.preparation)?.key ?? 'opacity';
   const modulation = selected?.modulations[selectedModKey];
   // An opaque Kaleidoscope above hides this layer completely, so its controls would appear to do nothing.
   const coveredBy = selected ? project.layers.slice(project.layers.findIndex(l => l.id === selected.id) + 1).find(l => l.kind === 'kaleidoscope' && l.visible && l.opacity >= 1 && l.blend === 'normal' && l.mask.kind === 'none' && Math.round(l.params.input ?? 0) !== KALEIDOSCOPE_INPUT.feedback) : undefined;
   const effectivePresetFilter = presetFilter === 'selected' ? selected?.kind === 'surface' || selected?.kind === 'fractal' || selected?.kind === 'graphic' ? `${selected.kind}-${Math.round(selected.params.style ?? 0)}` : selected?.kind === 'sculpture' ? `sculpture-${Math.round(selected.params.form ?? 0)}` : selected && ['oil', 'liquid', 'scope', 'super8', 'kaleidoscope'].includes(selected.kind) ? selected.kind : selected && isInstrument(selected.kind) ? selected.kind : 'all' : presetFilter;
-  const visiblePresets = PRESETS.filter(preset => effectivePresetFilter === 'projection' && PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'flat' && FLAT_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'all' || preset.kind === effectivePresetFilter || `${preset.kind}-${preset.kind === 'sculpture' ? preset.params.form : preset.params.style}` === effectivePresetFilter);
+  const visiblePresets = PRESETS.filter(preset => effectivePresetFilter === 'projection' && PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'fractal-projection' && FRACTAL_PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'flat' && FLAT_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'all' || preset.kind === effectivePresetFilter || `${preset.kind}-${preset.kind === 'sculpture' ? preset.params.form : preset.params.style}` === effectivePresetFilter);
   const searchedFinishes = FINISH_LOOKS.filter(f => `${f.name} ${f.description}`.toLowerCase().includes(libraryQuery) && !(selected?.kind === 'kaleidoscope' && 'echo' in f.params && !finishSupported(selected, f.id)));
   const searchedPresets = visiblePresets.filter(p => `${p.name} ${p.description} ${kindLabels[p.kind]}`.toLowerCase().includes(libraryQuery));
   const searchedInstruments = instrumentCatalogue.filter(i => `${i.name} ${i.caption}`.toLowerCase().includes(libraryQuery));
@@ -648,7 +463,7 @@ export default function App() {
       <div className="drawer-heading"><strong>Library</strong><button className="icon-button" aria-label="Close library" popoverTarget="library-drawer" popoverTargetAction="hide"><Icon name="close" size={16} /></button></div>
       <label className="library-search"><Icon name="search" size={15} /><input type="search" autoFocus aria-label="Search library" placeholder="Search instruments and looks…" value={librarySearch} onChange={e=>setLibrarySearch(e.target.value)} /></label>
       <div className="tab-switch library-tabs">{(['Instruments', 'Presets'] as const).map(t => <button key={t} aria-pressed={libraryTab === t} className={libraryTab === t ? 'active' : ''} onClick={() => setLibraryTab(t)}>{t}</button>)}</div>
-      <div className="library-content">{libraryTab === 'Instruments' ? <div className="instrument-list">{searchedInstruments.map(info => <button key={info.kind} aria-label={info.label} className="instrument-card" onClick={() => addLayer(info.kind)}><img className="instrument-art" src={info.image} alt="" /><div className="instrument-info"><div><strong>{info.name}</strong><small>{info.caption}</small></div><Icon name="plus" size={14} /></div></button>)}{!searchedInstruments.length && <p className="empty-note">No instruments match “{librarySearch}”.</p>}<button className="import-button" onClick={() => addLayer('image')}><Icon name="image" size={16} /><span>Import image<small>PNG / JPEG</small></span></button></div> : <><label className="stacked-label preset-filter">Filter<select aria-label="Preset library filter" value={presetFilter} onChange={e => setPresetFilter(e.target.value)}><option value="selected">Current selection</option><option value="all">All presets</option><option value="projection">Projection motion · {PROJECTION_LOOK_IDS.length} studies</option><option value="flat">Flat colour &amp; outlines · {FLAT_LOOK_IDS.length} looks</option><option value="finish">Finishes for any layer · {FINISH_LOOKS.length - 1} looks</option><optgroup label="Surfaces"><option value="surface">All surfaces</option>{patterns.surface!.map((label, index) => <option key={index} value={`surface-${index}`}>{label}</option>)}</optgroup><optgroup label="Sculptures"><option value="sculpture">All sculptures</option>{sculptureForms.map((label, index) => <option key={index} value={`sculpture-${index}`}>{label}</option>)}</optgroup><optgroup label="Fractals"><option value="fractal">All fractals</option><option value="fractal-0">Folded lace</option><option value="fractal-1">Julia blooms</option><option value="fractal-2">Mandelbox worlds</option></optgroup><optgroup label="Graphic Patterns"><option value="graphic">All graphic patterns</option>{GRAPHIC_FAMILIES.map((label, index) => <option key={index} value={`graphic-${index}`}>{label}</option>)}</optgroup><optgroup label="Light, material & space">{INSTRUMENTS.map(i=><option key={i.kind} value={i.kind}>{i.name}</option>)}</optgroup><option value="oil">Oil Slides</option><option value="liquid">Liquid Light</option><option value="scope">Oscilloscope</option><option value="super8">Super 8 Paint</option></select></label><div className="preset-list">{presetFilter === 'finish' ? searchedFinishes.map(finish => <button key={finish.id} className="preset-card finish-card" disabled={!selected || !finishSupported(selected, finish.id)} onClick={() => { if (selected && finishSupported(selected, finish.id)) editLayer(l => applyFinish(l, finish.id)); }}><strong>{finish.name}</strong><span>{finish.description}</span></button>) : searchedPresets.map(preset => <button key={preset.id} className="preset-card" onClick={() => {
+      <div className="library-content">{libraryTab === 'Instruments' ? <div className="instrument-list">{searchedInstruments.map(info => <button key={info.kind} aria-label={info.label} className="instrument-card" onClick={() => addLayer(info.kind)}><img className="instrument-art" src={info.image} alt="" /><div className="instrument-info"><div><strong>{info.name}</strong><small>{info.caption}</small></div><Icon name="plus" size={14} /></div></button>)}{!searchedInstruments.length && <p className="empty-note">No instruments match “{librarySearch}”.</p>}<button className="import-button" onClick={() => addLayer('image')}><Icon name="image" size={16} /><span>Import image<small>PNG / JPEG</small></span></button></div> : <><label className="stacked-label preset-filter">Filter<select aria-label="Preset library filter" value={presetFilter} onChange={e => setPresetFilter(e.target.value)}><option value="selected">Current selection</option><option value="all">All presets</option><option value="projection">Projection motion · {PROJECTION_LOOK_IDS.length} studies</option><option value="flat">Flat colour &amp; outlines · {FLAT_LOOK_IDS.length} looks</option><option value="finish">Finishes for any layer · {FINISH_LOOKS.length - 1} looks</option><optgroup label="Surfaces"><option value="surface">All surfaces</option>{patterns.surface!.map((label, index) => <option key={index} value={`surface-${index}`}>{label}</option>)}</optgroup><optgroup label="Sculptures"><option value="sculpture">All sculptures</option>{sculptureForms.map((label, index) => <option key={index} value={`sculpture-${index}`}>{label}</option>)}</optgroup><optgroup label="Fractals"><option value="fractal">All fractals</option><option value="fractal-0">Folded lace</option><option value="fractal-1">Julia blooms</option><option value="fractal-2">Mandelbox worlds</option><option value="fractal-3">Portals</option><option value="fractal-projection">Fractals for projection</option></optgroup><optgroup label="Graphic Patterns"><option value="graphic">All graphic patterns</option>{GRAPHIC_FAMILIES.map((label, index) => <option key={index} value={`graphic-${index}`}>{label}</option>)}</optgroup><optgroup label="Light, material & space">{INSTRUMENTS.map(i=><option key={i.kind} value={i.kind}>{i.name}</option>)}</optgroup><option value="oil">Oil Slides</option><option value="liquid">Liquid Light</option><option value="scope">Oscilloscope</option><option value="super8">Super 8 Paint</option></select></label><div className="preset-list">{presetFilter === 'finish' ? searchedFinishes.map(finish => <button key={finish.id} className="preset-card finish-card" disabled={!selected || !finishSupported(selected, finish.id)} onClick={() => { if (selected && finishSupported(selected, finish.id)) editLayer(l => applyFinish(l, finish.id)); }}><strong>{finish.name}</strong><span>{finish.description}</span></button>) : searchedPresets.map(preset => <button key={preset.id} className="preset-card" onClick={() => {
         if(preset.params.inkMode===2&&project.duration>60){notify('Shorten the clip to 60 seconds before selecting evolving chemistry.');return;}
         // Flat looks are authored as exact palette colour; soft highlight roll-off would dull them.
         if ((preset.params.toonMix ?? 0) > 0 && project.highlights !== 'exact') { edit(p => ({ ...p, highlights: 'exact' })); notify('Exact colour turned on for flat palette colour. Change it under Finish → Output.'); }
@@ -668,7 +483,7 @@ export default function App() {
       <div className="workspace-tools"><button ref={workspace.libraryButton} className={`workspace-tool ${workspace.libraryOpen ? 'active' : ''}`} aria-label="Open library" aria-expanded={workspace.libraryOpen} aria-controls="library-drawer" popoverTarget="library-drawer" title="Library · B"><Icon name="library" size={16}/><span>Library</span></button><button ref={workspace.layersButton} className={`workspace-tool ${workspace.layersExpanded ? 'active' : ''}`} aria-label="Toggle layer list" aria-expanded={workspace.layersExpanded} aria-controls="layer-panel" onClick={workspace.toggleLayers} disabled={workspace.focusMode} title="Layers · L"><Icon name="layers" size={16}/></button><span className="viewer-meta">{project.width} × {project.height}<span> · {Number((project.fps.num / project.fps.den).toFixed(2))} fps</span></span></div>
       <div className="viewer-options"><span className="live-badge"><i />{exporting ? 'Exporting' : playing ? 'Playing' : 'Paused'}</span><button className={checker ? 'selected-tool' : ''} title="Toggle transparency checker" aria-pressed={checker} onClick={() => setChecker(v => !v)}><Icon name="grid" size={15} /></button><button ref={workspace.inspectorButton} className={`workspace-tool ${workspace.inspectorOpen && !workspace.focusMode ? 'active' : ''}`} aria-label="Toggle inspector" aria-expanded={workspace.inspectorOpen && !workspace.focusMode} aria-controls="inspector-panel" onClick={workspace.toggleInspector} disabled={workspace.focusMode} title="Inspector · I"><Icon name="inspector" size={16}/></button><button ref={workspace.focusButton} className="workspace-tool focus-toggle" aria-label={workspace.focusMode ? 'Exit focus mode' : 'Focus preview'} aria-pressed={workspace.focusMode} onClick={workspace.toggleFocus} title={workspace.focusMode ? 'Exit focus · F or Esc' : 'Focus preview · F'}><Icon name="focus" size={16}/><span>{workspace.focusMode ? 'Exit focus' : 'Focus'}</span></button></div>
     </div>
-      <div className="preview-stage"><Preview tiled={tiledView && !!project.tileEdges} project={project} playing={playing && !exporting && mode === 'studio'} phase={phase} rendererRef={rendererRef} onError={reportError} onEnded={()=>setPlaying(false)} checker={checker} layer={selected} locks={locks} blocked={exporting || exportOpen || !ready} onChange={(layer, record) => {
+      <div className="preview-stage"><Preview tiled={tiledView && !!project.tileEdges} project={project} playing={playing && !exporting && mode === 'studio'} phase={phase} rendererRef={rendererRef} smokeSound={emberSound} onError={reportError} onEnded={()=>setPlaying(false)} checker={checker} layer={selected} locks={locks} blocked={exporting || exportOpen || !ready} onChange={(layer, record) => {
         const current = projectRef.current;
         const before = current.layers.find(l => l.id === layer.id);
         if (before && !sameCanvasValues(before, layer)) replace({ ...current, layers: current.layers.map(l => l.id === layer.id ? layer : l) }, record);
@@ -687,31 +502,13 @@ export default function App() {
       <div className="inspector-title"><span className="eyebrow">Selected layer</span><div><Icon name={selected.kind} size={20} /><EditableName label="Layer name" value={selected.name} maxLength={60} onCommit={name => editLayer(l => ({ ...l, name }))} /><button className="icon-button" title="Duplicate layer" disabled={project.layers.length >= 4} onClick={() => { const copy = structuredClone(selected); copy.id = uid(); copy.name = `${copy.name.slice(0, 54)} copy`; edit(p => ({ ...p, layers: [...p.layers, copy] })); setSelectedId(copy.id); }}><Icon name="copy" size={15} /></button><button className="icon-button" title="Delete layer" disabled={project.layers.length <= 1} onClick={() => { const layers = project.layers.filter(l => l.id !== selected.id); edit(p => ({ ...p, layers })); setSelectedId(layers.at(-1)?.id ?? ''); }}><Icon name="trash" size={15} /></button></div></div>
       <div className="tab-switch inspector-tabs">{(['Shape', 'Motion', 'Finish'] as const).map(t => <button key={t} aria-pressed={tab === t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>{t}</button>)}</div>
       <div className="inspector-content">{tab === 'Shape' ? <>
-        {patterns[selected.kind] && <div className="field-group"><label>{selected.kind === 'fractal' ? 'Fractal family' : 'Pattern'}</label><div className={`pattern-picker${selected.kind === 'fractal' ? ' fractal-patterns' : ''}`}>{patterns[selected.kind]!.map((label, i) => <button key={i} aria-pressed={Math.round(selected.params.style ?? 0) === i} className={Math.round(selected.params.style ?? 0) === i ? 'active' : ''} onClick={() => editLayer(l => ({ ...l, params: { ...l.params, style: i } }))}>{label}</button>)}</div></div>}
-        {isInstrument(selected.kind) && <div className="projection-help"><p>{INSTRUMENTS.find(i=>i.kind===selected.kind)!.description}. Pattern scale reveals more of the field. Field background controls transparent gaps.</p>{selected.kind==='livingink' && <p>Growth family and Branching prepare a seeded chemical pattern. Playback animates its flow and pigment without simulation warm-up.</p>}</div>}
         {coveredBy && <p className="muted-text" role="status">Covered by {coveredBy.name} above, so changes here won't show. Select that layer, hide it, or set its Source to Layer below.</p>}
-        {selected.kind === 'kaleidoscope' && <KaleidoscopePanel key={selected.id} layer={selected} isBottom={project.layers[0]?.id === selected.id}
-          onParam={(key, value) => editLayer(l => ({ ...l, params: { ...l.params, [key]: value, ...(key === 'input' && value === KALEIDOSCOPE_INPUT.feedback && !((l.params.echo ?? 0) > 0) ? { echo: .8 } : {}) } }))}
-          onChoose={() => kaleidoscopeInputRef.current?.click()}
-          onRemove={() => editLayer(l => { const { image: _removed, ...rest } = l; return rest; })}
-          onFit={fit => editLayer(l => ({ ...l, image: l.image ? { ...l.image, fit } : undefined }))}
-          echo={definitions.filter(d => d.key === 'echo').map(d => <Parameter key={d.key} definition={{ ...d, label: 'Echo amount', description: 'How long the folded picture lingers from frame to frame. 0 shows the motif alone; higher values leave longer trails.' }} value={selected.params.echo ?? 0} animated={!!selected.modulations.echo} onChange={n => editLayer(l => ({ ...l, params: { ...l.params, echo: n } }))} onAnimate={() => { setModKey('echo'); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />)} />}
-        {selected.kind === 'graphic' && <div className="graphic-options"><ChoiceParameter label="Pattern family" name="Graphic family" options={GRAPHIC_FAMILIES} value={selected.params.style} onChange={style => editLayer(l => applyPreset(l, GRAPHIC_LOOKS.find(look => look.params.style === style)!.id))} /><ChoiceParameter label="Starting look" name="Graphic look" options={GRAPHIC_VARIANTS[Math.round(selected.params.style)]} value={selected.params.variant} onChange={variant => editLayer(l => applyPreset(l, GRAPHIC_LOOKS.find(look => look.params.style === l.params.style && look.params.variant === variant)!.id))} />{selected.params.style === 2 && <><ChoiceParameter label="Tile finish" name="Tile finish" options={['Solid', 'Hollow outlines', 'Nested contours']} value={selected.params.fill} onChange={fill => editLayer(l => ({...l, params:{...l.params,fill}}))} /><ChoiceParameter label="Wave layout" name="Tile wave layout" options={['Still', 'Linear sweep', 'Radial ripple']} value={selected.params.sweep} onChange={sweep => editLayer(l => ({...l, params:{...l.params,sweep}}))} /></>}{selected.params.style === 3 && <ChoiceParameter label="Shape profile" name="Spiral shape profile" options={['Circle','Line','Triangle','Square','Pentagon','Hexagon','Heptagon','Octagon','Nonagon','Decagon']} value={selected.params.profile} onChange={profile => editLayer(l => ({...l, params:{...l.params,profile}}))} />}{selected.params.style === 4 && <ChoiceParameter label="Path corners" name="Path corners" options={['Square','Round','Soft bevel']} value={selected.params.corners} onChange={corners => editLayer(l => ({...l, params:{...l.params,corners}}))} />}<p>All patterns share the layer mix, masks and loop controls. Set Pattern background to zero for transparent gaps.</p></div>}
-        {selected.kind === 'surface' && <ChoiceParameter label="Variant" name="Surface variant" options={surfaceVariants[Math.round(selected.params.style ?? 0)]} value={selected.params.variant} onChange={variant => editLayer(l => ({ ...l, params: { ...l.params, variant } }))} />}
-        {selected.kind === 'sculpture' && <ChoiceParameter label="Form" name="Sculpture form" options={sculptureForms} value={selected.params.form} onChange={form => editLayer(l => ({ ...l, params: { ...l.params, form } }))} />}
-        {selected.kind === 'fractal' && <div className="fractal-options"><label className="stacked-label">Variant<select aria-label="Fractal variant" value={Math.round(selected.params.variant ?? 0)} onChange={e => editLayer(l => ({ ...l, params: { ...l.params, variant: Number(e.target.value) } }))}>{fractalVariants[Math.round(selected.params.style ?? 0)].map((label, value) => <option key={value} value={value}>{label}</option>)}</select></label><>{Math.round(selected.params.style ?? 0) === 2 && <label className="stacked-label">Radial fold<select aria-label="Mandelbox radial fold" value={Math.round(selected.params.radial ?? 0)} onChange={e => editLayer(l => ({ ...l, params: { ...l.params, radial: Number(e.target.value) } }))}><option value="0">Off</option><option value="1">On</option></select></label>}</><label className="stacked-label">Render quality<select aria-label="Fractal render quality" value={Math.round(selected.params.quality ?? 2)} onChange={e => editLayer(l => ({ ...l, params: { ...l.params, quality: Number(e.target.value) } }))}><option value="0">Draft</option><option value="1">Standard</option><option value="2">High</option></select></label><p>Quality affects preview and export.</p></div>}
-        {selected.kind === 'fractal' && <ChoiceParameter label="Coloring" name="Fractal coloring" options={coloringModes} value={selected.params.colorMode} onChange={colorMode => editLayer(l => ({ ...l, params: { ...l.params, colorMode } }))} />}
-        {selected.kind === 'super8' && <div className="super8-options"><ChoiceParameter label="Mode" name="Super 8 mode" options={SUPER8_MODES} value={selected.params.mode} onChange={mode => editLayer(l => ({ ...l, params: { ...l.params, mode } }))} /><ChoiceParameter label="Substrate" name="Super 8 substrate" options={['Transparent cutout', 'Painted paper']} value={selected.params.substrate} onChange={substrate => editLayer(l => ({ ...l, params: { ...l.params, substrate } }))} /><ChoiceParameter label="Projector view" name="Super 8 projector view" options={['Full canvas', 'Rounded gate', 'Film strip']} value={selected.params.gateMode} onChange={gateMode => editLayer(l => ({ ...l, params: { ...l.params, gateMode } }))} /><p>Paint holds at the film frame rate. Frame advance and shutter move between exposures. Reel turns scroll the strip; Full canvas fills the output without a border.</p></div>}
-        {isInstrument(selected.kind) && <ChoiceParameter label="Motion phrase" name="Motion phrase" options={['Steady travel','Gather and release','Drift and settle']} value={selected.params.phrase} onChange={phrase=>editLayer(l=>({...l,params:{...l.params,phrase}}))}/>}
-        {selected.kind === 'livingink' && <>{selected.params.inkMode===2&&<ChoiceParameter label="Chemical resolution" name="Chemical resolution" options={['128 × 128','256 × 256','384 × 384']} value={selected.params.simulationQuality} onChange={simulationQuality=>editLayer(l=>({...l,params:{...l.params,simulationQuality}}))}/>}<ChoiceParameter label="Pigment motion" name="Pigment motion" options={['Prepared growth','Flowing pigment loop','Evolving chemistry']} value={selected.params.inkMode} onChange={inkMode=>{if(inkMode===2&&project.duration>60){notify('Shorten the clip to 60 seconds before enabling evolving chemistry.');return;}if(inkMode===2&&selected.modulations.scale){notify('Remove Pattern scale animation before enabling evolving chemistry.');return;}editLayer(l=>({...l,params:{...l.params,inkMode}}));}}/>{selected.params.inkMode===2&&<p className="motion-help">{(selected.params.loopReturn??0)>0?'Evolving chemistry grows through the loop, then recedes back to its seeds over the Loop return share, so it loops seamlessly.':'Evolving chemistry develops through this clip and stops at the end. Raise Loop return to make it loop.'} Growth and transport settings re-prepare its fixed simulation.</p>}</>}
-        {selected.kind === 'relief' && <ChoiceParameter label="Relief construction" name="Relief construction" options={['Shaded field','Hinged solids']} value={selected.params.reliefMode} onChange={reliefMode=>editLayer(l=>({...l,params:{...l.params,reliefMode}}))}/>}
-        {selected.kind === 'livingink' && <ChoiceParameter label="Growth family" name="Ink growth family" options={['Seeded cells','Fingerprints','Coral labyrinth','Cellular lace']} value={selected.params.pattern} onChange={pattern=>editLayer(l=>({...l,params:{...l.params,pattern}}))}/>}
-        {selected.kind === 'relief' && <ChoiceParameter label="Hinge axis" name="Relief hinge axis" options={['Vertical','Horizontal','Diagonal']} value={selected.params.axis} onChange={axis=>editLayer(l=>({...l,params:{...l.params,axis}}))}/>}
-        {selected.kind === 'oil' && <div className="oil-options"><ChoiceParameter label="Render quality" name="Oil render quality" options={['Draft', 'Standard', 'High']} value={selected.params.quality} onChange={quality => editLayer(l => ({ ...l, params: { ...l.params, quality } }))} /><ChoiceParameter label="Substrate" name="Oil substrate" options={['Transparent cutout', 'Colored substrate']} value={selected.params.substrate} onChange={substrate => editLayer(l => ({ ...l, params: { ...l.params, substrate } }))} />{selected.params.substrate === 0 && <p>Transparency keeps the glass tint and reflections.</p>}<button className="oil-fine-button" aria-expanded={oilFine} onClick={() => setOilFine(value => !value)}>{oilFine ? 'Hide fine tuning' : 'Show fine tuning'}<Icon name={oilFine ? 'up' : 'down'} size={13} /></button>{oilFine && <p>Organic shape softens the dome. Lens depth changes its bulge. Cell complexity adds branching; Color separation adds colored edges.</p>}</div>}
-        {selected.kind === 'image' && <div className="image-settings">{selected.image ? <img src={selected.image.dataUrl} alt={selected.image.name} /> : <p>Import a PNG or JPEG to begin.</p>}<label>Image fit<select aria-label="Image fit" value={selected.image?.fit ?? 'contain'} onChange={e => editLayer(l => ({ ...l, image: l.image ? { ...l.image, fit: e.target.value as 'contain' | 'cover' } : undefined }))}><option value="contain">Contain</option><option value="cover">Cover</option></select></label><ChoiceParameter label="Mirror" name="Image mirror" options={mirrorModes} value={selected.params.mirror} onChange={mirror => editLayer(l => ({ ...l, params: { ...l.params, mirror } }))} /></div>}
-        {controlGroups.map(({ title, defs: groupDefs }) => { const defs = groupDefs.filter(d => !(selected.kind === 'kaleidoscope' && (KALEIDOSCOPE_OWN_KEYS.includes(d.key) || kaleidoscopeHidden(selected.params).has(d.key))) && !choiceKeys.includes(d.key) && !(selected.kind === 'livingink' && d.key === 'pattern') && !(selected.kind === 'relief' && d.key === 'axis') && !(selected.kind === 'graphic' && graphicChoiceKeys.includes(d.key)) && !gradingKeys.includes(d.key) && (selected.kind !== 'oil' || oilFine || !oilFineControls.includes(d.key))).map(d => ({ ...d, advanced: d.advanced || secondaryShapeControls[selected.kind]?.includes(d.key) })); if (!defs.length) return null; return <details className="control-section inspector-section" key={`${selected.kind}-${title}`} open={title === 'Shape' || title === 'Paint geometry'}><summary>{title}<span>{defs.length}</span></summary>{defs.filter(d=>!d.advanced).map(d => <Parameter key={d.key} definition={d} value={selected.params[d.key] ?? d.default} animated={!!selected.modulations[d.key]} onChange={n => editLayer(l => ({ ...l, params: { ...l.params, [d.key]: n } }))} onAnimate={d.step === 1 || d.preparation || routeHidden?.has(d.key) ? undefined : () => { setModKey(d.key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />)}{defs.some(d=>d.advanced)&&<details className="advanced-controls"><summary>Advanced {title.toLowerCase()}<span>{defs.filter(d=>d.advanced).length}</span></summary>{defs.filter(d=>d.advanced).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]??d.default} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={d.step===1||d.preparation||routeHidden?.has(d.key)?undefined:()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}</details>}</details>; })}
-        {isInstrument(selected.kind)&&<SurfaceEditor layer={selected} onChange={surface=>editLayer(l=>{const next={...l};if(surface)next.surface=surface;else delete next.surface;return next;})} onStart={beginGesture} onEnd={endGesture}/>}
-        {selected.kind !== 'image' && <section className="control-section"><h3>Palette</h3><div className="palette-editor">{selected.palette.map((color, i) => selected.kind === 'sculpture' && i !== 0 && i !== 2 ? null : <label key={i} style={{ background: color }} title={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'scope' ? scopePaletteLabels[i] : selected.kind === 'super8' ? super8PaletteLabels[i] : `Color ${i + 1}`}><input aria-label={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'scope' ? scopePaletteLabels[i] : selected.kind === 'super8' ? super8PaletteLabels[i] : `Palette color ${i + 1}`} type="color" value={color} onChange={e => editLayer(l => ({ ...l, palette: l.palette.map((c, j) => i === j ? e.target.value : c) }))} /></label>)}</div><label className="stacked-label palette-choice">Palette preset<select aria-label="Palette preset" value={PALETTE_LIBRARY.find(choice => choice.colors.every((c, i) => c === selected.palette[i]))?.name ?? ''} onChange={e => { const choice = PALETTE_LIBRARY.find(item => item.name === e.target.value); if (choice) editLayer(l => ({ ...l, palette: [...choice.colors] })); }}><option value="" disabled>Custom</option>{PALETTE_LIBRARY.map(choice => <option key={choice.name} value={choice.name}>{choice.name}</option>)}</select></label><div className="seed-row"><label>Seed<input aria-label="Layer seed" type="number" min="0" max="4294967295" value={selected.params.seed ?? project.seed} onChange={e => editLayer(l => ({ ...l, params: { ...l.params, seed: clamp(Math.round(Number(e.target.value)), 0, 4294967295) } }))} /></label><button className="icon-button" title="Next seed" onClick={() => editLayer(l => ({ ...l, params: { ...l.params, seed: ((l.params.seed ?? 1) + 1) >>> 0 } }))}><Icon name="shuffle" size={15} /></button></div></section>}
+        <LayerShapeControls layer={selected} isBottomLayer={project.layers[0]?.id === selected.id} onChooseKaleidoscopeImage={() => kaleidoscopeInputRef.current?.click()} edit={editLayer} onAnimateKey={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} seed={project.seed} duration={project.duration} notify={notify} oilFine={oilFine} setOilFine={setOilFine}
+          scopeAudioSlot={<details className="control-section"><summary>Smoke audio input</summary>
+            <ReactDevices audioOnly engine={emberSound} meter={emberMeters} onStart={() => setEmberSound(reactivity())} />
+            <p className="muted-text">The input drives playback. Exports use the repeating smoke phrase.</p>
+          </details>}
+          imageSlot={<>{selected.kind === 'image' && <div className="image-settings">{selected.image ? <img src={selected.image.dataUrl} alt={selected.image.name} /> : <p>Import a PNG or JPEG to begin.</p>}<label>Image fit<select aria-label="Image fit" value={selected.image?.fit ?? 'contain'} onChange={e => editLayer(l => ({ ...l, image: l.image ? { ...l.image, fit: e.target.value as 'contain' | 'cover' } : undefined }))}><option value="contain">Contain</option><option value="cover">Cover</option></select></label><ChoiceParameter label="Mirror" name="Image mirror" options={mirrorModes} value={selected.params.mirror} onChange={mirror => editLayer(l => ({ ...l, params: { ...l.params, mirror } }))} /></div>}</>} surfaceSlot={<>{isInstrument(selected.kind)&&<SurfaceEditor layer={selected} onChange={surface=>editLayer(l=>{const next={...l};if(surface)next.surface=surface;else delete next.surface;return next;})} onStart={beginGesture} onEnd={endGesture}/>}</>} />
       </> : tab === 'Motion' ? <>
         <p className="motion-help">Animate a parameter over the {isEvolving(project)?'clip':'loop'}.</p>
         <label className="stacked-label">Parameter<select aria-label="Motion parameter" value={selectedModKey} onChange={e => setModKey(e.target.value)}>{routeDefinitions.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}{!definitions.some(d => d.key === selectedModKey) && allDefinitions.some(d => d.key === selectedModKey) && <option value={selectedModKey}>{allDefinitions.find(d => d.key === selectedModKey)!.label} · other family</option>}<option value="opacity">Layer opacity</option><optgroup label="Layer transform"><option value="transform.x">Horizontal</option><option value="transform.y">Vertical</option><option value="transform.scale">Size</option><option value="transform.rotation">Rotation</option></optgroup></select></label>
@@ -720,15 +517,7 @@ export default function App() {
         {modulation && <section className="control-section"><label className="stacked-label">Animation range<select aria-label="Animation range" value={modulation.range?'endpoints':'offset'} onChange={e=>{if(e.target.value==='offset'){const {range,...rest}=modulation;changeMod(rest);}else{const d=allDefinitions.find(d=>d.key===selectedModKey),bounds=d?[d.min,d.max]:selectedModKey==='opacity'?[0,1]:selectedModKey==='transform.scale'?[.05,8]:selectedModKey==='transform.rotation'?[-TAU,TAU]:[-2,2];changeMod({...modulation,range:{min:bounds[0],max:bounds[1]}});}}}><option value="offset">Offset from base</option><option value="endpoints">Smooth between endpoints</option></select></label>{modulation.range&&<div className="endpoint-controls">{(['min','max'] as const).map(key=><label key={key}>{key==='min'?'Lower endpoint':'Upper endpoint'}<input type="number" aria-label={key==='min'?'Lower endpoint':'Upper endpoint'} step="any" value={modulation.range![key]} onChange={e=>{const n=Number(e.target.value),d=allDefinitions.find(d=>d.key===selectedModKey),bounds=d?[d.min,d.max]:selectedModKey==='opacity'?[0,1]:selectedModKey==='transform.scale'?[.05,8]:selectedModKey==='transform.rotation'?[-TAU,TAU]:[-2,2];if(Number.isFinite(n)&&n>=bounds[0]&&n<=bounds[1]&&(key==='min'?n<modulation.range!.max:n>modulation.range!.min))changeMod({...modulation,range:{...modulation.range!,[key]:n}});}}/></label>)}</div>}<p className="motion-help">Endpoints define the full movement without clipping at the control limits. Depth applies to offset routes.</p></section>}
         <section className="control-section"><h3>Active routes</h3>{Object.entries(selected.modulations).length ? Object.entries(selected.modulations).map(([key, mod]) => routeHidden?.has(key) ? <p className="muted-text" key={key}>{allDefinitions.find(d => d.key === key)?.label ?? key}: waits until this control is in use again.</p> : <button className="route-row" key={key} onClick={() => setModKey(key)}><Icon name="wave" size={15} /><span>{allDefinitions.find(d => d.key === key)?.label ?? key}</span><small>{mod.kind} · {mod.cycles}×</small></button>) : <p className="muted-text">No parameter animations.</p>}</section>
       </> : <>
-        <section className="control-section"><h3>Layer mix</h3><Parameter definition={{ key: 'opacity', label: 'Opacity', min: 0, max: 1, step: .01, default: 1, section: 'Material' }} value={selected.opacity} animated={!!selected.modulations.opacity} onChange={n => editLayer(l => ({ ...l, opacity: n }))} onAnimate={() => { setModKey('opacity'); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} /><label className="stacked-label">Blending<select value={selected.blend} onChange={e => editLayer(l => ({ ...l, blend: e.target.value as Layer['blend'] }))}><option value="normal">Normal</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="add">Light add</option><option value="source">Colour from below</option></select></label></section>
-        <section className="control-section"><h3>Color finish</h3>{definitions.filter(d => ['saturation','hue','exposure'].includes(d.key)).map(d => <Parameter key={d.key} definition={d} value={selected.params[d.key] ?? d.default} animated={!!selected.modulations[d.key]} onChange={n => editLayer(l => ({ ...l, params: { ...l.params, [d.key]: n } }))} onAnimate={() => { setModKey(d.key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />)}</section>
-        <section className="control-section"><h3>Tonal finishing</h3><p className="muted-text">Shape luminance and colour while preserving transparency.</p>{definitions.filter(d=>FINISH_KEYS.includes(d.key)&&!TOON_KEYS.includes(d.key)&&!FEEDBACK_KEYS.includes(d.key)&&!SLIT_KEYS.includes(d.key)&&!GLOW_KEYS.includes(d.key)&&!PRINT_KEYS.includes(d.key)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}</section>
-        {supportsGlow(selected) && <section className="control-section"><h3>Glow</h3><p className="muted-text">Bright areas spill soft light. Loops close exactly; adds a few blur passes per glowing layer.</p>{definitions.filter(d=>GLOW_KEYS.includes(d.key)&&(d.key==='glowMix'||(selected.params.glowMix??0)>0||!!selected.modulations.glowMix)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={d.step===1?undefined:()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}</section>}
-        {supportsPrint(selected) && <PrintScreenSection layer={selected} definitions={definitions} edit={editLayer} animate={key=>{setModKey(key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>}
-        <section className="control-section"><h3>Flat colour &amp; outlines</h3><p className="muted-text">Hard palette bands and contour lines. For the cleanest edges, lower the source's Relief and Softness.</p>{definitions.filter(d=>TOON_KEYS.includes(d.key)&&(d.key==='toonMix'||(selected.params.toonMix??0)>0)&&(d.key!=='toonOutlineColor'||(selected.params.toonOutline??0)>0)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={d.step===1?undefined:()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}</section>
-        {supportsSlitScan(selected) && <section className="control-section"><h3>Time displacement</h3><p className="muted-text">Parts of the frame show the source as it was some frames ago. Loops close exactly; each slice renders the source once more.</p>{definitions.filter(d=>SLIT_KEYS.includes(d.key)&&d.key!=='slitShape'&&(d.key==='slitShift'||(selected.params.slitShift??0)!==0||!!selected.modulations.slitShift)&&(d.key!=='slitBlocks'||selected.params.slitShape===4)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={d.step===1?undefined:()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}{((selected.params.slitShift??0)!==0||!!selected.modulations.slitShift)&&<ChoiceParameter label="Delay map" name="Delay map" options={SLIT_SHAPES} value={selected.params.slitShape??0} onChange={slitShape=>editLayer(l=>({...l,params:{...l.params,slitShape}}))}/>}</section>}
-        {selected.kind === 'kaleidoscope' && [KALEIDOSCOPE_INPUT.below, KALEIDOSCOPE_INPUT.feedback].includes(kaleidoscopeInput(selected.params) as 2 | 3) && <section className="control-section"><h3>Feedback</h3><p className="muted-text">{kaleidoscopeInput(selected.params) === KALEIDOSCOPE_INPUT.feedback ? 'This layer folds its own echo. Set Echo amount in the Shape tab.' : 'Echo does not apply to the layer below.'}</p></section>}
-        {supportsFeedback(selected) && !(selected.kind === 'kaleidoscope' && kaleidoscopeInput(selected.params) >= KALEIDOSCOPE_INPUT.below) && <section className="control-section"><h3>Feedback</h3><p className="muted-text">Each frame keeps a faded, moved echo of the last. Loops close exactly; exports warm up before the first frame.</p>{definitions.filter(d=>FEEDBACK_KEYS.includes(d.key)&&d.key!=='echoBlend'&&d.key!=='echoStreakAxis'&&(!['echoRound','echoSquare','echoEdge'].includes(d.key)||(selected.params.echoFrame??0)>0||(selected.params.echoWindow??0)>0)&&(d.key==='echo'||(selected.params.echo??0)>0||!!selected.modulations.echo)).map(d=><Parameter key={d.key} definition={d} value={selected.params[d.key]} animated={!!selected.modulations[d.key]} onChange={n=>editLayer(l=>({...l,params:{...l.params,[d.key]:n}}))} onAnimate={()=>{setModKey(d.key);setTab('Motion');}} onStart={beginGesture} onEnd={endGesture}/>)}{((selected.params.echo??0)>0||!!selected.modulations.echo)&&<ChoiceParameter label="Echo blend" name="Echo blend" options={['Mix','Behind source','Brighter']} value={selected.params.echoBlend??0} onChange={echoBlend=>editLayer(l=>({...l,params:{...l.params,echoBlend}}))}/>}{((selected.params.echo??0)>0||!!selected.modulations.echo)&&(selected.params.echoStreak??0)>0&&<ChoiceParameter label="Streak direction" name="Streak direction" options={['Radial','Box']} value={selected.params.echoStreakAxis??0} onChange={echoStreakAxis=>editLayer(l=>({...l,params:{...l.params,echoStreakAxis}}))}/>}</section>}
+        <FinishSections layer={selected} definitions={definitions} edit={editLayer} animate={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />
         <section className="control-section"><h3>Transform</h3>{([{ key: 'x', label: 'Horizontal', min: -2, max: 2, step: .01, default: 0 }, { key: 'y', label: 'Vertical', min: -2, max: 2, step: .01, default: 0 }, { key: 'scale', label: 'Size', min: .05, max: 8, step: .01, default: 1 }, { key: 'rotation', label: 'Rotation', min: -Math.PI, max: Math.PI, step: .01, default: 0 }] as const).map(d => <Parameter key={d.key} definition={{ ...d, section: 'Shape' }} value={selected.transform[d.key]} animated={!!selected.modulations[`transform.${d.key}`]} onChange={n => editLayer(l => ({ ...l, transform: { ...l.transform, [d.key]: n } }))} onAnimate={() => { setModKey(`transform.${d.key}`); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />)}</section>
         <section className="control-section"><h3>Mask</h3><label className="stacked-label">Mask shape<select value={selected.mask.kind} onChange={e => { const kind = e.target.value as Layer['mask']['kind']; if (kind === 'image' && !selected.mask.dataUrl) maskInput.current?.click(); else editLayer(l => ({ ...l, mask: { kind, softness: l.mask.softness, invert: l.mask.invert, size: l.mask.size, ...(kind === 'image' ? { dataUrl: l.mask.dataUrl } : {}) } })); }}><option value="none">None</option><option value="circle">Circle</option><option value="rectangle">Rectangle</option><option value="image">Imported image</option></select></label>{selected.mask.kind !== 'none' && <><Parameter definition={{ key: 'size', label: 'Mask size', min: .05, max: 2, step: .01, default: 1, section: 'Shape' }} value={selected.mask.size} animated={false} onChange={n => editLayer(l => ({ ...l, mask: { ...l.mask, size: n } }))} onStart={beginGesture} onEnd={endGesture} /><Parameter definition={{ key: 'softness', label: 'Feather', min: 0, max: 1, step: .01, default: .1, section: 'Shape' }} value={selected.mask.softness} animated={false} onChange={n => editLayer(l => ({ ...l, mask: { ...l.mask, softness: n } }))} onStart={beginGesture} onEnd={endGesture} /><label className="checkbox-row"><input type="checkbox" checked={selected.mask.invert} onChange={e => editLayer(l => ({ ...l, mask: { ...l.mask, invert: e.target.checked } }))} />Invert mask</label>{selected.mask.kind === 'image' && <button className="wide-button" onClick={() => maskInput.current?.click()}>Replace mask image</button>}</>}</section>
         <section className="control-section"><h3>Output</h3><label className="checkbox-row"><input type="checkbox" aria-label="Exact colour" checked={project.highlights === 'exact'} onChange={e => edit(p => ({ ...p, highlights: e.target.checked ? 'exact' : 'soft' }))} />Exact colour (no highlight roll-off)</label><p className="muted-text">Keeps palette colours at their exact values. Turn off for lit 3D and glowing sources, whose highlights then roll off softly.</p>{(() => { const blockers = tileBlockers(project); return <><label className="checkbox-row"><input type="checkbox" aria-label="Tile edges" checked={!!project.tileEdges} disabled={blockers.length > 0} onChange={e => edit(p => { const { tileEdges: _off, ...rest } = p; return e.target.checked ? { ...rest, tileEdges: true } : rest; })} />Tile edges</label><p className="muted-text">The exported clip repeats seamlessly side by side and top to bottom, for mapping copies onto neighbouring surfaces.</p>{blockers.map((b, i) => <p key={i} className="muted-text">{b}</p>)}</>; })()}</section>

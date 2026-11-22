@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultLiveSettings, validateLiveSettings, PAINT_CONTROLS } from '../src/live/settings';
+import { defaultLiveSettings, validateLiveSettings, RELIEF_PRESETS, PAINT_CONTROLS } from '../src/live/settings';
 import { MAX_STEP, capStep, fadeFactor, boxWeight, birthChance } from '../src/live/maths';
 
 test('defaults validate to themselves', () => assert.deepEqual(validateLiveSettings(defaultLiveSettings()), defaultLiveSettings()));
@@ -143,6 +143,38 @@ test('Vividness runs 0 to 1, defaults high, and the starting points leave it alo
   for (const start of SMOKE_STARTS) assert.equal('vividness' in start.values, false, start.label);
 });
 
+test('Relief loads old settings and validates each control independently', () => {
+  const d = defaultLiveSettings();
+  assert.deepEqual(validateLiveSettings({ look: 'smoke' }).relief, d.relief);
+  const saved = validateLiveSettings({ look: 'relief', relief: { depth: 99, reach: -.1, settle: 2 } });
+  assert.equal(saved.look, 'relief');
+  assert.deepEqual(saved.relief, { ...d.relief, depth: 1.25, reach: 0, settle: 2 });
+  assert.equal(validateLiveSettings({ relief: { settle: null } }).relief.settle, d.relief.settle);
+});
+
+test('Relief presets round-trip and invalid materials fall back independently', () => {
+  for (const preset of RELIEF_PRESETS) {
+    assert.deepEqual(validateLiveSettings({ relief: preset.settings }).relief, preset.settings);
+  }
+  const style = validateLiveSettings({ relief: { surface: 'weave', motion: 'toString', finish: null, edgeLight: 2 } }).relief;
+  assert.deepEqual([style.surface, style.motion, style.finish, style.edgeLight], ['weave', 'sweep', 'silver', 1]);
+});
+
+test('saved Broad and Medium Relief sizes migrate to Fine', () => {
+  for (const size of ['broad', 'medium']) {
+    const saved = validateLiveSettings({ look: 'relief', relief: { surface: 'scales', size, depth: .65 } });
+    assert.equal(saved.relief.size, 'fine');
+    assert.equal(saved.relief.depth, .65);
+  }
+  assert.equal(validateLiveSettings({ relief: { size: 'extraFine' } }).relief.size, 'extraFine');
+});
+
+test('Relief colour schemes persist and old settings use the finish colours', () => {
+  assert.equal(validateLiveSettings({ look: 'relief' }).reliefPalette, 'material');
+  assert.equal(validateLiveSettings({ reliefPalette: 'constructor' }).reliefPalette, 'material');
+  assert.equal(validateLiveSettings({ reliefPalette: 'cyber' }).reliefPalette, 'cyber');
+});
+
 import { SIGNAL_CONTROLS, SIGNAL_STARTS } from '../src/live/settings';
 test('Signal settings survive saving, repair bad values, and migrate older files', () => {
   const settings = defaultLiveSettings(); settings.look = 'signal'; settings.signal.hold = true;
@@ -179,7 +211,7 @@ test('Still poses participate in Signal without changing Smoke still-object sett
 });
 
 import * as THREE from 'three';
-import { KALEIDOSCOPE_LIVE, wantsPeople } from '../src/live/settings';
+import { KALEIDOSCOPE_LIVE, usesPeople } from '../src/live/settings';
 import { Kaleidoscope, advancePhase, liveKaleidoscopeUniforms } from '../src/live/Kaleidoscope';
 import type { Passes } from '../src/live/passes';
 import type { TrackingFeed } from '../src/live/look';
@@ -211,11 +243,11 @@ test('settings with the kaleidoscope stay under the 16 KB message cap', () => {
 });
 test('only smoke and background removal ask for people', () => {
   const d = defaultLiveSettings();
-  assert.equal(wantsPeople({ ...d, look: 'kaleidoscope' }), false);
-  assert.equal(wantsPeople({ ...d, look: 'paint' }), false);
-  assert.equal(wantsPeople({ ...d, look: 'smoke' }), true);
-  assert.equal(wantsPeople({ ...d, look: 'signal' }), true);
-  assert.equal(wantsPeople({ ...d, look: 'signal', signal: { ...d.signal, removeBackground: false } }), false);
+  assert.equal(usesPeople({ ...d, look: 'kaleidoscope' }), false);
+  assert.equal(usesPeople({ ...d, look: 'paint' }), false);
+  assert.equal(usesPeople({ ...d, look: 'smoke' }), true);
+  assert.equal(usesPeople({ ...d, look: 'signal' }), true);
+  assert.equal(usesPeople({ ...d, look: 'signal', signal: { ...d.signal, removeBackground: false } }), false);
 });
 test('phase advances by frame time, whatever the frame rate', () => {
   let fast = 0, slow = 0;

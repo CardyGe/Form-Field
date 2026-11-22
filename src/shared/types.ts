@@ -155,7 +155,7 @@ export interface StudioBridge {
   map: MapBridge;
 }
 /** Sent from the studio window to the artwork window. */
-export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' };
+export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' } | { type: 'signals'; signals: Record<string, number> };
 /** What the artwork window reports: its camera, and person finding when the look uses it. */
 export type LiveReport = SourceState & { people?: PeopleStatus; roomCaptured?: boolean };
 export interface LiveBridge {
@@ -163,6 +163,7 @@ export interface LiveBridge {
   loadSettings(): Promise<unknown>;
   saveSettings(settings: LiveSettings): Promise<void>;
   cameraAccess(): Promise<'granted' | 'refused'>;
+  microphoneAccess(): Promise<'granted' | 'refused'>;
   displays(): Promise<{ id: number; label: string; primary: boolean }[]>;
   openOutput(displayId: number): Promise<void>;
   closeOutput(): Promise<void>;
@@ -190,6 +191,9 @@ export interface MapBridge {
   saveAutosave(text: string): Promise<void>;
   /** The chosen show file as parsed JSON; null when cancelled; { damaged: true } when the file cannot be read. */
   openShow(): Promise<unknown>;
+  /** Stage 6: a video file picked by Greg (Video… or Find…), which the projector may then play. */
+  chooseVideo(): Promise<{ path: string; name: string } | null>;
+  findVideo(name: string): Promise<{ path: string; name: string } | null>;
   /** The file written, or null when the person cancelled. */
   saveShow(text: string, saveAs: boolean): Promise<string | null>;
   displays(): Promise<{ id: number; label: string; primary: boolean }[]>;
