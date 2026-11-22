@@ -237,6 +237,8 @@ Family-specific controls add ink seed coverage, development and edge pigment; st
 
 Each new instrument has a fourth exploration look that demonstrates these controls. Neutral migration defaults preserve existing artwork.
 
+**Finish** also has **Colour split**, **Gradient map**, **Colour balance** and **Key**, and Glow gains **Glow colour spread** and **Glow streak**. **Time displacement** gains **Time mode** (Delay map, Echo, Median, Darkest, Brightest), **Direction**, **Twist**, **Time zoom**, **Colour reach** and **Colour lag**. All of them start off, so existing projects look the same. Seven new finish looks use them: Neon Map, Anamorphic, Time Vortex, Ghosts, Long Exposure, Premonition and Brightness Time. Results are in [the colour and time proof](docs/colour-and-time-proof.md).
+
 Volume Banding suppression uses deterministic sampling dither; High quality reduces the resulting sampling texture. Directional highlights are filtered against rapid normal changes to reduce sparkle. All render and grading changes use the shared compositor and native output pipeline. The detailed audit and research are in [the professional effect audit](docs/professional-effect-audit-0.10.md).
 
 ## Per-element timing

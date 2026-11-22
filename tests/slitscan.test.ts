@@ -146,7 +146,7 @@ test('the five new time looks exist with their exact recipes', () => {
   const find = (id: string) => FINISH_LOOKS.find(f => f.id === id)!.params;
   assert.deepEqual(find('finish-time-vortex'), { slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 16, slitSmooth: 1, slitTwist: .5, slitZoom: .2, slitChroma: .25 });
   assert.deepEqual(find('finish-ghost-median'), { slitShift: 1, slitSpan: 60, slitMode: 2, slitSlices: 9, slitReach: .4 });
-  assert.deepEqual(find('finish-long-exposure'), { slitShift: 1, slitSpan: 45, slitMode: 4, slitSlices: 16 });
+  assert.deepEqual(find('finish-long-exposure'), { slitShift: 1, slitSpan: 16, slitMode: 4, slitSlices: 8 });
   assert.deepEqual(find('finish-premonition'), { slitShift: 1, slitSpan: 24, slitMode: 1, slitDirection: 1, slitSlices: 8, slitDecay: .7 });
   assert.deepEqual(find('finish-brightness-time'), { slitShift: 1, slitSpan: 60, slitShape: 5, slitSlices: 16, slitSmooth: 1 });
 });

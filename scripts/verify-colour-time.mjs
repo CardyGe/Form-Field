@@ -17,9 +17,14 @@ const option = name => process.argv.find(a => a.startsWith(`--${name}=`))?.slice
 const baseline = option('baseline');
 const only = option('only')?.split(',').map(s => s.trim()).filter(Boolean);
 const out = path.join(root, 'work/colour-time');
+const proof = path.join(root, 'work/colour-time-proof');
 const TAU = Math.PI * 2;
 const SHAPES = ['Straight', 'Lens', 'Edges', 'Wave'];
 const STAT_MODES = [['Echo', 1], ['Median', 2], ['Darkest', 3], ['Brightest', 4]];
+const LOOK_GROUPS = [
+  [['Neon Map', 'finish-neon-map'], ['Anamorphic', 'finish-anamorphic']],
+  [['Time Vortex', 'finish-time-vortex'], ['Ghosts', 'finish-ghost-median'], ['Long Exposure', 'finish-long-exposure'], ['Premonition', 'finish-premonition'], ['Brightness Time', 'finish-brightness-time']],
+];
 
 /** Fails a check that needs the older checkout, rather than letting it pass unseen. */
 const needsBaseline = () => baseline ? null : { ok: false, detail: 'needs --baseline=<checkout>' };
@@ -1006,6 +1011,154 @@ const CHECKS = [
       return { ok, detail: `5120x2880 Median: 3 slices ${array(r.three)}, same again reallocates ${r.repeat} times, 9 slices ${array(r.nine)} (budget 768 MiB); shared array reallocations ${r.shared.map(([name, row]) => `${name} ${row.reallocated} (depth ${row.depth})`).join(', ')}; values changed by sharing ${r.samplingOff}; modulated slices keep a ${r.modulatedWidth}-wide preview array (want 480); preview GL errors ${r.preview}; Echo holds [${r.echo}]; Darkest with reach [${r.reach}]; Median [${r.median}]; delay map [${r.delay}]; all in use ${r.all.length}/${r.keys.length}; after they stop [${r.after}], released ${r.released.length}; dispose released ${r.closed.length}, left [${r.left}]` };
     },
   },
+  {
+    name: 'all-presets-neutral',
+    // Every preset in the older checkout, at one phase, byte for byte against the same preset now.
+    run: async ({ page }) => {
+      const missing = needsBaseline(); if (missing) return missing;
+      const r = await page.evaluate(async () => {
+        const q = window.ct, before = new q.old.StudioRenderer(document.querySelector('#b')), changed = [];
+        const ids = q.old.PRESETS.map(p => p.id), current = new Set(q.m.PRESETS.map(p => p.id));
+        const make = (m, preset) => { const l = m.applyPreset(m.createLayer(preset.kind), preset.id); l.id = 'preset-proof'; const p = m.createProject(); p.id = 'preset-proof'; p.layers = [l]; p.background = '#000000'; return p; };
+        let compared = 0;
+        for (const preset of q.old.PRESETS) {
+          if (!current.has(preset.id)) continue;
+          const now = make(q.m, preset), then = make(q.old, preset);
+          await q.renderer.prepare(now); await before.prepare(then);
+          if (!q.same(await q.renderer.exportPNG(now, .9, 960, 540), await before.exportPNG(then, .9, 960, 540))) changed.push(preset.id);
+          compared++;
+        }
+        before.dispose();
+        return { total: ids.length, now: current.size, compared, missing: ids.filter(id => !current.has(id)), changed };
+      });
+      const ok = r.compared === r.total && r.compared > 0 && !r.changed.length && !r.missing.length;
+      return { ok, detail: `${r.compared} of ${r.total} baseline presets compared at phase .9, 960x540 (${r.now} presets now); ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'all byte-identical'}${r.missing.length ? `; missing now: ${r.missing.join(', ')}` : ''}` };
+    },
+  },
+  {
+    name: 'old-file',
+    // A project written by the older build's own code goes to disk, is read back, and opens in both.
+    run: async ({ page }) => {
+      const missing = needsBaseline(); if (missing) return missing;
+      await fs.mkdir(proof, { recursive: true });
+      const file = path.join(proof, 'baseline-project.formfield');
+      const saved = await page.evaluate(() => {
+        const q = window.ct, o = q.old, p = o.createProject();
+        const add = (kind, finish, extra = {}) => {
+          const preset = o.PRESETS.find(x => x.kind === kind);
+          let l = preset ? o.applyPreset(o.createLayer(kind), preset.id) : o.createLayer(kind);
+          if (kind === 'image') l.image = { name: 'tiny.png', dataUrl: q.tinyUrl, width: 64, height: 36, fit: 'contain' };
+          l = o.applyFinish(l, finish); Object.assign(l, extra); return l;
+        };
+        p.id = 'old-file-proof'; p.name = 'Baseline project'; p.background = '#000000';
+        p.layers = [add('surface', 'finish-tunnel'), add('fractal', 'finish-terraces', { opacity: .7, blend: 'screen' }), add('liquid', 'finish-soft-glow', { opacity: .6, blend: 'screen' }), add('image', 'finish-halftone', { opacity: .5 })];
+        return JSON.stringify(o.validateProject(p), null, 2);
+      });
+      await fs.writeFile(file, saved);
+      const text = await fs.readFile(file, 'utf8');
+      const r = await page.evaluate(async text => {
+        const q = window.ct, before = new q.old.StudioRenderer(document.querySelector('#b')), changed = [];
+        const raw = JSON.parse(text), now = q.m.validateProject(JSON.parse(text)), then = q.old.validateProject(JSON.parse(text));
+        let added = 0; const offDefault = [];
+        now.layers.forEach((l, i) => {
+          const defs = q.m.parameterDefinitions(l.kind);
+          for (const key of Object.keys(l.params)) if (!(key in raw.layers[i].params)) { added++; const d = defs.find(x => x.key === key); if (!d || l.params[key] !== d.default) offDefault.push(`${l.kind}.${key}`); }
+        });
+        const scenes = [['all layers', p => p], ...now.layers.map((l, i) => [l.kind, p => ({ ...p, layers: [p.layers[i]] })])];
+        let compared = 0;
+        for (const [name, pick] of scenes) {
+          const a = pick(now), b = pick(then);
+          await q.renderer.prepare(a); await before.prepare(b);
+          for (const phase of [0, 2.1, 4.2]) { compared++; if (!q.same(await q.renderer.exportPNG(a, phase, 960, 540), await before.exportPNG(b, phase, 960, 540))) changed.push(`${name}@${phase}`); }
+        }
+        before.dispose();
+        return { schema: raw.schemaVersion, savedSchema: now.schemaVersion, kinds: now.layers.map(l => l.kind), added, offDefault, compared, changed };
+      }, text);
+      const ok = r.compared === 15 && !r.changed.length && !r.offDefault.length && r.added > 0 && r.savedSchema === r.schema;
+      return { ok, detail: `${path.relative(root, file)}: schema ${r.schema} in the file, ${r.savedSchema} once opened, layers ${r.kinds.join(', ')}; ${r.added} new keys filled in, ${r.offDefault.length} off default; ${r.compared} renders ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'byte-identical'}` };
+    },
+  },
+  {
+    name: 'looks-sheet',
+    // Contact sheets for judging by eye, with measurements beside them. Passing means every look
+    // rendered and was not blank; whether it looks good is decided from the sheets.
+    run: async ({ page }) => {
+      await fs.mkdir(proof, { recursive: true });
+      const r = await page.evaluate(async ([groups, kinds]) => {
+        const q = window.ct, W = 480, H = 270, TAU = Math.PI * 2, phases = [0, TAU / 3, 2 * TAU / 3], sheets = [], metrics = [];
+        const base = kind => kind === 'image' ? q.poster() : q.layer(kind);
+        const thumb = async bytes => {
+          const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+          const c = new OffscreenCanvas(120, 68), x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(bitmap, 0, 0, 120, 68);
+          return { bitmap, data: x.getImageData(0, 0, 120, 68).data };
+        };
+        const diff = (a, b) => { let s = 0; for (let i = 0; i < a.length; i += 4) s += (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2])) / 3; return s / (a.length / 4); };
+        const measure = d => { let lit = 0, sat = 0; for (let i = 0; i < d.length; i += 4) { const hi = Math.max(d[i], d[i + 1], d[i + 2]), lo = Math.min(d[i], d[i + 1], d[i + 2]); if (hi > 32) { lit++; sat += (hi - lo) / hi; } } return { lit: lit / (d.length / 4), sat: lit ? sat / lit : 0 }; };
+        const b64 = async blob => { const u = new Uint8Array(await blob.arrayBuffer()); let t = ''; for (let i = 0; i < u.length; i += 8192) t += String.fromCharCode(...u.subarray(i, i + 8192)); return btoa(t); };
+        for (const kind of kinds) {
+          const plainThumbs = [];
+          for (let g = 0; g < groups.length; g++) {
+            const rows = [['Plain layer', null], ...groups[g]];
+            const sheet = new OffscreenCanvas(W * 3, H * rows.length), x = sheet.getContext('2d');
+            x.fillStyle = '#000'; x.fillRect(0, 0, sheet.width, sheet.height); x.font = '600 15px sans-serif';
+            for (let row = 0; row < rows.length; row++) {
+              const [name, id] = rows[row], layer = id ? q.m.applyFinish(base(kind), id) : base(kind), project = q.project([layer]), shots = [];
+              for (let col = 0; col < 3; col++) {
+                const t = await thumb(await q.shot(project, phases[col], 960, 540)); shots.push(t.data);
+                x.drawImage(t.bitmap, col * W, row * H, W, H);
+                x.fillStyle = 'rgba(0,0,0,.7)'; x.fillRect(col * W, row * H, 190, 22); x.fillStyle = '#fff'; x.fillText(`${name} ${col + 1}/3`, col * W + 5, row * H + 16);
+              }
+              if (!id) { if (!plainThumbs.length) plainThumbs.push(...shots); continue; }
+              const m = shots.map(measure);
+              metrics.push({ kind, look: name, lit: m.reduce((a, v) => a + v.lit, 0) / 3, saturation: m.reduce((a, v) => a + v.sat, 0) / 3, acrossLoop: (diff(shots[0], shots[1]) + diff(shots[1], shots[2]) + diff(shots[2], shots[0])) / 3, fromPlain: shots.reduce((a, v, i) => a + diff(v, plainThumbs[i]), 0) / 3 });
+            }
+            sheets.push({ name: `looks-${kind}-${g ? 'time' : 'colour'}.png`, data: await b64(await sheet.convertToBlob({ type: 'image/png' })) });
+          }
+          // One-to-one centre crops of a 1080-line frame, for line pitch and seams.
+          const looks = groups.flat(), crop = new OffscreenCanvas(480 * 4, 270 * 2), c = crop.getContext('2d'); c.font = '600 15px sans-serif';
+          for (let i = 0; i < looks.length; i++) {
+            const project = q.project([q.m.applyFinish(base(kind), looks[i][1])]);
+            const bitmap = await createImageBitmap(new Blob([await q.shot(project, phases[1], 1920, 1080)], { type: 'image/png' }));
+            const X = (i % 4) * 480, Y = (i >> 2) * 270; c.drawImage(bitmap, 720, 405, 480, 270, X, Y, 480, 270);
+            c.fillStyle = 'rgba(0,0,0,.7)'; c.fillRect(X, Y, 170, 22); c.fillStyle = '#fff'; c.fillText(looks[i][0], X + 5, Y + 16);
+          }
+          sheets.push({ name: `crop-1080-${kind}.png`, data: await b64(await crop.convertToBlob({ type: 'image/png' })) });
+        }
+        return { sheets, metrics };
+      }, [LOOK_GROUPS, ['surface', 'fractal', 'liquid', 'image']]);
+      for (const sheet of r.sheets) await fs.writeFile(path.join(proof, sheet.name), Buffer.from(sheet.data, 'base64'));
+      await fs.writeFile(path.join(proof, 'looks-metrics.json'), JSON.stringify(r.metrics, null, 2));
+      const blank = r.metrics.filter(m => m.lit === 0);
+      return { ok: r.sheets.length === 12 && r.metrics.length === 28 && !blank.length, detail: `${r.sheets.length} sheets and ${r.metrics.length} look measurements in ${path.relative(root, proof)}; blank: ${blank.length ? blank.map(m => `${m.look} on ${m.kind}`).join(', ') : 'none'}` };
+    },
+  },
+  {
+    name: 'preview-cost',
+    // A report, not a gate. Each frame is forced to finish on the GPU, so the time is the real draw.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async looks => {
+        const q = window.ct, canvas = document.createElement('canvas'), R = new q.m.StudioRenderer(canvas), gl = R.renderer.getContext(), rows = [], FRAMES = 60, WARM = 10;
+        const pixel = new Uint8Array(4);
+        try {
+          for (const kind of ['surface', 'fractal']) for (const [name, id] of [['Plain layer', null], ...looks]) {
+            const p = q.project([id ? q.m.applyFinish(q.layer(kind), id) : q.layer(kind)]); await R.prepare(p);
+            let total = 0;
+            for (let f = 0; f < WARM + FRAMES; f++) {
+              const start = performance.now();
+              R.render(p, f / (WARM + FRAMES) * Math.PI * 2, 1280, 720); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+              if (f >= WARM) total += performance.now() - start;
+            }
+            rows.push({ kind, name, ms: total / FRAMES });
+          }
+        } finally { R.dispose(); }
+        return rows;
+      }, LOOK_GROUPS.flat());
+      await fs.mkdir(proof, { recursive: true });
+      await fs.writeFile(path.join(proof, 'preview-cost.json'), JSON.stringify(rows, null, 2));
+      const text = ['surface', 'fractal'].map(kind => { const set = rows.filter(r => r.kind === kind), plain = set[0].ms; return `${kind}: plain ${plain.toFixed(2)} ms; ${set.slice(1).map(r => `${r.name} ${r.ms.toFixed(2)} (${r.ms >= plain ? '+' : ''}${(r.ms - plain).toFixed(2)})`).join(', ')}`; }).join(' | ');
+      return { ok: rows.length === 16, detail: `mean of 60 frames at 1280x720 (report only). ${text}` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -1019,8 +1172,8 @@ export {encodePNG} from './src/rendering/png';${extra}`, resolveDir: dir, loader
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
-await bundle(root, 'renderer.js', `\nexport {gradientTone,gradientStops} from './src/rendering/colour-lens';\nexport {applyFinish} from './src/core/project';\nexport {supportsSlitScan,medianOf,medianTargetSize} from './src/rendering/slitscan';\nexport {feedbackActive} from './src/rendering/feedback';`);
-if (baseline) await bundle(path.resolve(baseline), 'baseline.js');
+await bundle(root, 'renderer.js', `\nexport {gradientTone,gradientStops} from './src/rendering/colour-lens';\nexport {applyFinish,validateProject,parameterDefinitions} from './src/core/project';\nexport {supportsSlitScan,medianOf,medianTargetSize} from './src/rendering/slitscan';\nexport {feedbackActive} from './src/rendering/feedback';`);
+if (baseline) await bundle(path.resolve(baseline), 'baseline.js', `\nexport {applyFinish,validateProject} from './src/core/project';`);
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
 app.setPath('userData',${JSON.stringify(path.join(out, 'user-data'))});app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -1089,6 +1242,21 @@ try {
       l.modulations['transform.x'] = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: -.125, max: .125 } };
       return l;
     };
+    // Saturated shapes on black. An Image layer is still, so this one drifts to give the time looks motion.
+    const posterUrl = await dataUrl(960, 540, (x, y) => {
+      const disc = (cx, cy, r) => Math.hypot(x - cx, y - cy) < r;
+      if (disc(-.45, -.1, .24)) return [255, 30, 120, 255];
+      if (disc(.42, .14, .2)) return [30, 220, 255, 255];
+      if (disc(.05, -.24, .11)) return [255, 235, 60, 255];
+      if (Math.abs(y - .34) < .035) return [120, 255, 70, 255];
+      if (Math.abs(x + y * .5 - .72) < .03) return [255, 120, 20, 255];
+      return [0, 0, 0, 255];
+    });
+    const poster = (params = {}) => {
+      const l = image(posterUrl, params, 'poster');
+      l.modulations['transform.x'] = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: -.125, max: .125 } };
+      return l;
+    };
     const slide = reach => ({ kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: -reach, max: reach } });
     const layer = (kind, preset, params = {}) => { const l = preset ? m.applyPreset(m.createLayer(kind), preset) : m.createLayer(kind); Object.assign(l.params, params); l.id = `${kind}-proof`; return l; };
     const project = (layers, transparent = false) => { const p = m.createProject(); p.id = 'colour-proof'; p.layers = layers; p.background = '#000000'; p.transparent = transparent; return p; };
@@ -1115,7 +1283,7 @@ try {
       const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
       return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
     };
-    window.ct = { m, old, tinyUrl, renderer, slide, layer, soft, grey, bars, stripes, wave, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
+    window.ct = { m, old, tinyUrl, renderer, slide, layer, poster, soft, grey, bars, stripes, wave, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
   }, !!baseline);
 
   for (const check of selected) {
