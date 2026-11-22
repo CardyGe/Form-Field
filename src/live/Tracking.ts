@@ -22,6 +22,7 @@ const NOT_STARTED: PeopleStatus = { state: 'loading' };
 
 export class Tracking implements TrackingFeed {
   fresh = false;
+  newImage = false;
   /** One texture per source element: three sizes a texture once, and a camera and a file differ. */
   private sourceTexture: THREE.Texture | null = null;
   private readonly frames: Pair;
@@ -105,6 +106,7 @@ export class Tracking implements TrackingFeed {
 
   private analyse(source: FrameSource, settings: LiveSettings): void {
     this.fresh = false;
+    this.newImage = false;
     const element = source.element, now = performance.now();
     const ready = element && !(element instanceof HTMLVideoElement && (element.readyState < 2 || !element.videoWidth));
     if (!ready || element !== this.element) {
@@ -137,6 +139,7 @@ export class Tracking implements TrackingFeed {
     this.sourceTexture!.needsUpdate = true;
     this.passes.draw(this.copy, this.frames.write);
     this.frames.swap();
+    this.newImage = true;
     this.average.uniforms.uImage.value = this.frames.read.texture;
     this.passes.draw(this.average, this.lumas.write);
     this.lumas.swap();

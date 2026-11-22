@@ -79,7 +79,8 @@ export class Kaleidoscope implements Look {
     const k = settings.kaleidoscope;
     this.spin = advancePhase(this.spin, k.spin, seconds);
     this.zoom = advancePhase(this.zoom, k.zoom, seconds);
-    if (feed.fresh) this.capture(feed.camera);
+    // Not `fresh`: that needs two close frames to compare, so a slow source would never appear.
+    if (feed.newImage) this.capture(feed.camera);
     const u = this.material.uniforms;
     for (const [key, value] of Object.entries(liveKaleidoscopeUniforms(k, this.spin, this.zoom))) u[key].value = value;
     u.uAspect.value = this.picture.width / this.picture.height;

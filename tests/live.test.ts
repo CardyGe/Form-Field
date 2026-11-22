@@ -250,7 +250,7 @@ function fakeLook() {
   } as unknown as Passes;
   const look = new Kaleidoscope(passes, 1920, 1080);
   const camera = new THREE.WebGLRenderTarget(1280, 720).texture;
-  const feed = (fresh: boolean, texture: THREE.Texture = camera) => ({ camera: texture, fresh }) as unknown as TrackingFeed;
+  const feed = (newImage: boolean, texture: THREE.Texture = camera, fresh = false) => ({ camera: texture, newImage, fresh }) as unknown as TrackingFeed;
   const settings = { ...defaultLiveSettings(), look: 'kaleidoscope' as const };
   return { look, draws, feed, settings, camera };
 }
@@ -262,6 +262,13 @@ test('the look is dark until a frame arrives, and copies only on fresh frames', 
   assert.equal(draws.length, 3, 'one copy and one picture'); assert.equal(draws[2].empty, 0);
   look.step(.016, 0, feed(false), settings);
   assert.equal(draws.length, 4, 'a held frame is not copied again'); assert.equal(draws[3].empty, 0);
+});
+test('the look copies on a new image, whether or not movement could be measured', () => {
+  const { look, draws, feed, settings, camera } = fakeLook();
+  look.step(.016, 0, feed(true, camera, false), settings);
+  assert.equal(draws.length, 2, 'a slow frame is copied'); assert.equal(draws[1].empty, 0);
+  look.step(.016, 0, feed(false, camera, true), settings);
+  assert.equal(draws.length, 3, 'no new image, no copy');
 });
 test('no draw samples the target it writes', () => {
   const { look, draws, feed, settings } = fakeLook();

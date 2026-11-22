@@ -17,6 +17,8 @@ export interface TrackingFeed {
   readonly flow: THREE.Texture;
   /** True on display frames where a new camera frame was analysed. */
   readonly fresh: boolean;
+  /** True on display frames where `camera` received a new image, including ones too far apart to compare for movement. */
+  readonly newImage: boolean;
   /** People, lined up with `camera`: likelihood 0..1 with the filters applied. Zero while not ready or not wanted. */
   readonly people: THREE.Texture;
   /** Two timers per point in seconds. r: since any movement nearby (sway counts). g: since deliberate movement. */
