@@ -51,7 +51,9 @@ export class MorphSolver {
     this.director.update(seconds, params, this.width / this.height, driftBoost);
     const breath = 1 + params.breathing * .12 * Math.sin(time * .37), outer = params.wavelength * breath, inner = outer * params.formWavelength;
     const dt = Math.min(stableStep(outer, params.alignment, params.asymmetry), stableStep(inner, params.alignment, params.asymmetry));
-    const owed = accumulateSteps(this.carry, seconds, params.speed * SIM_RATE, dt, MAX_STEPS);
+    // Wide stripes grow more slowly, so they get more simulation time per second to settle as quickly as the default width.
+    const widthRate = Math.min(4, (2 * Math.PI / 12) ** 2 / (2 * Math.PI / outer) ** 2);
+    const owed = accumulateSteps(this.carry, seconds, params.speed * SIM_RATE * Math.max(1, widthRate), dt, MAX_STEPS);
     this.carry = owed.carry;
     const u = this.stepMaterial.uniforms;
     (u.uK.value as THREE.Vector2).set((2 * Math.PI / outer) ** 2, (2 * Math.PI / inner) ** 2);

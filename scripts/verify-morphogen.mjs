@@ -11,6 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'work/morphogen');
 await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {MorphSolver} from './src/morphogen/solver';
+export {MorphEngine} from './src/morphogen/engine';
 export {defaultMorphParams} from './src/morphogen/params';
 export {Passes} from './src/live/passes';
 export * as THREE from 'three';`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'morphogen.js'), logLevel: 'error' });
@@ -87,6 +88,74 @@ try {
     });
     console.log('straight spacing', spacing.toFixed(2));
     assert.ok(Math.abs(spacing - 12) <= 12 * .2, `spacing ${spacing}`);
+  });
+  await check('three looks render as distinct, well-exposed pictures', async () => {
+    const looks = [
+      { palette: 0, formType: 1, fieldType: 0, wavelength: 13, asymmetry: .16, irid: .75 },
+      { palette: 1, formType: 3, fieldType: 1, spiral: .22, wavelength: 18, asymmetry: .38, drive: .4, metal: .6, irid: .45, formSize: .34, formX: -.25 },
+      { palette: 2, formType: 2, fieldType: 4, wavelength: 10, asymmetry: .08, metal: 1, roughness: .1, irid: .9, filmNm: 620, formSize: .55 },
+    ];
+    for (let n = 0; n < looks.length; n++) {
+      const r = await page.evaluate(look => {
+        const { m, renderer, passes } = window.t, engine = new m.MorphEngine(passes, 1920, 1080), params = { ...m.defaultMorphParams(), ...look };
+        const input = { flow: null, people: null, impulse: 0, seedBurst: 0 };
+        for (let i = 0; i < 900; i++) engine.step(1 / 60, i / 60, params, input);
+        const copy = passes.material('uniform sampler2D uImage;void main(){vec3 c=clamp(texture2D(uImage,vUv).rgb,0.,1.);gl_FragColor=vec4(mix(c*12.92,1.055*pow(c,vec3(1./2.4))-.055,step(.0031308,c)),1.);}', { uImage: { value: engine.output } });
+        passes.draw(copy, null);
+        const gl = renderer.getContext(), data = new Uint8Array(1920 * 1080 * 4); gl.readPixels(0, 0, 1920, 1080, gl.RGBA, gl.UNSIGNED_BYTE, data);
+        let red = 0, green = 0, blue = 0, clipped = 0, black = 0;
+        for (let i = 0; i < data.length; i += 4) { red += data[i]; green += data[i + 1]; blue += data[i + 2]; if (data[i] > 252 && data[i + 1] > 252 && data[i + 2] > 252) clipped++; if (data[i] + data[i + 1] + data[i + 2] < 12) black++; }
+        const count = data.length / 4, image = renderer.domElement.toDataURL('image/png').split(',')[1];
+        copy.dispose(); engine.dispose();
+        return { mean: [red / count, green / count, blue / count], clipped: clipped / count, black: black / count, image };
+      }, looks[n]);
+      await fs.writeFile(path.join(out, `first-look-${n + 1}.png`), Buffer.from(r.image, 'base64'));
+      console.log(`look ${n + 1}`, r.mean.map(v => v.toFixed(0)).join(','), 'clipped', r.clipped.toFixed(3), 'black', r.black.toFixed(3));
+      assert.ok(r.clipped < .15, `look ${n + 1} clips ${r.clipped}`);
+      assert.ok(r.black < .15, `look ${n + 1} is black over ${r.black}`);
+      looks[n].mean = r.mean;
+    }
+    const apart = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    assert.ok(apart(looks[0].mean, looks[1].mean) > 12 && apart(looks[1].mean, looks[2].mean) > 12 && apart(looks[0].mean, looks[2].mean) > 12, 'looks are too similar');
+  });
+  await check('the picture keeps moving, and frame cost is measured', async () => {
+    await fs.rm(path.join(out, 'clip'), { recursive: true, force: true });
+    await fs.mkdir(path.join(out, 'clip'), { recursive: true });
+    await page.evaluate(() => {
+      const { m, passes } = window.t, engine = new m.MorphEngine(passes, 1920, 1080);
+      const params = { ...m.defaultMorphParams(), palette: 0, formType: 1, fieldType: 0, wavelength: 13, asymmetry: .16, irid: .75, breathing: .7, travel: .6, fieldDrift: .8, curlAmount: .35, envRotate: 0 };
+      const input = { flow: null, people: null, impulse: 0, seedBurst: 0 };
+      for (let i = 0; i < 900; i++) engine.step(1 / 60, i / 60, params, input);
+      const copy = passes.material('uniform sampler2D uImage;void main(){vec3 c=clamp(texture2D(uImage,vUv).rgb,0.,1.);gl_FragColor=vec4(mix(c*12.92,1.055*pow(c,vec3(1./2.4))-.055,step(.0031308,c)),1.);}', { uImage: { value: engine.output } });
+      window.t.clip = { engine, params, input, copy, frame: 900 };
+    });
+    const timing = await page.evaluate(() => {
+      const { renderer, passes, clip } = window.t, gl = renderer.getContext(), pixel = new Uint8Array(4), times = [];
+      for (let i = 0; i < 180; i++) {
+        const start = performance.now(); clip.engine.step(1 / 60, clip.frame++ / 60, clip.params, clip.input);
+        clip.copy.uniforms.uImage.value = clip.engine.output; passes.draw(clip.copy, null); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); times.push(performance.now() - start);
+      }
+      times.sort((a, b) => a - b);
+      return { median: times[90], p99: times[178] };
+    });
+    console.log(`frame ms at 1080p: median ${timing.median.toFixed(1)}, p99 ${timing.p99.toFixed(1)}`);
+    let previous = null, change = 0;
+    for (let n = 0; n < 150; n++) {
+      const r = await page.evaluate(() => {
+        const { renderer, passes, clip } = window.t;
+        for (let i = 0; i < 2; i++) clip.engine.step(1 / 60, clip.frame++ / 60, clip.params, clip.input);
+        clip.copy.uniforms.uImage.value = clip.engine.output; passes.draw(clip.copy, null);
+        const gl = renderer.getContext(), small = new Uint8Array(1920 * 1080 * 4); gl.readPixels(0, 0, 1920, 1080, gl.RGBA, gl.UNSIGNED_BYTE, small);
+        const sample = []; for (let i = 0; i < small.length; i += 4 * 97) sample.push(small[i + 1]);
+        return { image: renderer.domElement.toDataURL('image/jpeg', .92).split(',')[1], sample };
+      });
+      await fs.writeFile(path.join(out, 'clip', `${String(n).padStart(4, '0')}.jpg`), Buffer.from(r.image, 'base64'));
+      if (previous) { let sum = 0; for (let i = 0; i < r.sample.length; i++) sum += Math.abs(r.sample[i] - previous[i]); change += sum / r.sample.length; }
+      previous = r.sample;
+    }
+    await page.evaluate(() => { const c = window.t.clip; c.copy.dispose(); c.engine.dispose(); });
+    console.log(`mean change per clip frame: ${(change / 149).toFixed(2)} of 255`);
+    assert.ok(change / 149 > .5, 'the picture is not moving');
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));
