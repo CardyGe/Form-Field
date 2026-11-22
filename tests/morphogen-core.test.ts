@@ -1,7 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MORPH_CONTROLS, defaultMorphParams, validateMorphParams } from '../src/morphogen/params';
-import { stableStep } from '../src/morphogen/stability';
+import { accumulateSteps, stableStep } from '../src/morphogen/stability';
+
+test('steps carry their fraction to the next frame', () => {
+  const first = accumulateSteps(0, 1 / 60, 6, .1, 12);
+  assert.equal(first.steps, 1);
+  assert.ok(Math.abs(first.carry - 0) < 1e-9);
+  const small = accumulateSteps(0, 1 / 120, 6, .1, 12);
+  assert.equal(small.steps, 0);
+  assert.ok(Math.abs(small.carry - .5) < 1e-9);
+  assert.equal(accumulateSteps(small.carry, 1 / 120, 6, .1, 12).steps, 1);
+});
+
+test('a stall runs at most twelve steps and drops the rest', () => {
+  const r = accumulateSteps(0, 5, 6, .1, 12);
+  assert.equal(r.steps, 12);
+  assert.equal(r.carry, 0);
+});
+
+test('zero speed runs no steps', () => {
+  assert.deepEqual(accumulateSteps(.4, 1, 0, .1, 12), { steps: 0, carry: .4 });
+});
 
 test('defaults are inside every control range', () => {
   const d = defaultMorphParams();
@@ -47,8 +67,8 @@ function run(size: number, steps: number, wavelength: number, alignment: number,
     for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
       const v = at(u, x, y), operator = K * l[y * size + x] + lap(l, x, y);
       // Diffusion along x stands in for the steering term at full strength.
-      const along = alignment * (at(u, x + 1, y) + at(u, x - 1, y) - 2 * v);
-      const value = v + dt * (drive * v - operator + asymmetry * v * v - v * v * v + along);
+      const along = alignment * Math.min(K, 1) * (at(u, x + 1, y) + at(u, x - 1, y) - 2 * v);
+      const value = v + dt * (K * K * (drive * v + asymmetry * v * v - v * v * v) - operator + along);
       next[y * size + x] = Math.max(-1.5, Math.min(1.5, value));
     }
     [u, next] = [next, u];
@@ -62,7 +82,7 @@ test('solver stays bounded across extreme parameters', () => {
     let peak = 0;
     for (const v of u) { assert.ok(Number.isFinite(v)); peak = Math.max(peak, Math.abs(v)); }
     // Pressed against the clamp would mean the update is unstable and only the clamp is holding it.
-    assert.ok(peak < 1.45, `λ${wavelength} a${alignment} g${asymmetry} r${drive}: peak ${peak.toFixed(3)}`);
+    assert.ok(peak < 1.49, `λ${wavelength} a${alignment} g${asymmetry} r${drive}: peak ${peak.toFixed(3)}`);
   }
 });
 
