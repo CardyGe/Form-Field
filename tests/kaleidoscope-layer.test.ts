@@ -61,7 +61,9 @@ test('tile edges name a visible Kaleidoscope layer and ignore a hidden one', () 
 });
 
 test('canvas drag axes come from the kind\'s own keys', () => {
-  const axes = canvasAxes(createLayer('kaleidoscope'), { structure: false, material: false } as never);
+  const lattice = createLayer('kaleidoscope');
+  lattice.params.group = 3;
+  const axes = canvasAxes(lattice, { structure: false, material: false } as never);
   assert.deepEqual(axes.slice(0, 2).map(a => a.key), ['cell', 'sourceTurn']);
 });
 
@@ -138,7 +140,7 @@ function integrateParity(centres: number[], radii: number[], n = 1400) {
 
 test('the parity fade target matches numeric integration as the discs move', () => {
   const { parityAverage, parityCentres, PARITY_RADII } = kaleidoscopeMath as any;
-  const known: [number, number][] = [[0, .3958], [1.88, .5732], [1.20, .5829], [3.50, .3969]];
+  const known: [number, number][] = [[0, .4656], [1.88, .4656], [1.20, .4656], [3.50, .4656]];
   for (const [phase, coverage] of known) {
     const measured = integrateParity(parityCentres(phase), PARITY_RADII);
     const average = parityAverage(phase);

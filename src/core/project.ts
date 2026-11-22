@@ -2,7 +2,7 @@ import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLO
 import { isSimplePolygon } from './surface-layout';
 import { TIMING_PARAMETERS, TIMING_KEYS } from './timing';
 import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW } from './palettes';
-import { supportsFeedback } from '../rendering/feedback';
+import { kaleidoscopeInput, supportsFeedback } from '../rendering/feedback';
 import { supportsSlitScan } from '../rendering/slitscan';
 import { supportsGlow } from '../rendering/bloom';
 import { supportsPrint } from '../rendering/print-screen';
@@ -33,6 +33,39 @@ const OIL_PALETTE = ['#eeff00', '#a7de12', '#060710', '#25b8ed', '#071275', '#e2
 
 /** Where a Kaleidoscope layer takes the picture it folds. */
 export const KALEIDOSCOPE_INPUT = { motif: 0, image: 1, below: 2, feedback: 3 } as const;
+
+/** Whether the source draws a motif of its own: the motif itself, or feedback before any echo. */
+export const kaleidoscopeDrawsMotif = (params: Record<string, number>) => {
+  const input = kaleidoscopeInput(params);
+  return input === KALEIDOSCOPE_INPUT.motif || input === KALEIDOSCOPE_INPUT.feedback;
+};
+
+/** The controls that do nothing for these settings, so they are not shown or changed indirectly. */
+export function kaleidoscopeHidden(params: Record<string, number>): Set<string> {
+  const spiral = Math.round(params.spiral ?? 0) === 1, group = Math.round(params.group ?? 0);
+  const hidden = new Set<string>();
+  if (spiral) { hidden.add('sectors'); hidden.add('cell'); } else {
+    hidden.add('spiralA'); hidden.add('spiralB'); hidden.add('spiralScale'); hidden.add('zoomCycles');
+    hidden.add(group === 0 ? 'cell' : 'sectors');
+  }
+  if (!kaleidoscopeDrawsMotif(params)) { hidden.add('motifScale'); hidden.add('lineWidth'); }
+  return hidden;
+}
+
+/** A spiral needs a whole Motif scale, so animating it would jump the whole picture: its route waits. */
+export const kaleidoscopeHoldsMotifScale = (layer: Pick<Layer, 'kind' | 'params'>) =>
+  layer.kind === 'kaleidoscope' && Math.round(layer.params.spiral ?? 0) >= 1;
+
+/** Controls the Motion tab does not offer for these settings. Saved routes are kept. */
+export function kaleidoscopeRouteHidden(params: Record<string, number>): Set<string> {
+  const hidden = kaleidoscopeHidden(params);
+  if (Math.round(params.spiral ?? 0) >= 1) hidden.add('motifScale');
+  return hidden;
+}
+
+/** On these sources the echo is the layer's own, so a finish's echo settings would do nothing. */
+const kaleidoscopeOwnsEcho = (layer: Pick<Layer, 'kind' | 'params'>) =>
+  layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) >= KALEIDOSCOPE_INPUT.below;
 
 const parameter = (key: string, label: string, min: number, max: number, step: number, value: number, section: ParameterDefinition['section']): ParameterDefinition =>
   ({ key, label, min, max, step, default: value, section });
@@ -517,6 +550,7 @@ export function finishSupported(layer: Pick<Layer, 'kind' | 'params'>, finishId?
   if (!supportsFeedback(layer) || !supportsSlitScan(layer)) return false;
   const look = FINISH_LOOKS.find(item => item.id === finishId);
   if (!look) return true;
+  if ('echo' in look.params && kaleidoscopeOwnsEcho(layer)) return false;
   return (supportsGlow(layer) || !GLOW_KEYS.some(key => key in look.params)) && (supportsPrint(layer) || !PRINT_KEYS.some(key => key in look.params));
 }
 export function applyFinish(layer: Layer, finishId: string): Layer {
@@ -524,7 +558,8 @@ export function applyFinish(layer: Layer, finishId: string): Layer {
   if (!look) throw new Error(`Unknown finish: ${finishId}`);
   if (!finishSupported(layer, finishId)) throw new Error(`${look.name} cannot be applied to this layer.`);
   const next = structuredClone(layer), defaults = parameterDefinitions(layer.kind);
-  for (const key of FINISH_LOOK_KEYS) { next.params[key] = defaults.find(d => d.key === key)!.default; delete next.modulations[key]; }
+  const keepEcho = kaleidoscopeOwnsEcho(layer);
+  for (const key of FINISH_LOOK_KEYS) { if (keepEcho && key === 'echo') continue; next.params[key] = defaults.find(d => d.key === key)!.default; delete next.modulations[key]; }
   Object.assign(next.params, look.params);
   return next;
 }
@@ -586,7 +621,7 @@ export function clampParameter(value: number, definition: ParameterDefinition): 
 }
 
 // Identity, coverage and Julia topology are deliberate composition choices.
-const VARIATION_FIXED = new Set(['simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
+const VARIATION_FIXED = new Set(['simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset', 'input', 'group', 'motif', 'spiral', 'spiralA', 'spiralB', 'zoomCycles']);
 export type VariationLocks = { palette: boolean; structure: boolean; motion: boolean; material: boolean };
 
 /** Deterministic by default; UI entropy is independent of the locked film seed. */
@@ -608,11 +643,15 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
   const distance = (p: Preset) => definitions.filter(d => d.section === 'Shape' && !VARIATION_FIXED.has(d.key))
     .reduce((n,d) => n + ((layer.params[d.key] - p.params[d.key]) / (d.max-d.min)) ** 2, 0);
   const anchor = recipes.sort((a,b) => distance(a)-distance(b))[0];
+  const inactive = layer.kind === 'kaleidoscope' ? kaleidoscopeHidden(layer.params) : null;
+  const ownEcho = kaleidoscopeOwnsEcho(layer);
   const character = { Shape: random()*2-1, Material: random()*2-1, Motion: random()*2-1, Camera: random()*2-1 };
   for (const d of definitions) {
     const key = d.key, original = layer.params[key];
     const locked = d.section === 'Motion' ? locks.motion : d.section === 'Material' ? locks.material : locks.structure;
     if (locked || VARIATION_FIXED.has(key) || (locks.palette && ['hue','saturation','vibrance'].includes(key))) continue;
+    // A Kaleidoscope control with no effect right now keeps its value for when it returns.
+    if (inactive?.has(key) || (ownEcho && FEEDBACK_KEYS.includes(key))) continue;
     // Preserve artist-authored routes and their baseline values as a unit.
     // Flat colour is an explicit choice: never switch it on, change its palette
     // cycling (which can strobe), or vary its controls while it is off.

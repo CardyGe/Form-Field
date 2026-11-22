@@ -16,6 +16,15 @@ function control(layer: Layer, key: string, whole = false): number {
   return Math.min(d.max, Math.max(d.min, shaped)) + 0;
 }
 
+/** Echo at which the Feedback source's ground has fully cleared. */
+const GROUND_CLEAR_ECHO = 0.05;
+
+/** The Feedback source's ground: opaque at Echo 0, easing to clear, so raising Echo never snaps the frame. */
+export function feedbackGroundAlpha(echo: number): number {
+  const t = Number.isFinite(echo) ? Math.max(0, Math.min(1, echo / GROUND_CLEAR_ECHO)) : 0;
+  return 1 - t * t * (3 - 2 * t);
+}
+
 /**
  * The render boundary. Saved values are validated, but modulation can reach here fractional or
  * out of range, so every control is made safe again. Plain numbers only; pure.
@@ -36,7 +45,9 @@ export function kaleidoscopeUniforms(layer: Layer, loopFraction: number): Record
     uKInput: control(layer, 'input', true),
     uKGroup: control(layer, 'group', true),
     uKSectors: control(layer, 'sectors', true),
-    uKCell: control(layer, 'cell'),
+    // Rosette has no repeating tile, so Repeat size is kept but not used.
+    uKCell: control(layer, 'group', true) === 0 ? 1 : control(layer, 'cell'),
+    uKFeedbackGround: feedbackGroundAlpha(layer.params.echo ?? 0),
     uKSpiral: spiral,
     uKSpiralA: a + 0,
     uKSpiralB: b + 0,
@@ -90,7 +101,7 @@ uniform int uKGroup, uKSpiral, uKSpiralA, uKSpiralB, uKMotif;
 uniform float uKSectors, uKCell, uKSpiralScale, uKZoom, uKPhase;
 uniform float uKSourceX, uKSourceY, uKSourceScale, uKSourceTurn, uKSourceDrift;
 uniform float uKWarpIn, uKWarpOut, uKMotifScale, uKLineWidth, uKHasImage;
-uniform float uKAssociated, uKEmpty, uKFeedback, uKGain;
+uniform float uKAssociated, uKEmpty, uKFeedback, uKGain, uKFeedbackGround;
 uniform vec2 uKImageFit, uKParityAverage;
 uniform vec2 uKParityCentres[3];
 uniform vec3 uKPalette[6];
@@ -196,8 +207,8 @@ float kFade(vec2 dx, vec2 dy) {
 }
 float kWeight() { return clamp(.03 * uKLineWidth, .005, .18); }
 
-// On the feedback input the motif's ground is clear, so the folded history shows between its marks.
-vec4 kGround() { return uKFeedback > .5 ? vec4(0.) : vec4(uKPalette[5], 1.); }
+// On the feedback input the ground clears as Echo rises, so the folded history shows between the marks.
+vec4 kGround() { return vec4(uKPalette[5], 1.) * (uKFeedback > .5 ? uKFeedbackGround : 1.); }
 
 vec4 kLineField(vec2 q, vec2 dx, vec2 dy) {
   float t = K_TAU * q.x;

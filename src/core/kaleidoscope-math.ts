@@ -105,10 +105,19 @@ export function spiralTau(z: Vec2, a: number, b: number, lambda: number): Vec2 {
 /** Circle-parity discs, in tile units. Each radius is under half a tile, so a disc never meets its own image. */
 export const PARITY_RADII = [0.33, 0.29, 0.24];
 
-/** Disc centres at a loop phase, flat as x0, y0, x1, y1, x2, y2. Every term is a whole multiple of the phase. */
+/** How far the group of discs rocks about its middle, in radians. Keeps the two outer discs apart. */
+const PARITY_ROCK = 0.18;
+const PARITY_HOME = [[0, 0], [-0.25, 0.25], [0.25, -0.25]];
+
+/**
+ * Disc centres at a loop phase, flat as x0, y0, x1, y1, x2, y2. The discs move as one rigid group, gliding
+ * and rocking, so their overlaps and therefore the tile's coverage hold still while every edge keeps moving.
+ * Every term is a whole multiple of the phase.
+ */
 export function parityCentres(phase: number): number[] {
-  const c = Math.cos(phase), s = Math.sin(phase), c2 = Math.cos(2 * phase);
-  return [0.5 + 0.07 * c, 0.5 + 0.07 * s, 0.25 + 0.06 * c2, 0.75 + 0.06 * s, 0.75 + 0.05 * s, 0.25 + 0.05 * c2];
+  const turn = PARITY_ROCK * Math.sin(phase), c = Math.cos(turn), s = Math.sin(turn);
+  const x = 0.5 + 0.07 * Math.cos(phase), y = 0.5 + 0.07 * Math.sin(phase);
+  return PARITY_HOME.flatMap(([hx, hy]) => [x + c * hx - s * hy, y + s * hx + c * hy]);
 }
 
 const PARITY_ROWS = 128;
