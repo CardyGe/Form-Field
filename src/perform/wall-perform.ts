@@ -8,17 +8,24 @@ export interface WallLaunch { id: string; atMs: number; barMs: number; changes: 
 export interface PerformValues { master: number; zones: { brightness: number; hueDeg: number; speed: number }[] }
 export interface WallPerform { active: boolean; zones: ZonePicture[]; armed: string[]; launches: WallLaunch[]; values: PerformValues | null; phaseOffsets: Record<string, number> }
 
+/** The most launches the wall holds, and lands in one step. The same as LANDED_LIMIT in electron/map.cjs, so a landed report is never refused. */
+export const MAX_WALL_LAUNCHES = 32;
+
 export const initialWallPerform = (): WallPerform => ({ active: false, zones: [], armed: [], launches: [], values: null, phaseOffsets: {} });
 
 /** The next Perform state for a message. Until a show starts, only performStart does anything, so a late message cannot wake the overlay. */
 export function applyPerformMessage(p: WallPerform, m: MapMessage): WallPerform {
-  if (m.type === 'performStart') return { ...initialWallPerform(), active: true, zones: m.zones };
+  // Rebuilt with fromEntries, so a key such as __proto__ stays an ordinary entry. A reopened wall gets its running phases back this way.
+  if (m.type === 'performStart') return { ...initialWallPerform(), active: true, zones: m.zones, phaseOffsets: Object.fromEntries(Object.entries(m.phaseOffsets ?? {})) };
   if (!p.active) return p;
   switch (m.type) {
     case 'performEnd': return initialWallPerform();
     case 'performArm': return { ...p, armed: m.sourceIds };
-    // A launch with a known id replaces it and counts as the newest press.
-    case 'performLaunch': return { ...p, launches: [...p.launches.filter(l => l.id !== m.launch.id), m.launch] };
+    // A launch with a known id replaces it and counts as the newest press. A full queue refuses only new ids.
+    case 'performLaunch': {
+      const others = p.launches.filter(l => l.id !== m.launch.id);
+      return others.length >= MAX_WALL_LAUNCHES ? p : { ...p, launches: [...others, m.launch] };
+    }
     case 'performCancel': return p.launches.some(l => l.id === m.launchId) ? { ...p, launches: p.launches.filter(l => l.id !== m.launchId) } : p;
     case 'performValues': return { ...p, values: m.values };
     default: return p;
@@ -35,7 +42,7 @@ const nextBar = (l: WallLaunch, nowMs: number) => l.atMs + (Math.floor((nowMs - 
 export function stepWallPerform(p: WallPerform, nowMs: number, ready: (sourceId: string) => boolean): { perform: WallPerform; changed: boolean; landed: { launchId: string; zones: number[] }[]; blends: Map<string, { kind: BlendKind; durationMs: number }> } {
   const landed: { launchId: string; zones: number[] }[] = [];
   const blends = new Map<string, { kind: BlendKind; durationMs: number }>();
-  const due = p.active ? p.launches.filter(l => l.atMs <= nowMs).sort((a, b) => a.atMs - b.atMs) : [];
+  const due = p.active ? p.launches.filter(l => l.atMs <= nowMs).sort((a, b) => a.atMs - b.atMs).slice(0, MAX_WALL_LAUNCHES) : [];
   if (due.length === 0) return { perform: p, changed: false, landed, blends };
 
   const zones = [...p.zones];
@@ -50,8 +57,10 @@ export function stepWallPerform(p: WallPerform, nowMs: number, ready: (sourceId:
     for (const c of landing) {
       zones[c.zone] = { shapeIds: c.shapeIds, sourceId: c.sourceId, launched: true };
       for (const shapeId of c.shapeIds) blends.set(shapeId, c.blend);
+      // A source already playing on another zone keeps its phase, so the running look does not jump.
       // A computed key, so a source id such as __proto__ stays an ordinary entry.
-      if (c.sourceId !== null) offsets = { ...offsets, [c.sourceId]: c.phaseOffsetBeats };
+      const alreadyPlaying = zones.some((z, i) => i !== c.zone && z.launched && z.sourceId === c.sourceId);
+      if (c.sourceId !== null && !alreadyPlaying) offsets = { ...offsets, [c.sourceId]: c.phaseOffsetBeats };
       changed = true;
     }
     if (landing.length > 0 || launch.changes.length === 0) landed.push({ launchId: id, zones: landing.map(c => c.zone) });
@@ -63,7 +72,7 @@ export function stepWallPerform(p: WallPerform, nowMs: number, ready: (sourceId:
   }
 
   // Only the sources still on the wall keep a phase offset.
-  const playing = new Set(zones.map(z => z.sourceId));
+  const playing = new Set(zones.filter(z => z.launched).map(z => z.sourceId));
   const phaseOffsets = Object.fromEntries(Object.entries(offsets).filter(([id]) => playing.has(id)));
   return { perform: { ...p, zones, launches: queue, phaseOffsets }, changed, landed, blends };
 }

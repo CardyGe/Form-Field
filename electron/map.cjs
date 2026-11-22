@@ -58,7 +58,7 @@ const PERFORM_ARMED_LIMIT = 8;
 const LAUNCH_ID_LIMIT = 128;
 const BAR_MS_LIMIT = 60000;
 const BLEND_MS_LIMIT = 3600000;
-const LANDED_LIMIT = 32; // more launches than one frame can land
+const LANDED_LIMIT = 32; // MAX_WALL_LAUNCHES in src/perform/wall-perform.ts: the most the wall lands in one step
 const BLEND_KINDS = ['cut', 'fade', 'dip', 'dissolve'];
 // Array.from first: every() skips the holes of a sparse array, and structured clone keeps them.
 const listOf = (value, limit, check) => Array.isArray(value) && value.length <= limit && Array.from(value).every(item => check(item));
@@ -74,6 +74,8 @@ const acceptLaunch = l => plain(l) && sized(l.id, LAUNCH_ID_LIMIT) && finite(l.a
   && listOf(l.changes, ZONE_COUNT, acceptChange) && new Set(l.changes.map(c => c.zone)).size === l.changes.length;
 const acceptValueZone = z => plain(z) && finite(z.brightness) && finite(z.hueDeg) && finite(z.speed);
 const acceptValues = v => plain(v) && finite(v.master) && everyZone(v.zones, acceptValueZone);
+// At most one offset per zone's source. Object.entries reads own keys only, so __proto__ is checked like any other id.
+const acceptOffsets = o => o === undefined || (plain(o) && Object.keys(o).length <= ZONE_COUNT && Object.entries(o).every(([id, beats]) => performId(id) && finite(beats)));
 const acceptLanded = l => plain(l) && sized(l.launchId, LAUNCH_ID_LIMIT) && listOf(l.zones, ZONE_COUNT, zoneIndex);
 
 /** What the output may report to the studio: its frame rate, the governor level, failing sources, prepare counts, and Perform's armed sources and landings. */
@@ -100,7 +102,7 @@ function acceptMapMessage(value) {
     case 'fade': return finite(value.ms) && value.ms >= 0 && value.ms <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, 16 * 1024);
     case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
-    case 'performStart': return everyZone(value.zones, acceptPicture);
+    case 'performStart': return everyZone(value.zones, acceptPicture) && acceptOffsets(value.phaseOffsets);
     case 'performEnd': return true;
     case 'performArm': return listOf(value.sourceIds, PERFORM_ARMED_LIMIT, performId);
     case 'performLaunch': return acceptLaunch(value.launch);

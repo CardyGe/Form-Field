@@ -35,7 +35,7 @@ export type MapMessage =
   /** Stage 6: every video that cannot play loads again. */
   | { type: 'videoRetry' }
   /** Perform: a show starts over the Map show, or ends and hands the wall back. */
-  | { type: 'performStart'; zones: ZonePicture[] }
+  | { type: 'performStart'; zones: ZonePicture[]; phaseOffsets?: Record<string, number> }
   | { type: 'performEnd' }
   /** The sources to keep warm off-screen. */
   | { type: 'performArm'; sourceIds: string[] }
@@ -136,6 +136,8 @@ const acceptLaunch = (l: unknown) => plain(l) && sized(l.id, LAUNCH_ID_LIMIT) &&
   && listOf(l.changes, ZONE_COUNT, acceptChange) && new Set((l.changes as { zone: number }[]).map(c => c.zone)).size === (l.changes as unknown[]).length;
 const acceptValueZone = (z: unknown) => plain(z) && finite(z.brightness) && finite(z.hueDeg) && finite(z.speed);
 const acceptValues = (v: unknown) => plain(v) && finite(v.master) && everyZone(v.zones, acceptValueZone);
+// At most one offset per zone's source. Object.entries reads own keys only, so __proto__ is checked like any other id.
+const acceptOffsets = (o: unknown) => o === undefined || (plain(o) && Object.keys(o).length <= ZONE_COUNT && Object.entries(o).every(([id, beats]) => performId(id) && finite(beats)));
 
 /** Checks the envelope and size only. The show's geometry and a composition's contents are checked where they are used. */
 export function acceptMapMessage(value: unknown): value is MapMessage {
@@ -154,7 +156,7 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'fade': return finite(value.ms) && (value.ms as number) >= 0 && (value.ms as number) <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, LIVE_SETTINGS_LIMIT);
     case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
-    case 'performStart': return everyZone(value.zones, acceptPicture);
+    case 'performStart': return everyZone(value.zones, acceptPicture) && acceptOffsets(value.phaseOffsets);
     case 'performEnd': return true;
     case 'performArm': return listOf(value.sourceIds, PERFORM_ARMED_LIMIT, performId);
     case 'performLaunch': return acceptLaunch(value.launch);

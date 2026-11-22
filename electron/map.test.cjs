@@ -299,4 +299,8 @@ test('the output may report what is armed and what landed, and only in a well-fo
   const good = { ...base, armed: ['a'], landed: [{ launchId: 'l:ceiling', zones: [7] }, { launchId: 'empty', zones: [] }] };
   relay(h.fromOutput(), good);
   assert.deepEqual(reports(), [['studio:map:state', good]]);
+  // The most the wall can land in one step (MAX_WALL_LAUNCHES) always passes, even with the longest ids and every zone.
+  const full = { ...base, landed: Array.from({ length: 32 }, () => ({ launchId: 'x'.repeat(128), zones: [0, 1, 2, 3, 4, 5, 6, 7] })) };
+  relay(h.fromOutput(), full);
+  assert.equal(reports().length, 2);
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPerformMessage, initialWallPerform, stepWallPerform, type WallChange, type WallLaunch, type WallPerform } from '../src/perform/wall-perform';
+import { applyPerformMessage, initialWallPerform, MAX_WALL_LAUNCHES, stepWallPerform, type WallChange, type WallLaunch, type WallPerform } from '../src/perform/wall-perform';
 import { applyMapMessage, initialWall } from '../src/map/wall';
 import type { ZonePicture } from '../src/perform/resolve';
 
@@ -129,6 +129,65 @@ test('when two overdue launches share a zone, the newest press wins and both are
   assert.equal(newerIsEarlier.perform.zones[0].sourceId, 'b');
   assert.deepEqual(newerIsEarlier.landed, [{ launchId: 'newer', zones: [0] }, { launchId: 'older', zones: [] }]);
   assert.deepEqual(newerIsEarlier.perform.launches, []);
+});
+
+test('launching a playing source into a second zone keeps its running phase', () => {
+  const first = stepWallPerform(started(launch('a', 1000, [change(0, 'x', { phaseOffsetBeats: 1 })])), 1000, allReady).perform;
+  const next = applyPerformMessage(first, { type: 'performLaunch', launch: launch('b', 2000, [change(1, 'x', { phaseOffsetBeats: 3 })]) });
+  const second = stepWallPerform(next, 2000, allReady);
+  assert.equal(second.perform.zones[1].sourceId, 'x');
+  assert.deepEqual(second.perform.phaseOffsets, { x: 1 });
+});
+
+test('one launch putting a new source on two zones takes its offset once', () => {
+  const out = stepWallPerform(started(launch('a', 1000, [change(0, 'x', { phaseOffsetBeats: 2 }), change(1, 'x', { phaseOffsetBeats: 5 })])), 1000, allReady);
+  assert.deepEqual(out.perform.phaseOffsets, { x: 2 });
+});
+
+test('a source that left the wall takes a new offset when it comes back', () => {
+  let p = stepWallPerform(started(launch('a', 1000, [change(0, 'x', { phaseOffsetBeats: 1 })])), 1000, allReady).perform;
+  p = stepWallPerform(applyPerformMessage(p, { type: 'performLaunch', launch: launch('b', 2000, [change(0, null)]) }), 2000, allReady).perform;
+  assert.deepEqual(p.phaseOffsets, {});
+  p = stepWallPerform(applyPerformMessage(p, { type: 'performLaunch', launch: launch('c', 3000, [change(0, 'x', { phaseOffsetBeats: 3 })]) }), 3000, allReady).perform;
+  assert.deepEqual(p.phaseOffsets, { x: 3 });
+});
+
+test('a source id of __proto__ stays an ordinary phase offset', () => {
+  const out = stepWallPerform(started(launch('a', 1000, [change(0, '__proto__', { phaseOffsetBeats: 4 })])), 1000, allReady);
+  const offsets = out.perform.phaseOffsets;
+  assert.ok(Object.hasOwn(offsets, '__proto__'));
+  assert.equal(Object.getOwnPropertyDescriptor(offsets, '__proto__')?.value, 4);
+  assert.equal(Object.getPrototypeOf(offsets), Object.prototype);
+});
+
+test('the wall queue holds the landed limit, and a full queue can still replace a launch', () => {
+  let p = started();
+  for (let i = 0; i < MAX_WALL_LAUNCHES; i++) p = applyPerformMessage(p, { type: 'performLaunch', launch: launch(`l${i}`, 1000, []) });
+  assert.equal(p.launches.length, 32);
+  assert.equal(applyPerformMessage(p, { type: 'performLaunch', launch: launch('one-more', 1000, []) }), p);
+  const replaced = applyPerformMessage(p, { type: 'performLaunch', launch: launch('l5', 4000, []) });
+  assert.equal(replaced.launches.length, 32);
+  assert.equal(replaced.launches.find(l => l.id === 'l5')?.atMs, 4000);
+});
+
+test('at most the landed limit lands in one step; the rest land on the next', () => {
+  const launches = Array.from({ length: MAX_WALL_LAUNCHES + 1 }, (_, i) => launch(`l${i}`, 1000 + i, []));
+  const first = stepWallPerform({ ...started(), launches }, 5000, allReady);
+  assert.equal(first.landed.length, 32);
+  assert.deepEqual(first.perform.launches.map(l => l.id), ['l32']);
+  const second = stepWallPerform(first.perform, 5016, allReady);
+  assert.deepEqual(second.landed, [{ launchId: 'l32', zones: [] }]);
+  assert.deepEqual(second.perform.launches, []);
+});
+
+test('performStart restores phase offsets, and a __proto__ key stays ordinary', () => {
+  const phaseOffsets = JSON.parse('{"x":1.5,"__proto__":2}') as Record<string, number>;
+  const p = applyPerformMessage(initialWallPerform(), { type: 'performStart', zones: black(), phaseOffsets });
+  assert.equal(p.phaseOffsets.x, 1.5);
+  assert.equal(Object.getOwnPropertyDescriptor(p.phaseOffsets, '__proto__')?.value, 2);
+  assert.equal(Object.getPrototypeOf(p.phaseOffsets), Object.prototype);
+  assert.notEqual(p.phaseOffsets, phaseOffsets);
+  assert.deepEqual(applyPerformMessage(initialWallPerform(), { type: 'performStart', zones: black() }).phaseOffsets, {});
 });
 
 test('stepping does not change the state it was given', () => {
