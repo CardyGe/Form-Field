@@ -624,39 +624,55 @@ const CHECKS = [
   },
   {
     name: 'time-engage',
-    // A sub-pixel move of a hard edge changes that pixel a lot however correct the warp is, so:
-    // at .001 the mean and worst limits are held on a smooth moving layer. On every source they
-    // are tested at 1e-6, where the new path runs but nothing has moved, so a jump on engaging
-    // (a clamp to alpha, say) shows in the mean. Colour lag also limits how many pixels may
-    // change there. Sharp sources at .001 are printed, not gated.
+    // At .001 the mean and worst limits are held on a smooth moving layer, because a sub-pixel
+    // move of a hard edge changes that pixel a lot however correct the warp is.
+    // At 1e-6 (Twist 1e-7), on every preset of every kind that takes Time displacement:
+    // - The time pass's own output may not change any linear value by more than 1/255, or by
+    //   two half-float steps for over-range light, which cannot store a finer difference.
+    // - Colour lag and Zoom may not change a finished 8-bit value by more than 1. Two stages
+    //   after the pass turn any non-zero change into a hard flip, so layers using them are
+    //   held to the first limit only: Flat colour snaps to a band, and Feedback compounds it.
+    //   Twist is also held to the first limit, at 1e-7: at 1e-6 it still moves the corners
+    //   .0035 pixels, a real displacement that sharp edges and the sRGB curve near black enlarge.
     run: async ({ page }) => {
       const r = await page.evaluate(async () => {
-        const q = window.ct, rings = { slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 12 };
-        const preset = kind => q.m.PRESETS.find(p => p.kind === kind).id;
-        const sources = [['wave', false, params => q.wave(params)], ['surface', false, params => q.layer('surface', null, params)], ['soft', true, params => q.soft(params)],
-          ['sculpture', false, params => q.layer('sculpture', preset('sculpture'), params)], ['livingink', true, params => q.layer('livingink', preset('livingink'), params)]];
+        const q = window.ct, R = q.renderer, rings = { slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 12 };
+        const presets = q.m.PRESETS.filter(p => q.m.supportsSlitScan(q.layer(p.kind, p.id)));
+        const sources = [['wave', false, params => q.wave(params)], ['soft', true, params => q.soft(params)],
+          ...presets.map(p => [`${p.kind}/${p.id}`, false, params => q.layer(p.kind, p.id, params)])];
+        const half = v => { const e = (v >> 10) & 31, f = v & 1023, s = v >> 15 ? -1 : 1; return e === 31 ? (f ? NaN : s * Infinity) : e === 0 ? s * f / 1024 / 16384 : s * (1 + f / 1024) * 2 ** (e - 15); };
+        const pass = () => { const rt = R.slitTargets[0], d = new Uint16Array(rt.width * rt.height * 4); R.renderer.readRenderTargetPixels(rt, 0, 0, rt.width, rt.height, d); return Float32Array.from(d, half); };
+        // Measured in units of the limit: 1/255, or two half-float steps where light is so far
+        // over range that the target cannot store a finer difference.
+        const passChange = (a, b) => { let most = 0; for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]), v = Math.max(Math.abs(a[i]), Math.abs(b[i])), step = v > 0 ? 2 ** (Math.floor(Math.log2(v)) - 10) : 0; most = Number.isNaN(d) ? Infinity : Math.max(most, d / Math.max(1 / 255, 2 * step)); } return most; };
         const compare = (a, b) => {
           let sum = 0, worst = 0, pixels = 0;
-          for (let i = 0; i < a.length; i += 4) { let most = 0; for (let k = 0; k < 4; k++) { const d = Math.abs(a[i + k] - b[i + k]); sum += d; most = Math.max(most, d); } worst = Math.max(worst, most); if (most >= 4) pixels++; }
+          for (let i = 0; i < a.length; i += 4) { let most = 0; for (let k = 0; k < 4; k++) { const d = Math.abs(a[i + k] - b[i + k]); sum += d; most = Math.max(most, d); } worst = Math.max(worst, most); if (most > 1) pixels++; }
           return { mean: sum / a.length, worst, pixels };
         };
         const rows = [];
         for (const [name, transparent, make] of sources) {
           const render = params => q.px(q.project([make({ ...rings, ...params })], transparent));
-          const base = await render({});
-          for (const [key, large] of [['slitTwist', .5], ['slitZoom', .5], ['slitChroma', 1]])
-            rows.push({ name, key, small: compare(base, await render({ [key]: .001 })), tiny: compare(base, await render({ [key]: 1e-6 })), moved: q.difference(base, await render({ [key]: large })) });
+          const base = await render({}), basePass = pass(), l = make({});
+          const amplified = (l.params.toonMix ?? 0) > 0 || q.m.feedbackActive(l);
+          for (const [key, large] of [['slitTwist', .5], ['slitZoom', .5], ['slitChroma', 1]]) {
+            const out = await render({ [key]: key === 'slitTwist' ? 1e-7 : 1e-6 });
+            const row = { name, key, amplified, passChange: passChange(basePass, pass()), tiny: compare(base, out) };
+            if (name === 'wave') { row.small = compare(base, await render({ [key]: .001 })); row.moved = q.difference(base, await render({ [key]: large })); }
+            rows.push(row);
+          }
         }
         return rows;
       });
       const within = c => c.mean < 1 && c.worst < 4;
-      const failed = row => row.tiny.mean >= .05 || (row.key === 'slitChroma' && row.tiny.pixels > 26) || (row.moved < 1 && row.name !== 'soft') || (row.name === 'wave' && !within(row.small));
+      const finished = row => row.key !== 'slitTwist' && !row.amplified;
+      const failed = row => row.passChange > 1 || (finished(row) && row.tiny.pixels > 0) || (row.name === 'wave' && (!within(row.small) || row.moved < 1));
       const bad = r.filter(failed);
       const figure = c => `mean ${c.mean.toFixed(3)} worst ${c.worst}`;
       const wave = r.filter(row => row.name === 'wave').map(row => `${row.key} ${figure(row.small)} moved ${row.moved.toFixed(3)}`).join('; ');
-      const tiny = Math.max(...r.map(row => row.tiny.mean)), lag = Math.max(...r.filter(row => row.key === 'slitChroma').map(row => row.tiny.pixels));
-      const sharp = r.filter(row => row.name !== 'wave').map(row => `${row.name} ${row.key} ${figure(row.small)}`).join(', ');
-      return { ok: !bad.length, detail: `${bad.length ? `${bad.length}/${r.length} over limit: ${bad.map(row => `${row.name} ${row.key} .001 ${figure(row.small)}, 1e-6 ${figure(row.tiny)} (${row.tiny.pixels} pixels), moved ${row.moved.toFixed(3)}`).join('; ')} | ` : ''}smooth layer at .001: ${wave} (limits 1 and 4); every source at 1e-6: highest mean ${tiny.toFixed(3)} (limit .05), Colour lag changes at most ${lag} pixels (limit 26) | sharp sources at .001, not gated: ${sharp}` };
+      const held = r.filter(finished).length, top = Math.max(...r.map(row => row.passChange));
+      const list = bad.slice(0, 10).map(row => `${row.name} ${row.key}: time pass ${row.passChange.toFixed(3)} of limit, ${row.tiny.pixels} finished pixels, worst ${row.tiny.worst}`).join('; ');
+      return { ok: !bad.length, detail: `${r.length / 3} sources; smooth layer at .001: ${wave} (limits 1 and 4); at 1e-6 (Twist 1e-7): time pass change at most ${top.toFixed(3)} of its limit (1/255, or two half-float steps for over-range light); ${held} Colour lag and Zoom renders checked to 1/255 after finishing, ${bad.length} failed${list ? ` | ${list}` : ''}` };
     },
   },
   {
@@ -719,7 +735,7 @@ export {encodePNG} from './src/rendering/png';${extra}`, resolveDir: dir, loader
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
-await bundle(root, 'renderer.js', `\nexport {gradientTone,gradientStops} from './src/rendering/colour-lens';`);
+await bundle(root, 'renderer.js', `\nexport {gradientTone,gradientStops} from './src/rendering/colour-lens';\nexport {supportsSlitScan} from './src/rendering/slitscan';\nexport {feedbackActive} from './src/rendering/feedback';`);
 if (baseline) await bundle(path.resolve(baseline), 'baseline.js');
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');

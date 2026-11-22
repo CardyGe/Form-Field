@@ -37,6 +37,12 @@ export function sliceDelays(layer: Pick<Layer, 'params'>): number[] {
   return Array.from({ length: count }, (_, i) => span * i / (count - 1));
 }
 
+/** Source renders per frame: one per slice, plus the Brightness map's driver. */
+export function sliceSourceRenders(layer: Pick<Layer, 'params'>): number {
+  const shape = layer.params.slitShape ?? 0;
+  return sliceDelays(layer).length + Number(shape >= 4.5 && shape < 5.5);
+}
+
 /** Phase of a slice: back in time by default, forward in Future, wrapped to the loop. */
 export function slicePhase(phase: number, delay: number, total: number, direction: number): number {
   const TAU = Math.PI * 2;
@@ -73,7 +79,7 @@ export function medianTargetSize(width: number, height: number, slices: number):
 export const slitFragment = /* glsl */`
 precision highp float;
 varying vec2 vUv;
-uniform sampler2D uAccum, uSource, uDriver, uBound;
+uniform sampler2D uAccum, uSource, uDriver, uBound, uLag;
 uniform float uIndex, uCount, uSmooth, uShape, uBlocks, uScroll, uAspect, uReverse, uSeed, uTwist, uZoom, uChroma;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + uSeed) * 43758.5453); }
 // 0 = now, 1 = the full span ago.
@@ -133,18 +139,27 @@ void main() {
     red = sliceWeight(clamp(position - spread, 0., uCount - 1.), width);
     blue = sliceWeight(clamp(position + spread, 0., uCount - 1.), width);
   }
-#ifdef SLIT_BOUND
-  // Brightest straight colour each channel takes from any slice; drawn with MAX blending.
-  vec3 straight = source.a > 0. ? source.rgb / source.a : vec3(0.);
-  gl_FragColor = vec4(red > 0. ? straight.r : 0., weight > 0. ? straight.g : 0., blue > 0. ? straight.b : 0., 1.);
+  // Below this a sample is light with no coverage, as in the colour split.
+  bool covered = source.a > .001;
+#if defined(SLIT_BOUND)
+  // Brightest straight colour red and blue take from a covered slice; drawn with MAX blending.
+  vec3 straight = covered ? source.rgb / source.a : vec3(0.);
+  gl_FragColor = vec4(red > 0. ? straight.r : 0., 0., blue > 0. ? straight.b : 0., 1.);
+#elif defined(SLIT_LAG)
+  // What lag changes in red and blue, summed with additive blending:
+  // covered samples in rg, light with no coverage in ba.
+  vec2 change = vec2(source.r * (red - weight), source.b * (blue - weight));
+  gl_FragColor = covered ? vec4(change, 0., 0.) : vec4(0., 0., change);
 #else
-  vec4 sum = texture2D(uAccum, vUv);
-  if (uChroma > 0.) {
-    sum += vec4(source.r * red, source.g * weight, source.b * blue, source.a * weight);
-    // Shifted colour can land where alpha came from another slice. Keep it within
-    // the brightest colour combined here, so over-range light survives with no fringe.
-    if (uIndex > uCount - 1.5) sum.rgb = min(sum.rgb, sum.a * texture2D(uBound, vUv).rgb);
-  } else sum += source * weight;
+  vec4 sum = texture2D(uAccum, vUv) + source * weight;
+  if (uChroma > 0. && uIndex > uCount - 1.5) {
+    // The plain result plus a bounded change, so no change means exactly the plain
+    // result. Added colour stays within the brightest straight colour combined here,
+    // which keeps over-range light and adds no fringe. Uncovered light passes as it is.
+    vec4 lag = texture2D(uLag, vUv);
+    vec2 room = max(sum.a * texture2D(uBound, vUv).rb - sum.rb, 0.);
+    sum.rb += min(lag.rg, room) + lag.ba;
+  }
   gl_FragColor = sum;
 #endif
 }`;

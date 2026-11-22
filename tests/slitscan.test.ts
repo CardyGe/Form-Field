@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FINISH_LOOKS, FINISH_SHOWCASE_IDS, applyFinish, PRESETS, applyPreset, parameterDefinitions, createLayer, createProject, validateProject, varyLayer } from '../src/core/project';
 import { SLIT_KEYS } from '../src/core/finishing';
-import { SLIT_SHAPES, slitActive, sliceDelays, supportsSlitScan, sliceCount, slicePhase, echoWeights, channelSliceCounts, medianOf, medianTargetSize } from '../src/rendering/slitscan';
+import { SLIT_SHAPES, slitActive, sliceDelays, supportsSlitScan, sliceCount, slicePhase, sliceSourceRenders, echoWeights, channelSliceCounts, medianOf, medianTargetSize } from '../src/rendering/slitscan';
 const unlocked = { palette: false, structure: false, motion: false, material: false };
 
 test('time displacement is off by default and older projects migrate without it', () => {
@@ -100,4 +100,9 @@ test('older time displacement settings keep their meaning', () => {
   for (const key of ['slitMode','slitDirection','slitDecay','slitReach','slitTwist','slitZoom','slitChroma']) delete layer.params[key];
   const migrated = validateProject(JSON.parse(JSON.stringify(project))).layers[0].params;
   assert.deepEqual([migrated.slitShape, migrated.slitMode, migrated.slitDirection, migrated.slitTwist], [4, 0, 0, 0]);
+});
+
+test('the Brightness map counts its driver as one more source render', () => {
+  assert.equal(sliceSourceRenders({ params: { slitSlices: 12, slitShape: 2 } }), 12);
+  assert.equal(sliceSourceRenders({ params: { slitSlices: 12, slitShape: 5 } }), 13);
 });
