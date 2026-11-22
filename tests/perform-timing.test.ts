@@ -106,9 +106,9 @@ test('follow: music in a new phase after a drop out is picked up again', () => {
   const start = next + 5 + BEAT_128 * 0.4;
   clock.followTick(next + 5);
   assert.equal(clock.followState, 'holding');
-  for (let i = 0; i < 12; i++) hear(start + i * BEAT_128);
+  for (let i = 0; i < 16; i++) hear(start + i * BEAT_128);
   assert.equal(clock.followState, 'locked');
-  assert.ok(phaseErrorMs(clock, start + 12 * BEAT_128) < 30);
+  assert.ok(phaseErrorMs(clock, start + 16 * BEAT_128) < 30);
 });
 for (const [from, to] of [[96, 128], [96, 129], [128, 96], [116, 174], [116, 172], [174, 116], [128, 140]]) {
   test(`follow: a new track moving ${from} to ${to} BPM is picked up, though some onsets land near the old beat`, () => {
@@ -323,6 +323,47 @@ for (const jitter of [0.04, 0.05]) for (const [from, to] of [[128, 128], [124, 1
       assert.equal(clock.followState, 'holding');
     }
     assert.ok(left > 0, 'no run was ever LOCKED, so nothing was tested');
+  });
+}
+/** Runs hits through the detector and returns the seconds after `from` spent LOCKED on the wrong tempo or off the kick, and the seconds LOCKED at all. */
+function wrongLock(hits: [number, number][], until: number, offset: number, from: number, bpm: number, kickZero: number) {
+  let wrong = 0, locked = 0;
+  const { clock, listen } = detected(offset, (c, t) => {
+    if (t < from || c.followState !== 'locked') return;
+    locked += 1 / 60;
+    const kick = kickZero + Math.round((t - kickZero) * bpm / 60) * 60 / bpm;
+    if (Math.abs(c.bpm - bpm) > 1 || phaseErrorMs(c, kick) * c.bpm / bpm >= 30) wrong += 1 / 60;
+  });
+  listen(hits, until);
+  return { clock, wrong, locked };
+}
+const THREE_THREE_TWO: [number, number][] = [[0, 1], [0.75, 0.8], [1.5, 0.8]];
+const KICK_AND_GHOST: [number, number][] = [[0, 1], [0.75, 0.6], [1, 1], [2, 1], [2.5, 0.6], [3, 1], [3.75, 0.6]];
+const CHANGE = 0.5 + 32 * BEAT_128;
+for (const [name, to, period, pattern] of [['3-3-2', 120, 2, THREE_THREE_TWO], ['3-3-2', 134, 2, THREE_THREE_TWO], ['3-3-2', 140, 2, THREE_THREE_TWO], ['3-3-2', 150, 2, THREE_THREE_TWO], ['kick and ghost', 140, 4, KICK_AND_GHOST]] as [string, number, number, [number, number][]][]) {
+  test(`detected: from a 128 lock, ${name} at ${to} BPM for 60 s does not stay LOCKED on the old beat`, () => {
+    for (const offset of OFFSETS) {
+      const hits = [...bars(0.5, 128, 32, 1, KICK), ...bars(CHANGE, to, to, period, pattern)];
+      const { wrong } = wrongLock(hits, CHANGE + 59, offset, CHANGE + 1, to, CHANGE);
+      assert.ok(wrong <= 8, `offset ${offset}: LOCKED and wrong for ${wrong.toFixed(1)} s`);
+    }
+  });
+}
+test('detected: from a 128 lock, 3-3-2 at the same 128 BPM for 60 s keeps the lock throughout', () => {
+  for (const offset of OFFSETS) {
+    const hits = [...bars(0.5, 128, 32, 1, KICK), ...bars(CHANGE, 128, 128, 2, THREE_THREE_TWO)];
+    const { wrong, locked } = wrongLock(hits, CHANGE + 59, offset, CHANGE + 1, 128, CHANGE);
+    assert.equal(wrong, 0, `offset ${offset}: wrong for ${wrong.toFixed(1)} s`);
+    assert.ok(locked > 57.9, `offset ${offset}: LOCKED for only ${locked.toFixed(1)} s of 58`);
+  }
+});
+for (const to of [100, 120, 124, 134, 140, 150, 170]) {
+  test(`detected: from a 128 lock, 5 s of silence then the kick at ${to} BPM never shows LOCKED on the wrong tempo or beat`, () => {
+    for (const offset of OFFSETS) {
+      const back = CHANGE + 5, hits = [...bars(0.5, 128, 32, 1, KICK), ...bars(back, to, 80, 1, KICK)];
+      const { clock, wrong } = wrongLock(hits, back + 80 * 60 / to - 0.1, offset, back, to, back);
+      assert.ok(wrong < 0.05, `offset ${offset}: LOCKED and wrong for ${wrong.toFixed(2)} s, now ${clock.bpm.toFixed(1)}`);
+    }
   });
 }
 test('follow: equal kick and off-beat onsets are not guessed into a lock, and Tap settles the phase', () => {
