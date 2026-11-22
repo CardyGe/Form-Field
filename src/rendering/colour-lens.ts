@@ -96,18 +96,19 @@ vec2 splitField(vec2 uv) {
 
 vec4 splitStage(vec2 uv) {
   vec2 reach = splitField(uv) * uSplitAmount / 1080. / vec2(uAspect, 1.);
-  vec3 rgb = vec3(0.);
+  vec3 covered = vec3(0.), light = vec3(0.);
   float alpha = 0., peak = 0.;
   for (int i = 0; i < uSplitCount; i++) {
     vec4 s = tap(uv + reach * uSplitOffsets[i]);
-    rgb += s.rgb * uSplitWeights[i];
     alpha += s.a * uSplitWeights[i].g;
-    if (s.a > .001) peak = max(peak, max(s.r, max(s.g, s.b)) / s.a);
+    // Light with no coverage has no straight colour to bound, so it passes as it is.
+    if (s.a > .001) { covered += s.rgb * uSplitWeights[i]; peak = max(peak, max(s.r, max(s.g, s.b)) / s.a); }
+    else light += s.rgb * uSplitWeights[i];
   }
   // Each channel reads different pixels from the alpha, so at a soft edge colour
-  // can outrun coverage. Holding it to the brightest colour under the taps stops
-  // a bright fringe; min(peak, 1) also keeps RGB within alpha.
-  return vec4(min(rgb, vec3(alpha * min(peak, 1.))), alpha);
+  // can outrun coverage. Straight colour stays within the brightest straight
+  // colour among the samples, which keeps over-range light and adds no fringe.
+  return vec4(min(covered, vec3(alpha * peak)) + light, alpha);
 }
 
 float blockHash(vec2 cell) {
@@ -137,7 +138,7 @@ vec3 orderStage(vec3 c, vec2 uv) {
 void main() {
   vec4 c = uSplitOn > .5 ? splitStage(vUv) : tap(vUv);
   c.rgb = orderStage(c.rgb, vUv);
-  gl_FragColor = vec4(min(c.rgb, vec3(c.a)), c.a);
+  gl_FragColor = c;
 }
 `;
 

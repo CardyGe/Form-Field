@@ -31,9 +31,11 @@ const CHECKS = [
       const missing = needsBaseline(); if (missing) return missing;
       const result = await page.evaluate(async () => {
         const q = window.ct, before = new q.old.StudioRenderer(document.querySelector('#b')), changed = [];
-        const kinds = [...new Set(q.old.PRESETS.map(p => p.kind))];
+        // Image layers have no presets, so they use a small generated picture.
+        const kinds = [...new Set(q.old.PRESETS.map(p => p.kind)), 'image'];
         const make = (m, kind) => {
-          const preset = m.PRESETS.find(p => p.kind === kind), l = m.applyPreset(m.createLayer(kind), preset.id);
+          const l = kind === 'image' ? m.createLayer('image') : m.applyPreset(m.createLayer(kind), m.PRESETS.find(p => p.kind === kind).id);
+          if (kind === 'image') l.image = { name: 'tiny.png', dataUrl: q.tinyUrl, width: 64, height: 36, fit: 'contain' };
           l.id = 'neutral-proof';
           const p = m.createProject(); p.id = 'neutral-proof'; p.layers = [l]; p.background = '#000000';
           return p;
@@ -129,6 +131,30 @@ const CHECKS = [
     },
   },
   {
+    name: 'split-engage',
+    // A barely-on Split must look like the plain layer, on black and on transparency.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.ct, rows = [];
+        const kinds = [...new Set(q.m.PRESETS.map(p => p.kind)), 'image'];
+        const make = (kind, params) => kind === 'image' ? q.soft(params) : q.layer(kind, q.m.PRESETS.find(p => p.kind === kind).id, params);
+        for (const kind of kinds) for (const transparent of [false, true]) {
+          const a = await q.px(q.project([make(kind, {})], transparent)), b = await q.px(q.project([make(kind, { splitAmount: .001 })], transparent));
+          let sum = 0, worst = 0, at = 0;
+          for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); sum += d; if (d > worst) { worst = d; at = i; } }
+          const i = at - at % 4;
+          rows.push({ kind, transparent, mean: sum / a.length, worst, x: (i / 4) % 960, y: Math.floor(i / 4 / 960), channel: 'RGBA'[at % 4], plain: [...a.subarray(i, i + 4)], split: [...b.subarray(i, i + 4)] });
+        }
+        return rows;
+      });
+      const bad = rows.filter(r => r.mean >= 1 || r.worst >= 4);
+      const top = rows.reduce((a, b) => b.worst > a.worst ? b : a), high = rows.reduce((a, b) => b.mean > a.mean ? b : a);
+      const name = r => `${r.kind}${r.transparent ? '/transparent' : ''}`;
+      const cause = r => `${name(r)} mean ${r.mean.toFixed(3)} worst ${r.worst} at (${r.x},${r.y}) ${r.channel} plain ${r.plain} split ${r.split}`;
+      return { ok: bad.length === 0, detail: bad.length ? `${bad.length}/${rows.length} over limit: ${bad.map(cause).join(' | ')}` : `${rows.length} renders; highest mean ${high.mean.toFixed(3)} (${name(high)}), worst ${top.worst} (${name(top)}) (limits 1 and 4)` };
+    },
+  },
+  {
     name: 'split-tile',
     run: async ({ page }) => {
       const r = await page.evaluate(async () => {
@@ -208,6 +234,7 @@ try {
       return [176, 96, 48, Math.round(255 * Math.max(halo, block))];
     });
     const greyUrl = await dataUrl(64, 36, () => [128, 128, 128, 255]);
+    const tinyUrl = await dataUrl(64, 36, (x, y) => [Math.round(255 * (x + .9) / 1.8), Math.round(255 * (y + .5)), 90, Math.round(255 * (1 - ramp(.25, .48, Math.hypot(x, y))))]);
     const image = (url, params, name) => {
       const l = m.createLayer('image'); l.id = `${name}-proof`; Object.assign(l.params, params);
       l.image = { name: `${name}.png`, dataUrl: url, width: 960, height: 540, fit: 'contain' };
@@ -234,7 +261,7 @@ try {
     const px = async (...args) => pixels(await shot(...args));
     const difference = (a, b) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum / a.length; };
     const same = (a, b) => { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; };
-    window.ct = { m, old, renderer, layer, soft, grey, project, pixels, shot, px, difference, same };
+    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, project, pixels, shot, px, difference, same };
   }, !!baseline);
 
   for (const check of selected) {

@@ -126,7 +126,7 @@ export const SPLIT_PARAMETERS:ParameterDefinition[]=[
  {key:'splitWaves',label:'Waves',min:1,max:24,step:1,default:4,section:'Material',description:'Number of ripples across the frame for the Wave shape.'},
  {key:'splitTravel',label:'Wave travel per loop',min:-8,max:8,step:1,default:1,section:'Motion',description:'Whole ripples the Wave shape slides per loop; the loop closes exactly.'},
  {key:'splitOrder',label:'Channel order',min:0,max:5,step:1,default:0,section:'Material',description:'Which colour channel goes where: RGB leaves them alone, the others swap them.'},
- {key:'splitBlocks',label:'Order blocks',min:0,max:64,step:1,default:0,section:'Material',description:'Breaks the frame into this many blocks across, each of which may swap its channel order. 0 swaps the whole frame.'},
+ {key:'splitBlocks',label:'Order blocks',min:0,max:64,step:1,default:0,section:'Material',description:'Breaks the frame into blocks, this many per frame height, each of which may swap its channel order. 0 swaps the whole frame.'},
  {key:'splitChance',label:'Block chance',min:0,max:1,step:.01,default:.5,section:'Material',description:'Share of blocks that swap their channel order.'},
 ];
 /**
