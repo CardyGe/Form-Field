@@ -1,6 +1,17 @@
 # Form & Field
 
-A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.16 alpha.
+A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.17 alpha.
+
+## What's new in 0.17
+
+- **Map:** a new screen for projection mapping. Switch to **Map** in the header, draw shapes and drag their corners to fit the surfaces in the room, using a room photo, Snap, a test grid and Identify. The artwork shows on a projector while the controls stay on your screen, with Blackout.
+- **Anything can play on a shape:** give each shape a Studio instrument, an image, a video or the Live picture.
+- **Groups and scenes:** link shapes so they share one instrument, use **Make a grid** to spread one picture across many cells, and move between saved scenes by hand or with Auto-advance.
+- **Wild options:** Stagger, Vary each, Palette shift, Border runs with Chase, and instruments driven by a shape's outline. Each is off until you turn it on.
+- **Sound and MIDI:** Live and Map can follow sound bands, the beat and tempo, and MIDI controllers with learn.
+- **New Live looks:** **Relief** turns the camera into a kinetic metal wall, and **Signal Melt** adds live pose echoes.
+- **New in Studio:** the Ember Pulse Oscilloscope look, Copper Concertina in Kinetic Relief, and more projection-focused Fractals.
+- **Graphics recovery:** if the graphics context is lost, the Studio preview now comes back by itself, including instruments that build up a picture over time.
 
 ## What's new in 0.16
 
