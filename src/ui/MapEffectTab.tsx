@@ -5,7 +5,8 @@
  */
 import { useRef, useState } from 'react';
 import type { useMap } from './useMap';
-import { LayerShapeControls, Parameter, gradingKeys } from './LayerControls';
+import { LayerShapeControls } from './LayerControls';
+import { FinishSections } from './FinishControls';
 import { EditGrouper } from '../map/undo-group';
 import { visibleParameterDefinitions } from '../core/project';
 import { ReactTo, linkFor } from './ReactControls';
@@ -21,12 +22,13 @@ export default function MapEffectTab({ map, shape, locked, linked, setNote }: { 
   const source = shape.sourceId ? map.show.sources.find(s => s.id === shape.sourceId) ?? null : null;
   const [layerIndex, setLayerIndex] = useState(0);
   const [oilFine, setOilFine] = useState(false);
+  /** The two parts of an effect's settings, as Studio splits them: its look and shape, and its finish. */
+  const [part, setPart] = useState<'settings' | 'finish'>('settings');
   /** One drag is one undo step; a reset, a typed value or a choice is a step of its own. */
   const grouper = useRef(new EditGrouper());
   if (!source) return null;
   const layers = source.project.layers, index = Math.min(layerIndex, layers.length - 1), layer = layers[index];
   const sharers = map.show.shapes.filter(s => s.sourceId === source.id);
-  const finish = visibleParameterDefinitions(layer).filter(d => gradingKeys.includes(d.key));
 
   /** The source to edit: with "Change all" off on a shared effect, this shape first gets its own copy (in the same undo step). */
   const target = (merge?: string): string | null => {
@@ -72,16 +74,13 @@ export default function MapEffectTab({ map, shape, locked, linked, setNote }: { 
     </div>}
     {layers.length > 1 && <div className="map-layer-chips" role="group" aria-label="Layer">{layers.map((l, i) =>
       <button key={l.id} className={`look-chip ${i === index ? 'on' : ''}`} aria-pressed={i === index} onClick={() => setLayerIndex(i)}>{i + 1} · {l.name}</button>)}</div>}
-    <LayerShapeControls locked={locked} layer={layer} edit={edit} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()}
-      seed={source.project.seed} duration={source.project.duration} notify={text => setNote(text)}
-      oilFine={oilFine} setOilFine={change => setOilFine(change)} paramExtra={extra} readOnly={d => locked || !!layer.modulations[d.key]} />
-    {/* Studio's Finish tab, for this layer: its grading and finish settings, then Opacity. */}
-    <details className="control-section inspector-section" data-section="finish">
-      <summary>Finish<span>{finish.length + 1}</span></summary>
-      {finish.map(d => <Parameter key={d.key} definition={d} value={layer.params[d.key] ?? d.default} animated={!!layer.modulations[d.key]} readOnly={locked || !!layer.modulations[d.key]}
-        onChange={n => edit(l => ({ ...l, params: { ...l.params, [d.key]: n } }))} extra={extra(d)} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()} />)}
-      <Parameter definition={{ key: 'opacity', label: 'Opacity', min: 0, max: 1, step: .01, default: 1, section: 'Material' }} value={layer.opacity} animated={false} readOnly={locked}
-        onChange={n => edit(l => ({ ...l, opacity: n }))} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()} />
-    </details>
+    <div className="tab-switch map-effect-parts" role="group" aria-label="Effect settings">{(['settings', 'finish'] as const).map(t =>
+      <button key={t} aria-pressed={part === t} className={part === t ? 'active' : ''} onClick={() => setPart(t)}>{t === 'settings' ? 'Settings' : 'Finish'}</button>)}</div>
+    {part === 'settings'
+      ? <LayerShapeControls locked={locked} layer={layer} edit={edit} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()}
+          seed={source.project.seed} duration={source.project.duration} notify={text => setNote(text)}
+          oilFine={oilFine} setOilFine={change => setOilFine(change)} paramExtra={extra} readOnly={d => locked || !!layer.modulations[d.key]} />
+      : <FinishSections layer={layer} definitions={visibleParameterDefinitions(layer)} edit={edit} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()}
+          extra={extra} readOnly={d => locked || !!layer.modulations[d.key]} />}
   </div>;
 }

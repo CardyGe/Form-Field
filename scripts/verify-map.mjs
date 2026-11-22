@@ -1123,6 +1123,28 @@ try {
     await react('testBeat', false);
   });
 
+  await check('Finish in the Effect tab shows Studio’s groups, and Opacity there dims the effect on the wall', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
+    await tool('Select');
+    await playLook(studio, 'preset:porcelain-shutters');
+    await openSection(studio, 'effect');
+    const settings = studio.locator('.map-effect-settings');
+    await studio.locator('.map-effect-parts').getByRole('button', { name: 'Finish', exact: true }).click();
+    const heads = await settings.locator('.control-section h3').allInnerTexts();
+    for (const h of ['Layer mix', 'Color finish', 'Tonal finishing']) assert.ok(heads.includes(h), `Finish has no "${h}" group (${heads.join(', ')})`);
+    // Optional groups (Glow, Print screen, Feedback and the rest) are not all listed at once.
+    assert.ok(await settings.locator('.parameter').count() < 30, 'Finish lists every setting at once');
+    const brightness = async () => (await sample(output, [[.25, .25], [.4, .4], [.55, .55], [.3, .5], [.5, .3]])).colours.flat().reduce((a, b) => a + b, 0);
+    await sleep(1500);
+    const before = await brightness();
+    await slide('Opacity', 0.2);
+    await sleep(1500);
+    const after = await brightness();
+    assert.ok(after < before * 0.7, `Opacity 0.2 left the wall at ${after} of ${before}`);
+    await studio.locator('.map-effect-parts').getByRole('button', { name: 'Settings', exact: true }).click();
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
