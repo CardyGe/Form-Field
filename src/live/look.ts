@@ -30,6 +30,8 @@ export interface Look {
   step(seconds: number, time: number, feed: TrackingFeed, settings: LiveSettings): void;
   /** Linear colour at artwork size. */
   readonly output: THREE.Texture;
+  /** False while a look is still forming its first picture. Looks without this are ready at once. */
+  readonly ready?: boolean;
   resize(width: number, height: number): void;
   clear(): void;
   dispose(): void;

@@ -27,6 +27,21 @@ void main(){
  gl_FragColor=vec4(mix(chosen,curl,type==5.?0.:uMix*.6),0.,1.);
 }`;
 
+/** Catmull-Rom sampling of the state: it keeps stripes crisp when they are moved or resized. */
+const cubicField = /* glsl */`vec4 weights(float f){float g=f*f,h=g*f;return .5*vec4(-h+2.*g-f,3.*h-5.*g+2.,-3.*h+4.*g+f,h-g);}
+float sampleField(vec2 st,int channel){
+ ivec2 m=textureSize(uState,0)-1;st-=.5;ivec2 b=ivec2(floor(st));vec2 f=fract(st);vec4 wx=weights(f.x),wy=weights(f.y);float value=0.;
+ for(int j=0;j<4;j++)for(int i=0;i<4;i++)value+=texelFetch(uState,clamp(b+ivec2(i-1,j-1),ivec2(0),m),0)[channel]*wx[i]*wy[j];
+ return value;
+}
+`;
+
+/** Copies the state to a new size without restarting the pattern. */
+export const resampleFragment = header + /* glsl */`
+uniform sampler2D uState;uniform vec2 uSize;
+${cubicField}
+void main(){vec2 st=vUv*vec2(textureSize(uState,0));gl_FragColor=vec4(clamp(sampleField(st,0),-1.5,1.5),clamp(sampleField(st,1),-1.5,1.5),0.,1.);}`;
+
 /**
  * Carries both fields along a moving flow, once a frame. Catmull-Rom sampling keeps the stripes crisp, because
  * plain linear sampling would blur them faster than the solver can rebuild them.
@@ -36,12 +51,7 @@ export const advectFragment = header + /* glsl */`
 uniform sampler2D uState,uDirector,uFlow;uniform vec2 uCentre,uForm;uniform float uHasFlow,uAmount,uTime,uAspect,uFormRadius;
 float potential(vec2 p){float t=uTime*.16;return sin(p.x*1.7+1.1*sin(p.y*1.3+t)+t*.7)*cos(p.y*1.9-.9*sin(p.x*1.2-t*.8))+.45*sin(p.x*3.1-p.y*2.3+t*1.3);}
 vec2 eddy(vec2 p){const float e=.01;return vec2(potential(p+vec2(0.,e))-potential(p-vec2(0.,e)),-(potential(p+vec2(e,0.))-potential(p-vec2(e,0.))))/(2.*e);}
-vec4 weights(float f){float g=f*f,h=g*f;return .5*vec4(-h+2.*g-f,3.*h-5.*g+2.,-3.*h+4.*g+f,h-g);}
-float sampleField(vec2 st,int channel){
- ivec2 m=textureSize(uState,0)-1;st-=.5;ivec2 b=ivec2(floor(st));vec2 f=fract(st);vec4 wx=weights(f.x),wy=weights(f.y);float value=0.;
- for(int j=0;j<4;j++)for(int i=0;i<4;i++)value+=texelFetch(uState,clamp(b+ivec2(i-1,j-1),ivec2(0),m),0)[channel]*wx[i]*wy[j];
- return value;
-}
+${cubicField}
 void main(){
  vec2 scale=vec2(uAspect,1.),p=(vUv-.5)*2.*scale,q=p-uCentre*scale,toForm=p-uForm*scale,size=vec2(textureSize(uState,0));
  float r=length(q),pulse=.55+.45*sin(r*3.4-uTime*1.15+.8*sin(atan(q.y,q.x)*2.+uTime*.21));

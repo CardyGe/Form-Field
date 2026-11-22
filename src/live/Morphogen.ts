@@ -11,6 +11,7 @@ export class Morphogen implements Look {
   constructor(passes: Passes, width: number, height: number) { this.engine = new MorphEngine(passes, width, height); }
 
   get output(): THREE.Texture { return this.engine.output; }
+  get ready(): boolean { return this.engine.ready; }
 
   step(seconds: number, time: number, feed: TrackingFeed, settings: LiveSettings): void {
     this.engine.step(seconds, time, settings.morphogen, { flow: feed.flow, people: feed.peopleReady ? feed.people : null, impulse: 0, seedBurst: 0 });

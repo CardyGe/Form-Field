@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { MorphParams } from './params';
 import { MorphDirector } from './director';
 import { formAt } from './forms';
-import { advectFragment, seedFragment, stepFragment } from './solver-shaders';
+import { advectFragment, resampleFragment, seedFragment, stepFragment } from './solver-shaders';
 import { accumulateSteps, stableStep } from './stability';
 
 /** What the engine needs from the host's pass helper. The app's `Passes` class satisfies it. */
@@ -27,6 +27,10 @@ export class MorphSolver {
   private readonly seedMaterial: THREE.ShaderMaterial;
   private readonly stepMaterial: THREE.ShaderMaterial;
   private readonly advectMaterial: THREE.ShaderMaterial;
+  private readonly resampleMaterial: THREE.ShaderMaterial;
+  private maxSteps = MAX_STEPS;
+  /** Stripe widths are set for 576 lines, so a change of simulation size keeps the picture the same. */
+  private scale = 1;
   private carry = 0;
   private warmup = 0;
   private frame = 0;
@@ -40,6 +44,8 @@ export class MorphSolver {
       uState: { value: null }, uDirector: { value: null }, uK: { value: new THREE.Vector2() }, uDt: { value: .05 }, uDrive: { value: 0 }, uAsym: { value: 0 },
       uAlign: { value: 0 }, uTravel: { value: 0 }, uSurge: { value: 0 }, uCentre: { value: new THREE.Vector2() }, uTime: { value: 0 }, uNoise: { value: 0 }, uFrame: { value: 0 }, uAspect: { value: width / height },
     });
+    this.scale = height / 576;
+    this.resampleMaterial = passes.material(resampleFragment, { uState: { value: null }, uSize: { value: new THREE.Vector2() } });
     this.advectMaterial = passes.material(advectFragment, {
       uState: { value: null }, uDirector: { value: null }, uFlow: { value: null }, uHasFlow: { value: 0 }, uCentre: { value: new THREE.Vector2() }, uForm: { value: new THREE.Vector2() }, uAmount: { value: 0 }, uTime: { value: 0 }, uAspect: { value: width / height }, uFormRadius: { value: .4 },
     });
@@ -47,7 +53,7 @@ export class MorphSolver {
 
   /** Moves the pattern along the flow, once a frame. Holds when Speed or Streaming is zero. */
   private advect(seconds: number, time: number, params: MorphParams, flow: THREE.Texture | null): void {
-    const amount = params.flowSpeed * params.speed * Math.min(seconds, 1 / 20) * FLOW_TEXELS;
+    const amount = params.flowSpeed * params.speed * Math.min(seconds, 1 / 20) * FLOW_TEXELS * this.scale;
     if (amount <= 0 && !flow) return;
     if (params.speed <= 0) return;
     const u = this.advectMaterial.uniforms, form = formAt(params, time);
@@ -62,6 +68,25 @@ export class MorphSolver {
   /** The current field's render target, for measurement. */
   get target(): THREE.WebGLRenderTarget { return this.state.read; }
 
+  /** The picture's scale, for shading. */
+  get widthScale(): number { return this.scale; }
+  /** 0 for a fresh pattern, 1 once its stripes have formed. */
+  get formed(): number { return 1 - this.warmup / WARMUP_FRAMES; }
+
+  /** Sets the step limit and simulation size. A new size carries the current pattern across. */
+  setQuality(maxSteps: number, height: number): void {
+    this.maxSteps = Math.min(MAX_STEPS, maxSteps);
+    if (height === this.height) return;
+    const width = Math.round(height * 16 / 9), temporary = this.passes.pair(width, height, { float: true, nearest: true }), u = this.resampleMaterial.uniforms;
+    u.uState.value = this.state.read.texture;
+    this.passes.draw(this.resampleMaterial, temporary.read);
+    this.state.setSize(width, height);
+    u.uState.value = temporary.read.texture;
+    this.passes.draw(this.resampleMaterial, this.state.read);
+    temporary.dispose();
+    this.width = width; this.height = height; this.scale = height / 576;
+  }
+
   reseed(seed: number): void {
     this.seed = seed;
     this.seedMaterial.uniforms.uSeed.value = seed;
@@ -74,13 +99,13 @@ export class MorphSolver {
     if (this.seed !== params.seed) this.reseed(params.seed);
     this.director.update(seconds, params, this.width / this.height, driftBoost);
     this.advect(seconds, time, params, input.flow);
-    const breath = 1 + params.breathing * .12 * Math.sin(time * .37), outer = params.wavelength * breath, inner = outer * params.formWavelength;
+    const breath = 1 + params.breathing * .12 * Math.sin(time * .37), outer = params.wavelength * breath * this.scale, inner = outer * params.formWavelength;
     // A surge ring moves K by up to ±22%, so the step must be safe at both ends of that swing for both fields.
     const swing = params.surge * .22, ends = [outer, inner].flatMap(width => [width / Math.sqrt(1 + swing), width / Math.sqrt(1 - swing)]);
     const dt = Math.min(...ends.map(width => stableStep(width, params.alignment, params.asymmetry)));
     // Wide stripes grow more slowly, so they get more simulation time per second to settle as quickly as the default width.
-    const widthRate = Math.min(4, (2 * Math.PI / 12) ** 2 / (2 * Math.PI / outer) ** 2);
-    const owed = accumulateSteps(this.carry, seconds, params.speed * SIM_RATE * Math.max(1, widthRate), dt, MAX_STEPS);
+    const widthRate = Math.min(4, (params.wavelength * breath / 12) ** 2);
+    const owed = accumulateSteps(this.carry, seconds, params.speed * SIM_RATE * Math.max(1, widthRate), dt, this.maxSteps);
     this.carry = owed.carry;
     const u = this.stepMaterial.uniforms;
     (u.uK.value as THREE.Vector2).set((2 * Math.PI / outer) ** 2, (2 * Math.PI / inner) ** 2);
@@ -100,6 +125,6 @@ export class MorphSolver {
 
   dispose(): void {
     this.state.dispose(); this.director.dispose();
-    this.seedMaterial.dispose(); this.stepMaterial.dispose(); this.advectMaterial.dispose();
+    this.seedMaterial.dispose(); this.stepMaterial.dispose(); this.advectMaterial.dispose(); this.resampleMaterial.dispose();
   }
 }

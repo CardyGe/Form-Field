@@ -92,8 +92,8 @@ export const blurFragment = /* glsl */`uniform sampler2D uImage;uniform vec2 uSt
 void main(){vec3 c=texture2D(uImage,vUv).rgb*.227;c+=(texture2D(uImage,vUv+uStep*1.385).rgb+texture2D(uImage,vUv-uStep*1.385).rgb)*.316;c+=(texture2D(uImage,vUv+uStep*3.231).rgb+texture2D(uImage,vUv-uStep*3.231).rgb)*.07;gl_FragColor=vec4(c,1.);}`;
 
 /** Adds the glow, tone maps to display range and dithers. Output is linear 0..1 for the host to encode. */
-export const finishFragment = /* glsl */`uniform sampler2D uImage,uBloom;uniform float uAmount,uGrain,uTime;
+export const finishFragment = /* glsl */`uniform sampler2D uImage,uBloom;uniform float uAmount,uGrain,uTime,uFade;
 float hash(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031+fract(uTime)*7.);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}
 void main(){vec3 c=texture2D(uImage,vUv).rgb+texture2D(uBloom,vUv).rgb*uAmount*1.5;
 c=clamp(c*(2.51*c+.03)/(c*(2.43*c+.59)+.14),0.,1.);
-float n=hash(gl_FragCoord.xy)-.5;c=clamp(c*(1.+n*uGrain*.28)+n/255.,0.,1.);gl_FragColor=vec4(c,1.);}`;
+float n=hash(gl_FragCoord.xy)-.5;c=clamp(c*(1.+n*uGrain*.28)+n/255.,0.,1.);gl_FragColor=vec4(c*uFade,1.);}`;

@@ -228,6 +228,46 @@ try {
     assert.ok(Math.abs(r.dimmed - 136) <= 3, `dimmed to ${r.dimmed}`);
     assert.equal(r.probeSize, 64 * 36 * 4); assert.equal(r.probeValue, 255);
   });
+  await check('changing simulation size keeps the pattern and its stripe width', async () => {
+    const r = await page.evaluate(() => {
+      const { m, passes } = window.t, solver = new m.MorphSolver(passes, 1024, 576), params = { ...m.defaultMorphParams(), flowSpeed: 0, surge: 0, breathing: 0, travel: 0, fieldDrift: 0, curlAmount: 0, forkRate: 0 };
+      const input = { flow: null, people: null, impulse: 0, seedBurst: 0 };
+      for (let i = 0; i < 600; i++) solver.step(1 / 60, i / 60, params, input);
+      const read = (w, h) => { const d = new Float32Array(w * h * 4); passes.renderer.readRenderTargetPixels(solver.target, 0, 0, w, h, d); return d; };
+      const before = read(1024, 576);
+      solver.setQuality(12, 432);
+      const after = read(768, 432);
+      let xy = 0, xx = 0, yy = 0;
+      for (let y = 8; y < 424; y++) for (let x = 8; x < 760; x++) { const a = after[(y * 768 + x) * 4], b = before[(Math.round((y + .5) * 4 / 3 - .5) * 1024 + Math.round((x + .5) * 4 / 3 - .5)) * 4]; xy += a * b; xx += a * a; yy += b * b; }
+      for (let i = 0; i < 300; i++) solver.step(1 / 60, (600 + i) / 60, params, input);
+      const settled = read(768, 432); let crossings = 0, rows = 0;
+      for (let y = 40; y < 392; y += 8) { rows++; for (let x = 21; x < 748; x++) if (Math.sign(settled[(y * 768 + x) * 4]) !== Math.sign(settled[(y * 768 + x - 1) * 4])) crossings++; }
+      solver.dispose();
+      return { match: xy / Math.sqrt(xx * yy), crossingsPerRow: crossings / rows };
+    });
+    console.log('resample', JSON.stringify(r));
+    assert.ok(r.match > .9, `pattern changed on resize: ${r.match}`);
+  });
+  await check('a lost graphics context brings the picture back within three seconds', async () => {
+    const r = await page.evaluate(async () => {
+      const { m } = window.t, canvas = document.createElement('canvas'), live = new m.LiveRenderer(canvas, { element: null, frameId: 0 });
+      live.settings = { ...m.defaultLiveSettings(), look: 'morphogen' };
+      for (let i = 0; i < 140; i++) live.frame(1 / 60);
+      const gl = canvas.getContext('webgl2'), lose = gl.getExtension('WEBGL_lose_context');
+      const mean = () => { const p = new Uint8Array(4 * 64); gl.readPixels(928, 508, 8, 8, gl.RGBA, gl.UNSIGNED_BYTE, p); let s = 0; for (let i = 0; i < p.length; i += 4) s += p[i] + p[i + 1] + p[i + 2]; return s / 64 / 3; };
+      const before = mean(); lose.loseContext();
+      await new Promise(done => setTimeout(done, 60));
+      for (let i = 0; i < 5; i++) live.frame(1 / 60);
+      lose.restoreContext();
+      await new Promise(done => setTimeout(done, 100));
+      const started = performance.now(); let after = 0;
+      while (performance.now() - started < 3000 && after < 40) { live.frame(1 / 60); after = mean(); await new Promise(done => setTimeout(done)); }
+      const result = { before, after, ms: performance.now() - started, ready: live.lookReady }; live.dispose(); return result;
+    });
+    console.log('recovery', JSON.stringify(r));
+    assert.ok(r.before > 40, `no picture before: ${r.before}`);
+    assert.ok(r.after >= 40 && r.ms < 3000, `picture did not return: ${r.after} after ${r.ms} ms`);
+  });
   await check('camera movement pushes the stripes', async () => {
     const r = await page.evaluate(() => {
       const { m, passes, field } = window.t, W = 1024, H = 576, params = { ...m.defaultMorphParams(), flowSpeed: 0, surge: 0, breathing: 0, travel: 0, fieldDrift: 0, curlAmount: 0, fieldMix: 0, forkRate: 0 };

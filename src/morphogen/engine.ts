@@ -1,16 +1,20 @@
 import type * as THREE from 'three';
 import { ActivityGovernor, fieldActivity } from './activity';
+import { DisplayBudget, QualityGovernor, type QualityState } from './governor';
 import type { MorphParams } from './params';
 import { MorphShade } from './shade';
 import { MorphSolver, type GpuPasses, type MorphInput } from './solver';
 
 const SIM_WIDTH = 1024, SIM_HEIGHT = 576, PROBE_WIDTH = 64, PROBE_HEIGHT = 36;
+const SIM_HEIGHTS: QualityState['simHeight'][] = [432, 576, 720];
 
 /** The whole generator: stripes in, finished linear picture out. Knows nothing about Live or Map. */
 export class MorphEngine {
   private readonly solver: MorphSolver;
   private readonly shade: MorphShade;
   private readonly governor = new ActivityGovernor();
+  private readonly quality = new QualityGovernor(576);
+  private readonly budget = new DisplayBudget();
   private readonly probe: ReturnType<GpuPasses['pair']>;
   private readonly probeMaterial: THREE.ShaderMaterial;
   private seed = 0;
@@ -30,15 +34,24 @@ export class MorphEngine {
   }
 
   get output(): THREE.Texture { return this.shade.output; }
+  /** False while a fresh pattern is still forming. */
+  get ready(): boolean { return this.solver.formed >= 1; }
+  /** The quality the governor has chosen, for the operator and checks. */
+  get qualityState(): QualityState { return this.quality.state; }
 
   step(seconds: number, time: number, params: MorphParams, input: MorphInput): void {
     this.seed = params.seed;
+    this.quality.setBase(SIM_HEIGHTS[params.quality] ?? 576);
+    const milliseconds = seconds * 1000, chosen = this.quality.update(milliseconds, this.budget.estimate(milliseconds));
+    this.solver.setQuality(chosen.steps, chosen.simHeight);
     const { driftBoost, seedBurst } = this.help;
     this.help = { driftBoost, seedBurst: 0 };
     // Help works through the ordinary motion controls, and only ever adds to what the operator has set.
     const played = driftBoost > 0 ? { ...params, flowSpeed: Math.max(params.flowSpeed, driftBoost * .7), surge: Math.max(params.surge, driftBoost * .6) } : params;
     this.solver.step(seconds, time, played, { ...input, seedBurst: Math.max(input.seedBurst, seedBurst) }, driftBoost);
-    this.shade.draw(this.solver.texture, params, time);
+    // A fresh pattern fades up as it forms, so noise never reaches the wall.
+    const fade = Math.max(0, Math.min(1, (this.solver.formed - .3) / .7));
+    this.shade.draw(this.solver.texture, params, time, { widthScale: this.solver.widthScale, fade, bloom: chosen.bloom });
     this.measure(seconds, params);
   }
 
@@ -68,8 +81,8 @@ export class MorphEngine {
 
   /** The stripe field, for scripted checks. */
   readField(): Float32Array {
-    const rgba = new Float32Array(SIM_WIDTH * SIM_HEIGHT * 4);
-    this.passes.renderer.readRenderTargetPixels(this.solver.target, 0, 0, SIM_WIDTH, SIM_HEIGHT, rgba);
+    const { width, height } = this.solver.target, rgba = new Float32Array(width * height * 4);
+    this.passes.renderer.readRenderTargetPixels(this.solver.target, 0, 0, width, height, rgba);
     return rgba;
   }
 

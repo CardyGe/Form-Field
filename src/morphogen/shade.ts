@@ -20,6 +20,7 @@ export class MorphShade {
   private readonly blur: THREE.ShaderMaterial;
   private readonly finish: THREE.ShaderMaterial;
   private palette = -1;
+  private bloomLevel = 1;
 
   constructor(private readonly passes: GpuPasses, private width: number, private height: number) {
     this.surface = passes.pair(width, height, {});
@@ -32,12 +33,12 @@ export class MorphShade {
     });
     this.bright = passes.material(brightFragment, { uImage: { value: null }, uTexel: { value: new THREE.Vector2() } });
     this.blur = passes.material(blurFragment, { uImage: { value: null }, uStep: { value: new THREE.Vector2() } });
-    this.finish = passes.material(finishFragment, { uImage: { value: null }, uBloom: { value: null }, uAmount: { value: 0 }, uGrain: { value: 0 }, uTime: { value: 0 } });
+    this.finish = passes.material(finishFragment, { uImage: { value: null }, uBloom: { value: null }, uAmount: { value: 0 }, uGrain: { value: 0 }, uTime: { value: 0 }, uFade: { value: 1 } });
   }
 
   get output(): THREE.Texture { return this.result.read.texture; }
 
-  draw(state: THREE.Texture, params: MorphParams, time: number): void {
+  draw(state: THREE.Texture, params: MorphParams, time: number, finish: { widthScale: number; fade: number; bloom: boolean } = { widthScale: 1, fade: 1, bloom: true }): void {
     const u = this.shade.uniforms;
     if (this.palette !== params.palette) { u.uStops.value = linearStops(params.palette); this.palette = params.palette; }
     u.uState.value = state; u.uAspect.value = this.width / this.height; (u.uOut.value as THREE.Vector2).set(this.width, this.height);
@@ -45,13 +46,22 @@ export class MorphShade {
     (u.uFormPos.value as THREE.Vector2).set(form.x, form.y);
     const values: Record<string, number> = {
       uFormType: params.formType, uFormSize: params.formSize, uFormSoft: params.formSoft, uRefraction: params.refraction, uDepth: params.depth, uBevel: params.bevel,
-      uSharp: params.lineSharp, uWavelength: params.wavelength, uRough: params.roughness, uMetal: params.metal, uCoat: params.clearcoat, uLightAngle: params.lightAngle,
+      uSharp: params.lineSharp, uWavelength: params.wavelength * finish.widthScale, uRough: params.roughness, uMetal: params.metal, uCoat: params.clearcoat, uLightAngle: params.lightAngle,
       uEnvRotate: params.envRotate, uIrid: params.irid, uFilm: params.filmNm, uFilmVary: params.filmVary, uFilmIor: params.filmIor, uColourShift: params.colourShift,
       uZones: params.colourZones, uSaturation: params.saturation, uExposure: params.exposure, uChroma: params.chroma, uTime: time, uShimmer: params.shimmer,
     };
     for (const key in values) u[key].value = values[key];
     this.passes.draw(this.shade, this.surface.write); this.surface.swap();
 
+    // Bloom eases in and out, so the governor can never make it visibly pop.
+    this.bloomLevel = finish.bloom ? Math.min(1, this.bloomLevel + .04) : Math.max(0, this.bloomLevel - .04);
+    if (this.bloomLevel > 0) this.glowPasses();
+    const f = this.finish.uniforms;
+    f.uImage.value = this.surface.read.texture; f.uBloom.value = this.glow.read.texture; f.uAmount.value = params.bloom * this.bloomLevel; f.uGrain.value = params.grain; f.uTime.value = time; f.uFade.value = finish.fade;
+    this.passes.draw(this.finish, this.result.write); this.result.swap();
+  }
+
+  private glowPasses(): void {
     this.bright.uniforms.uImage.value = this.surface.read.texture;
     (this.bright.uniforms.uTexel.value as THREE.Vector2).set(1 / this.width, 1 / this.height);
     this.passes.draw(this.bright, this.glow.write); this.glow.swap();
@@ -60,9 +70,6 @@ export class MorphShade {
       this.blur.uniforms.uImage.value = this.glow.read.texture; this.blur.uniforms.uStep.value = direction;
       this.passes.draw(this.blur, this.glow.write); this.glow.swap();
     }
-    const f = this.finish.uniforms;
-    f.uImage.value = this.surface.read.texture; f.uBloom.value = this.glow.read.texture; f.uAmount.value = params.bloom; f.uGrain.value = params.grain; f.uTime.value = time;
-    this.passes.draw(this.finish, this.result.write); this.result.swap();
   }
 
   resize(width: number, height: number): void {

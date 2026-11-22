@@ -97,7 +97,14 @@ export class LiveRenderer {
     this.trackingView = this.passes.material(trackingViewFragment, { uCamera: { value: null }, uFlow: { value: null }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
     this.scratch = this.passes.target(1, 1);
     this.counted.since = performance.now();
+    // Three rebuilds its own resources after a restored context; the look's simulation has lost its state, so it starts again.
+    canvas.addEventListener('webglcontextrestored', this.restartLook);
   }
+
+  private readonly restartLook = () => { this.look?.dispose(); this.look = null; this.lookKind = null; };
+
+  /** False while the look is still forming its first picture. */
+  get lookReady(): boolean { return this.look?.ready ?? true; }
 
   start(): void {
     if (this.running || this.disposed) return;
@@ -202,6 +209,7 @@ export class LiveRenderer {
   dispose(): void {
     if (this.disposed) return;
     this.stop(); this.disposed = true;
+    this.canvas.removeEventListener('webglcontextrestored', this.restartLook);
     for (const item of [this.final, this.trackingView, this.tracking, this.black, this.scratch]) item.dispose();
     this.peopleView?.dispose();
     this.look?.dispose();
