@@ -32,8 +32,8 @@ const SET = deepFreeze(fixtureSet());
 const editedSet = (edit: (s: PerformanceSet) => void) => { const s = structuredClone(fixtureSet()); edit(s); return deepFreeze(s); };
 
 /** A frozen state with scene `row` landed on beat 4 (2000 ms), so any mutation by a launcher function throws. */
-function running(row: number, set: PerformanceSet = SET): LauncherState {
-  return deepFreeze(landed(queueScene(deepFreeze(initialLauncher()), set, row, clock, 200, 'boot'), 'boot', ALL, 2000));
+function running(row: number, set: PerformanceSet = SET, random: () => number = () => 0): LauncherState {
+  return deepFreeze(landed(queueScene(deepFreeze(initialLauncher()), set, row, clock, 200, 'boot'), 'boot', ALL, 2000, random));
 }
 const changeFor = (s: LauncherState, zone: number) => s.queue.flatMap(l => l.changes).filter(c => c.zone === zone);
 
@@ -256,7 +256,8 @@ test('armList holds the next scene without queueing, and never more than 8', () 
   // Queued clips come first; the ceiling is only armed for a scene that includes it.
   const queued = deepFreeze(queueZone(s, SET, 7, 1, clock, 2200, 'a'));
   assert.equal(armList(queued, SET)[0], 'c70');
-  assert.ok(armList(running(2), SET).includes('c73'));
+  const noFollow = editedSet(x => { x.scenes[2].follow = null; });
+  assert.ok(armList(running(2, noFollow), noFollow).includes('c73'));
   assert.ok(!armList(running(0), SET).includes('c71'));
   // Scene 2 queued (6 clips) plus scene 3 next (7 clips): the queued clips all survive the cap of 8.
   const crowded = armList(deepFreeze(queueScene(running(1), SET, 2, clock, 2200, 'c')), SET);
@@ -295,9 +296,8 @@ test('a follow rule fires after its bars; a manual launch restarts the timer', (
 
 test('follow random never picks the current scene', () => {
   const set = editedSet(x => { x.scenes[1].follow = { afterBars: 4, to: 'random' }; });
-  const s = running(1, set);
   const seen = new Set<number | null>();
-  for (const r of [0, 0.2, 0.34, 0.4, 0.5, 0.67, 0.8, 0.999999]) seen.add(dueFollow(s, set, 20, () => r));
+  for (const r of [0, 0.2, 0.34, 0.4, 0.5, 0.67, 0.8, 0.999999]) seen.add(dueFollow(running(1, set, () => r), set, 20, () => 0));
   assert.ok(!seen.has(1));
   assert.deepEqual([...seen].sort(), [0, 2, 3]);
   const alone = editedSet(x => { x.scenes = [x.scenes[1]]; x.scenes[0].follow = { afterBars: 4, to: 'random' }; });
@@ -328,6 +328,70 @@ test('launching now fires the queued scene at once, but the ceiling still waits 
   const fired = launchNow(split, 3100);
   assert.equal(fired.queue[0].atMs, 3100);
   assert.equal(fired.queue[1].atMs, 34000);
+});
+
+const withCeilingScene = () => editedSet(x => { x.scenes[0].includeProtected = true; });
+
+test('Launch Now fires the room of a combined scene while its ceiling keeps waiting', () => {
+  const set = withCeilingScene();
+  const queued = deepFreeze(queueScene(running(3, set), set, 0, clock, 33200, 'a'));
+  assert.equal(queued.queue.length, 1);
+  assert.equal(queued.queue[0].atMs, 34000);
+  const fired = deepFreeze(launchNow(queued, 33300));
+  assert.equal(fired.queue.length, 2);
+  assert.equal(fired.queue[0].id, 'a');
+  assert.equal(fired.queue[0].atMs, 33300);
+  assert.ok(!fired.queue[0].changes.some(c => c.zone === 7));
+  assert.equal(fired.queue[1].id, 'a:ceiling');
+  assert.equal(fired.queue[1].atMs, 34000);
+  assert.deepEqual(fired.queue[1].changes.map(c => c.zone), [7]);
+  const roomIn = landed(fired, 'a', ALL, 33300);
+  assert.equal(roomIn.sceneIndex, 0);
+  assert.equal(roomIn.playing[7], 'c73');
+  assert.equal(roomIn.queue.length, 1);
+  assert.equal(roomIn.queue[0].sceneIndex, null);
+});
+
+test('retime keeps the room on its corrected bar while the ceiling waits', () => {
+  const set = withCeilingScene();
+  const queued = deepFreeze(queueScene(running(3, set), set, 0, clock, 33200, 'a'));
+  const moved = deepFreeze(retime(queued, { ...clock, barOffset: 3 }, set, 33200));
+  assert.equal(moved.queue.length, 2);
+  assert.equal(moved.queue[0].id, 'a');
+  assert.equal(moved.queue[0].atMs, 33500);
+  assert.ok(!moved.queue[0].changes.some(c => c.zone === 7));
+  assert.equal(moved.queue[1].id, 'a:ceiling');
+  assert.equal(moved.queue[1].atMs, 35500);
+  assert.deepEqual(retime(moved, { ...clock, barOffset: 3 }, set, 33200), moved);
+});
+
+test('a ceiling Stop lands on the next beat through a dissolve and only its fade holds the ceiling', () => {
+  // 3000 ms is exactly beat 6, so a press there lands on that beat rather than at 34000.
+  assert.equal(stopZone(running(3), 7, clock, 3000, 'on').queue[0].atMs, 3000);
+  const stop = deepFreeze(stopZone(running(3), 7, clock, 3200, 'a'));
+  assert.equal(stop.queue[0].beat, 7);
+  assert.equal(stop.queue[0].atMs, 3500);
+  assert.deepEqual(stop.queue[0].changes[0].blend, { kind: 'fade', durationMs: 2000 });
+  assert.equal(retime(stop, clock, SET, 3200).queue[0].atMs, 3500);
+  const black = deepFreeze(landed(stop, 'a', [7], 3500));
+  assert.equal(black.playing[7], null);
+  assert.equal(black.ceilingBusyUntilMs, 5500);
+  assert.equal(queueZone(black, SET, 7, 1, clock, 3600, 'b').queue[0].atMs, 6000);
+});
+
+test('the follow target is armed ahead of the next row', () => {
+  const list = armList(running(2), SET);
+  assert.deepEqual(list.slice(0, 7), ['c00', 'c10', 'c20', 'c30', 'c40', 'c50', 'c60']);
+  assert.equal(list.length, 8);
+});
+
+test('a random follow is chosen on landing, armed, and is the one that fires', () => {
+  const set = editedSet(x => { x.scenes[1].follow = { afterBars: 4, to: 'random' }; });
+  const s = running(1, set, () => 0.5);
+  assert.equal(s.followTarget, 2);
+  assert.equal(armList(s, set)[0], 'c02');
+  for (const r of [0, 0.5, 0.999]) assert.equal(dueFollow(s, set, 20, () => r), 2);
+  assert.ok(armList(s, set).length <= 8);
 });
 
 test('a press inside the late grace counts as the bar just gone', () => {

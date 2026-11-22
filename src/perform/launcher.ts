@@ -1,12 +1,13 @@
 /** The Perform launcher: what is playing, what is queued, and what changes on the next bar. Pure: every function returns a new state. */
-import { followBeat } from './sequence';
+import { followBeat, followChoices, pickFollow, plannedFollow } from './sequence';
 import { nextBoundary, type ClockSnapshot } from './timing';
-import { BEATS_PER_BAR, ZONE_COUNT, type BlendKind, type Clip, type PerformanceSet, type Quantize } from './types';
+import { BEATS_PER_BAR, ZONE_COUNT, type BlendKind, type Clip, type PerformanceSet, type Quantize, type Scene } from './types';
 
 export interface ZoneChange { zone: number; clipId: string | null; blend: { kind: BlendKind; durationMs: number } }
-/** One queued launch. followAtBeat is when a scene launch's follow rule falls due: landed() has no set to work it out from. */
-export interface Launch { id: string; beat: number; atMs: number; sceneIndex: number | null; changes: ZoneChange[]; followAtBeat?: number | null }
-export interface LauncherState { playing: (string | null)[]; previous: (string | null)[]; launched: boolean[]; sceneIndex: number; queue: Launch[]; followAtBeat: number | null; ceilingBusyUntilMs: number }
+/** One queued launch. followAtBeat and followChoices carry a scene's follow rule, because landed() has no set to read it from. */
+export interface Launch { id: string; beat: number; atMs: number; sceneIndex: number | null; changes: ZoneChange[]; followAtBeat?: number | null; followChoices?: number[] }
+/** followTarget is the row the current scene's follow rule chose when it landed. */
+export interface LauncherState { playing: (string | null)[]; previous: (string | null)[]; launched: boolean[]; sceneIndex: number; queue: Launch[]; followAtBeat: number | null; followTarget: number | null; ceilingBusyUntilMs: number }
 
 const CEILING_ZONE = ZONE_COUNT - 1;
 const FADE_BARS = [0.5, 1, 2, 4, 8];
@@ -24,6 +25,7 @@ export const initialLauncher = (): LauncherState => ({
   sceneIndex: -1,
   queue: [],
   followAtBeat: null,
+  followTarget: null,
   ceilingBusyUntilMs: 0,
 });
 
@@ -43,7 +45,22 @@ function blendFor(clip: Clip | undefined, zone: number, via: 'scene' | 'amber', 
 }
 const stopBlend = (bpm: number): ZoneChange['blend'] => ({ kind: 'fade', durationMs: barsToMs(ROOM_FADE_BARS, bpm) });
 const clipById = (set: PerformanceSet, id: string | null) => id === null ? undefined : set.clips.find(c => c.id === id);
-const touchesCeiling = (l: Launch) => l.changes.some(c => c.zone === CEILING_ZONE);
+/** Only a new ceiling loop waits for a running dissolve. A Stop (null) does not. */
+const waitsForCeiling = (c: ZoneChange) => c.zone === CEILING_ZONE && c.clipId !== null;
+
+type Slot = { beat: number; atMs: number };
+/**
+ * Places a launch: everything on the room slot, and any new ceiling loop on the wait slot if the room would land during the dissolve.
+ * The ceiling part keeps the scene's index until the room lands, so Bank ◀ cancels both. With a scene, the follow beat is reworked for each part's slot.
+ */
+function placeLaunch(s: LauncherState, l: Launch, room: Slot, wait: Slot, scene?: Scene): Launch[] {
+  const at = (slot: Slot): Partial<Launch> => ({ beat: slot.beat, atMs: slot.atMs, ...(scene ? { followAtBeat: followBeat(scene, slot.beat) } : {}) });
+  const ceiling = l.changes.filter(waitsForCeiling);
+  if (ceiling.length === 0 || room.atMs >= s.ceilingBusyUntilMs) return [{ ...l, ...at(room) }];
+  const rest = l.changes.filter(c => !waitsForCeiling(c));
+  if (rest.length === 0) return [{ ...l, ...at(wait) }];
+  return [{ ...l, ...at(room), changes: rest }, { ...l, id: `${l.id}:ceiling`, ...at(wait), changes: ceiling }];
+}
 
 /** When a press lands. A ceiling change that would land during a running dissolve waits for the first boundary after it. */
 function slot(s: LauncherState, clock: ClockSnapshot, nowMs: number, q: Quantize, ceiling: boolean): { beat: number; atMs: number } {
@@ -66,7 +83,7 @@ const queuedScene = (s: LauncherState) => s.queue.find(l => l.sceneIndex !== nul
 function queueChange(s: LauncherState, zone: number, clipId: string | null, blend: ZoneChange['blend'], clock: ClockSnapshot, nowMs: number, q: Quantize, id: string): LauncherState {
   const queue = withoutZones(s.queue, [zone]);
   if (clipId === s.playing[zone]) return { ...s, queue };
-  const at = slot(s, clock, nowMs, q, zone === CEILING_ZONE);
+  const at = slot(s, clock, nowMs, q, zone === CEILING_ZONE && clipId !== null);
   return { ...s, queue: [...queue, { id, ...at, sceneIndex: null, changes: [{ zone, clipId, blend }] }] };
 }
 
@@ -114,19 +131,10 @@ export function queueScene(s: LauncherState, set: PerformanceSet, index: number,
   const changes: ZoneChange[] = cells
     .filter(c => c.clipId !== s.playing[c.zone])
     .map(c => ({ zone: c.zone, clipId: c.clipId, blend: blendFor(clipById(set, c.clipId), c.zone, 'scene', clock.bpm) }));
-  const room = changes.filter(c => c.zone !== CEILING_ZONE);
-  const ceiling = changes.filter(c => c.zone === CEILING_ZONE);
   const bar = slot(s, clock, nowMs, set.launchQuantize, false);
-  // The room must not wait for the ceiling: split the ceiling off when it has to wait for a running dissolve.
-  if (ceiling.length > 0 && bar.atMs < s.ceilingBusyUntilMs) {
-    const wait = slot(s, clock, nowMs, set.launchQuantize, true);
-    if (room.length === 0) return { ...s, queue: [...queue, { id, ...wait, sceneIndex: index, changes: ceiling, followAtBeat: followBeat(scene, wait.beat) }] };
-    return { ...s, queue: [...queue,
-      { id, ...bar, sceneIndex: index, changes: room, followAtBeat: followBeat(scene, bar.beat) },
-      { id: `${id}:ceiling`, ...wait, sceneIndex: index, changes: ceiling, followAtBeat: followBeat(scene, wait.beat) },
-    ] };
-  }
-  return { ...s, queue: [...queue, { id, ...bar, sceneIndex: index, changes, followAtBeat: followBeat(scene, bar.beat) }] };
+  const wait = slot(s, clock, nowMs, set.launchQuantize, true);
+  const launch: Launch = { id, ...bar, sceneIndex: index, changes, followChoices: followChoices(scene, index, set.scenes) };
+  return { ...s, queue: [...queue, ...placeLaunch(s, launch, bar, wait, scene)] };
 }
 
 export function bankNext(s: LauncherState, set: PerformanceSet, clock: ClockSnapshot, nowMs: number, id: string): LauncherState {
@@ -139,25 +147,25 @@ export function bankBack(s: LauncherState, set: PerformanceSet, clock: ClockSnap
   return s.sceneIndex > 0 ? queueScene(s, set, s.sceneIndex - 1, clock, nowMs, id) : s;
 }
 
-/** Fires the queued scene now. A ceiling change still waits for a running dissolve. */
+/** Fires the queued scene now. A new ceiling loop keeps its place behind a running dissolve, and the room goes without it. */
 export function launchNow(s: LauncherState, nowMs: number): LauncherState {
-  const busy = nowMs < s.ceilingBusyUntilMs;
-  return { ...s, queue: s.queue.map(l => l.sceneIndex !== null && !(busy && touchesCeiling(l)) ? { ...l, atMs: nowMs } : l) };
+  return { ...s, queue: s.queue.flatMap(l => l.sceneIndex === null ? [l] : placeLaunch(s, l, { beat: l.beat, atMs: nowMs }, { beat: l.beat, atMs: l.atMs })) };
 }
 
 /** Re-places every queued launch after a "This is the 1" or tempo correction, and re-works its blend lengths at the new tempo. */
 export function retime(s: LauncherState, clock: ClockSnapshot, set: PerformanceSet, nowMs: number): LauncherState {
-  const queue = s.queue.map((l): Launch => {
+  const queue = s.queue.flatMap((l): Launch[] => {
     const isStop = l.sceneIndex === null && l.changes.length > 0 && l.changes.every(c => c.clipId === null);
     const q = isStop ? STOP_QUANTIZE : set.launchQuantize;
-    const from = touchesCeiling(l) ? Math.max(nowMs, s.ceilingBusyUntilMs) : nowMs;
-    const { beat, atMs } = nextBoundary(clock, from, q, 0);
+    const room = nextBoundary(clock, nowMs, q, 0);
+    const wait = nextBoundary(clock, Math.max(nowMs, s.ceilingBusyUntilMs), q, 0);
     const changes = l.changes.map(c => ({
       ...c,
       blend: c.clipId === null ? stopBlend(clock.bpm) : blendFor(clipById(set, c.clipId), c.zone, c.blend.kind === 'cut' ? 'scene' : 'amber', clock.bpm),
     }));
     const scene = l.sceneIndex === null ? undefined : set.scenes[l.sceneIndex];
-    return scene ? { ...l, beat, atMs, changes, followAtBeat: followBeat(scene, beat) } : { ...l, beat, atMs, changes };
+    const next: Launch = scene ? { ...l, changes, followChoices: followChoices(scene, l.sceneIndex!, set.scenes) } : { ...l, changes };
+    return placeLaunch(s, next, { beat: room.beat, atMs: room.atMs }, { beat: wait.beat, atMs: wait.atMs }, scene);
   });
   // A running follow rule moves to the first corrected bar at or after it.
   const followAtBeat = s.followAtBeat === null ? null
@@ -166,7 +174,7 @@ export function retime(s: LauncherState, clock: ClockSnapshot, set: PerformanceS
 }
 
 /** Records which zones of a launch reached the wall. Any other zone stays queued, and retime moves it to the next bar. */
-export function landed(s: LauncherState, launchId: string, zones: readonly number[], nowMs: number): LauncherState {
+export function landed(s: LauncherState, launchId: string, zones: readonly number[], nowMs: number, random: () => number = Math.random): LauncherState {
   const launch = s.queue.find(l => l.id === launchId);
   if (!launch) return s;
   const hit = launch.changes.filter(c => zones.includes(c.zone));
@@ -178,7 +186,11 @@ export function landed(s: LauncherState, launchId: string, zones: readonly numbe
     if (playing[c.zone] !== c.clipId) previous[c.zone] = playing[c.zone];
     playing[c.zone] = c.clipId;
     isLaunched[c.zone] = true;
-    if (c.zone === CEILING_ZONE) ceilingBusyUntilMs = Math.max(ceilingBusyUntilMs, Math.max(launch.atMs, nowMs) + c.blend.durationMs);
+    if (c.zone === CEILING_ZONE) {
+      const blendEnd = Math.max(launch.atMs, nowMs) + c.blend.durationMs;
+      // A Stop replaces the running dissolve, so only its own fade holds the ceiling.
+      ceilingBusyUntilMs = c.clipId === null ? blendEnd : Math.max(ceilingBusyUntilMs, blendEnd);
+    }
   }
 
   const rest = launch.changes.filter(c => !zones.includes(c.zone));
@@ -193,13 +205,17 @@ export function landed(s: LauncherState, launchId: string, zones: readonly numbe
     ...s, playing, previous, launched: isLaunched, queue, ceilingBusyUntilMs,
     sceneIndex: isScene ? launch.sceneIndex! : s.sceneIndex,
     followAtBeat: isScene ? launch.followAtBeat ?? null : s.followAtBeat,
+    followTarget: isScene ? pickFollow(launch.followChoices ?? [], random) : s.followTarget,
   };
 }
 
-/** The clips to keep warm, most urgent first: everything queued, then the next scene. Never more than the renderer budget. */
+/** The clips to keep warm, most urgent first: everything queued, the follow target, then the next scene. Never more than the renderer budget. */
 export function armList(s: LauncherState, set: PerformanceSet): string[] {
   const queued = s.queue.flatMap(l => l.changes).map(c => c.clipId).filter((c): c is string => c !== null);
-  const nextIndex = (queuedScene(s) ?? s.sceneIndex) + 1;
-  const next = set.scenes[nextIndex] ? sceneCells(set, nextIndex).map(c => c.clipId) : [];
-  return [...new Set([...queued, ...next])].filter(c => !s.playing.includes(c)).slice(0, MAX_ARMED);
+  const pending = s.queue.find(l => l.sceneIndex !== null);
+  // A queued scene's random rule is not chosen until it lands, so only a single known target can be armed for it.
+  const followRow = pending ? (pending.followChoices?.length === 1 ? pending.followChoices[0] : null) : plannedFollow(s, set);
+  const rowClips = (row: number | null) => row !== null && set.scenes[row] ? sceneCells(set, row).map(c => c.clipId) : [];
+  const nextRow = (pending?.sceneIndex ?? s.sceneIndex) + 1;
+  return [...new Set([...queued, ...rowClips(followRow), ...rowClips(nextRow)])].filter(c => !s.playing.includes(c)).slice(0, MAX_ARMED);
 }
