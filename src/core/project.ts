@@ -701,7 +701,7 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     // cycling (which can strobe), or vary its controls while it is off.
     if (TOON_KEYS.includes(key) && (key === 'toonMix' || key === 'toonCycles' || !(layer.params.toonMix > 0))) continue;
     // Feedback is likewise an explicit choice, and its blend and frame are structural.
-    if (SLIT_KEYS.includes(key) && (['slitShift', 'slitShape', 'slitScroll', 'slitSlices'].includes(key) || !((layer.params.slitShift ?? 0) !== 0))) continue;
+    if (SLIT_KEYS.includes(key) && (['slitShift', 'slitShape', 'slitScroll', 'slitSlices', 'slitMode', 'slitDirection', 'slitTwist'].includes(key) || !((layer.params.slitShift ?? 0) !== 0))) continue;
     if (FEEDBACK_KEYS.includes(key) && (['echo', 'echoBlend', 'echoFrame', 'echoWindow', 'echoStreakAxis', 'echoKeep'].includes(key) || !(layer.params.echo > 0))) continue;
     // Glow too: never switch it on or off or change its colour, and keep its
     // threshold and size near where the artist set them, not near the recipe's.

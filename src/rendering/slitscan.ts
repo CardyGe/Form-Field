@@ -13,7 +13,8 @@
  */
 import type { Layer } from '../shared/types';
 
-export const SLIT_SHAPES = ['Rows', 'Columns', 'Rings', 'Diagonal', 'Blocks'];
+export const SLIT_SHAPES = ['Rows', 'Columns', 'Rings', 'Diagonal', 'Blocks', 'Brightness', 'Bands'];
+export const SLIT_MODES = ['Delay map', 'Echo', 'Median', 'Darkest', 'Brightest'];
 
 export function supportsSlitScan(layer: Pick<Layer, 'kind' | 'params'>): boolean {
   return layer.kind !== 'graphic' && !(layer.kind === 'livingink' && layer.params.inkMode === 2);
@@ -23,11 +24,50 @@ export function slitActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>
   return supportsSlitScan(layer) && ((layer.params.slitShift ?? 0) !== 0 || !!layer.modulations.slitShift);
 }
 
+/** Slices rendered per frame. Median needs an odd count of at most nine. */
+export function sliceCount(params: Record<string, number>): number {
+  const count = Math.max(2, Math.round(params.slitSlices ?? 12));
+  return (params.slitMode ?? 0) === 2 ? Math.min(9, count | 1) : count;
+}
+
 /** Delay in frames of each slice, from now (0) to the full span. */
 export function sliceDelays(layer: Pick<Layer, 'params'>): number[] {
-  const count = Math.max(2, Math.round(layer.params.slitSlices ?? 12));
+  const count = sliceCount(layer.params);
   const span = Math.abs(layer.params.slitShift ?? 0) * (layer.params.slitSpan ?? 30);
   return Array.from({ length: count }, (_, i) => span * i / (count - 1));
+}
+
+/** Phase of a slice: back in time by default, forward in Future, wrapped to the loop. */
+export function slicePhase(phase: number, delay: number, total: number, direction: number): number {
+  const TAU = Math.PI * 2;
+  const raw = phase + (direction >= .5 ? 1 : -1) * TAU * delay / total;
+  return ((raw % TAU) + TAU) % TAU;
+}
+
+/** Echo weights: decay^age, normalised to sum to one. */
+export function echoWeights(count: number, decay: number): number[] {
+  const raw = Array.from({ length: count }, (_, i) => Math.pow(decay, i));
+  const sum = raw.reduce((a, b) => a + b, 0);
+  return raw.map(v => v / sum);
+}
+
+/** How many slices each of red, green and blue remembers. Red the fewest, blue all. */
+export function channelSliceCounts(count: number, reach: number): [number, number, number] {
+  const r = Math.max(1, Math.round(count * reach));
+  return [r, Math.round((r + count) / 2), count];
+}
+
+export function medianOf(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+const MEDIAN_BUDGET = 768 * 1024 * 1024;
+/** Half-float RGBA is 8 bytes a pixel; shrink the slices so all of them fit the budget. */
+export function medianTargetSize(width: number, height: number, slices: number): { width: number; height: number } {
+  if (width * height * 8 * slices <= MEDIAN_BUDGET) return { width, height };
+  const scale = Math.sqrt(MEDIAN_BUDGET / (width * height * 8 * slices));
+  return { width: Math.floor(width * scale), height: Math.floor(height * scale) };
 }
 
 export const slitFragment = /* glsl */`

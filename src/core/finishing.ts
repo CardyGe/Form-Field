@@ -60,11 +60,18 @@ export const FEEDBACK_PARAMETERS:ParameterDefinition[]=[
 export const SLIT_PARAMETERS:ParameterDefinition[]=[
  {key:'slitShift',label:'Time shift',min:-1,max:1,step:.01,default:0,section:'Motion',description:'How far back the delay map reaches, as a share of Time span. Negative values flip the map. 0 is off.'},
  {key:'slitSpan',label:'Time span',min:1,max:120,step:1,default:30,section:'Motion',description:'The longest delay in frames, at Time shift 1.'},
- {key:'slitShape',label:'Delay map',min:0,max:4,step:1,default:0,section:'Shape',description:'Which parts of the frame lag: rows, columns, rings, a diagonal or random blocks.'},
+ {key:'slitShape',label:'Delay map',min:0,max:6,step:1,default:0,section:'Shape',description:'Which parts of the frame lag: rows, columns, rings, a diagonal, random blocks, by brightness or in bands.'},
  {key:'slitSlices',label:'Time slices',min:2,max:32,step:1,default:12,section:'Shape',description:'Moments of the past sampled each frame. More slices are smoother and slower to render.'},
  {key:'slitSmooth',label:'Slice blend',min:0,max:1,step:.01,default:0,section:'Shape',description:'0 gives hard stepped terraces; 1 blends neighbouring slices into a continuous smear.'},
  {key:'slitBlocks',label:'Block count',min:2,max:40,step:1,default:8,section:'Shape',description:'Blocks per frame height for the Blocks map.'},
  {key:'slitScroll',label:'Map scroll',min:-4,max:4,step:1,default:0,section:'Motion',description:'Times the delay map sweeps across the frame per loop.'},
+ {key:'slitMode',label:'Time mode',min:0,max:4,step:1,default:0,section:'Shape',description:'How the slices combine: a delay map, an echo, the median, the darkest or the brightest.'},
+ {key:'slitDirection',label:'Direction',min:0,max:1,step:1,default:0,section:'Motion',description:'Slices reach into the past, or into the future of the loop.'},
+ {key:'slitDecay',label:'Echo fade',min:.05,max:1,step:.01,default:.7,section:'Material',description:'How quickly older slices fade in Echo. 1 weights every slice equally.'},
+ {key:'slitReach',label:'Colour reach',min:.1,max:1,step:.01,default:1,section:'Material',description:'How far back each colour remembers. Red remembers least, blue all of it.'},
+ {key:'slitTwist',label:'Twist',min:-4,max:4,step:.01,default:0,section:'Shape',description:'Turns each older slice a little further around the frame centre.'},
+ {key:'slitZoom',label:'Time zoom',min:0,max:.9,step:.01,default:0,section:'Shape',description:'Scales each older slice a little further in towards the centre.'},
+ {key:'slitChroma',label:'Colour lag',min:0,max:1,step:.01,default:0,section:'Material',description:'Delays red and blue against green, so colours trail apart.'},
 ];
 /**
  * Glow: the bright parts of the layer spill soft light around themselves. The
