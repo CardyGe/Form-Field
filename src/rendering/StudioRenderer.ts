@@ -10,7 +10,7 @@ import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
-import { slitActive, slitFragment, sliceDelays } from './slitscan';
+import { slicePhase, slitActive, slitFragment, sliceDelays } from './slitscan';
 import { parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
@@ -188,6 +188,12 @@ export class StudioRenderer {
   private readonly slit: THREE.ShaderMaterial;
   /** Slit-scan accumulation, consumed before the next layer is drawn. */
   private slitTargets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null = null;
+  /** The slit shader in its MAX-blended form: the brightest straight colour among the slices. */
+  private readonly slitBound: THREE.ShaderMaterial;
+  /** Half the slice size, for the Brightness map. Allocated on first use. */
+  private slitDriverTarget: THREE.WebGLRenderTarget | null = null;
+  /** Slice size, for Colour lag. Allocated on first use. */
+  private slitBoundTarget: THREE.WebGLRenderTarget | null = null;
   private readonly glowBright: THREE.ShaderMaterial;
   /** Glow finish: one bright-pass target and blur pyramid, shared by all layers. */
   private glow: { bright: THREE.WebGLRenderTarget; pyramid: BloomPyramid; streak: StreakBlur } | null = null;
@@ -336,7 +342,13 @@ export class StudioRenderer {
     this.slit = material(slitFragment, {
       uAccum: { value: null }, uSource: { value: null }, uIndex: { value: 0 }, uCount: { value: 2 }, uSmooth: { value: 0 },
       uShape: { value: 0 }, uBlocks: { value: 8 }, uScroll: { value: 0 }, uAspect: { value: 1 }, uReverse: { value: 0 }, uSeed: { value: 0 },
+      uDriver: { value: this.fallback }, uBound: { value: this.fallback }, uTwist: { value: 0 }, uZoom: { value: 0 }, uChroma: { value: 0 },
     });
+    this.slitBound = material(slitFragment, this.slit.uniforms);
+    this.slitBound.defines = { SLIT_BOUND: '' };
+    this.slitBound.blending = THREE.CustomBlending;
+    this.slitBound.blendEquation = THREE.MaxEquation;
+    this.slitBound.blendSrc = THREE.OneFactor; this.slitBound.blendDst = THREE.OneFactor;
     this.feedback = material(feedbackFragment, {
       uSource: { value: null }, uPrevious: { value: null }, uAspect: { value: 1 }, uZoom: { value: 1 }, uRotate: { value: 0 },
       uFade: { value: 0 }, uHue: { value: 0 }, uWarp: { value: 0 }, uMode: { value: 0 }, uHole: { value: 0 }, uWindow: { value: 0 }, uDrift: { value: new THREE.Vector2() },
@@ -1008,15 +1020,45 @@ export class StudioRenderer {
     u.uScroll.value = (((p.slitScroll ?? 0) * phase / TAU) % 1 + 1) % 1;
     u.uAspect.value = this.width / this.height; u.uReverse.value = Number((p.slitShift ?? 0) < 0);
     u.uSeed.value = (p.seed ?? 0) % 1000;
+    u.uTwist.value = p.slitTwist ?? 0; u.uZoom.value = p.slitZoom ?? 0;
+    const chroma = Math.max(0, p.slitChroma ?? 0);
+    u.uChroma.value = chroma;
+    const shape = p.slitShape ?? 0;
+    if (shape >= 4.5 && shape < 5.5) u.uDriver.value = this.slitDriver(original, phase, duration);
+    let bound: THREE.WebGLRenderTarget | null = null;
+    if (chroma > 0) {
+      bound = this.slitBoundTarget ??= target();
+      if (bound.width !== this.width || bound.height !== this.height) bound.setSize(this.width, this.height);
+      this.clearTarget(bound);
+      u.uBound.value = bound.texture;
+    }
+    const direction = p.slitDirection ?? 0;
     delays.forEach((delay, index) => {
-      const earlier = ((phase - delay * TAU / total) % TAU + TAU) % TAU;
-      u.uSource.value = this.plainSource(original, earlier, duration);
+      u.uSource.value = this.plainSource(original, slicePhase(phase, delay, total, direction), duration);
       u.uAccum.value = accum.texture; u.uIndex.value = index;
+      if (bound) {
+        // MAX blending builds on what is already in the target, so this draw must not clear it.
+        const autoClear = this.renderer.autoClear;
+        this.renderer.autoClear = false;
+        this.draw(this.slitBound, bound);
+        this.renderer.autoClear = autoClear;
+      }
       this.draw(this.slit, next);
       [accum, next] = [next, accum];
     });
     this.slitTargets = [accum, next];
     return accum.texture;
+  }
+
+  /** The current frame at half the slice size, which the Brightness map reads its delay from. */
+  private slitDriver(original: Layer, phase: number, duration: number): THREE.Texture {
+    const driver = this.slitDriverTarget ??= target();
+    const width = Math.max(1, Math.round(this.width / 2)), height = Math.max(1, Math.round(this.height / 2));
+    if (driver.width !== width || driver.height !== height) driver.setSize(width, height);
+    // plainSource reuses its target for every slice, so the frame is copied out.
+    this.copy.uniforms.uImage.value = this.plainSource(original, phase, duration);
+    this.draw(this.copy, driver);
+    return driver.texture;
   }
 
   /** One feedback step: the source at `phase` over the faded, transformed echo in `from`. */
@@ -1256,12 +1298,14 @@ export class StudioRenderer {
     this.super8Source?.dispose(); this.super8Source = null;
     for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
     this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
+    this.slitDriverTarget?.dispose(); this.slitDriverTarget = null;
+    this.slitBoundTarget?.dispose(); this.slitBoundTarget = null;
     this.feedbackStates.clear();
     this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow?.streak.dispose(); this.glow = null; this.glowBright.dispose();
     this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.graphics.dispose(); this.instruments.dispose();
-    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
+    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;
     this.sliceSource?.dispose(); this.sliceSource = null;

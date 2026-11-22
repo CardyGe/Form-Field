@@ -513,6 +513,199 @@ const CHECKS = [
       return { ok: r.moved >= 1 && r.mean < 1 && r.worst < 4, detail: `${r.moved >= 1 ? '' : 'Key has no visible effect on the render. '}amount .001 against plain: mean ${r.mean.toFixed(3)}, worst ${r.worst} (limits 1 and 4); amount 1 moves it by ${r.moved.toFixed(3)}` };
     },
   },
+  {
+    name: 'time-neutral',
+    // The three existing time looks, on a moving layer, against the older checkout.
+    run: async ({ page }) => {
+      const missing = needsBaseline(); if (missing) return missing;
+      const r = await page.evaluate(async () => {
+        const q = window.ct, before = new q.old.StudioRenderer(document.querySelector('#b')), changed = [];
+        const looks = { terraces: { slitShift: 1, slitSpan: 60, slitShape: 0, slitSlices: 9 }, blocks: { slitShift: 1, slitSpan: 90, slitShape: 4, slitSlices: 8, slitBlocks: 5 }, rings: { slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 16, slitSmooth: 1, slitScroll: 1 } };
+        const plain = await q.px(q.project([q.layer('surface')]));
+        let moved = Infinity;
+        for (const [name, params] of Object.entries(looks)) {
+          const make = m => { const l = m.createLayer('surface'); Object.assign(l.params, params); l.id = 'surface-proof'; const p = m.createProject(); p.id = 'colour-proof'; p.layers = [l]; p.background = '#000000'; return p; };
+          const now = make(q.m), then = make(q.old);
+          await q.renderer.prepare(now); await before.prepare(then);
+          const a = await q.renderer.exportPNG(now, .9, 960, 540), b = await before.exportPNG(then, .9, 960, 540);
+          if (!q.same(a, b)) changed.push(name);
+          moved = Math.min(moved, q.difference(plain, await q.pixels(a)));
+        }
+        before.dispose();
+        return { changed, moved };
+      });
+      return { ok: !r.changed.length && r.moved > 0, detail: `${r.changed.length ? `changed: ${r.changed.join(', ')}` : '3 time looks byte-identical'}; smallest change from the plain layer ${r.moved.toFixed(3)}` };
+    },
+  },
+  {
+    name: 'time-brightness',
+    // Black and white plateaus joined by ramps, moving half a period between the two phases.
+    // Where the frame is white now it must show now; where it is black, the full delay.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, P = Math.PI / 2, Q = 0;
+        const scene = params => { const p = q.project([q.stripes(params)]); p.highlights = 'exact'; return p; };
+        const look = { slitShift: 1, slitSpan: 75, slitSlices: 12 };
+        const now = await q.px(scene({}), P), then = await q.px(scene({}), Q);
+        const rows = await q.px(scene({ ...look, slitShape: 0 }), P), mapped = await q.px(scene({ ...look, slitShape: 5 }), P);
+        const y = 270 * 960 * 4, at = (px, x) => px[y + x * 4];
+        const flat = (x, test) => { for (let k = -6; k <= 6; k++) if (!test(at(now, x + k))) return false; return true; };
+        let bright = 0, dark = 0, brightError = 0, darkError = 0, otherPhase = 0;
+        for (let x = 200; x < 760; x++) {
+          if (flat(x, v => v >= 253)) { bright++; brightError = Math.max(brightError, Math.abs(at(mapped, x) - at(now, x))); }
+          else if (flat(x, v => v <= 2)) { dark++; darkError = Math.max(darkError, Math.abs(at(mapped, x) - at(then, x))); if (at(then, x) >= 253) otherPhase++; }
+        }
+        return { fromRows: q.difference(rows, mapped), bright, dark, brightError, darkError, otherPhase };
+      });
+      const ok = r.fromRows > 1 && r.bright > 50 && r.dark > 50 && r.otherPhase > 50 && r.brightError <= 2 && r.darkError <= 2;
+      return { ok, detail: `differs from Rows by ${r.fromRows.toFixed(3)}; ${r.bright} bright pixels off the current phase by ${r.brightError}, ${r.dark} dark pixels off the full delay by ${r.darkError} (limit 2); ${r.otherPhase} dark pixels show a bright earlier phase` };
+    },
+  },
+  {
+    name: 'time-bands',
+    // Every band must show exactly one of the two delays, and neighbours the other one.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, P = Math.PI / 2, Q = 0;
+        const scene = params => { const p = q.project([q.stripes(params)]); p.highlights = 'exact'; return p; };
+        const now = await q.px(scene({}), P), then = await q.px(scene({}), Q);
+        const out = await q.px(scene({ slitShift: 1, slitSpan: 75, slitSlices: 12, slitShape: 6, slitBlocks: 8 }), P);
+        const off = (a, y) => { let sum = 0; for (let x = 200; x < 760; x++) sum += Math.abs(out[(y * 960 + x) * 4] - a[(y * 960 + x) * 4]); return sum / 560; };
+        return Array.from({ length: 8 }, (_, k) => { const y = Math.round((k + .5) * 540 / 8); return { now: off(now, y), then: off(then, y) }; });
+      });
+      const states = r.map(b => b.now <= 1 && b.then > 20 ? 'N' : b.then <= 1 && b.now > 20 ? 'D' : '?');
+      const ok = !states.includes('?') && states.every((s, i) => !i || s !== states[i - 1]);
+      return { ok, detail: `bands ${states.join('')} (N now, D full delay, must alternate); largest error ${Math.max(...r.map(b => Math.min(b.now, b.then))).toFixed(3)} (limit 1)` };
+    },
+  },
+  {
+    name: 'time-vortex',
+    // Map scroll is in the look so the seam comparison also covers the sweeping map.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, look = { slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 16, slitSmooth: 1, slitScroll: 1 };
+        const scene = params => q.project([q.layer('surface', null, { ...look, ...params })]);
+        return { moved: q.difference(await q.px(scene({})), await q.px(scene({ slitTwist: .5 }))), loop: await q.loop(scene({ slitTwist: .5 })) };
+      });
+      const loop = loopVerdict(r.loop);
+      return { ok: r.moved > 1 && loop.ok, detail: `Twist .5 moves Rings by ${r.moved.toFixed(3)} (at least 1); ${loop.detail}` };
+    },
+  },
+  {
+    name: 'time-future',
+    // Future at P is the same set of moments as Past at P + S with the map reversed.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, P = .9, S = 40, total = 300, look = { slitSpan: S, slitShape: 4, slitBlocks: 6, slitSlices: 12, slitSmooth: 0 };
+        const scene = params => q.project([q.layer('surface', null, { ...look, ...params })]);
+        const future = await q.px(scene({ slitShift: 1, slitDirection: 1 }), P);
+        const past = await q.px(scene({ slitShift: -1 }), P + Math.PI * 2 * S / total);
+        const forward = await q.px(scene({ slitShift: 1 }), P);
+        let worst = 0, over = 0; for (let i = 0; i < future.length; i++) { const d = Math.abs(future[i] - past[i]); worst = Math.max(worst, d); if (d > 1) over++; }
+        return { worst, over, fromPast: q.difference(future, forward), loop: await q.loop(scene({ slitShift: 1, slitDirection: 1 })) };
+      });
+      const loop = loopVerdict(r.loop);
+      return { ok: r.worst <= 1 && r.fromPast > 1 && loop.ok, detail: `Future against reversed Past: worst ${r.worst}, ${r.over} values over 1 (limit 1); Future differs from Past at the same phase by ${r.fromPast.toFixed(3)}; ${loop.detail}` };
+    },
+  },
+  {
+    name: 'time-seek',
+    // Every new input at once, so a leftover driver or colour bound would show.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, phase = f => f * Math.PI * 2 / 300;
+        const p = q.project([q.layer('surface', null, { slitShift: 1, slitSpan: 40, slitShape: 5, slitSlices: 6, slitTwist: .4, slitZoom: .2, slitChroma: .6 })]);
+        const direct = await q.shot(p, phase(40));
+        let last; for (let f = 0; f <= 40; f++) last = await q.shot(p, phase(f));
+        return { same: q.same(direct, last), moved: q.difference(await q.pixels(direct), await q.px(q.project([q.layer('surface')]), phase(40))) };
+      });
+      return { ok: r.same && r.moved > 1, detail: `frame 40 directly and after frames 0 to 40 ${r.same ? 'byte-identical' : 'differ'}; look moves the plain layer by ${r.moved.toFixed(3)}` };
+    },
+  },
+  {
+    name: 'time-engage',
+    // A sub-pixel move of a hard edge changes that pixel a lot however correct the warp is, so:
+    // at .001 the mean and worst limits are held on a smooth moving layer. On every source they
+    // are tested at 1e-6, where the new path runs but nothing has moved, so a jump on engaging
+    // (a clamp to alpha, say) shows in the mean. Colour lag also limits how many pixels may
+    // change there. Sharp sources at .001 are printed, not gated.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, rings = { slitShift: 1, slitSpan: 60, slitShape: 2, slitSlices: 12 };
+        const preset = kind => q.m.PRESETS.find(p => p.kind === kind).id;
+        const sources = [['wave', false, params => q.wave(params)], ['surface', false, params => q.layer('surface', null, params)], ['soft', true, params => q.soft(params)],
+          ['sculpture', false, params => q.layer('sculpture', preset('sculpture'), params)], ['livingink', true, params => q.layer('livingink', preset('livingink'), params)]];
+        const compare = (a, b) => {
+          let sum = 0, worst = 0, pixels = 0;
+          for (let i = 0; i < a.length; i += 4) { let most = 0; for (let k = 0; k < 4; k++) { const d = Math.abs(a[i + k] - b[i + k]); sum += d; most = Math.max(most, d); } worst = Math.max(worst, most); if (most >= 4) pixels++; }
+          return { mean: sum / a.length, worst, pixels };
+        };
+        const rows = [];
+        for (const [name, transparent, make] of sources) {
+          const render = params => q.px(q.project([make({ ...rings, ...params })], transparent));
+          const base = await render({});
+          for (const [key, large] of [['slitTwist', .5], ['slitZoom', .5], ['slitChroma', 1]])
+            rows.push({ name, key, small: compare(base, await render({ [key]: .001 })), tiny: compare(base, await render({ [key]: 1e-6 })), moved: q.difference(base, await render({ [key]: large })) });
+        }
+        return rows;
+      });
+      const within = c => c.mean < 1 && c.worst < 4;
+      const failed = row => row.tiny.mean >= .05 || (row.key === 'slitChroma' && row.tiny.pixels > 26) || (row.moved < 1 && row.name !== 'soft') || (row.name === 'wave' && !within(row.small));
+      const bad = r.filter(failed);
+      const figure = c => `mean ${c.mean.toFixed(3)} worst ${c.worst}`;
+      const wave = r.filter(row => row.name === 'wave').map(row => `${row.key} ${figure(row.small)} moved ${row.moved.toFixed(3)}`).join('; ');
+      const tiny = Math.max(...r.map(row => row.tiny.mean)), lag = Math.max(...r.filter(row => row.key === 'slitChroma').map(row => row.tiny.pixels));
+      const sharp = r.filter(row => row.name !== 'wave').map(row => `${row.name} ${row.key} ${figure(row.small)}`).join(', ');
+      return { ok: !bad.length, detail: `${bad.length ? `${bad.length}/${r.length} over limit: ${bad.map(row => `${row.name} ${row.key} .001 ${figure(row.small)}, 1e-6 ${figure(row.tiny)} (${row.tiny.pixels} pixels), moved ${row.moved.toFixed(3)}`).join('; ')} | ` : ''}smooth layer at .001: ${wave} (limits 1 and 4); every source at 1e-6: highest mean ${tiny.toFixed(3)} (limit .05), Colour lag changes at most ${lag} pixels (limit 26) | sharp sources at .001, not gated: ${sharp}` };
+    },
+  },
+  {
+    name: 'time-driver',
+    // The Brightness driver is half the current slice size in preview and export,
+    // exists only once Brightness is used, and is released with the renderer.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, canvas = document.createElement('canvas'); canvas.width = 960; canvas.height = 540;
+        const R = new q.m.StudioRenderer(canvas), look = { slitShift: 1, slitSpan: 30, slitSlices: 12 };
+        const scene = shape => q.project([q.layer('surface', null, { ...look, slitShape: shape })]);
+        const rings = scene(2), bright = scene(5);
+        await R.prepare(rings); await R.exportPNG(rings, .9, 960, 540);
+        const lazy = R.slitDriverTarget === null;
+        await R.prepare(bright); R.render(bright, .9, 960, 540);
+        const size = t => [t.width, t.height];
+        const slice = size(R.sliceSource), previewDriver = size(R.slitDriverTarget);
+        await R.exportPNG(bright, .9, 960, 540);
+        const exportDriver = size(R.slitDriverTarget), driver = R.slitDriverTarget;
+        let disposed = false; driver.addEventListener('dispose', () => { disposed = true; });
+        R.dispose();
+        return { lazy, slice, previewDriver, exportDriver, disposed, cleared: R.slitDriverTarget === null };
+      });
+      const half = r.slice.map(v => Math.max(1, Math.round(v / 2)));
+      const ok = r.lazy && r.slice[0] < 960 && r.previewDriver.every((v, i) => v === half[i]) && r.exportDriver[0] === 480 && r.exportDriver[1] === 270 && r.disposed && r.cleared;
+      return { ok, detail: `unused until Brightness: ${r.lazy}; preview slices ${r.slice.join('x')}, driver ${r.previewDriver.join('x')} (want ${half.join('x')}); export driver ${r.exportDriver.join('x')} (want 480x270); disposed ${r.disposed && r.cleared}` };
+    },
+  },
+  {
+    name: 'time-lag-fringe',
+    // A soft, moving, single-colour layer: Colour lag must not push straight colour past
+    // that colour anywhere, or leave colour where no slice has coverage.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.ct, slide = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: -.2, max: .2 } };
+        const scene = params => { const l = q.soft({ slitShift: 1, slitSpan: 75, slitShape: 0, slitSlices: 12, slitSmooth: 1, ...params }); l.modulations['transform.x'] = slide; const p = q.project([l], true); p.highlights = 'exact'; return p; };
+        const plain = await q.px(scene({})), lag = await q.px(scene({ slitChroma: 1 })), colour = [176, 96, 48];
+        let over = 0, worst = 0, leaked = 0, judged = 0;
+        for (let i = 0; i < lag.length; i += 4) {
+          if (lag[i + 3] === 0 && (lag[i] || lag[i + 1] || lag[i + 2])) leaked++;
+          if (lag[i + 3] < 32) continue;
+          judged++;
+          for (let c = 0; c < 3; c++) { const excess = lag[i + c] - colour[c]; worst = Math.max(worst, excess); if (excess > 3) over++; }
+        }
+        return { moved: q.difference(plain, lag), over, worst, leaked, judged };
+      });
+      return { ok: r.moved > 0 && r.judged > 1000 && !r.over && !r.leaked, detail: `Colour lag moves the layer by ${r.moved.toFixed(3)}; ${r.over} values over the layer colour, worst +${r.worst} (limit 3) across ${r.judged} covered pixels; ${r.leaked} colour pixels without coverage` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -552,6 +745,7 @@ try {
       for (let i = 0; i < png.length; i += 8192) text += String.fromCharCode(...png.subarray(i, i + 8192));
       return `data:image/png;base64,${btoa(text)}`;
     };
+    const TWO_PI = Math.PI * 2;
     const ramp = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
     // One colour, below full brightness, so any brightening at the edge shows.
     // A soft halo around a hard-edged block, which gives the Edges shape something to find.
@@ -573,6 +767,28 @@ try {
     const colourBars = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [0, 255, 255], [255, 0, 255], [128, 128, 128]];
     const barsUrl = await dataUrl(960, 540, x => [...colourBars[Math.min(6, Math.floor((x + 960 / 540 / 2) / (960 / 540) * 7))], 255]);
     const bars = (params = {}) => image(barsUrl, params, 'bars');
+    // Period 240: black plateau, ramp up, white plateau, ramp down. Slides 120 pixels, half a
+    // period, between phase 0 and a quarter of the loop, so black and white trade places.
+    const stripesUrl = await dataUrl(960, 540, x => {
+      const t = (((x + 960 / 540 / 2) * 540) % 240 + 240) % 240;
+      const v = Math.round(255 * (t < 100 ? 0 : t < 120 ? (t - 100) / 20 : t < 220 ? 1 : (240 - t) / 20));
+      return [v, v, v, 255];
+    });
+    const stripes = (params = {}) => {
+      const l = image(stripesUrl, params, 'stripes');
+      l.modulations['transform.x'] = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: -.125, max: .125 } };
+      return l;
+    };
+    // Gentle and periodic, so a small warp cannot move any pixel far in value.
+    const waveUrl = await dataUrl(960, 540, (x, y) => {
+      const v = Math.round(255 * (.5 + .1 * Math.cos(TWO_PI * x * 540 / 960) + .1 * Math.cos(TWO_PI * y)));
+      return [v, v, v, 255];
+    });
+    const wave = (params = {}) => {
+      const l = image(waveUrl, { repeat: 2, ...params }, 'wave');
+      l.modulations['transform.x'] = { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [], range: { min: -.125, max: .125 } };
+      return l;
+    };
     const layer = (kind, preset, params = {}) => { const l = preset ? m.applyPreset(m.createLayer(kind), preset) : m.createLayer(kind); Object.assign(l.params, params); l.id = `${kind}-proof`; return l; };
     const project = (layers, transparent = false) => { const p = m.createProject(); p.id = 'colour-proof'; p.layers = layers; p.background = '#000000'; p.transparent = transparent; return p; };
     const pixels = async bytes => {
@@ -598,7 +814,7 @@ try {
       const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
       return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
     };
-    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, bars, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
+    window.ct = { m, old, tinyUrl, renderer, layer, soft, grey, bars, stripes, wave, ramp: rampLayer, gradientTone: m.gradientTone, gradientStops: m.gradientStops, project, pixels, shot, px, difference, same, loop };
   }, !!baseline);
 
   for (const check of selected) {
