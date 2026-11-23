@@ -138,6 +138,7 @@ uniform float uPolarAmount, uPolarTwist, uMirrorAmount, uMirrorTurn;
 uniform int uPolarMode, uMirrorMode, uMirrorSegments;
 uniform mat3 uLayerView, uLayerInverse;
 uniform int uLayerMoved, uLayerBounded;
+uniform vec2 uLayerExtent;
 const float TAU = 6.28318530718;
 const float PI = 3.14159265359;
 const int WARP_TAPS = 4;
@@ -472,9 +473,11 @@ vec2 warpedUv(vec2 uv, bool folded) {
   // Skipped at a default transform, so those reads take exactly the path they always did.
   bool inLayer = reshaped && uLayerMoved == 1;
   vec2 own = inLayer ? (uLayerView * vec3(uv, 1.)).xy : uv;
-  // A moved Image ends at its own edge: pixels beyond it take no fold, so no stray copy of the picture appears there.
+  // A moved Image ends at its own edge, which Cover puts past the layer box on one axis.
+  // Pixels beyond it take no fold, so no stray copy of the picture appears there.
+  vec2 edgeLow = .5 - .5 * uLayerExtent, edgeHigh = .5 + .5 * uLayerExtent;
   // They stay marked as reshaped, so a 2x2 block on that edge keeps its worked-out footprint and not the jump between them.
-  bool beyond = inLayer && uLayerBounded == 1 && (own.x < 0. || own.x > 1. || own.y < 0. || own.y > 1.);
+  bool beyond = inLayer && uLayerBounded == 1 && (own.x < edgeLow.x || own.x > edgeHigh.x || own.y < edgeLow.y || own.y > edgeHigh.y);
   if (reshaped && !beyond) {
     if (inLayer) {
       mat2 toLayer = mat2(uLayerView);
@@ -484,7 +487,10 @@ vec2 warpedUv(vec2 uv, bool folded) {
     if (uPolarAmount > 0.) base = polarUv(base);
     if (inLayer) {
       // Inside a bounded Image, a read past its edge folds back at that edge, as a full-frame layer does at the frame's.
-      if (uLayerBounded == 1) base = mirrored(base);
+      if (uLayerBounded == 1) {
+        vec2 m = mod(base - edgeLow, 2. * uLayerExtent);
+        base = vec2(m.x > uLayerExtent.x ? 2. * uLayerExtent.x - m.x : m.x, m.y > uLayerExtent.y ? 2. * uLayerExtent.y - m.y : m.y) + edgeLow;
+      }
       mat2 toFrame = mat2(uLayerInverse);
       base = (uLayerInverse * vec3(base, 1.)).xy; readDx = toFrame * readDx; readDy = toFrame * readDy;
     }

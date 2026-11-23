@@ -6,11 +6,12 @@ Proof for Warp, Liquid, Luma Warp, Polar and Mirror on branch `warp-engine`, aga
 
 | Command | Result |
 | --- | --- |
-| `node scripts/verify-warp.mjs --baseline=<baseline>` | 69 passed, 0 failed |
+| `node scripts/verify-warp.mjs --baseline=<baseline>` | 70 passed, 0 failed |
 | `node scripts/verify-warp.mjs --baseline=<baseline> --previous=<checkout of 6c0c205> --only=default-pose` | 1 passed, 0 failed |
+| `node scripts/verify-warp.mjs --baseline=<baseline> --previous=<checkout of 51c257e> --only=moved-contain,default-pose` | 2 passed, 0 failed |
 | `npx tsc --noEmit` | clean |
 | `npm test` | 570 unit and 93 Electron tests pass, 0 fail |
-| `npm run test:workspace` | 14 passed, 0 failed on the final code, first run. The known "Focus preview" timeout stopped two earlier runs during this fix, on intermediate code |
+| `npm run test:workspace` | 14 passed, 0 failed on the final code, first run. The known "Focus preview" timeout stopped two earlier runs on intermediate code before `51c257e` |
 | `npm run test:map` | MAP CHECK PASSED |
 | `node scripts/verify-colour-time.mjs --baseline=<baseline>` | 52 passed, 0 failed, with no change to its tests |
 
@@ -34,7 +35,7 @@ Each new gate was shown to fail on an injected defect:
 
 ## Moved layers
 
-Mirror and Polar now work in the layer's own space. They pivot on its transformed centre and follow its turn and scale. Polar's centre controls are offsets from that pivot. A moved Image ends at its own edge, so a fold cannot leave a stray copy beyond it.
+Mirror and Polar now work in the layer's own space. They pivot on its transformed centre and follow its turn and scale. Polar's centre controls are offsets from that pivot. A moved Image ends at its own edge, so a fold cannot leave a stray copy beyond it. That edge is the picture's real extent: Cover runs past the layer box on one axis, and Contain stays within it.
 
 | Check | Covers | Result | Limit |
 | --- | --- | --- | --- |
@@ -44,9 +45,13 @@ Mirror and Polar now work in the layer's own space. They pivot on its transforme
 | moved-filter | Mirror reads at 4 mirror angles, 2 poses | spread 0 texels, 0 collapsed | .01 |
 | moved-engage | Amount .0001 on a moved layer | worst .0027 of 255 | .05 |
 | moved-no-ghost | A layer hanging off the frame under Left-right | 0% lit past its reflected edge | .1% |
-| default-pose-unchanged | 124 Mirror and Polar renders at a default transform, against `6c0c205` | all byte-identical | exact |
+| moved-cover | A square Cover Image, every Mirror and Polar mode, 2 poses, 960x540 and 720x900 | symmetry .416 of 255, box-edge step 2.70, 100% of the picture lit, 0% stray | 1.5, 12, over 99%, .1% |
+| moved-contain-unchanged | 96 renders against `51c257e`: moved Contain Images, full-frame Image, Surface, Fractal and Liquid at 3 poses, and Cover at a default transform | all byte-identical | exact |
+| default-pose-unchanged | 124 Mirror and Polar renders at a default transform, against `6c0c205` and again against `51c257e` | all byte-identical | exact |
 
-Each check was shown to fail: the first three and moved-no-ghost on the code before the fix, moved-filter on a draft whose layer edge spread reads by 2188 texels, moved-engage on an injected .01 offset, and default-pose-unchanged on a checkout with its fold line moved (40 of 124 changed).
+Each check was shown to fail: the first three and moved-no-ghost on the code before the fix, moved-filter on a draft whose layer edge spread reads by 2188 texels, moved-engage on an injected .01 offset, default-pose-unchanged on a checkout with its fold line moved (40 of 124 changed), moved-cover on `51c257e` (symmetry 33.623, box-edge step 97.59), and moved-contain-unchanged on a checkout with its edge test moved (29 of 96 changed).
+
+**Fixtures.** moved-visible, moved-symmetry, moved-follows, moved-filter, moved-engage and moved-no-ghost use a smooth 16:9 Image that matches the 960x540 frame (moved-filter uses a smooth float source at 962x542). moved-cover adds one smooth square Image on Cover, which overhangs its box vertically at 960x540 and sideways at 720x900. Unroll has no symmetry, so on Cover it is judged by the box-edge step, lit share and stray light.
 
 ## Retunes
 
@@ -132,6 +137,7 @@ Git-ignored, in `work/warp-proof/`:
 - **Preview cost in the full app.** Times measure the renderer alone, on one Surface layer, and not the app's interface or multi-layer projects.
 - **Map and Live with warps on.** Their suites pass, but neither was judged by eye with a warp applied.
 - **Non-default settings.** The sheets use one working amount per effect. Other scales, step counts and detail levels were not judged by eye.
-- **Moved layers by eye.** The moved-layer checks are measured on a smooth Image. No moved layer was judged by eye.
-- **Moved full-frame generators.** Surface, Fractal and Liquid use the same pivot, but the moved-layer checks do not render them.
+- **Moved layers by eye.** The moved-layer checks are measured on smooth test Images. No moved layer was judged by eye.
+- **Other Cover shapes.** Cover was measured with one square picture in two frame shapes, with the picture fully inside the frame. Portrait, panoramic, busy and partly off-frame Cover Images were not measured.
+- **Moved full-frame generators.** Surface, Fractal and Liquid are compared byte for byte with `51c257e` when moved, which proves the Cover fix left them alone. Their moved look itself is not measured for symmetry or judged by eye.
 - **Reflections of off-frame picture.** The source holds only what is inside the frame. Where a fold needs a part of a moved Image that hangs off the frame, it shows a reflection of the picture at the frame edge, not the hidden part.

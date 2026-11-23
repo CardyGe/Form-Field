@@ -73,6 +73,11 @@ const fringeStageVerdict = r => ({
 const MOVED_REPORTED = { x: .3, y: 0, scale: .45, rotation: 0 };
 const MOVED_POSES = [{ x: .18, y: -.05, scale: .4, rotation: .5 }, { x: -.2, y: .08, scale: .4, rotation: -1.1 }];
 const MOVED_CASES = [...MIRROR_NAMES.map((name, i) => [name, { mirrorAmount: 1, mirrorMode: i }]), ...POLAR_NAMES.map((name, i) => [name, { polarAmount: 1, polarMode: i }])];
+// A square picture on Cover overhangs its layer box: up and down in a wide frame, sideways in a tall one.
+const COVER_POSES = [{ x: .1, y: 0, scale: .4, rotation: 0 }, { x: .08, y: -.04, scale: .35, rotation: .5 }];
+const COVER_FRAMES = [[960, 540], [720, 900]];
+// Moved layers that the Cover fix must leave byte-identical.
+const UNCHANGED_POSES = [{ x: .18, y: -.05, scale: .4, rotation: .5 }, { x: -.3, y: .1, scale: 1, rotation: 0 }, { x: 0, y: 0, scale: 1.4, rotation: -.7 }];
 
 const CHECKS = [
   {
@@ -1564,7 +1569,69 @@ const CHECKS = [
       return { ok: r.stray < .001 && r.kept > .9, detail: `lit beyond the layer's reflected edge ${(r.stray * 100).toFixed(2)}% (limit .1%); the layer itself ${(r.kept * 100).toFixed(1)}% lit (over 90%)` };
     },
   },
+  {
+    name: 'moved-cover',
+    // Across the picture's whole extent, not its layer box: symmetry, no step at the box edge, all of it lit, nothing beyond it.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([poses, frames, cases]) => {
+        const q = window.wq, rows = [], turn = Math.PI / 3;
+        const partners = { 'Left-right': [[-1, 0, 0, 1]], 'Top-bottom': [[1, 0, 0, -1]], 'Four-way': [[-1, 0, 0, 1], [1, 0, 0, -1]], Kaleidoscope: [[Math.cos(turn), -Math.sin(turn), Math.sin(turn), Math.cos(turn)]], 'To circle': [[-1, 0, 0, 1]] };
+        for (const [W, H] of frames) for (const pose of poses) for (const [name, params] of cases) {
+          const l = q.coverSquare(params); l.transform = pose;
+          const px = await q.px(q.project([l]), .9, W, H), c = Math.cos(pose.rotation), s = Math.sin(pose.rotation), cx = W / 2 + pose.x * W, cy = H / 2 + pose.y * H, aspect = W / H;
+          const bw = .5 * pose.scale * W, bh = .5 * pose.scale * H, pw = bw * Math.max(1, 1 / aspect), ph = bh * Math.max(1, aspect);
+          const read = (x, y, ch) => { const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, v = (X, Y) => px[(Y * W + X) * 4 + ch]; return v(x0, y0) * (1 - fx) * (1 - fy) + v(x0 + 1, y0) * fx * (1 - fy) + v(x0, y0 + 1) * (1 - fx) * fy + v(x0 + 1, y0 + 1) * fx * fy; };
+          const at = (lx, ly, ch) => read(cx + c * lx - s * ly - .5, cy + s * lx + c * ly - .5, ch);
+          let sum = 0, n = 0, inside = 0, lit = 0, outside = 0, stray = 0;
+          const radius = .92 * Math.min(pw, ph);
+          for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+            const dx = x + .5 - cx, dy = y + .5 - cy, lx = c * dx + s * dy, ly = -s * dx + c * dy, i = (y * W + x) * 4, on = Math.max(px[i], px[i + 1], px[i + 2]) > 8;
+            if (Math.abs(lx) < pw - 2 && Math.abs(ly) < ph - 2) { inside++; if (on) lit++; }
+            else if (Math.abs(lx) > pw + 3 || Math.abs(ly) > ph + 3) { outside++; if (on) stray++; }
+            if (partners[name] && Math.hypot(lx, ly) <= radius) for (const [a, b, d, e] of partners[name]) for (let ch = 0; ch < 3; ch++) { sum += Math.abs(px[i + ch] - at(a * lx + b * ly, d * lx + e * ly, ch)); n++; }
+          }
+          let step = 0, steps = 0;
+          const wide = ph > bh, span = wide ? pw - 4 : ph - 4, edge = wide ? bh : bw;
+          for (const side of [-1, 1]) for (let t = -span; t <= span; t += 2) for (let ch = 0; ch < 3; ch++) {
+            const a = wide ? at(t, side * (edge - 1.5), ch) : at(side * (edge - 1.5), t, ch), b = wide ? at(t, side * (edge + 1.5), ch) : at(side * (edge + 1.5), t, ch);
+            step += Math.abs(a - b); steps++;
+          }
+          rows.push({ name, W, H, rotation: pose.rotation, off: n ? sum / n : 0, step: step / steps, lit: lit / inside, stray: stray / Math.max(outside, 1) });
+        }
+        return rows;
+      }, [COVER_POSES, COVER_FRAMES, MOVED_CASES]);
+      const most = key => rows.reduce((a, r) => r[key] > a[key] ? r : a), off = most('off'), step = most('step'), stray = most('stray'), lit = rows.reduce((a, r) => r.lit < a.lit ? r : a);
+      const label = r => `${r.name} ${r.W}x${r.H} turn ${r.rotation}`;
+      return { ok: rows.every(r => r.off < 1.5 && r.step < 12 && r.lit > .99 && r.stray < .001), detail: `${rows.length} cases; symmetry ${off.off.toFixed(3)} at ${label(off)} (limit 1.5); box-edge step ${step.step.toFixed(2)} at ${label(step)} (limit 12); least lit ${(lit.lit * 100).toFixed(2)}% at ${label(lit)} (over 99%); stray ${(stray.stray * 100).toFixed(3)}% at ${label(stray)} (limit .1%)` };
+    },
+  },
   ...(previous ? [{
+    name: 'moved-contain-unchanged',
+    // Against the commit before the Cover fix: Contain Images and full-frame layers when moved, and Cover at a default transform.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async ([poses, cases]) => {
+        const q = window.wq, before = new q.prior.StudioRenderer(document.querySelector('#b')), changed = [];
+        let total = 0;
+        const compare = async (label, make) => {
+          const now = make(q.m), then = make(q.prior); total++;
+          await q.renderer.prepare(now); await before.prepare(then);
+          if (!q.same(await q.renderer.exportPNG(now, .9, 480, 270), await before.exportPNG(then, .9, 480, 270))) changed.push(label);
+        };
+        const scene = (api, l) => { const p = api.createProject(); p.id = 'cover-unchanged'; p.layers = [l]; p.background = '#000000'; return p; };
+        for (const [name, params] of cases) {
+          for (const pose of poses) {
+            await compare(`contain square ${name} ${JSON.stringify(pose)}`, api => { const l = q.coverSquare(params); l.image = { ...l.image, fit: 'contain' }; l.transform = pose; return scene(api, l); });
+            await compare(`full image ${name} ${JSON.stringify(pose)}`, api => { const l = q.rich(params); l.transform = pose; return scene(api, l); });
+            for (const kind of ['surface', 'fractal', 'liquid']) await compare(`${kind} ${name} ${JSON.stringify(pose)}`, api => { const l = api.applyPreset(api.createLayer(kind), api.PRESETS.find(p => p.kind === kind).id); l.id = `${kind}-unchanged`; Object.assign(l.params, params); l.transform = pose; return scene(api, l); });
+          }
+          await compare(`cover at default ${name}`, api => scene(api, q.coverSquare(params)));
+        }
+        before.dispose();
+        return { total, changed };
+      }, [UNCHANGED_POSES, MOVED_CASES]);
+      return { ok: r.changed.length === 0, detail: r.changed.length ? `${r.changed.length} of ${r.total} changed, first ${r.changed[0]}` : `${r.total} renders byte-identical to the previous commit` };
+    },
+  }, {
     name: 'default-pose-unchanged',
     // Mirror and Polar at a default transform, byte for byte against the commit before the pivot was added.
     run: async ({ page }) => {
@@ -1738,6 +1805,9 @@ try {
       return [Math.round(bar[0] * detail), Math.round(bar[1] * detail), Math.round(bar[2] * detail), 255];
     });
     const bars = (params = {}) => image(barsUrl, params, 'bars');
+    // A smooth square picture on Cover, so it never matches the frame's shape.
+    const squareUrl = await dataUrl(512, 512, (x, y) => [Math.round(128 + 90 * Math.sin(3.1 * x + .4)), Math.round(128 + 90 * Math.cos(4.3 * y - .7)), Math.round(128 + 70 * Math.sin(2.2 * x + 3.7 * y)), 255]);
+    const coverSquare = (params = {}) => { const l = image(squareUrl, params, 'square', 512, 512); l.image.fit = 'cover'; return l; };
     // Red marks the right half; green is busy everywhere, so a move shows even where red is flat.
     const halfRedUrl = await dataUrl(960, 540, (x, y) => [x > 0 ? 255 : 0, Math.round(128 + 120 * Math.sin(83 * x + 31 * y)), 0, 255]);
     const halfRed = (params = {}) => image(halfRedUrl, params, 'half-red');
@@ -1843,7 +1913,7 @@ try {
       if (kind === 'image') return image(posterUrl, params, 'poster');
       const l = m.applyPreset(m.createLayer(kind), m.PRESETS.find(p => p.kind === kind).id); l.id = `${kind}-proof`; Object.assign(l.params, params); return l;
     };
-    window.wq = { prior, litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
+    window.wq = { coverSquare, prior, litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
   }, [!!baseline, !!previous]);
 
   for (const check of selected) {

@@ -6,7 +6,7 @@ import { isInstrument } from '../core/instruments';
 import * as THREE from 'three';
 import { GraphicRenderer } from './GraphicRenderer';
 import { graphicRenderPlan } from './graphic-view';
-import { sourceViewMatrix } from './source-view';
+import { imageFit, sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
@@ -245,7 +245,7 @@ export class StudioRenderer {
     uLumaDirection: { value: new THREE.Vector2(0, 1) }, uLumaThreshold: { value: 0 }, uLumaSoft: { value: .2 }, uLumaChroma: { value: 0 },
     uPolarAmount: { value: 0 }, uPolarMode: { value: 0 }, uPolarCentre: { value: new THREE.Vector2() }, uPolarTwist: { value: 0 },
     uMirrorAmount: { value: 0 }, uMirrorMode: { value: 0 }, uMirrorSegments: { value: 6 }, uMirrorTurn: { value: 0 },
-    uLayerView: { value: new THREE.Matrix3() }, uLayerInverse: { value: new THREE.Matrix3() }, uLayerMoved: { value: 0 }, uLayerBounded: { value: 0 },
+    uLayerView: { value: new THREE.Matrix3() }, uLayerInverse: { value: new THREE.Matrix3() }, uLayerMoved: { value: 0 }, uLayerBounded: { value: 0 }, uLayerExtent: { value: new THREE.Vector2(1, 1) },
   });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
@@ -808,13 +808,7 @@ export class StudioRenderer {
       this.image.uniforms.uImage.value = asset.texture;
       this.image.uniforms.uMirror.value = number(layer,'mirror',0);
       this.image.uniforms.uRepeat.value = number(layer,'repeat',1);
-      const imageAspect = layer.image.width / layer.image.height;
-      let x = 1, y = 1;
-      if (layer.image.fit === 'contain') {
-        if (imageAspect > aspect) y = aspect / imageAspect; else x = imageAspect / aspect;
-      } else {
-        if (imageAspect > aspect) x = imageAspect / aspect; else y = aspect / imageAspect;
-      }
+      const [x, y] = imageFit(layer.image, aspect);
       (this.image.uniforms.uFit.value as THREE.Vector2).set(x, y);
       this.draw(this.image, this.source);
     } else {
@@ -1006,6 +1000,9 @@ export class StudioRenderer {
     (u.uLayerView.value as THREE.Matrix3).copy(pose.view); (u.uLayerInverse.value as THREE.Matrix3).copy(pose.inverse);
     u.uLayerMoved.value = Number(pose.moved);
     u.uLayerBounded.value = Number(pose.moved && layer.kind === 'image' && number(layer, 'repeat', 1) <= 1);
+    // The picture's real span: Cover runs past the layer box on one axis, and Contain stays within it.
+    const fit = layer.kind === 'image' && layer.image ? imageFit(layer.image, width / height) : [1, 1];
+    (u.uLayerExtent.value as THREE.Vector2).set(Math.max(fit[0], 1), Math.max(fit[1], 1));
     this.draw(this.warp, output);
     return output.texture;
   }
