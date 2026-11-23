@@ -261,6 +261,54 @@ test('lowering Glitch to centre during a live event has no step', () => {
   assert.ok(events >= 16, `${events} live events were lowered`);
 });
 
+test('a Density move during Burst never throws a lit voice across the frame', () => {
+  for (const seed of [900001, 1729, 77, 4096]) for (const start of [330, AFTER_TEN_MINUTES]) for (const every of [4, 10, 12, 15, 20, 30]) for (const [from, to] of [[1, 0], [0, 1], [0.8, 0.2]]) for (const seconds of [0, 1]) {
+    const watch = new Watch(true), base = params({ macroDensity: from });
+    run(seed, 6, base, f => ({ params: { ...base, macroDensity: seconds ? from + (to - from) * Math.min(1, f / FPS) : to }, moves: { ...idle, burst: f % every < Math.max(1, every >> 1) } }), watch, start);
+    within(watch, `seed ${seed} at ${start}s, Burst every ${every}, Density ${from}->${to} over ${seconds}s`, MAX_USER_MOVE);
+  }
+});
+
+/** The summed change of visible marks between two frames: both ends of each, plus its light. */
+function pictureGap(a: Float32Array, b: Float32Array): number {
+  const p = new Float64Array(4), q = new Float64Array(4);
+  let sum = 0;
+  for (let at = 0; at < Math.min(a.length, b.length); at += STRIDE) {
+    if (Math.max(a[at + 9], b[at + 9]) <= 0.04) continue;
+    ends(a, at, p); ends(b, at, q);
+    sum += Math.abs(a[at + 9] - b[at + 9]) + Math.hypot(p[0] - q[0], p[1] - q[1]) + Math.hypot(p[2] - q[2], p[3] - q[3]);
+  }
+  return sum;
+}
+
+test('Scale and Density arrive by 1.5 s, on the fader and in the picture, alone and together', () => {
+  const cases: readonly (readonly [Record<string, number>, Record<string, number>])[] = [
+    [{ macroScale: 0 }, { macroScale: 1 }], [{ macroScale: 1 }, { macroScale: 0 }],
+    [{ macroDensity: 0 }, { macroDensity: 1 }], [{ macroDensity: 1 }, { macroDensity: 0 }],
+    [{ macroScale: 0, macroDensity: 0 }, { macroScale: 1, macroDensity: 1 }], [{ macroScale: 1, macroDensity: 1 }, { macroScale: 0, macroDensity: 0 }],
+    [{ macroScale: 0, macroDensity: 1 }, { macroScale: 1, macroDensity: 0 }], [{ macroScale: 1, macroDensity: 0 }, { macroScale: 0, macroDensity: 1 }],
+  ];
+  for (const [a, b] of cases) for (const seed of SEEDS) for (const start of [120, 330, AFTER_TEN_MINUTES]) {
+    const from = params(a), to = params(b), transport = createEvolveTransport(), list = new DisplayList(2000), view: Record<string, number> = {}, phase = phaseAt(start);
+    const draw = (p: Record<string, number>, wall: number) => { const clock = advanceEvolve(transport, phase, LOOP, wall, seed, p, idle); Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); return list.data.slice(0, list.count * STRIDE); };
+    advanceEvolve(transport, 0, LOOP, 0, seed, from, idle);
+    for (let f = 1; f <= start * 10; f++) advanceEvolve(transport, phaseAt(f / 10), LOOP, 0.1, seed, from, idle);
+    // The transport is paused from here: only the move itself changes the picture.
+    draw(from, 0);
+    for (let f = 0; f < 30; f++) draw(from, DT);
+    const first = draw(from, DT);
+    for (let f = 1; f < 90; f++) draw(to, DT);
+    const middle = draw(to, DT);
+    for (const key of Object.keys(b)) {
+      const share = (transport.values[key] - a[key]) / (b[key] - a[key]);
+      assert.ok(share >= 0.75, `seed ${seed} at ${start}s ${JSON.stringify(a)} to ${JSON.stringify(b)}: ${key} fader ${share}`);
+    }
+    for (let f = 0; f < 510; f++) draw(to, DT);
+    const final = draw(to, DT), whole = pictureGap(first, final);
+    if (whole > 1e-3) { const arrived = 1 - pictureGap(middle, final) / whole; assert.ok(arrived >= 0.75, `seed ${seed} at ${start}s ${JSON.stringify(a)} to ${JSON.stringify(b)}: picture ${arrived}`); }
+  }
+});
+
 test('24 Meridian layers never rebuild one another\'s forms', () => {
   const layers = Array.from({ length: 24 }, (_, i) => ({ seed: 1000 + i * 97, transport: createEvolveTransport(), list: new DisplayList(2000), view: {} as Record<string, number> })), p = params();
   const frame = (f: number, wall: number) => { for (const layer of layers) { const clock = advanceEvolve(layer.transport, phaseAt(f / FPS), LOOP, wall, layer.seed, p, idle); Object.assign(layer.view, p, layer.transport.values); evaluateEvolve(layer.seed, clock, layer.view, layer.list); } };

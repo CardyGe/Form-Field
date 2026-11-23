@@ -35,8 +35,10 @@ const TIER_RATES = [1, -0.618, 0.382];
 const GLITCH_CELL = 2.2; // Seconds in which at most one glitch event happens.
 const EASE_PLACE = 0.78, EASE_ARC = 0.69, EASE_LIGHT = 2.8, EASE_TURN = 0.66; // Per second, the fastest a voice may travel during a Density move.
 const UNSEEN = 0.012;
+const SPOKE_LIST = RING_VOICES * ARC_SLOTS, NODE_LIST = SPOKE_LIST + SPOKE_VOICES * 2; // Where each kind of voice starts in the display list.
+const ZOOM_SHARE = 0.55; // How much of the on-screen move limit a Scale move in progress keeps for itself.
 const SCALE_SPEED_SMALL = 0.72, SCALE_SPEED_LARGE = 1.2; // Share of the Scale fader per second.
-const FOLD_SPEED = 0.6; // Far forms fold in towards a small Scale at this rate, a little behind the zoom.
+const FOLD_SPEED = 0.72; // Far forms fold in towards a small Scale at this rate, a little behind the zoom.
 const ALPHA_SPEED = 4.2; // The fastest any mark's light may change while a performer is moving it: 0.07 a frame at 60 fps.
 const USER_FOLLOW = 3.6; // Density and Scale follow the fader as a critically damped spring: most of the way in about a second.
 
@@ -93,6 +95,8 @@ export interface EvolveClock {
   densityMoving: boolean; easing: boolean; wall: number;
   /** How far far-flung forms have folded in for a small Scale. Eased separately, so the fold never adds to the zoom's speed. */
   fold: number;
+  /** How fast Scale is moving, as a share of its top speed. */
+  zooming: number;
   /** True while a performer's move is under way. Light then changes at a limited rate, however the moves combine. */
   performing: boolean; guarding: boolean;
   readonly shown: Float32Array;
@@ -437,7 +441,7 @@ export function evolutionRate(params: Readonly<Record<string, number>>): number 
 }
 
 export function createEvolveClock(): EvolveClock {
-  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
+  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, zooming: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
 }
 
 export function createEvolveTransport(): EvolveTransport {
@@ -525,7 +529,7 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
       values[key] = wanted + (off + drive) * decay;
       if (sprung === 1) {
         // A zoom keeps to a speed the eye can follow.
-        const speed = (SCALE_SPEED_SMALL + (SCALE_SPEED_LARGE - SCALE_SPEED_SMALL) * smooth((before - 0.5) / 0.1)) * (transport.follow[0] !== 0 ? 0.6 : 1);
+        const speed = (SCALE_SPEED_SMALL + (SCALE_SPEED_LARGE - SCALE_SPEED_SMALL) * smooth((before - 0.5) / 0.1));
         if (Math.abs(values[key] - before) > speed * wall) {
           const sign = values[key] > before ? 1 : -1;
           values[key] = before + sign * speed * wall;
@@ -557,6 +561,7 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   } else clock.tintFade = Math.min(1, clock.tintFade + fadeStep);
   clock.densityMoving = transport.follow[0] !== 0;
   clock.wall = wall;
+  clock.zooming = Math.abs(transport.follow[1]) / SCALE_SPEED_SMALL;
   const foldTo = foldFor(unit(values.macroScale));
   clock.fold = firstFrame ? foldTo : clock.fold + clamp(foldTo - clock.fold, -FOLD_SPEED * wall, FOLD_SPEED * wall);
   clock.performing = transport.follow[0] !== 0 || transport.follow[1] !== 0 || clock.fold !== foldTo || values.macroGlitch !== finite(params.macroGlitch, 0) || clock.ripples[0] >= 0 || clock.ripples[1] >= 0 || clock.ripples[2] >= 0;
@@ -707,21 +712,25 @@ function easeField(pose: Float32Array, last: Float32Array, at: number, most: num
  * Density can ask many voices to move at once. For as long as it does, each may travel only so fast, so the structure
  * grows and merges instead of popping. Once every voice has arrived this does nothing, and the default is untouched.
  */
-function easePose(clock: EvolveClock): void {
-  const pose = clock.pose, last = clock.settled;
+function easePose(clock: EvolveClock, scale: number): void {
+  const pose = clock.pose, last = clock.settled, shown = clock.shown;
   if (clock.densityMoving) clock.easing = true;
   if (clock.easing) {
-    const place = EASE_PLACE * clock.wall, light = EASE_LIGHT * clock.wall, turn = EASE_TURN * clock.wall;
+    // Limits are on screen, so a structure drawn small may move further in its own units. A zoom under way takes its share first.
+    const room = (1 - ZOOM_SHARE * Math.min(1, clock.zooming)) / Math.min(1, scale);
+    const place = EASE_PLACE * room * clock.wall, light = EASE_LIGHT * clock.wall, turn = EASE_TURN * room * clock.wall;
     let held = false, carrying = 0; // The first four rings carry the nodes, so a ring with visible nodes counts as seen.
     for (let node = 0; node < NODE_VOICES; node++) {
       const at = NODE_BASE + node * NODE_FIELDS;
-      if (Math.max(pose[at + N_ALPHA], last[at + N_ALPHA]) > UNSEEN) carrying |= 1 << (node % 4);
+      if (Math.max(pose[at + N_ALPHA], last[at + N_ALPHA], shown[NODE_LIST + node]) > UNSEEN) carrying |= 1 << (node % 4);
     }
     for (let voice = 0; voice < RING_VOICES; voice++) {
       // An arc's end travels further on a larger ring, so a smaller ring may open and close faster.
-      const at = voice * RING_FIELDS, arc = EASE_ARC * clock.wall / Math.max(0.2, Math.abs(pose[at + R_RADIUS]));
+      const at = voice * RING_FIELDS, arc = EASE_ARC * room * clock.wall / Math.max(0.2, Math.abs(pose[at + R_RADIUS]));
+      let lit = 0; // What is actually on screen after every light guard, not just what the pose asks for.
+      for (let k = 0; k < ARC_SLOTS; k++) lit = Math.max(lit, shown[voice * ARC_SLOTS + k]);
       // A voice nobody can see may take its new place at once.
-      const seen = Math.max(pose[at + R_ALPHA], last[at + R_ALPHA]) > UNSEEN || (carrying & (1 << voice)) !== 0;
+      const seen = Math.max(pose[at + R_ALPHA], last[at + R_ALPHA], lit) > UNSEEN || (carrying & (1 << voice)) !== 0;
       if (seen) {
         for (let f = R_RADIUS; f <= R_Y; f++) if (easeField(pose, last, at + f, place, false)) held = true;
         if (easeField(pose, last, at + R_WIDTH, place * 20, false)) held = true;
@@ -731,7 +740,7 @@ function easePose(clock: EvolveClock): void {
     }
     for (let voice = 0; voice < SPOKE_VOICES; voice++) {
       const at = SPOKE_BASE + voice * SPOKE_FIELDS;
-      if (Math.max(pose[at + S_ALPHA], last[at + S_ALPHA]) > UNSEEN) {
+      if (Math.max(pose[at + S_ALPHA], last[at + S_ALPHA], shown[SPOKE_LIST + voice * 2], shown[SPOKE_LIST + voice * 2 + 1]) > UNSEEN) {
         if (easeField(pose, last, at + S_ANGLE, turn, true)) held = true;
         if (easeField(pose, last, at + S_INNER, place, false)) held = true;
         if (easeField(pose, last, at + S_OUTER, place, false)) held = true;
@@ -742,7 +751,7 @@ function easePose(clock: EvolveClock): void {
     }
     for (let node = 0; node < NODE_VOICES; node++) {
       const at = NODE_BASE + node * NODE_FIELDS;
-      if (Math.max(pose[at + N_ALPHA], last[at + N_ALPHA]) > UNSEEN) {
+      if (Math.max(pose[at + N_ALPHA], last[at + N_ALPHA], shown[NODE_LIST + node]) > UNSEEN) {
         if (easeField(pose, last, at + N_ANGLE, turn, true)) held = true;
         if (easeField(pose, last, at + N_SIZE, place, false)) held = true;
       }
@@ -818,7 +827,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const pose = clock.pose;
   if (clock.glide < 1) { poseA.set(pose); blendPose(pose, clock.from, poseA, clock.glide, clock.glideTrack, clock.glideFresh); clock.glideFresh = false; }
 
-  if (!clock.exact) easePose(clock);
+  if (!clock.exact) easePose(clock, scale);
 
   // Turning, breathing and drift, all continuous in the motion clock.
   const organic = chaos * chaos * (1 - home);
