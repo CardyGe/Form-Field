@@ -14,7 +14,7 @@ import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, govern
 import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, SPEED_RANGE, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
 import type { BlendKind } from '../perform/types';
-import { CarriedPace, performClock, type PerformDraw } from '../perform/wall-values';
+import { CarriedPace, CarriedTempo, performClock, type PerformDraw } from '../perform/wall-values';
 import type { Scene } from './scenes';
 import { LiveSlot, LIVE_ASPECT } from './liveSlot';
 import { VideoSlot } from './videoSlot';
@@ -199,6 +199,9 @@ export class MapCompositor {
   private readonly leaving = new Map<string, { speed: number; offset: number }>();
   /** After a show: a loop locked to the tempo that is still playing keeps its speed and bar until its next loop boundary. */
   private readonly carried = new CarriedPace();
+  /** A locked video's tempo after a show ends, to its next loop boundary, and the last tempo the show sent. */
+  private readonly carriedTempo = new CarriedTempo();
+  private showBpm: number | undefined;
   /** After a show: master, brightness and hue go back to plain over a short time, from where they were. */
   private easing: { from: PerformDraw; start: number; duration: number } | null = null;
   /**
@@ -213,7 +216,7 @@ export class MapCompositor {
     this.canvas = canvas;
     this.gpu = new Gpu(canvas);
     // A lost context blanks the wall until Chromium gives it back; then every picture is made again.
-    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); this.carried.clear(); });
+    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); this.carried.clear(); this.carriedTempo.clear(); });
     canvas.addEventListener('webglcontextrestored', () => {
       this.gpu.setUp();
       this.pictures.clear(); this.overlay = null; this.histories.clear();
@@ -322,12 +325,14 @@ export class MapCompositor {
       for (const source of [...this.show.sources, ...(this.show.videos ?? [])]) {
         if (isVideoId(source.id) ? this.videoSlots.has(source.id) : this.slots.has(source.id)) this.carried.keep(source, this.speedOf(source.id), this.offsetOf(source.id));
         else this.carried.delete(source.id);
+        if (isVideoId(source.id) && this.videoSlots.has(source.id) && this.showBpm !== undefined) this.carriedTempo.keep(source, this.showBpm, this.speedOf(source.id), this.offsetOf(source.id));
+        else this.carriedTempo.delete(source.id);
       }
       this.easing = easeMs > 0 ? { from: this.perform, start: this.fadeClock, duration: easeMs } : null;
     } else {
       this.easing = null;
       // A new show starts from its own values: nothing is carried into it from the last one.
-      if (values) { this.settling = false; if (!this.perform) this.carried.clear(); }
+      if (values) { this.settling = false; if (!this.perform) { this.carried.clear(); this.carriedTempo.clear(); this.showBpm = undefined; } }
     }
     this.perform = values;
     this.dirty = true;
@@ -443,7 +448,7 @@ export class MapCompositor {
       for (const id of this.armed) if (isVideoId(id)) wanted.add(id);
       for (const fade of this.fades.values()) if (isVideoId(fade.fromSource)) wanted.add(fade.fromSource);
     }
-    for (const [id, slot] of this.videoSlots) if (!wanted.has(id) || !videos.some(v => v.id === id)) { slot.dispose(); this.videoSlots.delete(id); this.videoTextures.delete(id); this.carried.delete(id); this.dirty = true; }
+    for (const [id, slot] of this.videoSlots) if (!wanted.has(id) || !videos.some(v => v.id === id)) { slot.dispose(); this.videoSlots.delete(id); this.videoTextures.delete(id); this.carried.delete(id); this.carriedTempo.delete(id); this.dirty = true; }
     for (const video of videos) {
       if (!wanted.has(video.id)) continue;
       const slot = this.videoSlots.get(video.id);
@@ -463,6 +468,7 @@ export class MapCompositor {
   /** The latest signals. A show that reacts is drawn again with them. */
   setSignals(signals: Signals): void {
     this.signals = signals;
+    if (this.perform && signals['tempo.bpm'] !== undefined) this.showBpm = signals['tempo.bpm'];
     // Freeze holds the picture: links stay where they were until it is let go.
     if (this.frozen) return;
     if (this.show.links?.length || this.show.sources.some(s => s.tempoSync)) this.dirty = true;
@@ -538,6 +544,7 @@ export class MapCompositor {
     if (videoLeft) this.updateVideos();
     // After a show: a carried speed and bar end at the loop's next boundary, or at once when its source is changed.
     if (!this.frozen && this.carried.size) this.carried.step([...this.show.sources, ...(this.show.videos ?? [])], this.signals);
+    if (!this.frozen) this.carriedTempo.step(this.show.videos ?? [], this.signals);
     // What each source is wanted for this frame, worked out for all of them before any renderer is asked for.
     const wanted = new Map<string, { users: Shape[]; fading: { shapes: Shape[]; dissolve: boolean } | undefined; waiting: boolean; rank: number }>();
     for (const source of this.show.sources) {
@@ -597,12 +604,14 @@ export class MapCompositor {
       const had = !!this.videoTextures.get(id);
       // Perform: a video kept ready waits on its first picture until a shape plays it.
       const idle = this.armed.includes(id) && !fadingFrom.has(id) && !this.show.shapes.some(s => s.sourceId === id && !s.blocker);
-      if (idle && had) { slot.setFrozen(true); continue; }
+      if (idle && had) { slot.holdArmed(); continue; }
       slot.setFrozen(this.frozen);
       // Perform's speed and bar for this video (1 and 0 without a show): the slot keeps a locked loop on the beat grid with them.
       const pace = this.speedOf(id), offset = this.offsetOf(id), linked = this.drawn.speed.get(id);
       const speed = pace === 1 ? linked : Math.min(SPEED_RANGE.max, (linked ?? this.show.videos?.find(v => v.id === id)?.speed ?? 1) * pace);
-      const now = slot.frame(this.frozen ? this.frozenSignals : this.signals, speed, pace, offset);
+      // The studio stops sending the tempo's speed at End show, while the wall's values stay on through the handover.
+      const heard = this.frozen ? this.frozenSignals : this.signals, showBpm = this.carriedTempo.get(id) ?? (this.perform ? this.showBpm : undefined);
+      const now = slot.frame(showBpm !== undefined && heard['tempo.bpm'] === undefined ? { ...heard, 'tempo.bpm': showBpm } : heard, speed, pace, offset);
       this.videoTextures.set(id, now);
       // A video that fails mid-show stops giving a picture: its shapes go to their fill at once.
       if (slot.fresh || had !== !!now) rendered = true;

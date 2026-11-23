@@ -31,6 +31,7 @@ import { useWorkspace } from './useWorkspace';
 import LivePanel from './LivePanel';
 import { KIND_LABELS } from '../core/library';
 import { beginStudioEdit, endStudioEdit, onStudioWallWarning, studioEdit } from './useMap';
+import { performService } from '../perform/service';
 import { projectForStudioSave, stashStudio, type ShapeEdit } from './studio-edit';
 import MapPanel from './MapPanel';
 import { sameCanvasValues } from '../core/canvas-interaction';
@@ -346,7 +347,8 @@ export default function App() {
     projectRef.current = edit.stash.project; setProject(edit.stash.project); setHistoryRevision(n => n + 1);
     setSelectedId(edit.stash.selectedId); phase.current = edit.stash.phase; setFilePath(edit.stash.filePath);
     // Going to Live instead of Map: the Map wall that stayed open for the edit closes, as leaving Map does.
-    if (to !== 'map') void window.studio?.map?.closeOutput().catch(() => {});
+    // A running show keeps it, wherever the operator goes.
+    if (to !== 'map' && !performService().running) void window.studio?.map?.closeOutput().catch(() => {});
     setMode(to);
   };
   useEffect(() => window.studio?.onExportProgress(p => { if (p.jobId === activeJob.current) setProgress(p); }), []);

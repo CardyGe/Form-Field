@@ -70,6 +70,34 @@ export class CarriedPace {
 }
 
 /**
+ * After a show: Map sends the wall no tempo speed, so a video locked to the tempo would fall back to 120 BPM as the
+ * show ends. It keeps the show's tempo until its next loop boundary, and from there plays as Map plays it.
+ */
+export class CarriedTempo {
+  private readonly held = new Map<string, { bpm: number; speed: number; offset: number; sync: number; loop: number | null }>();
+  get(id: string): number | undefined { return this.held.get(id)?.bpm; }
+  keep(source: PacedSource, bpm: number, speed: number, offset: number): void {
+    if (!source.tempoSync || !(bpm > 0) || !(speed > 0)) { this.held.delete(source.id); return; }
+    this.held.set(source.id, { bpm, speed, offset, sync: source.tempoSync, loop: null });
+  }
+  delete(id: string): void { this.held.delete(id); }
+  clear(): void { this.held.clear(); }
+  /** Once a frame: ends every carry whose loop has come round, whose source changed, or that has no beat to count. */
+  step(sources: Iterable<PacedSource>, signals: Signals): void {
+    if (this.held.size === 0) return;
+    const now = new Map<string, PacedSource>();
+    for (const s of sources) now.set(s.id, s);
+    const beat = signals['tempo.beat'];
+    for (const [id, h] of this.held) {
+      if (now.get(id)?.tempoSync !== h.sync || beat === undefined) { this.held.delete(id); continue; }
+      const loop = Math.floor((beat + (signals['tempo.phase'] ?? 0) - h.offset) * h.speed / h.sync);
+      if (h.loop === null) h.loop = loop;
+      else if (loop !== h.loop) this.held.delete(id);
+    }
+  }
+}
+
+/**
  * The tempo as one Perform source hears it: `offset` beats taken off the count, and the count run at `speed`, so a
  * loop of n beats plays as n / speed beats and starts on the corrected bar. Only the tempo signals are changed; at
  * speed 1 with no offset, and with no beat to count, the signals are returned as they are.

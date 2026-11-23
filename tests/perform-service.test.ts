@@ -1,0 +1,378 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import type { MapMessage } from '../src/map/messages';
+import { createShow, type ShowDocument } from '../src/map/show';
+import { clockSnapshot, PerformService, type ClockLink, type WallLink } from '../src/perform/service';
+import type { ClockSnapshot } from '../src/perform/timing';
+import type { Clip, Scene } from '../src/perform/types';
+import { TempoClock } from '../src/react/tempo';
+import type { AudioStatus, MidiStatus } from '../src/react/engine';
+import type { Signals } from '../src/react/signals';
+
+const BAR_MS = 2000; // 120 BPM
+
+const clip = (id: string, sourceId: string, hueOffset = 0): Clip => ({ id, name: id, sourceId, hueOffset, blend: null, audioBand: 'bass' });
+const scene = (id: string, cells: Record<number, string>, follow: Scene['follow'] = null): Scene => ({ id, name: id, cells: Array.from({ length: 8 }, (_, i) => cells[i] ?? null), includeProtected: false, follow });
+
+function makeShow(): ShowDocument {
+  const show = createShow();
+  show.shapes = Array.from({ length: 8 }, (_, i) => ({ id: `s${i}`, groupId: null })) as unknown as ShowDocument['shapes'];
+  show.sources = ['a', 'b', 'free'].map(id => ({ id, speed: 1, tempoSync: id === 'free' ? null : 4, project: { layers: [] } })) as unknown as ShowDocument['sources'];
+  show.performance.zones = show.performance.zones.map((z, i) => ({ ...z, target: { kind: 'shape', id: `s${i}` } }));
+  show.performance.clips = [clip('ca', 'a', 30), clip('cb', 'b'), clip('cf', 'free'), clip('cf2', 'free', 90)];
+  show.performance.scenes = [scene('one', { 0: 'ca', 1: 'cb' }), scene('two', { 0: 'cb' })];
+  return show;
+}
+
+function rig(show = makeShow(), open = true) {
+  const sent: MapMessage[] = [];
+  const log: string[] = [];
+  let now = 1000, barOffset = 0, next = 0, frame: ((s: Signals) => void) | null = null;
+  const state = { audio: { state: 'on', label: 'x' } as AudioStatus, midi: { state: 'off' } as MidiStatus, open };
+  const wall: WallLink = {
+    send: m => { sent.push(m); log.push(m.type); },
+    isOpen: () => state.open,
+    sendWholeShow: () => { log.push('wholeShow'); },
+  };
+  const clock: ClockLink & { audio(): AudioStatus; midi(): MidiStatus } = {
+    snapshot: (): ClockSnapshot => ({ anchorMs: 0, anchorBeat: 0, bpm: 120, state: 'locked', barOffset }),
+    begin: () => { log.push('clock.begin'); },
+    end: () => { log.push('clock.end'); },
+    tap: () => { log.push('clock.tap'); },
+    follow: () => { log.push('clock.follow'); },
+    setBarStart: () => { barOffset = 1; log.push('clock.bar'); },
+    subscribe: fn => { frame = fn; return () => { frame = null; log.push('clock.off'); }; },
+    audio: () => state.audio,
+    midi: () => state.midi,
+  };
+  const service = new PerformService({ wall, clock, show: () => show, now: () => now, id: () => `L${++next}`, random: () => 0 });
+  const ofType = <T extends MapMessage['type']>(type: T) => sent.filter((m): m is Extract<MapMessage, { type: T }> => m.type === type);
+  const ready = () => { service.control({ kind: 'sendAllStart' }); service.control({ kind: 'sendAllEnd' }); };
+  return { service, sent, log, show, state, ofType, ready, at: (ms: number) => { now = ms; }, frame: (s: Signals = {}) => frame?.(s), hasFrame: () => frame !== null };
+}
+type Rig = ReturnType<typeof rig>;
+const lastLaunch = (r: Rig) => r.ofType('performLaunch').at(-1)!.launch;
+const lastValues = (r: Rig) => r.ofType('performValues').at(-1)!.values;
+
+test('startShow sends a black start; no launch until Bank ▶', () => {
+  const r = rig();
+  r.service.startShow();
+  assert.equal(r.service.view().running, true);
+  assert.equal(r.log[0], 'clock.begin');
+  const start = r.ofType('performStart')[0];
+  assert.equal(start.zones.length, 8);
+  assert.ok(start.zones.every(z => !z.launched && z.sourceId === null));
+  assert.equal(lastValues(r).master, 0);
+  r.frame();
+  assert.equal(r.ofType('performLaunch').length, 0);
+  // Reading the controls does not start anything either.
+  r.ready();
+  r.frame();
+  assert.equal(r.ofType('performLaunch').length, 0);
+});
+
+test('a press sends one exact-time launch to the wall', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.at(1000);
+  r.service.control({ kind: 'bankNext', down: true });
+  const launches = r.ofType('performLaunch');
+  assert.equal(launches.length, 1);
+  assert.equal(launches[0].launch.atMs, BAR_MS);
+  assert.equal(launches[0].launch.barMs, BAR_MS);
+  assert.deepEqual(launches[0].launch.changes.map(c => [c.zone, c.sourceId, c.shapeIds]), [[0, 'a', ['s0']], [1, 'b', ['s1']]]);
+  r.frame();
+  assert.equal(r.ofType('performLaunch').length, 1, 'an unchanged launch is not sent again');
+});
+
+test('correcting the 1 cancels and resends queued launches at the new bar', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.at(1000);
+  r.service.action({ type: 'bankNext' });
+  const id = lastLaunch(r).id;
+  r.service.action({ type: 'downbeat' });
+  assert.ok(r.log.includes('clock.bar'));
+  assert.ok(r.ofType('performCancel').some(m => m.launchId === id));
+  const moved = lastLaunch(r);
+  assert.equal(moved.id, id);
+  // The bar now starts on beat 1, which is 500 ms in: the next one is at 2500.
+  assert.equal(moved.atMs, 2500);
+  assert.ok(moved.changes.every(c => c.phaseOffsetBeats === 1));
+});
+
+test('on a one-beat grid, correcting the 1 keeps the time but resends the new bar offset', () => {
+  const r = rig();
+  r.show.performance.launchQuantize = '1/4';
+  r.service.startShow(); r.ready();
+  r.at(1200); // past the late-press grace of the beat at 1000
+  r.service.action({ type: 'bankNext' });
+  assert.equal(lastLaunch(r).atMs, 1500);
+  assert.equal(lastLaunch(r).changes[0].phaseOffsetBeats, 0);
+  r.service.action({ type: 'downbeat' });
+  assert.equal(lastLaunch(r).atMs, 1500);
+  assert.equal(lastLaunch(r).changes[0].phaseOffsetBeats, 1);
+});
+
+test('a press just after the bar stays on it when the 1 is corrected', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.at(2050);
+  r.service.action({ type: 'bankNext' });
+  assert.equal(lastLaunch(r).atMs, 2050);
+  const count = r.ofType('performLaunch').length;
+  r.at(2060);
+  r.service.action({ type: 'downbeat' });
+  assert.equal(r.ofType('performLaunch').length, count, 'a launch already firing is not pushed a boundary');
+});
+
+test('re-pressing the playing clip cancels what was queued on the wall', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const id = lastLaunch(r).id;
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: id, zones: [0, 1] }] });
+  r.at(2100);
+  r.service.action({ type: 'next', zone: 2 }); // zone 2 has no clips: nothing queued
+  r.service.action({ type: 'next', zone: 1 }); // column of zone 1 is only cb, already playing
+  assert.equal(r.service.view().launcher.queue.length, 0);
+  r.service.action({ type: 'next', zone: 0 }); // ca -> cb
+  const queued = lastLaunch(r).id;
+  r.service.action({ type: 'next', zone: 0 }); // cb -> ca, which is playing: only clears the queue
+  assert.equal(r.service.view().launcher.queue.length, 0);
+  assert.ok(r.ofType('performCancel').some(m => m.launchId === queued));
+});
+
+test('landed reports update what is playing', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const id = lastLaunch(r).id;
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: id, zones: [0, 1] }], armed: ['b'] });
+  const view = r.service.view();
+  assert.deepEqual(view.launcher.playing.slice(0, 2), ['ca', 'cb']);
+  assert.equal(view.launcher.sceneIndex, 0);
+  assert.deepEqual(view.armed, ['b']);
+  // A report for a launch no longer queued changes nothing.
+  r.service.wallState({ landed: [{ launchId: 'gone', zones: [3] }] });
+  assert.equal(r.service.view().launcher.playing[3], null);
+});
+
+test('a partial landing resends the rest past the missed bar, not at its old time', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const id = lastLaunch(r).id;
+  r.at(2000); // exactly on the bar the rest missed
+  r.service.wallState({ landed: [{ launchId: id, zones: [0] }] });
+  const rest = lastLaunch(r);
+  assert.equal(rest.id, id);
+  assert.equal(rest.atMs, 4000);
+  assert.deepEqual(rest.changes.map(c => c.zone), [1]);
+});
+
+test('a scene with nothing to change still lands, so the row moves on', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', {}), scene('two', { 0: 'ca' })];
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  assert.equal(r.ofType('performLaunch').length, 0, 'nothing to send');
+  r.at(2000);
+  r.frame();
+  assert.equal(r.service.view().launcher.sceneIndex, 0);
+  assert.equal(r.service.view().launcher.queue.length, 0);
+});
+
+test('a follow rule launches by itself', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 0: 'ca' }, { afterBars: 4, to: 'next' }), scene('two', { 0: 'cb' })];
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0] }] });
+  const before = r.ofType('performLaunch').length;
+  r.at(9000);
+  r.frame();
+  assert.equal(r.ofType('performLaunch').length, before, 'not due yet');
+  // Queued ahead of the bar at 10000, for that exact bar.
+  r.at(9900);
+  r.frame();
+  assert.equal(r.ofType('performLaunch').length, before + 1);
+  assert.equal(lastLaunch(r).atMs, 10000);
+  assert.equal(lastLaunch(r).changes[0].sourceId, 'b');
+});
+
+test('values reach the wall at most 30 times a second', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  const before = r.ofType('performValues').length;
+  for (let ms = 0; ms < 1000; ms++) {
+    r.at(5000 + ms);
+    r.service.control({ kind: 'master', value: (ms % 100) / 100 });
+    r.frame();
+  }
+  const sent = r.ofType('performValues').length - before;
+  assert.ok(sent >= 25 && sent <= 30, `${sent} value messages in a second`);
+});
+
+test('shared clips average their speed knobs, but keep separate brightness and colour', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 0: 'cf', 1: 'cf2' })];
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0, 1] }] });
+  r.service.control({ kind: 'knob', strip: 0, knob: 2, value: 0 });
+  r.service.control({ kind: 'knob', strip: 1, knob: 2, value: 0 });
+  r.service.control({ kind: 'knob', strip: 0, knob: 0, value: 1 });
+  r.service.control({ kind: 'knob', strip: 1, knob: 0, value: .5 });
+  r.service.control({ kind: 'fader', strip: 0, value: .25 });
+  r.service.control({ kind: 'fader', strip: 1, value: .75 });
+  r.service.control({ kind: 'master', value: 1 });
+  r.at(3000);
+  r.frame();
+  const v = lastValues(r);
+  assert.equal(v.zones[0].speed, v.zones[1].speed);
+  assert.ok(Math.abs(v.zones[0].speed - 2) < 1e-9, `the average of full and centre is 4^0.5, got ${v.zones[0].speed}`);
+  assert.equal(v.zones[0].brightness, .25);
+  assert.equal(v.zones[1].brightness, .75);
+  assert.equal(v.zones[0].hueDeg, 0);
+  assert.equal(v.zones[1].hueDeg, 90);
+});
+
+test('a locked clip sends only half, one or two', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0, 1] }] });
+  for (const [knob, want] of [[0, .5], [.5, 1], [1, 2]] as const) {
+    r.service.control({ kind: 'knob', strip: 0, knob: 0, value: knob });
+    r.at(3000 + knob * 1000);
+    r.frame();
+    assert.equal(lastValues(r).zones[0].speed, want);
+  }
+});
+
+test('wallReopened resends the show, zones, armed sources and values', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const id = lastLaunch(r).id;
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: id, zones: [0] }] }); // zone 1 is still queued
+  r.at(2500);
+  r.sent.length = 0; r.log.length = 0;
+  r.service.wallReopened();
+  assert.deepEqual(r.log.slice(0, 2), ['performStart', 'wholeShow']);
+  const start = r.ofType('performStart')[0];
+  assert.equal(start.zones[0].sourceId, 'a');
+  assert.equal(start.zones[0].launched, true);
+  assert.deepEqual(start.phaseOffsets, { a: 0 });
+  assert.equal(r.ofType('performArm').length, 1);
+  assert.equal(r.ofType('performValues').length, 1);
+  const again = lastLaunch(r);
+  assert.equal(again.id, id);
+  assert.equal(again.atMs, 4000, 'a deferred launch is retimed, not resent at its old time');
+  assert.ok(r.log.indexOf('performLaunch') > r.log.indexOf('performValues'));
+});
+
+test('queued sources are armed first, as source ids, and a source that never readies is shown as stuck', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  assert.deepEqual(r.ofType('performArm').at(-1)!.sourceIds, ['a', 'b']);
+  r.service.wallState({ armed: ['a'] });
+  assert.deepEqual(r.service.view().waiting, ['b']);
+  assert.deepEqual(r.service.view().stuck, []);
+  r.at(1000 + BAR_MS);
+  r.frame();
+  assert.deepEqual(r.service.view().stuck, ['b']);
+  r.service.wallState({ armed: ['a', 'b'] });
+  assert.deepEqual(r.service.view().stuck, []);
+});
+
+test('a deleted zone target does not throw during tick', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  r.show.shapes = [];
+  r.show.performance.zones[0].target = null;
+  r.show.performance.clips = r.show.performance.clips.filter(c => c.id !== 'cb');
+  r.at(2000);
+  assert.doesNotThrow(() => r.frame());
+  assert.doesNotThrow(() => r.service.wallReopened());
+  assert.ok(lastLaunch(r).changes.every(c => c.sourceId !== 'b'), 'a deleted clip is not launched');
+});
+
+test('endShow restores the clock source and the Map show', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.endShow();
+  assert.equal(r.service.view().running, false);
+  assert.ok(r.log.includes('performEnd'));
+  assert.ok(r.log.includes('clock.end'));
+  assert.equal(r.hasFrame(), false);
+  const count = r.sent.length;
+  r.service.tick();
+  r.service.action({ type: 'bankNext' });
+  assert.equal(r.sent.length, count, 'nothing reaches the wall after the show');
+});
+
+test('losing audio keeps the show running and reports it', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.control({ kind: 'master', value: 1 });
+  r.service.control({ kind: 'fader', strip: 0, value: .5 });
+  r.service.action({ type: 'bankNext' });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0, 1] }] });
+  r.at(2100); r.frame({ 'audio.bass': 1 });
+  r.at(2200); r.frame({ 'audio.bass': 1 });
+  assert.ok(lastValues(r).zones[0].brightness > .5, 'audio lifts the zone');
+  r.state.audio = { state: 'lost' };
+  r.at(4000); r.frame({});
+  const view = r.service.view();
+  assert.equal(view.running, true);
+  assert.equal(view.audio.state, 'lost');
+  assert.ok(view.notices.some(n => /audio/i.test(n)));
+  assert.ok(Math.abs(lastValues(r).zones[0].brightness - .5) < .01, 'the reaction eases to nothing');
+});
+
+test('a lost controller clears shift and bursts and holds every value', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.state.midi = { state: 'on', devices: ['MIDImix'] };
+  r.frame();
+  assert.equal(r.service.view().midi, 'connected');
+  r.service.control({ kind: 'fader', strip: 0, value: .6 });
+  r.service.control({ kind: 'solo', down: true });
+  r.state.midi = { state: 'on', devices: [] };
+  r.frame();
+  const view = r.service.view();
+  assert.equal(view.midi, 'lost');
+  assert.equal(view.shift, false);
+  assert.equal(view.running, true);
+  assert.equal(view.controls.faders[0], .6);
+  assert.ok(view.controls.held.every(Boolean));
+});
+
+test('the signals sent during a show carry the tempo and only what the show uses', () => {
+  const r = rig();
+  r.service.startShow();
+  r.frame({ 'tempo.beat': 3, 'tempo.phase': .5, 'tempo.bpm': 128, 'audio.bass': .4 });
+  assert.deepEqual(r.ofType('signals').at(-1)!.signals, { 'tempo.beat': 3, 'tempo.phase': .5, 'tempo.bpm': 128 });
+});
+
+test('the clock adapter reads the tempo clock in the shared time base', () => {
+  const tempo = new TempoClock();
+  tempo.setBpm(120);
+  tempo.advance(10);
+  const origin = 1_000_000;
+  const a = clockSnapshot(tempo, origin + 10_000, origin);
+  const b = clockSnapshot(tempo, origin + 11_000, origin);
+  assert.equal(a.bpm, 120);
+  assert.equal(a.anchorMs, origin + 10_000);
+  assert.ok(Math.abs(b.anchorBeat - a.anchorBeat - 2) < 1e-9, 'a second is two beats at 120');
+});

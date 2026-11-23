@@ -13,6 +13,8 @@ import type { Signals } from '../react/signals';
 import { MeterStore } from '../react/meter';
 import { usesEmberSmokeAudio } from '../react/ember-smoke';
 import { autoAdvanceDue, nextAutoScene } from '../map/wild';
+import { linkPerformToMap, performService, type PerformService } from '../perform/service';
+import { validateLiveSettings } from '../live/settings';
 
 /** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
 export const showReacts = (show: ShowDocument) => show.links.length > 0 || show.triggers.length > 0 || show.sources.some(s => s.tempoSync !== null || s.project.layers.some(usesEmberSmokeAudio))
@@ -31,6 +33,7 @@ const TOO_LARGE = 'This show is too large to send to the wall. The wall keeps it
 const TOO_LARGE_SOURCE = 'A composition is too large to send to the projector, so its shape keeps what the projector already had, or its colour.';
 export const SAVE_FAILED = 'Could not save — keep working, then use Save As';
 const DAMAGED = 'That file could not be read. Nothing was changed.';
+const SCENES_PAUSED = 'Map scenes are paused while a Perform show is running.';
 const fileName = (file: string) => file.split(/[\\/]/).pop() || file;
 /** How many shapes in a file did not survive validation. */
 const leftOut = (raw: unknown, show: ShowDocument): number => {
@@ -71,6 +74,8 @@ interface Session {
   /** Snap, and whether the trace-over photo is shown on this screen. */
   snap: boolean;
   photoShown: boolean;
+  /** Live's settings as last known, so a running show can resend them while Map is not shown. */
+  live: LiveSettings | null;
 }
 let session: Session | null = null;
 function mapSession(): Session {
@@ -79,7 +84,7 @@ function mapSession(): Session {
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
     outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, mounted: 0, wallFrame: null, onStudioWarning: null,
-    solo: { shapes: [], groups: [] }, snap: true, photoShown: true,
+    solo: { shapes: [], groups: [] }, snap: true, photoShown: true, live: null,
     saver: autosaveSchedule<ShowDocument>(async show => {
       if (!bridge) return;
       // A failed write is reported, never swallowed: the operator keeps working and can Save As.
@@ -94,9 +99,38 @@ function mapSession(): Session {
     catch { created.saveFailed = true; created.onSaveResult?.(true); throw new Error('The Map show could not be saved. Open Map and use Save As to keep it.'); }
   });
   // Followed for the window's life, so the session knows whether the wall is open even while Map is not shown.
-  bridge?.onOutputChanged(open => { created.outputOpen = open; if (open) created.sentSources = new Map(); });
+  // A wall that opens or reloads during a show is told the show again from here, whichever section is on screen.
+  bridge?.onOutputChanged(open => { created.outputOpen = open; if (open) { created.sentSources = new Map(); performService().wallReopened(); } });
+  bridge?.onState(state => performService().wallState(state));
+  linkPerformToMap({
+    send: message => bridge?.send(message),
+    isOpen: () => created.outputOpen,
+    sendWholeShow: () => sendWholeShow(created),
+    show: () => created.state.show,
+    live: () => created.live,
+  });
   session = created;
   return created;
+}
+
+/** Everything the wall needs to draw the show, in the order a newly opened wall takes it. Works with Map not on screen. */
+function sendWholeShow(s: Session): void {
+  const bridge = window.studio?.map;
+  if (!s.outputOpen || !bridge) return;
+  bridge.send({ type: 'blackout', on: s.blackout });
+  bridge.send({ type: 'testGrid', on: s.testGrid });
+  bridge.send({ type: 'freeze', on: s.freeze });
+  bridge.send({ type: 'solo', ids: soloIds(s.state.show, s.solo) });
+  const live: MapMessage = { type: 'liveSettings', settings: usesLive(s.state.show) ? s.live : null };
+  if (acceptMapMessage(live as unknown)) bridge.send(live);
+  pushToWall(s, s.state.show);
+}
+
+/** The Map session for the Perform service, with Live's settings read, so a show can run before Map has been opened. */
+export function performSession(): PerformService {
+  const s = mapSession();
+  if (!s.live) void window.studio?.live?.loadSettings().then(saved => { s.live ??= validateLiveSettings(saved); }).catch(() => {});
+  return performService();
 }
 
 /** Sends the wall the compositions it lacks, then the show. False when something was too large to send. */
@@ -246,7 +280,7 @@ export function useMap(onError: (message: string) => void) {
     return () => {
       offOutput(); offDisplays(); offPreview(); offState(); kept.onSaveResult = null; saver.flush().catch(() => {});
       kept.mounted--;
-      setTimeout(() => { if (kept.mounted === 0 && !kept.studioEdit) void bridge.closeOutput().catch(() => {}); }, 0);
+      setTimeout(() => { if (kept.mounted === 0 && !kept.studioEdit && !performService().running) void bridge.closeOutput().catch(() => {}); }, 0);
     };
   }, []);
   useEffect(() => { if (!outputOpen) { setWallPicture(null); setWallState(null); } }, [outputOpen]);
@@ -385,6 +419,7 @@ export function useMap(onError: (message: string) => void) {
   const switchScene = (sceneId: string, merge?: string) => {
     const s = stateRef.current.show, scene = s.scenes.find(sc => sc.id === sceneId);
     if (!scene || s.sceneId === sceneId) return false;
+    if (performService().running) { setLastRefusal(SCENES_PAUSED); return false; }
     const ms = Math.round((scene.fadeSeconds ?? s.sceneFade) * 1000);
     if (!dispatch({ type: 'switchScene', sceneId }, merge)) return false;
     // Only once the switch is made. The wall gets the fade with the next whole show it is sent (never a drag's
@@ -412,7 +447,7 @@ export function useMap(onError: (message: string) => void) {
   const showUsesLive = usesLive(show);
   const reacts = showReacts(show) || (showUsesLive && !!live?.links.some(l => l.on));
   const [panelOpen, setPanelOpen] = useState(false);
-  useEffect(() => { if (outputOpen) sendLive(); }, [live, showUsesLive, outputOpen]);
+  useEffect(() => { if (live) kept.live = live; if (outputOpen) sendLive(); }, [live, showUsesLive, outputOpen]);
   /** This screen's own compositor hears Live's Clear and Capture empty room here, as the wall does through messages. */
   const onLiveAction = useRef<((action: 'clear' | 'captureRoom' | 'retry' | 'videoRetry') => void) | null>(null);
   const clearLive = () => { onLiveAction.current?.('clear'); if (outputOpen) bridge?.send({ type: 'liveClear' }); };
@@ -448,6 +483,8 @@ export function useMap(onError: (message: string) => void) {
       const t = performance.now(), s = stateRef.current.show, { freeze, blackout } = latest.current;
       const signals = engineRef.current?.signals, beat = signals?.['tempo.beat'] !== undefined && signals?.['tempo.phase'] !== undefined ? signals['tempo.beat'] + signals['tempo.phase'] : null;
       if (s.sceneId !== sceneAt) { sceneAt = s.sceneId; elapsed = 0; bars = 0; }
+      // Paused during a Perform show; the count starts again when it ends.
+      if (performService().running) { elapsed = 0; bars = 0; last = t; lastBeat = beat; return; }
       if (!freeze && !blackout) {
         elapsed += (t - last) / 1000;
         if (beat !== null && lastBeat !== null && beat > lastBeat) bars += (beat - lastBeat) / 4;
@@ -471,20 +508,22 @@ export function useMap(onError: (message: string) => void) {
     // never restarts the sound input.
     const off = engine.subscribe(now => {
       const { panelOpen, outputOpen, reacts } = listening.current;
+      // During a Perform show the service sends the wall its signals, and Map's triggers wait.
+      const performing = performService().running;
       // The wall gets only the signals the show uses, so a controller with many knobs never makes the message too large.
-      if (outputOpen && reacts) {
+      if (outputOpen && reacts && !performing) {
         const used = wallInputs(stateRef.current.show, liveRef.current);
         bridge?.send({ type: 'signals', signals: Object.fromEntries(Object.entries(now).filter(([k]) => used.has(k))) });
       }
       onSignals.current?.(now);
-      for (const action of fire(stateRef.current.show.triggers, prev, now)) triggerAct.current(action);
+      if (!performing) for (const action of fire(stateRef.current.show.triggers, prev, now)) triggerAct.current(action);
       prev = now;
       // The panel's meters update a few times a second, not every frame.
       const t = performance.now();
       if (panelOpen && t - shown > 100) { shown = t; meter.set(now); }
     });
     // Leaving Map, or nothing reacting any more: the wall goes back to the set values at once.
-    return () => { off(); if (listening.current.outputOpen) bridge?.send({ type: 'signals', signals: {} }); };
+    return () => { off(); if (listening.current.outputOpen && !performService().running) bridge?.send({ type: 'signals', signals: {} }); };
   }, [engine, active]);
   const openOutput = async () => {
     if (display === null) return;

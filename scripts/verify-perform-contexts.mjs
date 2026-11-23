@@ -393,7 +393,9 @@ try {
       const waiting = await read(), still = (await sleep(400), await read());
       assert.ok(await wall.evaluate(n => window.__videos.length > n, before), 'no player was made for the armed video');
       assert.ok(waiting.paused && still.time === waiting.time, 'the armed video is playing while it waits');
-      await toWall([{ type: 'performLaunch', launch: { id: 'V1', atMs: await wallNow() + 200, barMs: 2000, changes: [change(5, video.id, cut)] } }]);
+      // On a bar of the tempo above (both clocks read the same wall time), so the landing is on the grid the check measures.
+      const wallAt = await wallNow(), dateAt = Date.now(), barsIn = Math.ceil((dateAt + 200 - started) / 2000);
+      await toWall([{ type: 'performLaunch', launch: { id: 'V1', atMs: wallAt + (started + barsIn * 2000 - dateAt), barMs: 2000, changes: [change(5, video.id, cut)] } }]);
       await until(async () => (await landedOf('V1')).length > 0, 10000, 'the video to land');
       await sleep(1300);
       const plain = await read();

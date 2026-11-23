@@ -61,6 +61,9 @@ export class VideoSlot {
     if (!this.held && (this.state === 'playing' || this.state === 'loading')) void this.video.play().catch(() => {});
   }
 
+  /** Perform: kept ready on its first picture. When it lands it joins exactly where the beat is. Map's Freeze never comes here. */
+  holdArmed(): void { this.setFrozen(true); this.rejoin = true; }
+
   /**
    * The picture to draw: the latest frame, or null until it plays. `speed`: the Speed links leave it at this frame.
    * Perform: `pace` is the zone's speed (a tempo loop of n beats plays as n / pace beats; 0 holds the video on its
