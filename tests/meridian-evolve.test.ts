@@ -489,7 +489,7 @@ test('nothing on the per-frame path allocates', () => {
     for (let i = open; i < source.length; i++) { if (source[i] === '{') depth++; else if (source[i] === '}' && --depth === 0) return source.slice(open, i + 1); }
     throw new Error(name);
   };
-  const path = ['compile', 'kindAt', 'fillOrder', 'setArcs', 'setRing', 'setSpoke', 'setHero', 'random', 'guardLight', 'foldFor', 'advanceEvolve', 'evaluateEvolve', 'exactEvolveClock', 'project', 'blendPose', 'angleBetween', 'easePose', 'easeField', 'formFor', 'segmentAt', 'boundary', 'morphWindow', 'morphRate', 'travel', 'exactStops', 'closedTurn', 'latchGlitch', 'glitchEnvelope', 'ringVoices', 'spokeVoices', 'tierRate', 'growth', 'pull', 'oscillate', 'lightAt', 'rippleAt', 'tintAt', 'hash', 'hashUnit', 'speedRate', 'evolutionRate'];
+  const path = ['compile', 'kindAt', 'fillOrder', 'setArcs', 'setRing', 'setSpoke', 'setHero', 'random', 'guardLight', 'foldFor', 'advanceEvolve', 'evaluateEvolve', 'exactEvolveClock', 'project', 'blendPose', 'angleBetween', 'easePose', 'easeField', 'formFor', 'segmentAt', 'boundary', 'morphWindow', 'morphRate', 'journeyRate', 'drawnTravel', 'travel', 'exactStops', 'closedTurn', 'latchGlitch', 'glitchEnvelope', 'ringVoices', 'spokeVoices', 'tierRate', 'growth', 'pull', 'oscillate', 'lightAt', 'rippleAt', 'tintAt', 'hash', 'hashUnit', 'speedRate', 'evolutionRate'];
   for (const name of path) {
     const code = body(name).replace(/\/\/.*$/gm, '');
     assert.ok(!/\bnew\s+[A-Z]|\.(map|filter|slice|concat|flatMap|reduce|forEach)\(|\.\.\./.test(code), `${name} allocates`);
@@ -543,6 +543,44 @@ test('every form morphs into every other inside the limits', () => {
     assert.ok(transport.clock.evolution >= boundary, `${pair} finished`);
     assert.ok(watch.minDrawn >= 5, `${pair}: ${watch.minDrawn} drawn`);
     within(watch, `${pair} (seed ${seed})`);
+  }
+});
+
+test('full Evolution stays inside the limits for ten minutes, including the seeds that once threw a spoke', () => {
+  for (const seed of [3, 15, 1729, 77, 31337, 900001]) {
+    const watch = new Watch();
+    run(seed, 600, params({ scoreEvolution: 1 }), () => undefined, watch);
+    within(watch, `seed ${seed} at full Evolution`);
+  }
+});
+
+test('repeated Next stays inside the limits on the seeds that once threw a spoke', () => {
+  for (const seed of [3, 15, 1729]) {
+    const watch = new Watch();
+    run(seed, 600, params(), f => ({ moves: { ...idle, next: f % 1500 < 20 } }), watch);
+    within(watch, `seed ${seed} with Next every 25 s`);
+  }
+});
+
+test('at full Evolution, form pairs across several seeds morph inside the limits', () => {
+  const found = new Map<string, [number, number][]>();
+  for (const seed of [3, 15]) for (const [e, a, b] of changes(seed, 1800)) { const key = `${a}>${b}`; found.set(key, [...(found.get(key) ?? []), [seed, e]]); }
+  for (let seed = 1; seed < 500; seed++) for (const [e, a, b] of changes(seed, 1800)) { const key = `${a}>${b}`, list = found.get(key) ?? []; if (list.length < 3 && !list.some(item => item[0] === seed)) found.set(key, [...list, [seed, e]]); }
+  assert.equal(found.size, 15 * 14, 'all ordered pairs were found');
+  const p = params({ scoreEvolution: 1 }), list = new DisplayList(2000), view: Record<string, number> = {};
+  for (const [pair, places] of found) for (const [seed, boundary] of places) {
+    const kind = evolveFormKind(seed, boundary - 1);
+    let start = boundary - 1;
+    while (start > boundary - 38 && start > 0 && evolveFormKind(seed, start - 0.5) === kind) start -= 0.5;
+    const transport = createEvolveTransport(), watch = new Watch();
+    advanceEvolve(transport, 0, LOOP, 0, seed, p, idle);
+    transport.clock.evolution = start; transport.evolveRate = 5;
+    for (let f = 1; f < 60 * 180 && transport.clock.evolution < boundary + 0.5; f++) {
+      const clock = advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, seed, p, idle);
+      Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); watch.see(list);
+    }
+    assert.ok(transport.clock.evolution >= boundary, `${pair} (seed ${seed}) finished`);
+    within(watch, `${pair} (seed ${seed}) at full Evolution`);
   }
 });
 

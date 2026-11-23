@@ -29,6 +29,7 @@ const CLOSURE_STEP = Math.PI / 6; // The home form looks identical after this tu
 const GLIDE_SECONDS = 16;
 const TINT_FADE_SECONDS = 5;
 const NEXT_SECONDS = 11;
+const DRAWN_TRAVEL_SECONDS = 6.2; // Seconds a morph above the designed pace gives each unit of distance a drawn mark must cover.
 const SHORTEST_MORPH = 11; // However restless Evolution is, one form takes at least this long to become the next.
 const SHORT_PATH_REACH = 0.0616; // A short export goes only as far towards a distant form as it can reach at a calm speed.
 const FULL_PATH_SECONDS = 46; // An export shorter than this travels only part of the way to its second form and back.
@@ -432,6 +433,42 @@ function morphRate(forms: readonly Form[], seed: number, index: number): number 
   return glide / Math.max(SHORTEST_MORPH, travel(formFor(forms, seed, index), formFor(forms, seed, index + 1)) * 5.4);
 }
 
+/** The furthest any mark that is actually drawn travels, measured on the two poses as the sliders have placed them. */
+function drawnTravel(a: Float32Array, b: Float32Array): number {
+  const heroMove = Math.hypot(a[HERO_BASE + H_X] - b[HERO_BASE + H_X], a[HERO_BASE + H_Y] - b[HERO_BASE + H_Y]);
+  let most = Math.abs(a[HERO_BASE + H_RADIUS] - b[HERO_BASE + H_RADIUS]) + heroMove;
+  for (let voice = 0; voice < RING_VOICES; voice++) {
+    const at = voice * RING_FIELDS;
+    if (Math.max(a[at + R_ALPHA], b[at + R_ALPHA]) <= UNSEEN) continue;
+    most = Math.max(most, Math.abs(a[at + R_RADIUS] - b[at + R_RADIUS]) + Math.hypot(a[at + R_X] - b[at + R_X], a[at + R_Y] - b[at + R_Y]));
+  }
+  for (let voice = 0; voice < SPOKE_VOICES; voice++) {
+    const at = SPOKE_BASE + voice * SPOKE_FIELDS;
+    if (Math.max(a[at + S_ALPHA], b[at + S_ALPHA]) <= UNSEEN) continue;
+    const swing = Math.abs(shortest(a[at + S_ANGLE], b[at + S_ANGLE]));
+    const inner = Math.abs(a[at + S_INNER] - b[at + S_INNER]) + swing * Math.max(a[at + S_INNER], b[at + S_INNER]);
+    const outer = Math.abs(a[at + S_OUTER] - b[at + S_OUTER]) + swing * Math.max(a[at + S_OUTER], b[at + S_OUTER]);
+    most = Math.max(most, Math.max(inner, outer) + heroMove);
+  }
+  return most;
+}
+
+/**
+ * How fast the journey clock may run through a morph. Up to the designed pace this is `morphRate`. Beyond it, the clock
+ * may only hurry as far as the marks actually on screen can follow, so a restless Evolution never throws a spoke.
+ */
+function journeyRate(forms: readonly Form[], seed: number, index: number, wanted: number, values: Readonly<Record<string, number>>): number {
+  const calm = morphRate(forms, seed, index);
+  if (wanted <= 1) return Math.min(wanted, calm);
+  const from = formFor(forms, seed, index), to = formFor(forms, seed, index + 1), grow = growth(unit(values.macroDensity));
+  const ringGain = clamp(finite(values.ringCount, 7) / 7, 0, 3), spokeGain = clamp(finite(values.spokeCount, 12) / 12, 0, 4);
+  project(from, ringVoices(from, grow, ringGain), spokeVoices(from, grow, spokeGain, false), 0, poseA);
+  project(to, ringVoices(to, grow, ringGain), spokeVoices(to, grow, spokeGain, false), 0, poseB);
+  const glide = clamp((boundary(seed, index + 1) - boundary(seed, index)) * 0.62, 14, 36);
+  const seen = glide / Math.max(SHORTEST_MORPH, drawnTravel(poseA, poseB) * DRAWN_TRAVEL_SECONDS);
+  return Math.min(wanted, calm, Math.max(Math.min(1, calm), seen));
+}
+
 /** Puts the voices a slider has asked for at their places, and every other voice on its parent. */
 function project(form: Form, ringCount: number, spokeCount: number, nodeGain: number, out: Float32Array): void {
   out.set(form.data);
@@ -662,12 +699,12 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   if (transport.chase !== null) {
     const index = segmentAt(seed, Math.min(clock.evolution, transport.chase - 0.002));
     const length = boundary(seed, index + 1) - boundary(seed, index), glide = clamp(length * 0.62, 14, 36);
-    clock.evolution = Math.min(transport.chase, clock.evolution + Math.max(running, wall) * Math.min(glide / NEXT_SECONDS, morphRate(clock.forms, seed, index)));
+    clock.evolution = Math.min(transport.chase, clock.evolution + Math.max(running, wall) * journeyRate(clock.forms, seed, index, glide / NEXT_SECONDS, values));
     if (clock.evolution >= transport.chase) transport.chase = null;
   } else {
     // A restless journey spends less time resting on each form, but a morph itself never hurries.
     const index = segmentAt(seed, clock.evolution), inMorph = morphWindow(seed, index, clock.evolution) > 0;
-    clock.evolution = Math.max(0, clock.evolution + moved * (inMorph ? Math.min(transport.evolveRate, morphRate(clock.forms, seed, index)) : transport.evolveRate));
+    clock.evolution = Math.max(0, clock.evolution + moved * (inMorph ? journeyRate(clock.forms, seed, index, transport.evolveRate, values) : transport.evolveRate));
   }
 
   if (moves.drop && !transport.dropDown) transport.swellTarget = 1;
