@@ -1364,6 +1364,74 @@ try {
     meridianReport.strobe = { off, onset: on, steady, gain: stats.flashGuard.gain, cpuMs: stats.flashGuard.cpuMs, gpuMs: stats.flashGuard.gpuMs, wallFps: stats.fps, level: stats.level };
   });
 
+  // Drives the wash shape from the studio window as a real controller would: bursts of pulses, then a gap.
+  const playBursts = pattern => studio.evaluate(({ pulses, hz, gap }) => {
+    const start = performance.now(), burst = pulses / hz, cycle = burst + gap; let last = -1;
+    clearInterval(window.__burst);
+    window.__burst = setInterval(() => {
+      const t = ((performance.now() - start) / 1000) % cycle, on = t < burst && (t * hz) % 1 < .5 ? 1 : 0;
+      if (on !== last) { last = on; window.__studioTest.react.midi([0xb0, 21, on ? 127 : 0]); }
+    }, 2);
+  }, pattern);
+  const stopBursts = async () => { await studio.evaluate(() => clearInterval(window.__burst)); await react('midi', [0xb0, 21, 0]); };
+  const BURSTS = [{ pulses: 5, hz: 15, gap: .5 }, { pulses: 4, hz: 10, gap: .5 }, { pulses: 3, hz: 10, gap: .35 }, { pulses: 3, hz: 5, gap: .35 }];
+
+  await check('repeated bursts stay within the limit in real wall pixels, from their first burst', async () => {
+    await openFile('burst-off');
+    await reactReady();
+    await meridianStats(s => s.meridian?.ev?.frames > 10, 'the burst show is not playing');
+    await playBursts(BURSTS[3]); await sleep(500);
+    const raw = await captureFlashes(4000);
+    await stopBursts();
+    assert.ok(raw.changes > 6, `the check is not over the limit without the guard: ${JSON.stringify(raw)}`);
+    meridianReport.bursts = { raw };
+    await openFile('burst-on');
+    await meridianStats(s => s.meridian?.ev?.frames > 10 && s.flashGuard?.on, 'the guarded burst show is not playing');
+    for (const pattern of BURSTS) {
+      await stopBursts(); await sleep(1600);
+      const counting = captureFlashes(8000);
+      await playBursts(pattern);
+      const seen = await counting;
+      await stopBursts();
+      meridianReport.bursts[`${pattern.pulses}x${pattern.hz}Hz/${pattern.gap}s`] = seen;
+      assert.ok(seen.changes <= 6, `${JSON.stringify(pattern)}: ${JSON.stringify(seen)}`);
+    }
+  });
+
+  await check('Blackout hammered over a bright frozen wall is counted and limited, and still goes black at once', async () => {
+    await stopBursts(); await react('midi', [0xb0, 21, 127]);
+    await meridianStats(s => s.flashGuard?.gain === 1, 'the dim did not clear before the check', 15000);
+    const freeze = studio.getByRole('button', { name: 'Freeze', exact: true }), blackout = studio.getByRole('button', { name: 'Blackout', exact: true });
+    await freeze.click(); await sleep(300);
+    const counting = captureFlashes(5000);
+    await studio.evaluate(() => { const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Blackout'); let n = 0; window.__hammer = setInterval(() => { if (n++ < 40) b.click(); else clearInterval(window.__hammer); }, 100); });
+    const seen = await counting;
+    await studio.evaluate(() => clearInterval(window.__hammer));
+    meridianReport.frozenBlackout = seen;
+    assert.ok(seen.changes <= 6, `hammered Blackout under Freeze: ${JSON.stringify(seen)}`);
+    if (await blackout.getAttribute('aria-pressed') === 'true') { await blackout.click(); await sleep(200); }
+    await blackout.click(); await sleep(150);
+    const dark = await sample(output, [[.2, .2], [.8, .8]]);
+    assert.ok(dark.colours.every(p => near(p, BLACK, 0)), `Blackout under Freeze left ${JSON.stringify(dark.colours)}`);
+    await blackout.click(); await freeze.click(); await react('midi', [0xb0, 21, 0]);
+  });
+
+  await check('reopening the same show ends a linked Reseed, but a scene change keeps it', async () => {
+    await openFile('calm');
+    await meridianStats(s => s.meridian?.ev?.frames > 10, 'the show is not playing');
+    await react('midi', [0x90, 64, 127]); await sleep(400); await react('midi', [0x80, 64, 0]);
+    await meridianStats(s => s.meridian.ev.linkedSeed, 'Reseed did not take');
+    const add = studio.getByRole('button', { name: '+ Scene' });
+    await add.click(); await add.click(); await sleep(1300);
+    assert.equal((await output.evaluate(() => window.__mapStats.meridian.ev)).linkedSeed, true, 'a scene change ended the Reseed');
+    const framesBefore = (await output.evaluate(() => window.__mapStats.meridian.ev)).frames;
+    await nextPick(path.join(out, 'meridian-calm.formshow'));
+    studio.once('dialog', d => d.accept());
+    await studio.getByTitle('Open a show file; it replaces the shapes here').click();
+    const after = await meridianStats(s => s.meridian?.ev && !s.meridian.ev.linkedSeed, 'the Reseed survived reopening the show');
+    assert.ok(after.meridian.ev.frames > framesBefore, 'the source restarted instead of carrying on');
+  });
+
   await check('a show with no Meridian has no wall guard and strobes as it always did', async () => {
     await openFile('plain');
     await reactReady();

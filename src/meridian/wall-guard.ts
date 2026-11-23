@@ -16,6 +16,7 @@ const SATURATION_UP = 1;       // Saturation per second on the way back.
 const FREE_SATURATION = 2;     // The control's maximum: at or above this the wall is not limited.
 const SHOWN_FOR = 1.5;         // Seconds the operator's status stays on after the last limiting, so a brief dip is seen.
 const LONGEST_STEP = 0.25;
+const WALL_LEAD = 0.17;        // Seconds from a transition to the dim landing: up to three frames of readback, then the slew.
 
 export interface WallGuardSettings { safetyFlashGuard: number; safetyMaxFlashes: number; safetyRedLimit: number; safetyFullField: number }
 export interface WallGuardPolicy {
@@ -52,7 +53,7 @@ export function wallGuardPolicy(projects: Iterable<{ layers: readonly GuardLayer
 const LIGHT = Float32Array.from({ length: 256 }, (_, i) => (i / 255) * (i / 255));
 
 export class WallFlashGuard {
-  private readonly guard = new FlashGuard();
+  private readonly guard = new FlashGuard({ lead: WALL_LEAD, predictiveOnly: true });
   private readonly cells: GuardCells & { redLight: Float32Array } = { count: WALL_CELLS, guarded: new Float32Array(WALL_CELLS), fixed: new Float32Array(WALL_CELLS), red: new Float32Array(WALL_CELLS), redLight: new Float32Array(WALL_CELLS) };
   private shownFor = 0;
   /** The master dim for the wall, 0 to 1. Exactly 1 on a calm wall. */
@@ -65,8 +66,21 @@ export class WallFlashGuard {
 
   reset(): void { this.guard.reset(); this.gain = 1; this.saturation = Infinity; this.shownFor = 0; }
 
-  /** One reading of the wall, rgba from the graphics card. Allocates nothing. */
-  step(dt: number, rgba: Uint8Array, settings: Readonly<WallGuardSettings>): void {
+  /** The guard was switched off while dimming: the dim eases away, and only then is everything reset. True once it is gone. */
+  easeOut(dt: number): boolean {
+    const step = Number.isFinite(dt) && dt > 0 ? Math.min(dt, LONGEST_STEP) : 0;
+    this.gain = Math.min(1, this.gain + RISE_RATE * step);
+    this.slewSaturation(Infinity, step);
+    if (this.gain < 1 || this.saturation !== Infinity) return false;
+    this.reset();
+    return true;
+  }
+
+  /**
+   * One reading of the wall, rgba from the graphics card. `applied` is the gain that reading's frame was shown with.
+   * Allocates nothing.
+   */
+  step(dt: number, rgba: Uint8Array, settings: Readonly<WallGuardSettings>, applied: number = this.gain): void {
     if (!Number.isFinite(dt) || dt < 0) return;
     const step = Math.min(dt, LONGEST_STEP), { guarded, red, redLight } = this.cells;
     for (let i = 0, at = 0; i < WALL_CELLS; i++, at += 4) {
@@ -76,7 +90,7 @@ export class WallFlashGuard {
       redLight[i] = saturated ? r - g - b : 0;
       red[i] = saturated ? Math.max(0, (r - g - b) / r) : 0;
     }
-    const wanted = this.guard.step(step, this.cells, settings);
+    const wanted = this.guard.step(step, this.cells, settings, applied);
     this.gain = wanted < this.gain ? Math.max(wanted, this.gain - DIM_RATE * step) : Math.min(wanted, this.gain + RISE_RATE * step);
     if (this.gain > 1 - 1e-6 && wanted >= 1) this.gain = 1;
     this.slewSaturation(this.guard.saturationLimit, step);

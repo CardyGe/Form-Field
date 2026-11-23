@@ -29,7 +29,9 @@ export type MapMessage =
   /** Open Live's camera again (after it was unplugged, or refused and then allowed). */
   | { type: 'liveRetry' }
   /** Stage 6: every video that cannot play loads again. */
-  | { type: 'videoRetry' };
+  | { type: 'videoRetry' }
+  /** A show file was opened: linked Meridian moves from before it end. A scene change never sends this. */
+  | { type: 'performanceReset' };
 
 /** Live's settings travel under the same limit as on Live's own output. */
 export const LIVE_SETTINGS_LIMIT = 16 * 1024;
@@ -117,7 +119,7 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
     case 'fade': return finite(value.ms) && (value.ms as number) >= 0 && (value.ms as number) <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, LIVE_SETTINGS_LIMIT);
-    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': return true;
     default: return false;
   }
 }

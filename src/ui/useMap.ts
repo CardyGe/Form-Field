@@ -411,7 +411,7 @@ export function useMap(onError: (message: string) => void) {
   const [panelOpen, setPanelOpen] = useState(false);
   useEffect(() => { if (outputOpen) sendLive(); }, [live, showUsesLive, outputOpen]);
   /** This screen's own compositor hears Live's Clear and Capture empty room here, as the wall does through messages. */
-  const onLiveAction = useRef<((action: 'clear' | 'captureRoom' | 'retry' | 'videoRetry') => void) | null>(null);
+  const onLiveAction = useRef<((action: 'clear' | 'captureRoom' | 'retry' | 'videoRetry' | 'performanceReset') => void) | null>(null);
   const clearLive = () => { onLiveAction.current?.('clear'); if (outputOpen) bridge?.send({ type: 'liveClear' }); };
   const retryVideos = () => { onLiveAction.current?.('videoRetry'); if (outputOpen) bridge?.send({ type: 'videoRetry' }); };
   const retryLive = () => { onLiveAction.current?.('retry'); if (outputOpen) bridge?.send({ type: 'liveRetry' }); };
@@ -514,6 +514,9 @@ export function useMap(onError: (message: string) => void) {
     if (isDamaged(opened)) { setNotice(DAMAGED); return; }
     const { show: next } = validateShow(opened);
     setSelection(null); setPreview(null); setLastRefusal(null);
+    // A real load ends linked Reseed, Recall and Mutate, even when the same show comes back and its sources keep playing.
+    onLiveAction.current?.('performanceReset');
+    if (listening.current.outputOpen) bridge.send({ type: 'performanceReset' });
     step({ type: 'load', show: next });
     const dropped = leftOut(opened, next);
     setNotice(dropped > 0 ? `Show opened. ${dropped} shape${dropped === 1 ? '' : 's'} could not be read and ${dropped === 1 ? 'was' : 'were'} left out.` : 'Show opened');

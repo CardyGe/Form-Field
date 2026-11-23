@@ -107,8 +107,8 @@ export interface CompositorStats {
   delayed?: number;
   /** Wall Flash Guard, for a show with Meridian: what it is doing and what it costs. */
   /** For the scripted checks: each Meridian source's Conductor and moves. */
-  meridian?: Record<string, { status: string; beats: number; wave: number; frames: number; drops: number; holds: number; phase: number }>;
-  flashGuard?: { on: boolean; warn: boolean; limiting: boolean; gain: number; saturation: number | null; cpuMs: number; gpuMs: number | null; dims: number } | null;
+  meridian?: Record<string, { status: string; beats: number; wave: number; frames: number; drops: number; holds: number; linkedSeed: boolean; phase: number }>;
+  flashGuard?: { failed: string | null; on: boolean; warn: boolean; limiting: boolean; gain: number; saturation: number | null; cpuMs: number; gpuMs: number | null; dims: number } | null;
 }
 
 /** Runs each frame for each source, so it allocates nothing. */
@@ -168,6 +168,9 @@ export class MapCompositor {
   private guardAt: number | null = null;
   private guardCost = 0;
   private guardDims = 0;
+  /** The guard was switched off while dimming: the dim is easing away. */
+  private guardFading = false;
+  private guardFadeAt: number | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
@@ -208,7 +211,10 @@ export class MapCompositor {
     const guardWasOn = this.guardPolicy.on;
     this.guardPolicy = wallGuardPolicy(this.projects.values());
     // Turned off, or the last Meridian source left: the wall is exactly as drawn from the next frame.
-    if (guardWasOn && !this.guardPolicy.on) { this.wallGuard.reset(); this.guardAt = null; }
+    if (guardWasOn && !this.guardPolicy.on) {
+      this.guardAt = null; this.guardFadeAt = null;
+      if (this.wallGuard.gain < 1 || this.wallGuard.saturation !== Infinity) this.guardFading = true; else this.wallGuard.reset();
+    } else if (this.guardPolicy.on) this.guardFading = false;
     // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
     for (const shape of show.shapes) {
@@ -378,9 +384,11 @@ export class MapCompositor {
     const running = !this.frozen && this.show.shapes.some(s => s.border.run && s.border.width > 0 && !s.blocker && shownOnWall(this.show, s, this.options.solo));
     const staggering = this.keepHistories(show);
     // A dim still easing back is drawn until it is gone, even over a still picture.
-    const easing = !this.frozen && this.guardPolicy.on && (this.wallGuard.gain < 1 || this.wallGuard.saturation !== Infinity);
+    const easing = this.guardFading || (this.guardPolicy.on && (this.wallGuard.gain < 1 || this.wallGuard.saturation !== Infinity));
     const drawn = this.dirty || rendered || running || staggering || easing || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
+    // A reading still on its way after the last drawn frame is taken in, so a single changed frame is counted too.
+    else if (this.guardPolicy.on && this.gpu.measurePending) this.collectGuard();
     this.frameIndex++;
     const work = performance.now() - started;
     // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
@@ -410,9 +418,12 @@ export class MapCompositor {
       staggered: this.histories.size, delayed: this.delays.size,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
       meridian: Object.fromEntries([...this.slots].flatMap(([id, s]) => { const report = s.renderer?.meridianReport(); return report ? [[id, { ...report, phase: s.phase }]] : []; })),
-      flashGuard: this.guardPolicy.present ? { on: this.guardPolicy.on, warn: this.guardPolicy.warn, limiting: this.wallGuard.limiting, gain: this.wallGuard.gain, saturation: Number.isFinite(this.wallGuard.saturation) ? this.wallGuard.saturation : null, cpuMs: this.guardCost, gpuMs: this.gpu.guardGpuMs, dims: this.guardDims } : null,
+      flashGuard: this.guardPolicy.present ? { failed: this.gpu.guardError, on: this.guardPolicy.on, warn: this.guardPolicy.warn, limiting: this.wallGuard.limiting, gain: this.wallGuard.gain, saturation: Number.isFinite(this.wallGuard.saturation) ? this.wallGuard.saturation : null, cpuMs: this.guardCost, gpuMs: this.gpu.guardGpuMs, dims: this.guardDims } : null,
     };
   }
+
+  /** A show was really loaded (not a scene change): what linked moves changed in the last one ends here. */
+  resetPerformance(): void { for (const slot of this.slots.values()) slot.renderer?.resetMeridianPerformance(); }
 
   /** For the scripted checks: what one wall measurement costs the graphics card, in ms, net of an empty round trip. */
   probeGuardCost(): { medianMs: number; worstMs: number } | null {
@@ -591,6 +602,7 @@ export class MapCompositor {
     }
     // After the shapes and before the overlays and corners: the guard judges the finished picture, and never the operator's marks.
     if (this.guardPolicy.on) this.guardWall();
+    else if (this.guardFading) this.fadeGuard();
     if (!this.options.blackout) {
       const overlay = this.overlayPicture();
       if (overlay) gpu.layer(overlay);
@@ -602,21 +614,33 @@ export class MapCompositor {
   }
 
   /**
-   * One frame of Wall Flash Guard. A blackout is measured too, so a Blackout key hammered in time still counts as flashing,
-   * but it is never dimmed: black is already black. Freeze holds the dim where it is.
+   * One frame of Wall Flash Guard. Every composited frame is measured, under Freeze too, because Blackout and show changes
+   * still change the wall then. A blackout is measured but never dimmed: black is already black, at once.
    */
   private guardWall(): void {
     const started = performance.now(), guard = this.wallGuard, gpu = this.gpu;
-    if (this.frozen) { while (gpu.collectMeasure(this.guardCells) !== null) { /* readings from before Freeze */ } this.guardAt = null; }
-    else {
-      gpu.measureStage(started);
-      for (let at = gpu.collectMeasure(this.guardCells); at !== null; at = gpu.collectMeasure(this.guardCells)) {
-        if (this.guardAt !== null) guard.step((at - this.guardAt) / 1000, this.guardCells, this.guardPolicy.settings);
-        this.guardAt = at;
-      }
-    }
+    gpu.measureStage(started, this.options.blackout ? 0 : guard.gain);
+    this.collectGuard();
     if (!this.options.blackout && (guard.gain < 1 || guard.saturation < 1)) { gpu.dimStage(guard.gain, guard.saturation); this.guardDims++; }
     this.guardCost = this.guardCost * .95 + (performance.now() - started) * .05;
+  }
+
+  private collectGuard(): void {
+    const gpu = this.gpu;
+    for (let at = gpu.collectMeasure(this.guardCells); at !== null; at = gpu.collectMeasure(this.guardCells)) {
+      if (this.guardAt !== null) this.wallGuard.step((at - this.guardAt) / 1000, this.guardCells, this.guardPolicy.settings, gpu.measuredGain);
+      this.guardAt = at;
+    }
+  }
+
+  /** The last guarded source has gone while the wall was dimmed: the dim eases out rather than stepping back to full. */
+  private fadeGuard(): void {
+    const now = performance.now(), guard = this.wallGuard, gpu = this.gpu;
+    while (gpu.collectMeasure(this.guardCells) !== null) { /* readings of the guarded show */ }
+    const done = guard.easeOut(this.guardFadeAt === null ? 0 : (now - this.guardFadeAt) / 1000);
+    this.guardFadeAt = now;
+    if (done) { this.guardFading = false; this.guardFadeAt = null; return; }
+    if (!this.options.blackout) gpu.dimStage(guard.gain, guard.saturation);
   }
 
   /** The overlays drawn in 2D, and given to the graphics card only when they change. Null when there are none. */

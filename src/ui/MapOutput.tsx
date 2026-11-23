@@ -42,6 +42,7 @@ export default function MapOutput() {
       if (kind === 'liveCaptureRoom') { compositor.liveCaptureRoom(); return; }
       if (kind === 'liveRetry') { compositor.liveRetry(); return; }
       if (kind === 'videoRetry') { compositor.videoRetry(); return; }
+      if (kind === 'performanceReset') { compositor.resetPerformance(); return; }
       // A show carrying a fade time is a scene switch, crossfading over the scene's time.
       const fadeMs = (message as { fadeMs?: unknown }).fadeMs;
       if (kind === 'show' && typeof fadeMs === 'number') { apply(fadeMs); return; }

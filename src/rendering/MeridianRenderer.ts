@@ -368,9 +368,9 @@ export class MeridianRenderer {
   }
 
   /** For the scripted checks: what the last Evolve layer's Conductor and moves did. */
-  performanceReport(): { status: string; beats: number; wave: number; frames: number; drops: number; holds: number } {
+  performanceReport(): { status: string; beats: number; wave: number; frames: number; drops: number; holds: number; linkedSeed: boolean } {
     const { status, beats, wave, frames, drops, holds } = this.diagnostics;
-    return { status, beats, wave, frames, drops, holds };
+    return { status, beats, wave, frames, drops, holds, linkedSeed: [...this.evolveLive.values()].some(live => live.overrides.seed !== null) };
   }
 
   /** A project was loaded: what linked moves changed in the last one must not carry over. */

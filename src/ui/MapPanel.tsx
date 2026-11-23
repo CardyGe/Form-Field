@@ -168,18 +168,20 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const [localLive, setLocalLive] = useState<{ running: boolean; state: string } | null>(null);
   const [localVideos, setLocalVideos] = useState<Record<string, { state: string; playsAs: number | null }>>({});
   const [localLimiting, setLocalLimiting] = useState(false);
+  const [localFailed, setLocalFailed] = useState(false);
   useEffect(() => {
-    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); setLocalLimiting(false); return; }
+    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); setLocalLimiting(false); setLocalFailed(false); return; }
     const timer = setInterval(() => {
       const next = compositor.current?.stats().live ?? null;
       setLocalLive(old => old?.running === next?.running && old?.state === next?.state ? old : next);
       const videos = compositor.current?.stats().videos ?? {};
       setLocalVideos(old => JSON.stringify(old) === JSON.stringify(videos) ? old : videos);
       setLocalLimiting(!!compositor.current?.stats().flashGuard?.limiting);
+      setLocalFailed(!!compositor.current?.stats().flashGuard?.failed);
     }, 500);
     return () => clearInterval(timer);
   }, [map.outputOpen]);
-  map.onLiveAction.current = action => { if (action === 'clear') compositor.current?.liveClear(); else if (action === 'retry') compositor.current?.liveRetry(); else if (action === 'videoRetry') compositor.current?.videoRetry(); else compositor.current?.liveCaptureRoom(); };
+  map.onLiveAction.current = action => { if (action === 'performanceReset') compositor.current?.resetPerformance(); else if (action === 'clear') compositor.current?.liveClear(); else if (action === 'retry') compositor.current?.liveRetry(); else if (action === 'videoRetry') compositor.current?.videoRetry(); else compositor.current?.liveCaptureRoom(); };
   useEffect(() => {
     if (!canvas.current) return;
     // It draws on its own hidden canvas; this screen copies that picture and draws its marks over it.
@@ -719,7 +721,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   // Safety stays on screen whatever else the status line is saying.
   const guardPolicy = useMemo(() => wallGuardPolicy(map.show.sources.map(s => s.project)), [map.show.sources]);
   const guardLimiting = guardPolicy.on && (map.outputOpen ? !!wall?.flashGuard?.limiting : localLimiting);
-  const guardNote = guardPolicy.warn ? (guardPolicy.on ? 'Flash guard is off on one Meridian layer' : 'Flash guard is off: the wall is not limited') : guardLimiting ? 'Flash guard: limiting' : null;
+  const guardFailed = guardPolicy.on && !!(map.outputOpen ? wall?.flashGuard?.failed : localFailed);
+  const guardWarning = guardFailed ? 'Flash guard could not start: the wall is not limited' : guardPolicy.warn ? (guardPolicy.on ? 'Flash guard is off on one Meridian layer' : 'Flash guard is off: the wall is not limited') : null;
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
   // The browser follows the single selected shape; it closes when there is none, or a Blocker or locked shape is picked.
   // Several shapes playing one instrument count as that one instrument: the browser changes it through the first of them.
@@ -793,7 +796,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} liveStatus={localLive} videoStatus={map.outputOpen ? map.wallState?.videos ?? {} : localVideos} />
       </aside>
     </div>
-    <footer className="map-status" role="status"><span>{status}</span>{guardNote && <strong className={`map-flash-guard ${guardPolicy.warn ? 'is-off' : ''}`} role="alert">{guardNote}</strong>}{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
+    <footer className="map-status" role="status"><span>{status}</span>{guardWarning && <strong className="map-flash-guard is-off" role="alert">{guardWarning}</strong>}{guardLimiting && <strong className="map-flash-guard" role="alert">Flash guard: limiting</strong>}{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
     {looksOpen && lookShape && <MapLookBrowser current={currentLook(lookShape)} colour={lookShape.colour} onPick={value => act.play(lookShape.id, value, sharedSelection || linkedChanges)} onClose={() => setLooksOpen(false)} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label={menu.shapeId ? 'Shape' : 'Stage'} entries={menuEntries(menu.shapeId)} onClose={() => setMenu(null)} />}
   </section>;

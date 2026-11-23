@@ -138,7 +138,7 @@ void main() {
 const MEASURE_MIDDLE = { width: 480, height: 270 };
 const MEASURE_SIZE = { width: 48, height: 27 };
 const MEASURE_SLOTS = 4;
-interface MeasureSlot { buffer: WebGLBuffer; sync: WebGLSync | null; at: number }
+interface MeasureSlot { buffer: WebGLBuffer; sync: WebGLSync | null; at: number; gain: number }
 
 export interface Texture { tex: WebGLTexture; width: number; height: number }
 /** One shape to draw. Matrices are 3 × 3, row major, from stage pixels to the picture's 0..1 square. */
@@ -183,6 +183,12 @@ export class Gpu {
   private smallTex!: WebGLTexture;
   private smallFb!: WebGLFramebuffer;
   private dimCopy: WebGLTexture | null = null;
+  private guardState: 'unbuilt' | 'ready' | 'failed' = 'unbuilt';
+  /** Why the wall guard could not be built; null when it is fine or not yet needed. */
+  guardError: string | null = null;
+  /** The gain the reading last collected was shown with. */
+  measuredGain = 1;
+  get measurePending(): boolean { return this.measureHead !== this.measureTail; }
   private measures: MeasureSlot[] = [];
   private measureHead = 0;
   private measureTail = 0;
@@ -210,52 +216,22 @@ export class Gpu {
   /** Programs, buffers and the stage framebuffer. Called again after a lost context is restored. */
   setUp(): void {
     const gl = this.gl;
-    const compile = (fragment: string, uniforms: string[], vertex = VERTEX): Program => {
-      const make = (type: number, src: string) => {
-        const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s);
-        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader');
-        return s;
-      };
-      const program = gl.createProgram()!;
-      gl.attachShader(program, make(gl.VERTEX_SHADER, vertex)); gl.attachShader(program, make(gl.FRAGMENT_SHADER, fragment));
-      gl.bindAttribLocation(program, 0, 'aUnit');
-      gl.linkProgram(program);
-      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'program');
-      return { program, u: Object.fromEntries(uniforms.map(n => [n, gl.getUniformLocation(program, n)])) };
-    };
+    const compile = (fragment: string, uniforms: string[]) => this.compile(fragment, uniforms);
     this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uLook', 'uAlpha', 'uDecor', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
     this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex']);
-    this.measureP = compile(MEASURE, ['uRect', 'uStage', 'uTex', 'uCell', 'uEncoded']);
-    this.dimP = compile(DIM, ['uRect', 'uStage', 'uTex', 'uGain', 'uSaturation']);
     this.quad = gl.createVertexArray()!;
     gl.bindVertexArray(this.quad);
     const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    const target = (w: number, h: number) => {
-      const tex = this.texture();
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      const fb = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-      return { tex, fb };
-    };
+    const target = (w: number, h: number) => this.target(w, h);
     ({ tex: this.stageTex, fb: this.stageFb } = target(STAGE_SIZE.width, STAGE_SIZE.height));
     ({ tex: this.previewTex, fb: this.previewFb } = target(PREVIEW.width, PREVIEW.height));
-    ({ tex: this.middleTex, fb: this.middleFb } = target(MEASURE_MIDDLE.width, MEASURE_MIDDLE.height));
-    ({ tex: this.smallTex, fb: this.smallFb } = target(MEASURE_SIZE.width, MEASURE_SIZE.height));
-    this.dimCopy = null;
-    this.measures = Array.from({ length: MEASURE_SLOTS }, () => {
-      const buffer = gl.createBuffer()!;
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
-      gl.bufferData(gl.PIXEL_PACK_BUFFER, MEASURE_SIZE.width * MEASURE_SIZE.height * 4, gl.STREAM_READ);
-      return { buffer, sync: null, at: 0 };
-    });
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    this.measureHead = this.measureTail = 0;
-    const timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
-    this.timer = timerExt ? { ext: timerExt, query: null, running: false } : null;
-    this.guardGpuMs = null;
+    // The wall guard's passes are built the first time a show with Meridian needs them.
+    this.guardState = 'unbuilt'; this.guardError = null;
+    this.dimCopy = null; this.measures = []; this.measureHead = this.measureTail = 0;
+    this.timer = null; this.guardGpuMs = null;
     this.copyFb = gl.createFramebuffer()!;
     this.drawFb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -267,6 +243,55 @@ export class Gpu {
     this.blank = { tex: blank, width: 1, height: 1 };
     this.readback = null; this.readbackBuffer = null;
     this.generation++;
+  }
+
+  private compile(fragment: string, uniforms: string[], vertex = VERTEX): Program {
+    const gl = this.gl;
+    const make = (type: number, src: string) => {
+      const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader');
+      return s;
+    };
+    const program = gl.createProgram()!;
+    gl.attachShader(program, make(gl.VERTEX_SHADER, vertex)); gl.attachShader(program, make(gl.FRAGMENT_SHADER, fragment));
+    gl.bindAttribLocation(program, 0, 'aUnit');
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'program');
+    return { program, u: Object.fromEntries(uniforms.map(n => [n, gl.getUniformLocation(program, n)])) };
+  }
+
+  private target(w: number, h: number): { tex: WebGLTexture; fb: WebGLFramebuffer } {
+    const gl = this.gl, tex = this.texture();
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    const fb = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex, fb };
+  }
+
+  /** Builds the wall guard's passes once. A failure is reported and never reaches the stage's own drawing. */
+  private ensureGuard(): boolean {
+    if (this.guardState !== 'unbuilt') return this.guardState === 'ready';
+    const gl = this.gl;
+    try {
+      this.measureP = this.compile(MEASURE, ['uRect', 'uStage', 'uTex', 'uCell', 'uEncoded']);
+      this.dimP = this.compile(DIM, ['uRect', 'uStage', 'uTex', 'uGain', 'uSaturation']);
+      ({ tex: this.middleTex, fb: this.middleFb } = this.target(MEASURE_MIDDLE.width, MEASURE_MIDDLE.height));
+      ({ tex: this.smallTex, fb: this.smallFb } = this.target(MEASURE_SIZE.width, MEASURE_SIZE.height));
+      this.measures = Array.from({ length: MEASURE_SLOTS }, () => {
+        const buffer = gl.createBuffer()!;
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, MEASURE_SIZE.width * MEASURE_SIZE.height * 4, gl.STREAM_READ);
+        return { buffer, sync: null, at: 0, gain: 1 };
+      });
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      const timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
+      this.timer = timerExt ? { ext: timerExt, query: null, running: false } : null;
+      this.guardState = 'ready';
+    } catch (error) {
+      this.guardState = 'failed'; this.guardError = String((error as Error)?.message ?? error);
+    }
+    this.backToStage();
+    return this.guardState === 'ready';
   }
 
   private texture(): WebGLTexture {
@@ -365,7 +390,8 @@ export class Gpu {
    * Wall Flash Guard: starts reading the stage as drawn so far into 48 x 27 cells, without waiting for the graphics card.
    * The buffers are made once. Returns false when every reading is still on its way.
    */
-  measureStage(at: number): boolean {
+  measureStage(at: number, gain = 1): boolean {
+    if (!this.ensureGuard()) return false;
     const gl = this.gl, slot = this.measures[this.measureHead % MEASURE_SLOTS];
     if (slot.sync) return false;
     const { program, u } = this.measureP, timer = this.timer;
@@ -390,7 +416,7 @@ export class Gpu {
     gl.readPixels(0, 0, MEASURE_SIZE.width, MEASURE_SIZE.height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     slot.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-    slot.at = at;
+    slot.at = at; slot.gain = gain;
     if (slot.sync) this.measureHead++;
     gl.flush();
     this.backToStage();
@@ -400,6 +426,7 @@ export class Gpu {
   /** The oldest finished reading, into `out`; its time, or null when none is ready. Never waits. */
   collectMeasure(out: Uint8Array): number | null {
     const gl = this.gl, timer = this.timer;
+    if (this.guardState !== 'ready') return null;
     if (timer?.running && timer.query && gl.getQueryParameter(timer.query, gl.QUERY_RESULT_AVAILABLE)) {
       const ns = gl.getQueryParameter(timer.query, gl.QUERY_RESULT) as number;
       if (!gl.getParameter(timer.ext.GPU_DISJOINT_EXT)) this.guardGpuMs = this.guardGpuMs === null ? ns / 1e6 : this.guardGpuMs * .9 + ns / 1e6 * .1;
@@ -415,11 +442,13 @@ export class Gpu {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.buffer);
     gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, out);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.measuredGain = slot.gain;
     return slot.at;
   }
 
   /** Dims the flat stage, in linear light. Called only while the guard is limiting, so an unguarded stage is never touched. */
   dimStage(gain: number, saturation: number): void {
+    if (!this.ensureGuard()) return;
     const gl = this.gl, { program, u } = this.dimP;
     gl.activeTexture(gl.TEXTURE0);
     if (!this.dimCopy) {
