@@ -399,7 +399,24 @@ function wallOf(r: Rig) {
     step: (ready: (id: string) => boolean) => { feed(); const out = stepWallPerform(wall, r.now(), ready); wall = out.perform; return out.landed; },
     zone: (i: number) => { feed(); return wall.zones[i].sourceId; },
     launches: () => { feed(); return wall.launches.map(l => l.id); },
+    /** The compositor's rule: a source nothing plays and nothing arms is released, so it is not ready. */
+    kept: (id: string) => { feed(); return wall.armed.includes(id) || wall.zones.some(z => z.launched && z.sourceId === id); },
+    /** Puts a zone where a crossed report says the wall already is. */
+    put: (i: number, sourceId: string) => { feed(); wall = { ...wall, zones: wall.zones.map((z, n) => n === i ? { ...z, sourceId, launched: true } : z) }; },
   };
+}
+/** The later press landed `cb` on zone 1, then the older launch's report crossed it: the wall shows `free` there and has let `b` go. */
+function crossedLanding() {
+  const { r, wall, older, newer } = olderWaitingThenScene();
+  const first = wall.step(id => id === 'a' || id === 'b');
+  assert.deepEqual(first, [{ launchId: newer.id, zones: [0, 1] }]);
+  r.at(2030);
+  r.service.wallState({ landed: first });
+  r.at(2040);
+  r.service.wallState({ landed: [{ launchId: older.id, zones: [1] }] });
+  wall.put(1, 'free');
+  assert.deepEqual([wall.zone(0), wall.zone(1)], ['a', 'free'], 'nothing on the wall plays the later press\'s source any more');
+  return { r, wall, fix: lastLaunch(r) };
 }
 /** Zone 1 is queued to `cf` for 2000 and its source never readies; then a scene pressed later plays `cb` there and fires at once. */
 function olderWaitingThenScene() {
@@ -492,6 +509,52 @@ test('an older launch that lands after a later press is put right on the next bo
   const fix = lastLaunch(r);
   assert.equal(fix.atMs, 4000);
   assert.deepEqual(fix.changes.map(c => [c.zone, c.sourceId]), [[1, 'b']]);
+});
+
+test('the repair after a crossed landing arms its released source, lands, and leaves wall and studio agreeing', () => {
+  const { r, wall, fix } = crossedLanding();
+  assert.deepEqual(fix.changes.map(c => [c.zone, c.sourceId]), [[1, 'b']]);
+  assert.equal(r.ofType('performArm').at(-1)!.sourceIds[0], 'b', 'the queued source is armed first, though the studio lists its clip as playing');
+  assert.equal(wall.kept('b'), true, 'armed, so the wall makes it ready');
+  r.at(4000);
+  const report = wall.step(wall.kept);
+  assert.deepEqual(report, [{ launchId: fix.id, zones: [1] }]);
+  r.at(4010);
+  r.service.wallState({ landed: report, armed: [] });
+  assert.equal(wall.zone(1), 'b');
+  assert.equal(r.service.view().launcher.playing[1], 'cb');
+  assert.equal(r.service.view().launcher.queue.length, 0);
+  assert.equal(wall.launches().length, 0);
+  assert.deepEqual(r.service.view().stuck, []);
+});
+
+test('a repair whose source cannot get ready shows as stuck', () => {
+  const { r, wall, fix } = crossedLanding();
+  r.service.wallState({ armed: [] });
+  assert.deepEqual(r.service.view().waiting, ['b']);
+  r.at(4000);
+  assert.deepEqual(wall.step(id => id !== 'b' && wall.kept(id)), []);
+  r.at(4300);
+  r.frame();
+  assert.deepEqual(r.service.view().stuck, ['b'], 'the operator sees the red dot');
+  assert.equal(lastLaunch(r).id, fix.id);
+  assert.equal(lastLaunch(r).atMs, 6000, 'and it tries again on the next bar');
+});
+
+test('a queued source another zone already plays is armed first, and at most eight are armed', () => {
+  const r = rig();
+  const ids = Array.from({ length: 10 }, (_, i) => `x${i}`);
+  r.show.sources = ['a', 'b', ...ids].map(id => ({ id, speed: 1, tempoSync: 4, project: { layers: [] } })) as unknown as ShowDocument['sources'];
+  r.show.performance.clips = [clip('ca', 'a'), clip('cb', 'b'), clip('cb2', 'b'), ...ids.map(id => clip(`c${id}`, id))];
+  r.show.performance.scenes = [scene('one', { 0: 'ca', 1: 'cb' }), scene('two', { 0: 'cb2', 1: 'cx0', 2: 'cx1', 3: 'cx2', 4: 'cx3', 5: 'cx4', 6: 'cx5' }), scene('three', { 0: 'cx7', 1: 'cx8', 2: 'cx9' })];
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0, 1] }] });
+  r.at(2500);
+  r.service.action({ type: 'bankNext' });
+  // Seven queued, then the next row's clips for the one place left.
+  assert.deepEqual(r.ofType('performArm').at(-1)!.sourceIds, ['b', 'x0', 'x1', 'x2', 'x3', 'x4', 'x5', 'x7']);
 });
 
 test('a launch replaced just as it landed still updates what is playing when its report arrives', () => {

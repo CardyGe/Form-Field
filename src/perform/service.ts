@@ -317,10 +317,17 @@ export class PerformService {
     }
   }
 
-  /** Queued sources first, in the launcher's order. A source already on the wall needs no arming. */
+  /**
+   * Queued sources first, in the launcher's order, then the ones worth keeping warm. Every queued source is armed, even
+   * one the studio lists as playing: the wall may have let it go, and a launch of a released source never lands.
+   * A source that is only being kept warm needs no arming while it is on the wall.
+   */
   private sendArm(force = false): void {
     const show = this.deps.show(), playing = new Set(this.pictures().map(p => p.sourceId));
-    const ids = [...new Set(armList(this.launcher, show.performance).map(c => this.sourceOf(c)).filter((s): s is string => s !== null && !playing.has(s)))].slice(0, MAX_ARMED);
+    const known = (s: string | null): s is string => s !== null;
+    const queued = this.launcher.queue.flatMap(l => l.changes).map(c => this.sourceOf(c.clipId)).filter(known);
+    const warm = armList(this.launcher, show.performance).map(c => this.sourceOf(c)).filter(known).filter(s => !playing.has(s));
+    const ids = [...new Set([...queued, ...warm])].slice(0, MAX_ARMED);
     const same = ids.length === this.requested.length && ids.every((id, i) => id === this.requested[i]);
     if (!same) {
       const now = this.deps.now();
