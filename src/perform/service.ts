@@ -12,6 +12,7 @@ import type { TempoClock } from '../react/tempo';
 import { applyControl, holdForReconnect, initialControls, knobOffset, speedFactor, type ControlEvent, type ControlValues, type PerformAction } from './controls';
 import { armList, bankBack, bankNext, initialLauncher, landed, launchNow, queueCell, queueScene, queueZone, retime, returnZone, stopZone, type Launch, type LauncherState } from './launcher';
 import { linkedZones, zoneShapes, type ZonePicture } from './resolve';
+import { bandSignal, BURST_TIMES, reactionSpeed, stepReaction, zoneBrightness, type ReactionState } from './reaction';
 import { dueFollow } from './sequence';
 import { beatAt, LATE_GRACE_MS, launchPhaseOffset, msAtBeat, nextBoundary, type ClockSnapshot } from './timing';
 import { BEATS_PER_BAR, ZONE_COUNT, type Clip } from './types';
@@ -47,22 +48,17 @@ const IN_FLIGHT_MS = 250;
 const CANCEL_RACE_MS = 50;
 /** How far the clock may drift from a queued launch before it is sent again, and how near the bar it is left alone. */
 const DRIFT_MS = 10, DRIFT_SETTLED_MS = 50;
-/** How quickly audio reaction moves, and how a burst rises and falls: at once with the kick, slowly on the ceiling. */
-const REACT_MS = 120;
-const BURST_MS = { room: { on: 10, off: 180 }, ceiling: { on: 2000, off: 4000 } };
-/** A held burst lifts a zone by half, and by as much again with the kick. Reaction and bursts add this share to a free clip's speed. */
-const BURST_BASE = .5, BURST_KICK = .5, SPEED_FOLD = .5;
 const HUE_RANGE = 180;
 const CEILING = ZONE_COUNT - 1;
 /** The launcher names the waiting ceiling part of a launch with this suffix. */
 const CEILING_PART = ':ceiling';
-const AUDIO_KEYS: Record<Clip['audioBand'], string> = { bass: 'audio.bass', mid: 'audio.mids', high: 'audio.highs', level: 'audio.level' };
 const STOPPED: ClockSnapshot = { anchorMs: 0, anchorBeat: 0, bpm: 120, state: 'manual', barOffset: 0 };
 
 const unit = (n: number | undefined) => n === undefined || !Number.isFinite(n) ? 0 : Math.min(1, Math.max(0, n));
 const wrapHue = (deg: number) => { const h = ((deg + 180) % 360 + 360) % 360 - 180; return h === -180 ? 180 : h; };
 const mean = (list: number[]) => list.reduce((a, b) => a + b, 0) / list.length;
 const zeros = () => Array.from({ length: ZONE_COUNT }, () => 0);
+const calm = (): ReactionState[] => Array.from({ length: ZONE_COUNT }, () => ({ envelope: 0, burst: 0 }));
 
 /** The tempo clock as a snapshot in the time base both windows share. `timeOrigin` turns it into the clock's own seconds. */
 export function clockSnapshot(tempo: Pick<TempoClock, 'snapshot'>, nowMs: number, timeOrigin: number): ClockSnapshot {
@@ -93,8 +89,7 @@ export class PerformService {
   /** The bar offset each source on the wall plays with, kept so a reopened wall gets them back. */
   private phases = new Map<string, number>();
   private bursts = Array.from({ length: ZONE_COUNT }, () => false);
-  private burstLevel = zeros();
-  private reaction = zeros();
+  private reaction = calm();
   private signals: Signals = {};
   private lastFrame: number | null = null;
   private valuesAt = -Infinity;
@@ -496,11 +491,11 @@ export class PerformService {
   private stepEnvelopes(now: number): void {
     const dt = this.lastFrame === null ? 0 : Math.max(0, now - this.lastFrame);
     this.lastFrame = now;
+    // A lost input counts as silence, so the reaction eases out whatever the last signals were.
+    const live = !['lost', 'missing', 'failed', 'refused'].includes(this.audio.state), pulse = live ? unit(this.signals['beat.pulse']) : 0;
     for (let i = 0; i < ZONE_COUNT; i++) {
-      const band = this.clipOf(i)?.audioBand ?? 'level';
-      this.reaction[i] += (this.controls.knobs[i][2] * unit(this.signals[AUDIO_KEYS[band]]) - this.reaction[i]) * Math.min(1, dt / REACT_MS);
-      const times = i === CEILING ? BURST_MS.ceiling : BURST_MS.room, on = this.bursts[i];
-      this.burstLevel[i] += ((on ? 1 : 0) - this.burstLevel[i]) * Math.min(1, dt / (on ? times.on : times.off));
+      const band = live ? bandSignal(this.signals, this.clipOf(i)?.audioBand ?? 'level') : 0;
+      this.reaction[i] = stepReaction(this.reaction[i], band, this.controls.knobs[i][2], this.bursts[i], pulse, dt / 1000, i === CEILING ? BURST_TIMES.ceiling : BURST_TIMES.room);
     }
   }
 
@@ -511,18 +506,17 @@ export class PerformService {
 
   private computeValues(): PerformValues {
     const pictures = this.pictures(), linked = linkedZones(pictures), { faders, knobs, master, ready } = this.controls;
-    const lift = (i: number) => this.reaction[i] + this.burstLevel[i] * (BURST_BASE + BURST_KICK * unit(this.signals['audio.bass']));
     const speedOf = (i: number) => {
       const source = pictures[i].sourceId;
       if (source === null || source === LIVE_SOURCE_ID) return 1;
       // Zones sharing a source share one picture, so they share one speed.
       const zones = linked.get(source) ?? [i], offset = mean(zones.map(z => knobOffset(knobs[z][0])));
-      return this.isLocked(source) ? speedFactor(offset, true) : speedFactor(offset, false) * (1 + SPEED_FOLD * mean(zones.map(lift)));
+      return this.isLocked(source) ? speedFactor(offset, true) : reactionSpeed(speedFactor(offset, false), { envelope: mean(zones.map(z => this.reaction[z].envelope)), burst: mean(zones.map(z => this.reaction[z].burst)) });
     };
     return {
       master: ready ? master : 0,
       zones: Array.from({ length: ZONE_COUNT }, (_, i) => ({
-        brightness: faders[i] * (1 + lift(i)),
+        brightness: zoneBrightness(faders[i], ready ? master : 0, this.reaction[i]),
         hueDeg: wrapHue((this.clipOf(i)?.hueOffset ?? 0) + knobOffset(knobs[i][1]) * HUE_RANGE),
         speed: speedOf(i),
       })),
@@ -561,8 +555,7 @@ export class PerformService {
     this.landedPress = zeros();
     this.phases.clear();
     this.bursts.fill(false);
-    this.burstLevel = zeros();
-    this.reaction = zeros();
+    this.reaction = calm();
     this.signals = {};
     this.lastFrame = null;
     this.valuesAt = -Infinity;

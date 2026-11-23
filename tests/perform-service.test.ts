@@ -702,3 +702,38 @@ test('the clock adapter reads the tempo clock in the shared time base', () => {
   assert.equal(a.anchorMs, origin + 10_000);
   assert.ok(Math.abs(b.anchorBeat - a.anchorBeat - 2) < 1e-9, 'a second is two beats at 120');
 });
+
+test('audio reaction and bursts never move a locked clip speed, but lift a free one', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 0: 'ca', 1: 'cf' })];
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0, 1] }] });
+  for (const strip of [0, 1]) { r.service.control({ kind: 'knob', strip, knob: 2, value: 1 }); r.service.control({ kind: 'fader', strip, value: 1 }); }
+  r.service.control({ kind: 'master', value: 1 });
+  r.service.action({ type: 'burst', zone: 0, on: true });
+  r.service.action({ type: 'burst', zone: 1, on: true });
+  for (let t = 2100; t <= 2600; t += 50) { r.at(t); r.frame({ 'audio.bass': 1, 'beat.pulse': 1 }); }
+  const v = lastValues(r);
+  assert.equal(v.zones[0].speed, 1, 'a locked clip keeps its loop speed');
+  assert.ok(v.zones[0].brightness > 1, 'but still brightens');
+  assert.ok(v.zones[1].speed > 1, 'a free clip speeds up');
+  assert.ok(v.zones.every(z => z.brightness <= 1.6));
+});
+
+test('values reach the wall at most 30 times a second, and fader 0 stays black in a burst', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 0: 'ca' })];
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0] }] });
+  r.service.control({ kind: 'knob', strip: 0, knob: 2, value: 1 });
+  r.service.control({ kind: 'master', value: 1 });
+  r.service.action({ type: 'burst', zone: 0, on: true });
+  const before = r.ofType('performValues').length;
+  for (let i = 0; i < 100; i++) { r.at(3000 + i * 5); r.frame({ 'audio.bass': i % 2 }); }
+  assert.ok(r.ofType('performValues').length - before <= 16, 'half a second sends at most about 15');
+  assert.equal(lastValues(r).zones[0].brightness, 0);
+});
