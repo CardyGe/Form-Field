@@ -15,7 +15,7 @@ import MapMenu, { type MenuEntry } from './MapMenu';
 import { newSourceId, randomSeed } from './mapActions';
 import PerformGrid, { LOOK_DRAG, type GridActions } from './PerformGrid';
 import { ReactDevices } from './ReactControls';
-import { startPerformShow, useMap } from './useMap';
+import { startPerformShow, useMap, type ClipCopy } from './useMap';
 import { keysBelongElsewhere, usePerform } from './usePerform';
 
 const QUANTIZE: { value: Quantize; label: string }[] = [{ value: '1/4', label: '1 beat' }, { value: '1/2', label: '2 beats' }, { value: '1bar', label: '1 bar' }, { value: '2bar', label: '2 bars' }, { value: '4bar', label: '4 bars' }];
@@ -47,7 +47,7 @@ function nextLine(view: PerformView, set: PerformanceSet, canStart: boolean): { 
 const audioWord = (a: PerformView['audio']) => a.state === 'on' ? 'on' : a.state === 'starting' ? 'starting' : a.state === 'off' ? 'off' : a.state === 'refused' ? 'not allowed' : 'lost';
 const audioTone = (a: PerformView['audio']) => a.state === 'on' ? 'good' : a.state === 'off' || a.state === 'starting' ? 'quiet' : 'bad';
 
-export default function PerformPanel({ header, onError, onEditClip, draftName, onOpenDraft }: { header: ReactNode; onError: (message: string) => void; onEditClip: (sourceId: string, name: string) => void; /** A clip draft left open in Studio. */ draftName: string | null; onOpenDraft: () => void }) {
+export default function PerformPanel({ header, onError, onEditClip, onCopyClip, draftName, onOpenDraft }: { header: ReactNode; onError: (message: string) => void; onEditClip: (sourceId: string, name: string) => void; onCopyClip: (copy: ClipCopy) => void; /** A clip draft left open in Studio. */ draftName: string | null; onOpenDraft: () => void }) {
   const map = useMap(onError);
   const perform = usePerform();
   const { view, service } = perform;
@@ -127,6 +127,8 @@ export default function PerformPanel({ header, onError, onEditClip, draftName, o
     const source = show.sources.find(s => s.id === clip.sourceId);
     if (!source) return;
     const sourceId = newSourceId(), copy = { ...newClip(name, sourceId), hueOffset: clip.hueOffset, blend: clip.blend, audioBand: clip.audioBand };
+    // During a show the copy is made at Apply, so a Discard leaves the show exactly as it was.
+    if (service.running) { onCopyClip({ fromSourceId: source.id, sourceId, clip: copy, row, zone }); return; }
     if (!apply({ type: 'addClipSource', sourceId, project: structuredClone(source.project), speed: source.speed, tempoSync: source.tempoSync, performance: placeClip(base, row, zone, copy, inUse()) })) return;
     onEditClip(sourceId, name);
   };

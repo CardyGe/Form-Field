@@ -83,7 +83,8 @@ function acceptState(value) {
   if (!plain(value) || !within(value, 16 * 1024)) return false;
   return finite(value.fps) && Number.isInteger(value.level) && value.level >= 0 && value.level <= 3 && Array.isArray(value.failing) && (value.prepares === undefined || plain(value.prepares))
     && (value.armed === undefined || listOf(value.armed, PERFORM_ARMED_LIMIT, performId))
-    && (value.landed === undefined || listOf(value.landed, LANDED_LIMIT, acceptLanded));
+    && (value.landed === undefined || listOf(value.landed, LANDED_LIMIT, acceptLanded))
+    && (value.swapFailed === undefined || listOf(value.swapFailed, PERFORM_ARMED_LIMIT, f => plain(f) && performId(f.id) && Number.isInteger(f.revision) && f.revision >= 0));
 }
 
 function acceptMapMessage(value) {
@@ -223,4 +224,4 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
   return { closeOutput, isOutput: contents => alive(output) && contents === output.webContents };
 }
 
-module.exports = { loadShowFile, saveShowFile, acceptMapMessage, setupMap };
+module.exports = { loadShowFile, saveShowFile, acceptMapMessage, acceptState, setupMap };

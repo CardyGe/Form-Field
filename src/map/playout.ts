@@ -107,6 +107,19 @@ export function shouldFade(before: Playing | undefined, after: Playing): boolean
 }
 
 /**
+ * A source is about to change its picture: blends still leaving it stop reading it live and hold a copy of it as it is,
+ * so they never jump to the new look.
+ */
+export function freezeLeaving<T>(fades: Iterable<{ from: T | string; fromSource?: string | null }>, id: string, copy: () => T, free: (picture: T) => void): void {
+  for (const fade of fades) {
+    if (fade.fromSource !== id) continue;
+    if (typeof fade.from !== 'string') free(fade.from);
+    fade.from = copy();
+    fade.fromSource = null;
+  }
+}
+
+/**
  * Whether a changed composition must be prepared again before it plays. Not when only settings that can follow sound
  * changed (the same as links change them for drawing): the effect is adjusted in place, never restarted.
  */

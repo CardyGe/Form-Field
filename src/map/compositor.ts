@@ -10,7 +10,7 @@ import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
 import { drawCommands, ringPx, shownOnWall, stageCommands, type DrawOptions } from './draw';
 import { borderColour, fadeKey } from './edge';
-import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
+import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, freezeLeaving, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, SPEED_RANGE, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
 import type { BlendKind } from '../perform/types';
@@ -75,6 +75,8 @@ interface Slot {
   failed: string | null;
   /** A composition that could not be prepared is not tried again every frame; a new composition is. */
   failedProject: Project | null;
+  /** An applied draft that could not start: `project` and its picture play on in its place until the studio sends the old look back. */
+  keptOver?: Project | null;
   prepares: number;
   /** The composition last drawn. A source kept ready is drawn once for its composition, then waits. */
   shown: Project | null;
@@ -136,6 +138,8 @@ export interface CompositorStats {
   adjusted?: number;
   /** How many applied drafts have crossfaded on to the wall (for checks). */
   crossfades?: number;
+  /** Applied drafts that could not start, once each: the old look is still playing. */
+  swapFailed?: { id: string; revision: number }[];
   staggered?: number;
   delayed?: number;
   /** Perform: the armed sources that are ready to land, and (once, as they happen) the launches that landed. */
@@ -405,12 +409,17 @@ export class MapCompositor {
 
   // ---- Perform: a draft applied to the show ----
   /** Sources with a new composition on its way: their old look plays on until it is ready, then crossfades. */
-  private readonly swaps = new Set<string>();
+  private readonly swaps = new Map<string, number>();
   private crossfades = 0;
+  private swapFailures: { id: string; revision: number }[] = [];
   /** The next composition this source takes crossfades in. A source with no picture on the wall has nothing to fade from. */
-  crossfadeNext(id: string): void { if (this.slots.get(id)?.texture) this.swaps.add(id); }
+  crossfadeNext(id: string, revision: number): void { if (this.slots.get(id)?.texture) this.swaps.set(id, revision); }
+  /** The applied drafts that could not start since this was last asked. */
+  takeSwapFailures(): { id: string; revision: number }[] { const out = this.swapFailures; this.swapFailures = []; return out; }
   /** The new composition is ready and not drawn yet: every shape playing it fades from the picture on the wall now. */
   private startSwap(id: string, texture: Texture): void {
+    // A blend leaving this look reads it live, and must not jump to the new one.
+    freezeLeaving<Texture>(this.fades.values(), id, () => this.gpu.copy(texture), t => this.gpu.free(t));
     let faded = false;
     for (const shape of this.show.shapes) {
       if (shape.sourceId !== id || shape.blocker || !shownOnWall(this.show, shape, this.options.solo)) continue;
@@ -598,13 +607,19 @@ export class MapCompositor {
       const slot = this.slot(source.id, now, want.rank);
       if (!slot) continue;
       // A setting that can follow sound changed (Map's Effect tab): the playing effect is adjusted in place, never restarted.
-      if (project !== slot.project && slot.project && !slot.pending && slot.failedProject === null && !needsPrepare(slot.project, project)) { slot.project = project; this.adjusted++; }
+      // The old look sent back after a draft could not start: it never stopped playing, so it is not started again.
+      if (slot.keptOver && project !== slot.keptOver && slot.project && !slot.pending && !needsPrepare(slot.project, project)) { slot.project = project; slot.keptOver = null; slot.failedProject = null; slot.failed = null; }
+      else if (project !== slot.project && slot.project && !slot.pending && slot.failedProject === null && !needsPrepare(slot.project, project)) { slot.project = project; this.adjusted++; }
       // A drag while a restart is still being prepared: the newer settings wait for it, rather than restarting it again.
       else if (slot.pending && project !== slot.pending && project !== slot.project && !needsPrepare(slot.pending, project)) slot.latest = project;
       else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) { slot.latest = null; this.prepare(slot, project, !!source.followOutline); }
       if (this.swaps.has(source.id)) {
         if (slot.project === project) { this.swaps.delete(source.id); if (slot.texture) this.startSwap(source.id, slot.texture); }
-        else if (slot.failedProject === project) this.swaps.delete(source.id);
+        else if (slot.failedProject === project) {
+          this.swapFailures.push({ id: source.id, revision: this.swaps.get(source.id)! });
+          this.swaps.delete(source.id);
+          if (slot.project && slot.texture) slot.keptOver = project;
+        }
       }
       if (!slot.project || !slot.renderer) continue;
       if (waiting && slot.shown === slot.project && slot.texture) continue;
@@ -781,7 +796,7 @@ export class MapCompositor {
       // An evolving composition plays from its start; a looping one carries on where it was.
       // Not when only the outline it follows moved: dragging a shape never sends its effect back to the start.
       if (isEvolving(project) && !(follows && slot.project && onlySurfaceDiffers(slot.project, project))) slot.phase = 0;
-      slot.project = slot.latest && !needsPrepare(project, slot.latest) ? slot.latest : project; slot.latest = null; slot.pending = null; slot.failed = null; slot.failedProject = null;
+      slot.project = slot.latest && !needsPrepare(project, slot.latest) ? slot.latest : project; slot.latest = null; slot.pending = null; slot.failed = null; slot.failedProject = null; slot.keptOver = null;
       this.dirty = true;
     }).catch(error => {
       if (slot.pending !== project) return;
@@ -988,7 +1003,7 @@ export class MapCompositor {
     const videoSlot = isVideo ? this.videoSlots.get(shape.sourceId!) : undefined;
     const slot = shape.sourceId && !isLive && !isVideo ? this.slots.get(shape.sourceId) : undefined;
     // A source that will not play (failing, over the limit, restarting, or with no composition) plays the shape's own fill.
-    const cannotPlay = !isLive && !isVideo && shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === project) || !project);
+    const cannotPlay = !isLive && !isVideo && shape.sourceId !== null && (!slot || !slot.renderer || (slot.failedProject !== null && slot.failedProject === project && slot.keptOver !== project) || !project);
     const fill = (): ShapeDraw['content'] => this.own(shape, p, land);
     let content: ShapeDraw['content'];
     if (shape.blocker) content = { kind: 'colour', rgba: [0, 0, 0, 1] };
@@ -1008,7 +1023,7 @@ export class MapCompositor {
     }
     // A fade waits for the composition the shape should now play, not one still drawing from before.
     // A fade into Live waits only while Live is starting; a camera that cannot play lets it finish to the fill.
-    const ready = shape.blocker || shape.sourceId === null || cannotPlay || (isVideo ? !videoSlot || videoSlot.state !== 'loading' : isLive ? !this.live || this.live.readiness !== 'wait' : slot?.project === project && !!slot?.texture);
+    const ready = shape.blocker || shape.sourceId === null || cannotPlay || (isVideo ? !videoSlot || videoSlot.state !== 'loading' : isLive ? !this.live || this.live.readiness !== 'wait' : (slot?.project === project || (!!project && slot?.keptOver === project)) && !!slot?.texture);
     let from: ShapeDraw['from'] = null, mix = 1, decorAlpha = 1;
     let oldBorder: { texture: Texture; alpha: number; run: { texture: Texture; shape: Shape } | null } | null = null;
     const fade = this.fades.get(shape.id);

@@ -447,9 +447,9 @@ try {
     if (await expand.count()) await expand.click();
     await studio.getByTitle(/^(Hide|Show) layer$/).first().click();
   };
-  const openDraft = async () => {
-    const row = await studio.evaluate(() => { const v = window.__studioTest.perform(), s = window.__studioTest.performSet(); return s.scenes.findIndex(r => r.cells[2] === v.launcher.playing[2]); });
-    await cell(row, 2).click({ button: 'right' });
+  const openDraft = async (zone = 2) => {
+    const row = await studio.evaluate(z => { const v = window.__studioTest.perform(), s = window.__studioTest.performSet(); return s.scenes.findIndex(r => r.cells[z] === v.launcher.playing[z]); }, zone);
+    await cell(row, zone).click({ button: 'right' });
     await studio.getByRole('menuitem', { name: 'Edit', exact: true }).click();
     await studio.getByRole('button', { name: 'Apply to show' }).waitFor({ timeout: 5000 });
   };
@@ -507,12 +507,37 @@ try {
     await sleep(600);
     assert.ok(colourGap(after, await zoneColours(wall)) < 8, 'the refused undo changed the wall');
   });
-  await check('Duplicate and edit during a show opens the copy as a draft', async () => {
+  await check('a look that cannot start: the old one keeps playing, the show goes back, and the draft is kept', async () => {
+    // Passes the file checks, but no browser can decode it.
+    const chunk = (type, data) => { const b = Buffer.alloc(12 + data.length); b.writeUInt32BE(data.length, 0); b.write(type, 4, 'latin1'); data.copy(b, 8); return b; };
+    const header = Buffer.alloc(13); header.writeUInt32BE(4, 0); header.writeUInt32BE(4, 4); header[8] = 8; header[9] = 6;
+    const bad = `data:image/png;base64,${Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', Buffer.from([1, 2, 3, 4])), chunk('IEND', Buffer.alloc(0))]).toString('base64')}`;
+    const setBefore = await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet())), undoBefore = await studio.getByRole('button', { name: 'Undo', exact: true }).isEnabled();
+    await openDraft(1);
+    await studio.evaluate(url => window.__studioTest.studioDraft.edit(p => ({ ...p, layers: p.layers.map(l => ({ ...l, mask: { kind: 'image', softness: .1, invert: false, size: 1, dataUrl: url } })) })), bad);
+    await studio.getByRole('button', { name: 'Apply to show' }).click();
+    await studio.getByText('The new look could not start. The old one is still playing.').waitFor({ timeout: 8000 });
+    await studio.getByRole('button', { name: 'Back to draft' }).waitFor({ timeout: 3000 });
+    for (let i = 0; i < 8; i++) { assert.ok((await litIn(wall))[1] > LIT, 'the zone lost its picture'); await sleep(150); }
+    await until(() => wall.evaluate(() => (window.__mapStats?.failing ?? []).length === 0), 4000, 'the wall to be back on the old look');
+    assert.equal(await studio.locator('.error-toast').count(), 0, 'a lasting error covers the controller');
+    assert.equal(await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet())), setBefore);
+    assert.equal(await studio.getByRole('button', { name: 'Undo', exact: true }).isEnabled(), undoBefore);
+    await studio.getByRole('button', { name: 'Back to draft' }).click();
+    await studio.getByRole('button', { name: 'Apply to show' }).waitFor({ timeout: 3000 });
+    assert.equal(await studio.evaluate(() => window.__studioTest.studioDraft.get().layers[0].mask.dataUrl), bad, 'the draft lost its content');
+    await studio.getByRole('button', { name: 'Discard' }).click();
+    await studio.getByRole('region', { name: 'Perform' }).waitFor({ timeout: 3000 });
+  });
+  await check('Duplicate and edit during a show adds nothing until Apply, so Discard leaves the set as it was', async () => {
+    const setBefore = await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet()));
     await cell(0, 1).click({ button: 'right' });
     await studio.getByRole('menuitem', { name: 'Duplicate and edit' }).click();
     await studio.getByRole('button', { name: 'Apply to show' }).waitFor({ timeout: 5000 });
+    assert.equal(await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet())), setBefore, 'the copy was made before Apply');
     await studio.getByRole('button', { name: 'Discard' }).click();
     await studio.getByRole('region', { name: 'Perform' }).waitFor({ timeout: 3000 });
+    assert.equal(await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet())), setBefore);
   });
   await check('End show with a draft open keeps the draft, says so, and applies nothing', async () => {
     await openDraft();

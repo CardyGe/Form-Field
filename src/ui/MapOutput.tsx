@@ -69,7 +69,7 @@ export default function MapOutput() {
       const before = state.perform, heldProjects = state.projects;
       state = applyMapMessage(state, message);
       // A draft applied during a show: the running look holds until the new one is ready, then crossfades.
-      if (kind === 'source' && state.projects !== heldProjects && (message as { crossfade?: unknown }).crossfade === true) compositor.crossfadeNext((message as { id: string }).id);
+      if (kind === 'source' && state.projects !== heldProjects && (message as { crossfade?: unknown }).crossfade === true) { const { id, revision } = message as { id: string; revision: number }; compositor.crossfadeNext(id, revision); }
       if (typeof kind === 'string' && kind.startsWith('perform')) {
         // A refused message, or one for a show that is not running, changes nothing.
         if (state.perform === before) return;
@@ -106,10 +106,12 @@ export default function MapOutput() {
     const encoder = new PreviewWorker();
     let raf = 0, busy = false, reading = false, changed = true, sentPicture = 0, sentReport = 0;
     let landed: { launchId: string; zones: number[] }[] = [], sentArmed = '';
+    let swapFailed: { id: string; revision: number }[] = [];
     const report = () => {
-      // While a show runs every report says which armed looks are ready; a landing is reported once.
-      const stats = { ...compositor.stats(), ...(state.perform.active ? { armed: compositor.armedIds() } : {}), ...(landed.length ? { landed } : {}) };
+      // While a show runs every report says which armed looks are ready; a landing or a look that failed is reported once.
+      const stats = { ...compositor.stats(), ...(state.perform.active ? { armed: compositor.armedIds() } : {}), ...(landed.length ? { landed } : {}), ...(swapFailed.length ? { swapFailed: swapFailed.slice(0, 8) } : {}) };
       landed = [];
+      swapFailed = swapFailed.slice(8);
       sentArmed = (stats.armed ?? []).join('\n');
       // For scripted checks: what the compositor reports, read from the page.
       (window as unknown as { __mapStats?: unknown }).__mapStats = stats;
@@ -134,7 +136,8 @@ export default function MapOutput() {
       }
       if (compositor.frame(now)) changed = true;
       // The studio hears at once when a launch lands or an armed look becomes ready (or stops being).
-      if (landed.length || (state.perform.active && compositor.armedIds().join('\n') !== sentArmed)) report();
+      swapFailed.push(...compositor.takeSwapFailures());
+      if (landed.length || swapFailed.length || (state.perform.active && compositor.armedIds().join('\n') !== sentArmed)) report();
       if (reading) {
         const picture = compositor.collectPreview();
         // A readback lost with the graphics context never arrives: start again.

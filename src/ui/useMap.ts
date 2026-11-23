@@ -14,7 +14,8 @@ import { MeterStore } from '../react/meter';
 import { usesEmberSmokeAudio } from '../react/ember-smoke';
 import { autoAdvanceDue, nextAutoScene } from '../map/wild';
 import { linkPerformToMap, performService, type PerformService } from '../perform/service';
-import { clipsInUse, historyBlock, savedShow, zonesSharingSource, type HistoryBlock } from '../perform/grid-edit';
+import { clipsInUse, historyBlock, placeClip, savedShow, zonesSharingSource, type HistoryBlock } from '../perform/grid-edit';
+import type { Clip } from '../perform/types';
 import { validateLiveSettings } from '../live/settings';
 
 /** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
@@ -81,7 +82,12 @@ interface Session {
    * A composition being edited in Studio: the wall stays open and follows the edits. A draft (begun during a show)
    * holds its changes in `latest` instead, and neither the show nor the wall hears of them until Apply.
    */
-  studioEdit: { sourceId: string; shapeId: string; first: boolean; draft: boolean; latest: Project | null } | null;
+  studioEdit: { sourceId: string; shapeId: string; first: boolean; draft: boolean; latest: Project | null; name: string; copy?: PendingCopy } | null;
+  /** The last draft applied to each source, until the wall has had the chance to say it could not start. */
+  applied: Map<string, { revision: number; before: { project: Project; revision: number }; pushed: ShowDocument; show: ShowDocument; project: Project; name: string }>;
+  /** Drafts the wall could not start, waiting to be opened again so their work is not lost. */
+  failedDrafts: { sourceId: string; project: Project; name: string }[];
+  onDraftFailed: (() => void) | null;
   /** How many Map screens are mounted (React may mount one twice in development). */
   mounted: number;
   /** A Studio edit waiting to reach the wall at the next frame (edits come faster than frames while a slider moves). */
@@ -100,13 +106,16 @@ interface Session {
   /** The screen showing the session, told when the session's state is tidied without an edit. */
   onStateTidied: ((state: MapState) => void) | null;
 }
+/** Duplicate and edit during a show: the copy to make at Apply, so a Discard leaves the show exactly as it was. */
+export interface ClipCopy { fromSourceId: string; sourceId: string; clip: Clip; row: number; zone: number }
+type PendingCopy = ClipCopy & { sceneId: string; replaces: string | null };
 let session: Session | null = null;
 function mapSession(): Session {
   if (session) return session;
   const bridge = window.studio?.map;
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
-    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, mounted: 0, wallFrame: null, onStudioWarning: null,
+    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, applied: new Map(), failedDrafts: [], onDraftFailed: null, mounted: 0, wallFrame: null, onStudioWarning: null,
     solo: { shapes: [], groups: [] }, snap: true, photoShown: true, live: null, wallHeld: false, onStateTidied: null,
     saver: autosaveSchedule<ShowDocument>(async show => {
       if (!bridge) return;
@@ -124,7 +133,7 @@ function mapSession(): Session {
   // Followed for the window's life, so the session knows whether the wall is open even while Map is not shown.
   // A wall that opens or reloads during a show is told the show again from here, whichever section is on screen.
   bridge?.onOutputChanged(open => { created.outputOpen = open; if (!open) created.wallHeld = false; if (open) { created.sentSources = new Map(); performService().wallReopened(); } });
-  bridge?.onState(state => performService().wallState(state));
+  bridge?.onState(state => { performService().wallState(state); for (const failed of state.swapFailed ?? []) draftFailedOnWall(created, failed); });
   linkPerformToMap({
     send: message => bridge?.send(message),
     isOpen: () => created.outputOpen,
@@ -209,9 +218,9 @@ export function beginStudioEdit(sourceId: string, shapeId: string, clipName?: st
   // A Perform clip may play on no shape yet: it is named by the clip instead.
   const shapeName = shape?.name ?? clipName;
   if (!source || shapeName === undefined) return null;
-  s.studioEdit = { sourceId, shapeId, first: true, draft, latest: null };
-  // The Map screen's crosshair and flash belong to Map: they leave the wall while Studio has it. A draft sends nothing.
-  if (s.outputOpen && !draft) { window.studio?.map.send({ type: 'crosshair', point: null, shapeId: null }); window.studio?.map.send({ type: 'identify', shapeId: null }); }
+  s.studioEdit = { sourceId, shapeId, first: true, draft, latest: null, name: shapeName };
+  // The Map screen's crosshair and flash belong to Map: they leave the wall while Studio has it.
+  if (s.outputOpen) { window.studio?.map.send({ type: 'crosshair', point: null, shapeId: null }); window.studio?.map.send({ type: 'identify', shapeId: null }); }
   return { project: source.project, shapeName };
 }
 
@@ -221,12 +230,87 @@ export function beginClipEdit(sourceId: string, draft: boolean): { project: Proj
   return clip ? beginStudioEdit(sourceId, '', clip.name, draft) : null;
 }
 
+/** Duplicate and edit during a show: a draft of a copy that does not exist until Apply. */
+export function beginClipCopyDraft(copy: ClipCopy): { project: Project; shapeName: string } | null {
+  const s = mapSession(), show = s.state.show, source = show.sources.find(x => x.id === copy.fromSourceId), scene = show.performance.scenes[copy.row];
+  if (!source || !scene) return null;
+  s.studioEdit = { sourceId: copy.sourceId, shapeId: '', first: true, draft: true, latest: null, name: copy.clip.name, copy: { ...copy, sceneId: scene.id, replaces: scene.cells[copy.zone] } };
+  if (s.outputOpen) { window.studio?.map.send({ type: 'crosshair', point: null, shapeId: null }); window.studio?.map.send({ type: 'identify', shapeId: null }); }
+  return { project: source.project, shapeName: copy.clip.name };
+}
+
 /** Whether a draft is open. */
 export function clipDraftOpen(): boolean { return !!mapSession().studioEdit?.draft; }
+/** Whether the open draft is of a copy that is not in the show yet. */
+export function clipDraftIsCopy(): boolean { return !!mapSession().studioEdit?.copy; }
 /** The zones an open draft would change: all those sharing its look. */
 export function clipDraftZones(): number[] {
   const s = mapSession(), edit = s.studioEdit;
-  return edit?.draft ? zonesSharingSource(s.state.show.performance, edit.sourceId) : [];
+  return edit?.draft && !edit.copy ? zonesSharingSource(s.state.show.performance, edit.sourceId) : [];
+}
+/** Whether the open draft's look is on the projector now, so that Apply would change the picture. */
+export function clipDraftOnWall(): boolean {
+  const s = mapSession(), edit = s.studioEdit, service = performService();
+  if (!edit?.draft || edit.copy || !service.running) return false;
+  const { playing, launched } = service.view().launcher, clips = s.state.show.performance.clips;
+  return playing.some((id, zone) => launched[zone] && clips.find(c => c.id === id)?.sourceId === edit.sourceId);
+}
+
+/** Told when the wall could not start an applied draft. */
+export function onClipDraftFailed(listener: (() => void) | null): void { mapSession().onDraftFailed = listener; }
+
+/**
+ * The wall kept the old look because the applied one could not start. The show goes back to that look with no undo
+ * step, so the two agree, and any edit made since stays. The draft's work is kept to be opened again.
+ */
+function draftFailedOnWall(s: Session, failed: { id: string; revision: number }): void {
+  const applied = s.applied.get(failed.id);
+  if (!applied || applied.revision !== failed.revision) return;
+  s.applied.delete(failed.id);
+  const back = (show: ShowDocument): ShowDocument => show.sources.some(x => x.id === failed.id && x.revision === failed.revision)
+    ? { ...show, sources: show.sources.map(x => x.id === failed.id ? { ...x, project: applied.before.project, revision: applied.before.revision } : x) } : show;
+  const { state } = s;
+  const show = state.show === applied.show ? applied.pushed : back(state.show);
+  s.state = { ...state, show, past: state.past.filter(p => p !== applied.pushed).map(back), future: state.future.map(back) };
+  s.saver.save(show);
+  const source = show.sources.find(x => x.id === failed.id);
+  if (source && s.outputOpen) {
+    window.studio?.map.send({ type: 'source', id: source.id, revision: source.revision, project: source.project });
+    s.sentSources = new Map(s.sentSources).set(source.id, source.revision);
+  }
+  s.onStateTidied?.(s.state);
+  s.failedDrafts.push({ sourceId: failed.id, project: applied.project, name: applied.name });
+  s.onDraftFailed?.();
+}
+
+/** Opens the next draft the wall could not start, with its work in it. Null while another edit is open, or when none is waiting. */
+export function reopenFailedDraft(): { sourceId: string; project: Project; shapeName: string; from: 'map' | 'perform' } | null {
+  const s = mapSession();
+  if (s.studioEdit) return null;
+  for (let next = s.failedDrafts.shift(); next; next = s.failedDrafts.shift()) {
+    const { sourceId, project, name } = next;
+    if (!s.state.show.sources.some(x => x.id === sourceId)) continue;
+    s.studioEdit = { sourceId, shapeId: '', first: true, draft: true, latest: project, name };
+    return { sourceId, project, shapeName: name, from: s.state.show.performance.clips.some(c => c.sourceId === sourceId) ? 'perform' : 'map' };
+  }
+  return null;
+}
+
+/** Makes the copy a Duplicate and edit draft stands for: one undo step, in the cell it was made from. */
+function applyCopyDraft(s: Session, edit: NonNullable<Session['studioEdit']>, copy: PendingCopy): string | null {
+  const show = s.state.show, from = show.sources.find(x => x.id === copy.fromSourceId);
+  if (!from) return 'that clip is no longer in the set';
+  const row = show.performance.scenes.findIndex(x => x.id === copy.sceneId);
+  if (row < 0 || show.performance.scenes[row].cells[copy.zone] !== copy.replaces) return 'that cell has changed since the copy was started';
+  const performance = placeClip(show.performance, row, copy.zone, copy.clip, clipsInUse(performService().view().launcher));
+  const next = mapReducer(s.state, { type: 'edit', action: { type: 'addClipSource', sourceId: copy.sourceId, project: edit.latest ?? structuredClone(from.project), speed: from.speed, tempoSync: from.tempoSync, performance } });
+  if (next.show === show) return next.refusal === 'too-many-sources' ? 'the set is full' : STUDIO_REFUSALS[next.refusal ?? ''] ?? next.refusal ?? 'the change could not be made';
+  s.state = next;
+  s.saver.save(next.show);
+  s.onStateTidied?.(next);
+  if (!pushToWall(s, next.show).sources) s.onStudioWarning?.('the copy is too large to send to the projector, so it cannot be launched yet');
+  s.studioEdit = null;
+  return null;
 }
 
 /**
@@ -236,6 +320,7 @@ export function clipDraftZones(): number[] {
 export function applyClipDraft(): string | null {
   const s = mapSession(), edit = s.studioEdit;
   if (!edit?.draft) return null;
+  if (edit.copy) return applyCopyDraft(s, edit, edit.copy);
   const close = () => { s.studioEdit = null; return null; };
   if (edit.latest === null) return close();
   const before = s.state, was = before.show.sources.find(x => x.id === edit.sourceId);
@@ -250,7 +335,11 @@ export function applyClipDraft(): string | null {
   s.state = next;
   s.saver.save(next.show);
   s.onStateTidied?.(next);
-  if (s.outputOpen) { window.studio?.map.send(message); s.sentSources = new Map(s.sentSources).set(source.id, source.revision); }
+  if (s.outputOpen) {
+    s.applied.set(source.id, { revision: source.revision, before: { project: was.project, revision: was.revision }, pushed: before.show, show: next.show, project: source.project, name: edit.name });
+    window.studio?.map.send(message);
+    s.sentSources = new Map(s.sentSources).set(source.id, source.revision);
+  }
   return close();
 }
 
@@ -262,7 +351,7 @@ export function discardClipDraft(): void {
 
 /** For tests: puts a show into the session, as if it had been loaded. */
 export const mapSessionForTest = {
-  load(state: MapState): void { const s = mapSession(); s.state = state; s.loaded = true; s.studioEdit = null; },
+  load(state: MapState): void { const s = mapSession(); s.state = state; s.loaded = true; s.studioEdit = null; s.applied.clear(); s.failedDrafts = []; },
   state: (): MapState => mapSession().state,
   /** The show changes under an open edit. */
   replace(state: MapState): void { mapSession().state = state; },
