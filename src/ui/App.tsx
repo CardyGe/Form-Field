@@ -30,7 +30,7 @@ import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
 import LivePanel from './LivePanel';
 import { KIND_LABELS } from '../core/library';
-import { applyClipDraft, beginClipCopyDraft, beginClipEdit, beginStudioEdit, clipDraftIsCopy, clipDraftOnWall, clipDraftZones, discardClipDraft, endStudioEdit, onClipDraftFailed, onStudioWallWarning, reopenFailedDraft, studioEdit, wallStaysOpen, type ClipCopy } from './useMap';
+import { applyClipDraft, beginClipCopyDraft, beginClipEdit, beginStudioEdit, clipApplyStarting, clipDraftIsCopy, clipDraftOnWall, clipDraftZones, discardClipDraft, endStudioEdit, onClipApplySettled, onClipDraftFailed, onStudioWallWarning, reopenFailedDraft, studioEdit, wallStaysOpen, type ClipCopy } from './useMap';
 import { performService } from '../perform/service';
 import { projectForStudioSave, stashStudio, type ShapeEdit } from './studio-edit';
 import MapPanel from './MapPanel';
@@ -404,6 +404,13 @@ export default function App() {
     onClipDraftFailed(() => { notify('The new look could not start. The old one is still playing.'); setFailedDrafts(n => n + 1); });
     return () => onClipDraftFailed(null);
   }, [notify]);
+  // Apply says Starting… until the wall has answered for this look's last Apply.
+  const [, setApplySettled] = useState(0);
+  useEffect(() => {
+    onClipApplySettled(note => { if (note) notify(note); setApplySettled(n => n + 1); });
+    return () => onClipApplySettled(null);
+  }, [notify]);
+  const draftStarting = !!shapeEdit?.draft && clipApplyStarting();
   useEffect(() => {
     if (!ready || shapeEditRef.current) return;
     const failed = reopenFailedDraft();
@@ -501,7 +508,7 @@ export default function App() {
     <input ref={imageInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0]); e.target.value = ''; }} />
     <input ref={maskInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0], true); e.target.value = ''; }} />
     <header className="app-header" inert={mode !== 'studio'}>{modeSwitch}
-      {shapeEdit?.draft && <div className="shape-edit-bar" role="status"><span>Draft of <strong>{shapeEdit.shapeName}</strong> · {draftStatus}{draftZones.length > 1 && ` · Apply changes zones ${draftZones.map(z => z + 1).join(', ')}: they share this look`}</span><button className="primary-button" onClick={applyDraft}>{draftShowRunning ? 'Apply to show' : 'Apply to clip'}</button><button className="secondary-button" onClick={discardDraft}>Discard</button></div>}
+      {shapeEdit?.draft && <div className="shape-edit-bar" role="status"><span>Draft of <strong>{shapeEdit.shapeName}</strong> · {draftStatus}{draftZones.length > 1 && ` · Apply changes zones ${draftZones.map(z => z + 1).join(', ')}: they share this look`}</span><button className="primary-button" disabled={draftStarting} title={draftStarting ? 'The last change to this look is still starting. Your draft is kept.' : undefined} onClick={applyDraft}>{draftStarting ? 'Starting…' : draftShowRunning ? 'Apply to show' : 'Apply to clip'}</button><button className="secondary-button" onClick={discardDraft}>Discard</button></div>}
       {shapeEdit && !shapeEdit.draft && <div className="shape-edit-bar" role="status">Editing <strong>{shapeEdit.shapeName}</strong> from {shapeEdit.from === 'perform' ? 'Perform' : 'Map'} · changes show on the projector<button className="primary-button" onClick={() => finishShapeEdit(shapeEdit.from ?? 'map')}>Back to {shapeEdit.from === 'perform' ? 'Perform' : 'Map'}</button></div>}
       <div className="project-title"><EditableName label="Project name" value={project.name} maxLength={80} onCommit={name => edit(p => ({ ...p, name }))} />{fileName && <span className="project-file" title={filePath}>{fileName}</span>}<span role="status" className={saved === 'Save project to keep changes' ? 'save-failed' : ''}>{saved}</span></div>
       <div className="header-actions"><button className="icon-button" title="Undo · ⌘Z" disabled={!history.current.length} onClick={undo}><Icon name="undo" /></button><button className="icon-button" title="Redo · ⇧⌘Z" disabled={!future.current.length} onClick={redo}><Icon name="redo" /></button><span className="divider" /><button className="text-button" title="New composition · ⌘N" disabled={exporting || !!shapeEdit} onClick={() => void newProject()}><Icon name="plus" size={16} />New</button><button className="text-button" title="Open · ⌘O" disabled={!!shapeEdit} onClick={() => void open()}><Icon name="folder" size={16} />Open</button><button className="text-button" title={fileName ? `Save to ${fileName} · ⌘S\nShift-click or ⇧⌘S to save as a new file` : 'Save · ⌘S'} disabled={!!shapeEdit} onClick={e => void save(e.shiftKey)}><Icon name="save" size={16} />Save</button><button className="primary-button" disabled={!!shapeEdit} title={shapeEdit ? 'Go back to Map to export your own composition' : undefined} onClick={e => { e.currentTarget.focus(); setExportOpen(true); }}><Icon name="download" size={16} />Export</button></div>

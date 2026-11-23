@@ -35,6 +35,17 @@ export function initialWall(): WallState {
   };
 }
 
+/**
+ * What the wall owes the studio for a draft applied to it, so an Apply is always answered. `swap`: it is on its way and
+ * the compositor will answer. `started`: the wall already holds it. `failed`: the wall refused it. Null: not an Apply.
+ */
+export function swapOutcome(before: WallState, after: WallState, message: unknown): 'swap' | 'started' | 'failed' | null {
+  const m = message as { type?: unknown; id?: unknown; revision?: unknown; crossfade?: unknown } | null;
+  if (m?.type !== 'source' || m.crossfade !== true || typeof m.id !== 'string') return null;
+  if (after.projects.get(m.id)?.revision !== m.revision) return 'failed';
+  return after.projects !== before.projects ? 'swap' : 'started';
+}
+
 /** The next wall state for a message. A refused message changes nothing, so the last good picture stays up. */
 export function applyMapMessage(state: WallState, value: unknown): WallState {
   if (!acceptMapMessage(value)) return state;

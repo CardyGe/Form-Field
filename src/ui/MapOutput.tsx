@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { MapCompositor, MAX_ARMED, type ShapeBlend } from '../map/compositor';
+import { MapCompositor, MAX_ARMED, type ShapeBlend, type SwapResult } from '../map/compositor';
 import { performDraw } from '../perform/wall-values';
 import { isShapeShown, LIVE_SOURCE_ID, STAGE_SIZE } from '../map/show';
-import { applyMapMessage, initialWall } from '../map/wall';
+import { applyMapMessage, initialWall, swapOutcome } from '../map/wall';
 import { overlayShow, type ZonePicture } from '../perform/resolve';
 import { stepWallPerform, type WallPerform } from '../perform/wall-perform';
 import PreviewWorker from '../map/preview-worker?worker&inline';
@@ -64,12 +64,17 @@ export default function MapOutput() {
       syncValues();
     };
     apply();
+    let swapResults: SwapResult[] = [];
     const off = bridge.onMessage(message => {
       const kind = (message as { type?: string })?.type;
-      const before = state.perform, heldProjects = state.projects;
+      const before = state.perform, wallBefore = state;
       state = applyMapMessage(state, message);
-      // A draft applied during a show: the running look holds until the new one is ready, then crossfades.
-      if (kind === 'source' && state.projects !== heldProjects && (message as { crossfade?: unknown }).crossfade === true) { const { id, revision } = message as { id: string; revision: number }; compositor.crossfadeNext(id, revision); }
+      // A draft applied during a show: the running look holds until the new one is ready, then crossfades. Always answered.
+      const outcome = swapOutcome(wallBefore, state, message);
+      if (outcome) {
+        const { id, revision } = message as { id: string; revision: number };
+        if (outcome === 'swap') compositor.crossfadeNext(id, revision); else swapResults.push({ id, revision, result: outcome });
+      }
       if (typeof kind === 'string' && kind.startsWith('perform')) {
         // A refused message, or one for a show that is not running, changes nothing.
         if (state.perform === before) return;
@@ -106,12 +111,11 @@ export default function MapOutput() {
     const encoder = new PreviewWorker();
     let raf = 0, busy = false, reading = false, changed = true, sentPicture = 0, sentReport = 0;
     let landed: { launchId: string; zones: number[] }[] = [], sentArmed = '';
-    let swapFailed: { id: string; revision: number }[] = [];
     const report = () => {
       // While a show runs every report says which armed looks are ready; a landing or a look that failed is reported once.
-      const stats = { ...compositor.stats(), ...(state.perform.active ? { armed: compositor.armedIds() } : {}), ...(landed.length ? { landed } : {}), ...(swapFailed.length ? { swapFailed: swapFailed.slice(0, 8) } : {}) };
+      const stats = { ...compositor.stats(), ...(state.perform.active ? { armed: compositor.armedIds() } : {}), ...(landed.length ? { landed } : {}), ...(swapResults.length ? { swapResults: swapResults.slice(0, 8) } : {}) };
       landed = [];
-      swapFailed = swapFailed.slice(8);
+      swapResults = swapResults.slice(8);
       sentArmed = (stats.armed ?? []).join('\n');
       // For scripted checks: what the compositor reports, read from the page.
       (window as unknown as { __mapStats?: unknown }).__mapStats = stats;
@@ -136,8 +140,8 @@ export default function MapOutput() {
       }
       if (compositor.frame(now)) changed = true;
       // The studio hears at once when a launch lands or an armed look becomes ready (or stops being).
-      swapFailed.push(...compositor.takeSwapFailures());
-      if (landed.length || swapFailed.length || (state.perform.active && compositor.armedIds().join('\n') !== sentArmed)) report();
+      swapResults.push(...compositor.takeSwapResults());
+      if (landed.length || swapResults.length || (state.perform.active && compositor.armedIds().join('\n') !== sentArmed)) report();
       if (reading) {
         const picture = compositor.collectPreview();
         // A readback lost with the graphics context never arrives: start again.

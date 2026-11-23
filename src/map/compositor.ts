@@ -117,6 +117,7 @@ interface Pictures {
   ownKey: string; own: Texture | null; ownFor: { shape: Shape; pinned: boolean; w: number; h: number } | null;
 }
 
+export interface SwapResult { id: string; revision: number; result: 'started' | 'failed' | 'lost' }
 export interface CompositorStats {
   fps: number;
   /** Governor level: 0 full size; 1 and 2 drawn smaller; 3 also every other frame. */
@@ -138,8 +139,8 @@ export interface CompositorStats {
   adjusted?: number;
   /** How many applied drafts have crossfaded on to the wall (for checks). */
   crossfades?: number;
-  /** Applied drafts that could not start, once each: the old look is still playing. */
-  swapFailed?: { id: string; revision: number }[];
+  /** What became of each applied draft, once each: it started, it failed (the old look still plays), or its renderer was lost first. */
+  swapResults?: SwapResult[];
   staggered?: number;
   delayed?: number;
   /** Perform: the armed sources that are ready to land, and (once, as they happen) the launches that landed. */
@@ -222,7 +223,7 @@ export class MapCompositor {
     this.canvas = canvas;
     this.gpu = new Gpu(canvas);
     // A lost context blanks the wall until Chromium gives it back; then every picture is made again.
-    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); this.carried.clear(); this.carriedTempo.clear(); });
+    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; for (const id of [...this.swaps.keys()]) this.settleSwap(id, 'lost'); this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); this.carried.clear(); this.carriedTempo.clear(); });
     canvas.addEventListener('webglcontextrestored', () => {
       this.gpu.setUp();
       this.pictures.clear(); this.overlay = null; this.histories.clear();
@@ -411,11 +412,21 @@ export class MapCompositor {
   /** Sources with a new composition on its way: their old look plays on until it is ready, then crossfades. */
   private readonly swaps = new Map<string, number>();
   private crossfades = 0;
-  private swapFailures: { id: string; revision: number }[] = [];
-  /** The next composition this source takes crossfades in. A source with no picture on the wall has nothing to fade from. */
-  crossfadeNext(id: string, revision: number): void { if (this.slots.get(id)?.texture) this.swaps.set(id, revision); }
-  /** The applied drafts that could not start since this was last asked. */
-  takeSwapFailures(): { id: string; revision: number }[] { const out = this.swapFailures; this.swapFailures = []; return out; }
+  private swapResults: SwapResult[] = [];
+  /** The next composition this source takes crossfades in. A source with no picture on the wall has nothing to fade from, so it counts as started. */
+  crossfadeNext(id: string, revision: number): void {
+    if (this.slots.get(id)?.texture) this.swaps.set(id, revision);
+    else this.swapResults.push({ id, revision, result: 'started' });
+  }
+  /** What has become of applied drafts since this was last asked. */
+  takeSwapResults(): SwapResult[] { const out = this.swapResults; this.swapResults = []; return out; }
+  /** Every swap ends here, so the studio is always told and an Apply can never wait for ever. */
+  private settleSwap(id: string, result: SwapResult['result']): void {
+    const revision = this.swaps.get(id);
+    if (revision === undefined) return;
+    this.swaps.delete(id);
+    this.swapResults.push({ id, revision, result });
+  }
   /** The new composition is ready and not drawn yet: every shape playing it fades from the picture on the wall now. */
   private startSwap(id: string, texture: Texture): void {
     // A blend leaving this look reads it live, and must not jump to the new one.
@@ -602,7 +613,8 @@ export class MapCompositor {
       const project = this.projects.get(source.id);
       if (!project) continue;
       const want = wanted.get(source.id);
-      if (!want) { const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
+      // Off the wall before it started: there is no picture left to change, and it starts when it is next launched.
+      if (!want) { this.settleSwap(source.id, 'started'); const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
       const { users, fading, waiting } = want;
       const slot = this.slot(source.id, now, want.rank);
       if (!slot) continue;
@@ -614,10 +626,9 @@ export class MapCompositor {
       else if (slot.pending && project !== slot.pending && project !== slot.project && !needsPrepare(slot.pending, project)) slot.latest = project;
       else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) { slot.latest = null; this.prepare(slot, project, !!source.followOutline); }
       if (this.swaps.has(source.id)) {
-        if (slot.project === project) { this.swaps.delete(source.id); if (slot.texture) this.startSwap(source.id, slot.texture); }
+        if (slot.project === project) { this.settleSwap(source.id, 'started'); if (slot.texture) this.startSwap(source.id, slot.texture); }
         else if (slot.failedProject === project) {
-          this.swapFailures.push({ id: source.id, revision: this.swaps.get(source.id)! });
-          this.swaps.delete(source.id);
+          this.settleSwap(source.id, 'failed');
           if (slot.project && slot.texture) slot.keptOver = project;
         }
       }
@@ -732,7 +743,7 @@ export class MapCompositor {
       fade.fromSource = null;
     }
     this.carried.delete(id);
-    this.swaps.delete(id);
+    this.settleSwap(id, 'lost');
     slot.renderer?.dispose();
     slot.renderer = null;
     if (!this.lost) this.gpu.free(slot.texture);

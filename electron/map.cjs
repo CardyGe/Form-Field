@@ -84,7 +84,7 @@ function acceptState(value) {
   return finite(value.fps) && Number.isInteger(value.level) && value.level >= 0 && value.level <= 3 && Array.isArray(value.failing) && (value.prepares === undefined || plain(value.prepares))
     && (value.armed === undefined || listOf(value.armed, PERFORM_ARMED_LIMIT, performId))
     && (value.landed === undefined || listOf(value.landed, LANDED_LIMIT, acceptLanded))
-    && (value.swapFailed === undefined || listOf(value.swapFailed, PERFORM_ARMED_LIMIT, f => plain(f) && performId(f.id) && Number.isInteger(f.revision) && f.revision >= 0));
+    && (value.swapResults === undefined || listOf(value.swapResults, PERFORM_ARMED_LIMIT, r => plain(r) && performId(r.id) && Number.isInteger(r.revision) && r.revision >= 0 && ['started', 'failed', 'lost'].includes(r.result)));
 }
 
 function acceptMapMessage(value) {

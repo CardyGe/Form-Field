@@ -8,7 +8,7 @@ import { acceptMapMessage } from '../src/map/messages';
 import { createShow, LIVE_SOURCE_ID, type ShowDocument } from '../src/map/show';
 import { initialMapState, mapReducer, type MapState } from '../src/map/state';
 import { freezeLeaving } from '../src/map/playout';
-import { applyMapMessage, initialWall } from '../src/map/wall';
+import { applyMapMessage, initialWall, swapOutcome } from '../src/map/wall';
 import { addRow, historyBlock, placeClip, setCell, zonesSharingSource } from '../src/perform/grid-edit';
 import type { Clip } from '../src/perform/types';
 
@@ -28,7 +28,7 @@ const frames: ((t: number) => void)[] = [];
 globals.requestAnimationFrame = (fn: (t: number) => void) => { frames.push(fn); return frames.length; };
 const nextFrame = () => { for (const fn of frames.splice(0)) fn(0); };
 
-const { applyClipDraft, beginClipCopyDraft, beginClipEdit, clipDraftOpen, discardClipDraft, mapSessionForTest, onClipDraftFailed, reopenFailedDraft, studioEdit } = await import('../src/ui/useMap');
+const { applyClipDraft, beginClipCopyDraft, beginClipEdit, clipApplyStarting, clipDraftOpen, discardClipDraft, mapSessionForTest, onClipApplySettled, onClipDraftFailed, reopenFailedDraft, studioEdit } = await import('../src/ui/useMap');
 
 const clip = (id: string, sourceId: string): Clip => ({ id, name: id, sourceId, hueOffset: 0, blend: null, audioBand: 'level' });
 function showWithClips(): ShowDocument {
@@ -55,6 +55,7 @@ function open(show = showWithClips()): MapState {
 
 /** Opens a draft. Map's crosshair and flash leave the wall as it opens, and from then on nothing is sent. */
 function openDraft(sourceId: string) {
+  sent.length = 0;
   const begun = beginClipEdit(sourceId, true)!;
   assert.deepEqual(sent.map(m => m.type), ['crosshair', 'identify']);
   sent.length = 0;
@@ -76,7 +77,7 @@ test('a look that cannot start on the wall: the show goes back with no undo step
   applyClipDraft();
   const revision = mapSessionForTest.state().show.sources.find(s => s.id === 'src-a')!.revision;
   sent.length = 0;
-  wallReport({ fps: 60, level: 0, failing: [], swapFailed: [{ id: 'src-a', revision }] });
+  wallReport({ fps: 60, level: 0, failing: [], swapResults: [{ id: 'src-a', revision, result: 'failed' }] });
   const after = mapSessionForTest.state();
   assert.deepEqual(after.show, copy);
   assert.equal(after.past.length, state.past.length);
@@ -105,7 +106,7 @@ test('a failure report for another revision changes nothing', () => {
   applyClipDraft();
   const applied = mapSessionForTest.state(), revision = applied.show.sources.find(s => s.id === 'src-a')!.revision;
   sent.length = 0;
-  wallReport({ fps: 60, level: 0, failing: [], swapFailed: [{ id: 'src-a', revision: revision + 5 }] });
+  wallReport({ fps: 60, level: 0, failing: [], swapResults: [{ id: 'src-a', revision: revision + 5, result: 'failed' }] });
   assert.equal(mapSessionForTest.state(), applied);
   assert.deepEqual(sent, []);
 });
@@ -118,7 +119,7 @@ test('an edit made after Apply survives the look failing', () => {
   const applied = mapSessionForTest.state(), revision = applied.show.sources.find(s => s.id === 'src-a')!.revision;
   const moved = mapReducer(applied, { type: 'edit', action: { type: 'setPerformance', performance: { ...applied.show.performance, launchQuantize: '4bar' } } });
   mapSessionForTest.replace(moved);
-  wallReport({ fps: 60, level: 0, failing: [], swapFailed: [{ id: 'src-a', revision }] });
+  wallReport({ fps: 60, level: 0, failing: [], swapResults: [{ id: 'src-a', revision, result: 'failed' }] });
   const after = mapSessionForTest.state();
   assert.equal(after.show.performance.launchQuantize, '4bar');
   assert.notEqual(after.show.sources.find(s => s.id === 'src-a')!.project.layers[0].opacity, .3);
@@ -187,9 +188,125 @@ test('a blend leaving the edited look is frozen on its current picture, and othe
 test('the main process accepts a wall report of a look that failed, and refuses a malformed one', () => {
   const main = createRequire(import.meta.url)('../electron/map.cjs') as { acceptState: (value: unknown) => boolean };
   const base = { fps: 60, level: 0, failing: [] };
-  assert.equal(main.acceptState({ ...base, swapFailed: [{ id: 's', revision: 2 }] }), true);
-  assert.equal(main.acceptState({ ...base, swapFailed: [{ id: 's', revision: -1 }] }), false);
-  assert.equal(main.acceptState({ ...base, swapFailed: 's' }), false);
+  for (const result of ['started', 'failed', 'lost']) assert.equal(main.acceptState({ ...base, swapResults: [{ id: 's', revision: 2, result }] }), true);
+  assert.equal(main.acceptState({ ...base, swapResults: [{ id: 's', revision: -1, result: 'failed' }] }), false);
+  assert.equal(main.acceptState({ ...base, swapResults: [{ id: 's', revision: 2, result: 'maybe' }] }), false);
+  assert.equal(main.acceptState({ ...base, swapResults: 's' }), false);
+});
+
+const opacityNow = () => mapSessionForTest.state().show.sources.find(s => s.id === 'src-a')!.project.layers[0].opacity;
+const revisionNow = () => mapSessionForTest.state().show.sources.find(s => s.id === 'src-a')!.revision;
+const report = (revision: number, result: 'started' | 'failed' | 'lost') => wallReport({ fps: 60, level: 0, failing: [], swapResults: [{ id: 'src-a', revision, result }] });
+/** Applies a draft at this opacity, and returns the revision the wall was sent. */
+function applyAt(opacity: number): number {
+  const begun = openDraft('src-a');
+  studioEdit(changed(begun.project, opacity));
+  assert.equal(applyClipDraft(), null);
+  return revisionNow();
+}
+
+test('a second Apply for a look still starting waits, with its draft kept', () => {
+  open();
+  const a = applyAt(.3);
+  const begun = openDraft('src-a');
+  assert.equal(clipApplyStarting(), true);
+  studioEdit(changed(begun.project, .2));
+  sent.length = 0;
+  assert.match(applyClipDraft() ?? '', /still starting/);
+  assert.equal(clipDraftOpen(), true);
+  assert.equal(opacityNow(), .3);
+  assert.deepEqual(sent, []);
+  let settled = 0;
+  onClipApplySettled(() => { settled++; });
+  report(a, 'started');
+  onClipApplySettled(null);
+  assert.equal(settled, 1);
+  assert.equal(clipApplyStarting(), false);
+  assert.equal(applyClipDraft(), null);
+  assert.equal(opacityNow(), .2);
+});
+
+test('a failure rolls back to the look the wall confirmed, never to one it did not start', () => {
+  open();
+  const a = applyAt(.3);
+  report(a, 'started');
+  const b = applyAt(.2);
+  sent.length = 0;
+  report(b, 'failed');
+  assert.equal(opacityNow(), .3, 'A was confirmed playing');
+  assert.equal(revisionNow(), a);
+  assert.equal(sent[0].revision, a);
+  reopenFailedDraft();
+  discardClipDraft();
+  // While A is unconfirmed, B cannot exist: A failing goes straight back to the original.
+  const again = open(), first = applyAt(.3), held = openDraft('src-a');
+  studioEdit(changed(held.project, .2));
+  assert.match(applyClipDraft() ?? '', /still starting/);
+  report(first, 'failed');
+  assert.deepEqual(mapSessionForTest.state().show.sources.find(s => s.id === 'src-a')!.project, again.show.sources.find(s => s.id === 'src-a')!.project);
+  assert.equal(revisionNow(), again.show.sources.find(s => s.id === 'src-a')!.revision);
+  // The draft in hand stays open and can now be applied; A's work waits its turn.
+  assert.equal(clipDraftOpen(), true);
+  assert.equal(reopenFailedDraft(), null);
+  discardClipDraft();
+  assert.equal(reopenFailedDraft()?.project.layers[0].opacity, .3);
+});
+
+test('a closed wall clears a look still starting, says so, and a late report is ignored', () => {
+  open();
+  const a = applyAt(.3);
+  const notes: (string | null)[] = [];
+  onClipApplySettled(note => { notes.push(note); });
+  outputChanged(false);
+  onClipApplySettled(null);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0] ?? '', /projector closed/);
+  openDraft2();
+  assert.equal(clipApplyStarting(), false);
+  discardClipDraft();
+  const held = mapSessionForTest.state();
+  sent.length = 0;
+  report(a, 'failed');
+  assert.equal(mapSessionForTest.state(), held);
+  assert.deepEqual(sent, []);
+});
+
+function openDraft2() { assert.ok(beginClipEdit('src-a', true)); }
+
+test('a renderer lost before the look started clears the wait and says so', () => {
+  open();
+  const a = applyAt(.3);
+  const notes: (string | null)[] = [];
+  onClipApplySettled(note => { notes.push(note); });
+  report(a, 'lost');
+  onClipApplySettled(null);
+  assert.match(notes[0] ?? '', /could not confirm/);
+  assert.equal(opacityNow(), .3);
+  openDraft('src-a');
+  assert.equal(clipApplyStarting(), false);
+  discardClipDraft();
+});
+
+test('a report for an older revision leaves the look still starting', () => {
+  open();
+  const a = applyAt(.3);
+  report(a - 1, 'started');
+  openDraft('src-a');
+  assert.equal(clipApplyStarting(), true);
+  discardClipDraft();
+});
+
+test('the wall answers every crossfading update, including one it refused or has nothing to fade from', () => {
+  const project = presetComposition('salt-mandala', 7)!;
+  const message = { type: 'source', id: 's', revision: 1, project, crossfade: true };
+  const empty = initialWall(), taken = applyMapMessage(empty, message);
+  assert.equal(swapOutcome(empty, taken, message), 'swap');
+  assert.equal(swapOutcome(taken, applyMapMessage(taken, message), message), 'started');
+  const refused = { ...message, revision: 2, project: { bad: true } };
+  assert.equal(swapOutcome(taken, applyMapMessage(taken, refused), refused), 'failed');
+  const plain = { type: 'source', id: 's', revision: 2, project };
+  assert.equal(swapOutcome(taken, applyMapMessage(taken, plain), plain), null);
+  assert.equal(swapOutcome(taken, taken, { type: 'blackout', on: true }), null);
 });
 
 test('a clip whose source plays on no Map shape can be opened', () => {

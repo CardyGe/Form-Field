@@ -16,6 +16,7 @@ import { autoAdvanceDue, nextAutoScene } from '../map/wild';
 import { linkPerformToMap, performService, type PerformService } from '../perform/service';
 import { clipsInUse, historyBlock, placeClip, savedShow, zonesSharingSource, type HistoryBlock } from '../perform/grid-edit';
 import type { Clip } from '../perform/types';
+import type { SwapResult } from '../map/compositor';
 import { validateLiveSettings } from '../live/settings';
 
 /** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
@@ -83,11 +84,13 @@ interface Session {
    * holds its changes in `latest` instead, and neither the show nor the wall hears of them until Apply.
    */
   studioEdit: { sourceId: string; shapeId: string; first: boolean; draft: boolean; latest: Project | null; name: string; copy?: PendingCopy } | null;
-  /** The last draft applied to each source, until the wall has had the chance to say it could not start. */
+  /** A draft applied to each source and not yet answered by the wall: at most one per source, so a rollback is always to the look on the wall. */
   applied: Map<string, { revision: number; before: { project: Project; revision: number }; pushed: ShowDocument; show: ShowDocument; project: Project; name: string }>;
   /** Drafts the wall could not start, waiting to be opened again so their work is not lost. */
   failedDrafts: { sourceId: string; project: Project; name: string }[];
   onDraftFailed: (() => void) | null;
+  /** Told when an Apply stops waiting on the wall, with a note when the operator needs one. */
+  onApplySettled: ((note: string | null) => void) | null;
   /** How many Map screens are mounted (React may mount one twice in development). */
   mounted: number;
   /** A Studio edit waiting to reach the wall at the next frame (edits come faster than frames while a slider moves). */
@@ -115,7 +118,7 @@ function mapSession(): Session {
   const bridge = window.studio?.map;
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
-    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, applied: new Map(), failedDrafts: [], onDraftFailed: null, mounted: 0, wallFrame: null, onStudioWarning: null,
+    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, applied: new Map(), failedDrafts: [], onDraftFailed: null, onApplySettled: null, mounted: 0, wallFrame: null, onStudioWarning: null,
     solo: { shapes: [], groups: [] }, snap: true, photoShown: true, live: null, wallHeld: false, onStateTidied: null,
     saver: autosaveSchedule<ShowDocument>(async show => {
       if (!bridge) return;
@@ -132,8 +135,8 @@ function mapSession(): Session {
   });
   // Followed for the window's life, so the session knows whether the wall is open even while Map is not shown.
   // A wall that opens or reloads during a show is told the show again from here, whichever section is on screen.
-  bridge?.onOutputChanged(open => { created.outputOpen = open; if (!open) created.wallHeld = false; if (open) { created.sentSources = new Map(); performService().wallReopened(); } });
-  bridge?.onState(state => { performService().wallState(state); for (const failed of state.swapFailed ?? []) draftFailedOnWall(created, failed); });
+  bridge?.onOutputChanged(open => { created.outputOpen = open; wallChanged(created, open); if (!open) created.wallHeld = false; if (open) { created.sentSources = new Map(); performService().wallReopened(); } });
+  bridge?.onState(state => { performService().wallState(state); for (const result of state.swapResults ?? []) swapAnswered(created, result); });
   linkPerformToMap({
     send: message => bridge?.send(message),
     isOpen: () => created.outputOpen,
@@ -258,6 +261,29 @@ export function clipDraftOnWall(): boolean {
 
 /** Told when the wall could not start an applied draft. */
 export function onClipDraftFailed(listener: (() => void) | null): void { mapSession().onDraftFailed = listener; }
+/** Told when an Apply stops waiting on the wall. */
+export function onClipApplySettled(listener: ((note: string | null) => void) | null): void { mapSession().onApplySettled = listener; }
+/** Whether the open draft's look has an earlier Apply the wall has not answered yet. */
+export function clipApplyStarting(): boolean {
+  const s = mapSession(), edit = s.studioEdit;
+  return !!edit?.draft && s.applied.has(edit.sourceId);
+}
+
+/** The wall's answer to an Apply. An answer for any other revision is out of date and changes nothing. */
+function swapAnswered(s: Session, answer: SwapResult): void {
+  const applied = s.applied.get(answer.id);
+  if (!applied || applied.revision !== answer.revision) return;
+  if (answer.result === 'failed') draftFailedOnWall(s, answer);
+  else s.applied.delete(answer.id);
+  s.onApplySettled?.(answer.result === 'lost' ? 'The projector could not confirm the new look because its graphics restarted. It will try the look again by itself.' : null);
+}
+
+/** A wall that closed or reloaded will never answer: nothing may stay waiting on it. */
+function wallChanged(s: Session, open: boolean): void {
+  if (!s.applied.size) return;
+  s.applied.clear();
+  s.onApplySettled?.(open ? 'The projector reloaded before the new look started. It will play the new look.' : 'The projector closed before the new look started. It will play the new look when it opens.');
+}
 
 /**
  * The wall kept the old look because the applied one could not start. The show goes back to that look with no undo
@@ -329,6 +355,8 @@ export function applyClipDraft(): string | null {
   if (next.show === before.show) return STUDIO_REFUSALS[next.refusal ?? ''] ?? next.refusal ?? 'the change could not be made';
   const source = next.show.sources.find(x => x.id === edit.sourceId)!;
   if (JSON.stringify(source.project) === JSON.stringify(was.project)) return close();
+  // One Apply at a time for a look, so what the wall is playing is always known. The draft stays open meanwhile.
+  if (s.applied.has(source.id)) return 'the last change to this look is still starting';
   const message: MapMessage = { type: 'source', id: source.id, revision: source.revision, project: source.project, crossfade: true };
   // Checked before anything changes, so the show and the wall never disagree.
   if (s.outputOpen && !acceptMapMessage(message as unknown)) return 'the composition is too large to send to the projector';
