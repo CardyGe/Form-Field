@@ -63,7 +63,8 @@ try {
     const watch = (canvas, name) => { seen.canvases.push({ canvas, name }); canvas.addEventListener('webglcontextlost', () => seen.lost.push(`${name} at ${Math.round(performance.now())} ms`)); };
     watch(document.querySelector('canvas'), 'stage');
     const create = document.createElement.bind(document);
-    document.createElement = (tag, ...rest) => { const made = create(tag, ...rest); if (String(tag).toLowerCase() === 'canvas') watch(made, `instrument ${++seen.made}`); return made; };
+    window.__videos = [];
+    document.createElement = (tag, ...rest) => { const made = create(tag, ...rest); if (String(tag).toLowerCase() === 'canvas') watch(made, `instrument ${++seen.made}`); if (String(tag).toLowerCase() === 'video') window.__videos.push(made); return made; };
   });
   const wallState = () => wall.evaluate(() => {
     const c = document.querySelector('canvas'), copy = new OffscreenCanvas(96, 54), x = copy.getContext('2d', { willReadFrequently: true });
@@ -96,9 +97,30 @@ try {
   await wall.waitForFunction(() => Object.keys(window.__mapStats?.prepares ?? {}).length === 1, null, { timeout: 15000 });
   await sleep(1500);
 
+  // A second shape plays a 2 s test clip, chosen through the app's own file dialog so the app allows the file. Only
+  // the video itself is kept for the Perform part; the shape is left out of the show the check sends.
+  let videoProblem = '';
+  try {
+    const { execFileSync } = await import('node:child_process');
+    const clip = path.join(out, 'locked-loop.mp4');
+    execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '5', '-movflags', '+faststart', clip]);
+    await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, clip);
+    await studio.getByRole('button', { name: 'Rectangle', exact: true }).click();
+    await studio.mouse.move(...at(.84, .76)); await studio.mouse.down(); await studio.mouse.move(...at(.9, .85), { steps: 4 }); await studio.mouse.move(...at(.96, .95), { steps: 4 }); await studio.mouse.up();
+    await studio.getByRole('button', { name: 'Select', exact: true }).click();
+    if (await effect.count()) await effect.click();
+    await studio.evaluate(() => { const d = document.querySelector('details[data-section="effect"]'); if (d && !d.open) d.open = true; });
+    await studio.getByRole('button', { name: 'Change look' }).click();
+    await studio.locator('[data-look="video"]').click();
+    await studio.getByRole('button', { name: 'Close looks' }).click({ timeout: 2000 }).catch(() => {});
+    await wall.waitForFunction(() => Object.values(window.__mapStats?.videos ?? {}).some(v => v.state === 'playing'), null, { timeout: 15000 });
+  } catch (error) { videoProblem = String(error.message ?? error).split('\n')[0]; }
+
   const sent = await app.evaluate(() => globalThis.__sent);
   const baseShow = sent.filter(m => m.type === 'show').at(-1).show;
-  const baseShape = baseShow.shapes.find(s => s.sourceId), baseSource = baseShow.sources.find(s => s.id === baseShape.sourceId);
+  const baseShape = baseShow.shapes.find(s => baseShow.sources.some(x => x.id === s.sourceId)), baseSource = baseShow.sources.find(s => s.id === baseShape.sourceId);
+  // The clip as a loop locked to the tempo, four beats long.
+  const video = (baseShow.videos ?? [])[0] ? { ...baseShow.videos[0], tempoSync: 4, speed: 1 } : null;
   const baseProject = sent.filter(m => m.type === 'source' && m.id === baseSource.id).at(-1).project;
   const xs = baseShape.points.map(p => p.x), ys = baseShape.points.map(p => p.y);
   const box = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
@@ -113,7 +135,7 @@ try {
     sources.push({ ...baseSource, id, revision: 1 });
     sourceMessages.push({ type: 'source', id, revision: 1, project: baseProject });
   }
-  const show = { ...baseShow, shapes, sources, groups: baseShow.groups ?? [], links: [], clipSourceIds: [] };
+  const show = { ...baseShow, shapes, sources, groups: baseShow.groups ?? [], links: [], clipSourceIds: [], videos: video ? [video] : [] };
   await toWall([{ type: 'show', show }, ...sourceMessages]);
 
   await check(`the wall starts ${SOURCES} instrument sources beside the stage`, async () => {
@@ -198,7 +220,7 @@ try {
   const picture = async name => { const png = await wall.evaluate(async () => { const c = document.querySelector('canvas'), copy = new OffscreenCanvas(960, 540); copy.getContext('2d').drawImage(c, 0, 0, 960, 540); const bytes = new Uint8Array(await (await copy.convertToBlob({ type: 'image/png' })).arrayBuffer()); let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); }); await fs.writeFile(path.join(out, name), Buffer.from(png, 'base64')); };
   const cut = { kind: 'cut', durationMs: 0 };
   const change = (zone, sourceId, blend) => ({ zone, sourceId, shapeIds: [shapes[zone].id], blend, phaseOffsetBeats: 0 });
-  const valuesOf = (master, zone0 = {}, zone4 = {}) => ({ type: 'performValues', values: { master, zones: Array.from({ length: 8 }, (_, i) => ({ brightness: 1, hueDeg: 0, speed: 1, ...(i === 0 ? zone0 : {}), ...(i === 4 ? zone4 : {}) })) } });
+  const valuesOf = (master, zone0 = {}, zone4 = {}, zone5 = {}) => ({ type: 'performValues', values: { master, zones: Array.from({ length: 8 }, (_, i) => ({ brightness: 1, hueDeg: 0, speed: 1, ...(i === 0 ? zone0 : {}), ...(i === 4 ? zone4 : {}), ...(i === 5 ? zone5 : {}) })) } });
   record.perform = {};
 
   await check('Perform starts black, and gives back the renderers Map was using', async () => {
@@ -342,6 +364,66 @@ try {
     assert.ok(b.stopHalf > .3 && b.stopHalf < .7, `half way through a Stop the border is at ${b.stopHalf}`);
     assert.ok(b.stopEnd < .05, `after a Stop the border is at ${b.stopEnd}`);
     await toWall([valuesOf(1)]);
+  });
+
+  await check('a video locked to the tempo is armed, lands, and stays on the beat grid through speed steps and a hold', async () => {
+    assert.equal(videoProblem, '', `the test video could not be set up: ${videoProblem}`);
+    assert.ok(video, 'the studio sent no video');
+    // The tempo the service will send during a show: 120 BPM, counted from now, sent every few milliseconds.
+    const BPM = 120;
+    const started = await app.evaluate(({ BrowserWindow }, bpm) => {
+      const t0 = Date.now();
+      globalThis.__tempo = setInterval(() => {
+        const wall = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('#map-output'));
+        const total = (Date.now() - t0) * bpm / 60000, beat = Math.floor(total);
+        wall?.webContents.send('studio:map:message', { type: 'signals', signals: { 'tempo.beat': beat, 'tempo.phase': total - beat, 'tempo.bpm': bpm } });
+      }, 8);
+      return t0;
+    }, BPM);
+    try {
+      const beats = at => (at - started) * BPM / 60000;
+      const read = () => wall.evaluate(() => { const v = window.__videos.at(-1); return { at: Date.now(), time: v.currentTime, duration: v.duration, paused: v.paused, rate: v.playbackRate }; });
+      // How far the video is from where a 4-beat loop at this speed should be, as a part of the loop (0 to 0.5).
+      const off = (r, pace) => { const want = ((beats(r.at) * pace / 4) % 1 + 1) % 1, d = Math.abs(r.time / r.duration - want); return Math.min(d, 1 - d); };
+      const untilPhase = async phase => { for (;;) { const b = beats(Date.now()); if (Math.abs(b - Math.floor(b) - phase) < .04) return; await sleep(5); } };
+      const before = (await wall.evaluate(() => window.__videos.length));
+      await toWall([{ type: 'performArm', sourceIds: [video.id] }]);
+      await until(async () => (await armedNow()).includes(video.id), 15000, 'the armed video to be ready');
+      await sleep(600);
+      const waiting = await read(), still = (await sleep(400), await read());
+      assert.ok(await wall.evaluate(n => window.__videos.length > n, before), 'no player was made for the armed video');
+      assert.ok(waiting.paused && still.time === waiting.time, 'the armed video is playing while it waits');
+      await toWall([{ type: 'performLaunch', launch: { id: 'V1', atMs: await wallNow() + 200, barMs: 2000, changes: [change(5, video.id, cut)] } }]);
+      await until(async () => (await landedOf('V1')).length > 0, 10000, 'the video to land');
+      await sleep(1300);
+      const plain = await read();
+      // Stepped to 2× late in a beat, and back to 1× late in a beat: both must land where the beat is.
+      await untilPhase(.85);
+      await toWall([valuesOf(1, {}, {}, { speed: 2 })]);
+      await sleep(450);
+      const doubled = await read();
+      await untilPhase(.85);
+      await toWall([valuesOf(1, {}, {}, { speed: 1 })]);
+      await sleep(450);
+      const back = await read();
+      await toWall([valuesOf(1, {}, {}, { speed: 0 })]);
+      await sleep(300);
+      const held = await read(), later = (await sleep(400), await read());
+      await toWall([valuesOf(1)]);
+      await sleep(700);
+      const released = await read();
+      record.perform.video = { duration: plain.duration, rate: [plain.rate, doubled.rate, back.rate].map(r => +r.toFixed(2)), offGrid: { plain: +off(plain, 1).toFixed(3), doubled: +off(doubled, 2).toFixed(3), back: +off(back, 1).toFixed(3), released: +off(released, 1).toFixed(3) }, heldMoved: +(later.time - held.time).toFixed(3) };
+      assert.ok(!plain.paused && Math.abs(plain.rate - 1) < .05, `a 2 s clip on a 4-beat loop at 120 plays at ${plain.rate}×`);
+      assert.ok(off(plain, 1) < .08, `at 1× the video is ${off(plain, 1).toFixed(3)} of a loop off the beat`);
+      assert.ok(Math.abs(doubled.rate - 2) < .05, `at 2× the video plays at ${doubled.rate}×`);
+      assert.ok(off(doubled, 2) < .08, `after the step to 2× the video is ${off(doubled, 2).toFixed(3)} of a loop off the beat`);
+      assert.ok(Math.abs(back.rate - 1) < .05, `back at 1× the video plays at ${back.rate}×`);
+      assert.ok(off(back, 1) < .08, `after the step back to 1× the video is ${off(back, 1).toFixed(3)} of a loop off the beat`);
+      assert.ok(held.paused && later.time === held.time, `at speed 0 the video moved on by ${(later.time - held.time).toFixed(3)} s`);
+      assert.ok(!released.paused && off(released, 1) < .08, `let go, the video is ${off(released, 1).toFixed(3)} of a loop off the beat`);
+    } finally {
+      await app.evaluate(() => clearInterval(globalThis.__tempo));
+    }
   });
 
   await check('master, brightness and hue change the picture; values out of range are held inside it', async () => {

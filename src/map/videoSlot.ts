@@ -27,6 +27,8 @@ export class VideoSlot {
   private pace = 1;
   private offset = 0;
   private held = false;
+  /** Perform changed its speed or bar: the next join counts the part of a beat already played. Never set by Map. */
+  private rejoin = false;
   /** Bumped on every load, so a late answer about an older load is ignored. */
   private generation = 0;
   private watching = false;
@@ -71,12 +73,12 @@ export class VideoSlot {
     if (!this.frozen) {
       // A speed of 0 holds the video where it is, locked to the tempo or not; let go, it joins the beat where it is.
       const hold = !(pace > 0);
-      if (hold !== this.held) { this.held = hold; this.loop = -1; if (hold) v.pause(); else void v.play().catch(() => {}); }
+      if (hold !== this.held) { this.held = hold; this.loop = -1; this.rejoin = true; if (hold) v.pause(); else void v.play().catch(() => {}); }
       // A new speed or bar moves every loop boundary: the video joins the new loop where the beat is, not at its start.
-      if (pace !== this.pace || offset !== this.offset) { this.pace = pace; this.offset = offset; this.loop = -1; }
+      if (pace !== this.pace || offset !== this.offset) { this.pace = pace; this.offset = offset; this.loop = -1; this.rejoin = true; }
     }
     if (!this.frozen && !this.held) {
-      const clock = videoClock(signals, pace, offset);
+      const clock = videoClock(signals, pace, offset, this.rejoin);
       const { rate, beats } = videoRate(Number.isFinite(v.duration) ? v.duration : null, speed, this.source.tempoSync, clock.bpm);
       this.playsAs = beats;
       if (Math.abs(v.playbackRate - rate) > 0.005) v.playbackRate = rate;
@@ -86,7 +88,7 @@ export class VideoSlot {
         if (loop !== this.loop) {
           // Joining mid-loop, it starts where the beat is; after that, each loop starts at its beginning.
           v.currentTime = this.loop === -1 ? Math.max(0, into * (v.duration || 0)) : 0;
-          this.loop = loop;
+          this.loop = loop; this.rejoin = false;
         }
       } else this.loop = -1;
     }

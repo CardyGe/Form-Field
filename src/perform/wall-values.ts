@@ -31,6 +31,44 @@ export function performDraw(perform: { zones: readonly ZonePicture[]; values: Pe
   return { master: perform.values ? within(perform.values.master, 0, 1, 1) : 1, shapes, speed, phaseOffsets };
 }
 
+/** A source as far as its pace goes: its own speed, and the beats of its loop when it is locked to the tempo. */
+export interface PacedSource { id: string; speed: number; tempoSync?: number | null }
+
+/**
+ * After a show: a loop locked to the tempo that plays on carries its Perform speed and bar, so its picture does not
+ * jump when the show ends, but only until its next loop boundary. From there it plays as Map plays it. The carry
+ * ends at once if the source leaves, its loop length or speed is changed, it was held at speed 0, or there is no tempo.
+ */
+export class CarriedPace {
+  private readonly held = new Map<string, { speed: number; offset: number; sync: number; own: number; loop: number | null }>();
+  get size(): number { return this.held.size; }
+  get(id: string): { speed: number; offset: number } | undefined {
+    const h = this.held.get(id);
+    return h && { speed: h.speed, offset: h.offset };
+  }
+  /** Carries this source's pace on. A free source, or plain pace (speed 1, no offset), carries nothing and drops what was there. */
+  keep(source: PacedSource, speed: number, offset: number): void {
+    if (!source.tempoSync || (speed === 1 && offset === 0)) { this.held.delete(source.id); return; }
+    this.held.set(source.id, { speed, offset, sync: source.tempoSync, own: source.speed, loop: null });
+  }
+  delete(id: string): void { this.held.delete(id); }
+  clear(): void { this.held.clear(); }
+  /** Once a frame, with the show's sources as they are now and the tempo: ends every carry that is due to end. */
+  step(sources: Iterable<PacedSource>, signals: Signals): void {
+    if (this.held.size === 0) return;
+    const now = new Map<string, PacedSource>();
+    for (const s of sources) now.set(s.id, s);
+    const beat = signals['tempo.beat'];
+    for (const [id, h] of this.held) {
+      const source = now.get(id);
+      if (!source || source.tempoSync !== h.sync || source.speed !== h.own || beat === undefined || !(h.speed > 0)) { this.held.delete(id); continue; }
+      const loop = Math.floor((beat + (signals['tempo.phase'] ?? 0) - h.offset) * h.speed / h.sync);
+      if (h.loop === null) h.loop = loop;
+      else if (loop !== h.loop) this.held.delete(id);
+    }
+  }
+}
+
 /**
  * The tempo as one Perform source hears it: `offset` beats taken off the count, and the count run at `speed`, so a
  * loop of n beats plays as n / speed beats and starts on the corrected bar. Only the tempo signals are changed; at

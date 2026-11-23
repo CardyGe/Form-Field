@@ -14,7 +14,7 @@ import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, govern
 import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, SPEED_RANGE, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
 import type { BlendKind } from '../perform/types';
-import { performClock, type PerformDraw } from '../perform/wall-values';
+import { CarriedPace, performClock, type PerformDraw } from '../perform/wall-values';
 import type { Scene } from './scenes';
 import { LiveSlot, LIVE_ASPECT } from './liveSlot';
 import { VideoSlot } from './videoSlot';
@@ -197,8 +197,8 @@ export class MapCompositor {
   private perform: PerformDraw | null = null;
   /** A source leaving through a blend keeps the speed and bar it had when its zone moved on. */
   private readonly leaving = new Map<string, { speed: number; offset: number }>();
-  /** After a show: a loop locked to the tempo that is still playing keeps its speed and bar, so it does not jump. */
-  private readonly kept = new Map<string, { speed: number; offset: number }>();
+  /** After a show: a loop locked to the tempo that is still playing keeps its speed and bar until its next loop boundary. */
+  private readonly carried = new CarriedPace();
   /** After a show: master, brightness and hue go back to plain over a short time, from where they were. */
   private easing: { from: PerformDraw; start: number; duration: number } | null = null;
   /**
@@ -213,7 +213,7 @@ export class MapCompositor {
     this.canvas = canvas;
     this.gpu = new Gpu(canvas);
     // A lost context blanks the wall until Chromium gives it back; then every picture is made again.
-    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); });
+    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); this.carried.clear(); });
     canvas.addEventListener('webglcontextrestored', () => {
       this.gpu.setUp();
       this.pictures.clear(); this.overlay = null; this.histories.clear();
@@ -317,17 +317,24 @@ export class MapCompositor {
   setPerformValues(values: PerformDraw | null, easeMs = 0): void {
     if (values === this.perform) return;
     if (!values && this.perform) {
-      // A loop locked to the tempo that plays on keeps its speed and its bar until it stops, so its picture does not jump.
-      const locked = [...this.show.sources, ...(this.show.videos ?? [])].filter(s => s.tempoSync && (isVideoId(s.id) ? this.videoSlots.has(s.id) : this.slots.has(s.id)));
-      for (const { id } of locked) { const speed = this.speedOf(id), offset = this.offsetOf(id); if (speed !== 1 || offset !== 0) this.kept.set(id, { speed, offset }); }
+      // A loop locked to the tempo that plays on keeps its speed and its bar to its next loop boundary, so its picture
+      // does not jump as the show ends. Plain pace carries nothing, and removes anything that was there.
+      for (const source of [...this.show.sources, ...(this.show.videos ?? [])]) {
+        if (isVideoId(source.id) ? this.videoSlots.has(source.id) : this.slots.has(source.id)) this.carried.keep(source, this.speedOf(source.id), this.offsetOf(source.id));
+        else this.carried.delete(source.id);
+      }
       this.easing = easeMs > 0 ? { from: this.perform, start: this.fadeClock, duration: easeMs } : null;
-    } else { this.easing = null; if (values) this.settling = false; }
+    } else {
+      this.easing = null;
+      // A new show starts from its own values: nothing is carried into it from the last one.
+      if (values) { this.settling = false; if (!this.perform) this.carried.clear(); }
+    }
     this.perform = values;
     this.dirty = true;
   }
   // With no show, and none just ended, these are 1 and 0 for every source: all three maps are empty.
-  private speedOf(id: string): number { return this.perform?.speed.get(id) ?? this.leaving.get(id)?.speed ?? this.kept.get(id)?.speed ?? 1; }
-  private offsetOf(id: string): number { return this.perform?.phaseOffsets.get(id) ?? this.leaving.get(id)?.offset ?? this.kept.get(id)?.offset ?? 0; }
+  private speedOf(id: string): number { return this.perform?.speed.get(id) ?? this.leaving.get(id)?.speed ?? this.carried.get(id)?.speed ?? 1; }
+  private offsetOf(id: string): number { return this.perform?.phaseOffsets.get(id) ?? this.leaving.get(id)?.offset ?? this.carried.get(id)?.offset ?? 0; }
   /** How far the values of a show that has ended have gone back to plain, 0 to 1; null when none are. */
   private easeAt(now: number): number | null { return this.easing ? fadeAlpha(this.easing.start, now, this.easing.duration) : null; }
   /** Perform's brightness and hue for a shape now; undefined for none. */
@@ -436,7 +443,7 @@ export class MapCompositor {
       for (const id of this.armed) if (isVideoId(id)) wanted.add(id);
       for (const fade of this.fades.values()) if (isVideoId(fade.fromSource)) wanted.add(fade.fromSource);
     }
-    for (const [id, slot] of this.videoSlots) if (!wanted.has(id) || !videos.some(v => v.id === id)) { slot.dispose(); this.videoSlots.delete(id); this.videoTextures.delete(id); this.kept.delete(id); this.dirty = true; }
+    for (const [id, slot] of this.videoSlots) if (!wanted.has(id) || !videos.some(v => v.id === id)) { slot.dispose(); this.videoSlots.delete(id); this.videoTextures.delete(id); this.carried.delete(id); this.dirty = true; }
     for (const video of videos) {
       if (!wanted.has(video.id)) continue;
       const slot = this.videoSlots.get(video.id);
@@ -529,6 +536,8 @@ export class MapCompositor {
     let videoLeft = false;
     for (const id of [...this.leaving.keys()]) if (!fadingFrom.has(id)) { this.leaving.delete(id); videoLeft ||= isVideoId(id); }
     if (videoLeft) this.updateVideos();
+    // After a show: a carried speed and bar end at the loop's next boundary, or at once when its source is changed.
+    if (!this.frozen && this.carried.size) this.carried.step([...this.show.sources, ...(this.show.videos ?? [])], this.signals);
     // What each source is wanted for this frame, worked out for all of them before any renderer is asked for.
     const wanted = new Map<string, { users: Shape[]; fading: { shapes: Shape[]; dissolve: boolean } | undefined; waiting: boolean; rank: number }>();
     for (const source of this.show.sources) {
@@ -664,7 +673,7 @@ export class MapCompositor {
       if (slot.texture && !this.lost && !this.disposed) { if (typeof fade.from !== 'string') this.gpu.free(fade.from); fade.from = this.gpu.copy(slot.texture); }
       fade.fromSource = null;
     }
-    this.kept.delete(id);
+    this.carried.delete(id);
     slot.renderer?.dispose();
     slot.renderer = null;
     if (!this.lost) this.gpu.free(slot.texture);

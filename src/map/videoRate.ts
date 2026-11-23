@@ -10,10 +10,11 @@ import type { Signals } from '../react/signals';
  * The beat count and tempo a video hears. Map: the clock as it is (whole beats; 120 when the wall has no tempo).
  * Perform: `offset` beats taken off the count, the part of a beat already played counted in, and both the count and
  * the tempo run at `pace`, so a loop of n beats plays as n / pace beats at pace times the rate.
+ * exact: also count the part of a beat at plain pace, for a video joining its loop after a Perform speed or bar change.
  */
-export function videoClock(signals: Signals, pace: number, offset: number): { count: number | undefined; bpm: number } {
+export function videoClock(signals: Signals, pace: number, offset: number, exact = false): { count: number | undefined; bpm: number } {
   const beat = signals['tempo.beat'], bpm = signals['tempo.bpm'] ?? 120;
-  if (pace === 1 && offset === 0) return { count: beat, bpm };
+  if (pace === 1 && offset === 0 && !exact) return { count: beat, bpm };
   return { count: beat === undefined ? undefined : (beat + (signals['tempo.phase'] ?? 0) - offset) * pace, bpm: bpm * pace };
 }
 
