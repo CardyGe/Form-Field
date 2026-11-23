@@ -6,7 +6,7 @@ import { MAX_PERFORM_SCENES, ZONE_COUNT, type Clip, type PerformanceSet, type Sc
 
 /**
  * The set with Map's scenes added after any rows it already has, up to 16. Clips reuse sources already in the show,
- * so the 64-source limit cannot be passed, and a look shared by several zones or scenes shares one clip.
+ * so the 64-source limit cannot be passed, and a look shared by several zones or scenes shares one default clip. Rows leave the protected ceiling alone until switched on.
  * `id` gives each new row and clip its id.
  */
 export function importMapScenes(show: ShowDocument, id: () => string): PerformanceSet {
@@ -18,7 +18,8 @@ export function importMapScenes(show: ShowDocument, id: () => string): Performan
   const known = new Set([LIVE_SOURCE_ID, ...show.sources.map(s => s.id), ...show.videos.map(v => v.id)]);
   const clips: Clip[] = [...set.clips];
   const clipFor = (sourceId: string, name: string): string => {
-    const have = clips.find(c => c.sourceId === sourceId);
+    // Only a clip with default settings is shared: a tuned one would hand its hue, blend and band to the imported cell.
+    const have = clips.find(c => c.sourceId === sourceId && c.hueOffset === 0 && c.blend === null && c.audioBand === 'level');
     if (have) return have.id;
     const clip: Clip = { id: id(), name: name.slice(0, 40), sourceId, hueOffset: 0, blend: null, audioBand: 'level' };
     clips.push(clip);
@@ -35,8 +36,7 @@ export function importMapScenes(show: ShowDocument, id: () => string): Performan
       if (!shapeId || !sourceId || !known.has(sourceId)) return null;
       return clipFor(sourceId, show.shapes.find(s => s.id === shapeId)?.name ?? 'Clip');
     });
-    const ceiling = set.zones.some((z, i) => z.protected && cells[i] !== null);
-    scenes.push({ id: id(), name: mapScene.name.slice(0, 40), cells, includeProtected: ceiling, follow: null });
+    scenes.push({ id: id(), name: mapScene.name.slice(0, 40), cells, includeProtected: false, follow: null });
   }
   return { ...set, scenes, clips };
 }

@@ -27,6 +27,8 @@ export interface PerformView {
   /** Asked for and still not ready after a whole bar (the red dot). */
   stuck: string[];
   notices: string[];
+  /** Milliseconds each source took from being asked for to being ready (the first time). In memory only. */
+  prepareMs: Record<string, number>;
 }
 export interface WallLink { send(m: MapMessage): void; isOpen(): boolean; sendWholeShow(): void }
 export interface ClockLink {
@@ -76,6 +78,7 @@ export class PerformService {
   private requested: string[] = [];
   /** When each requested source was first asked for. */
   private requestedAt = new Map<string, number>();
+  private prepared = new Map<string, number>();
   /** What the wall holds, as last sent. */
   private held = new Map<string, { launch: WallLaunch; key: string; source: Launch }>();
   /** Launches cancelled as they came due: the wall may have landed them, so a late report still counts. */
@@ -161,8 +164,12 @@ export class PerformService {
   /** What the wall reports: which armed sources are ready, and what has landed. */
   wallState(state: { armed?: string[]; landed?: { launchId: string; zones: number[] }[] }): void {
     if (!this.isRunning) return;
-    if (state.armed) this.wallArmed = state.armed;
-    const now = this.deps.now(), partial = new Set<string>(), overruled = new Set<number>();
+    const now = this.deps.now();
+    if (state.armed) {
+      this.wallArmed = state.armed;
+      for (const id of state.armed) { const at = this.requestedAt.get(id); if (at !== undefined && !this.prepared.has(id)) this.prepared.set(id, Math.max(0, now - at)); }
+    }
+    const partial = new Set<string>(), overruled = new Set<number>();
     let latestMissed = now;
     const reported = (state.landed ?? []).map(r => r.launchId);
     for (const { launchId, zones } of state.landed ?? []) {
@@ -271,7 +278,7 @@ export class PerformService {
       if (this.midi === 'lost') notices.push('MIDImix lost. The picture keeps its values until it reconnects.');
       if (!this.deps.wall.isOpen()) notices.push('The projector window is closed. The show carries on and resumes when it opens.');
     }
-    return { running: this.isRunning, clock, launcher: this.launcher, controls: this.controls, shift: this.shift, audio: this.audio, midi: this.midi, armed: this.wallArmed, waiting, stuck, notices };
+    return { running: this.isRunning, clock, launcher: this.launcher, controls: this.controls, shift: this.shift, audio: this.audio, midi: this.midi, armed: this.wallArmed, waiting, stuck, notices, prepareMs: Object.fromEntries(this.prepared) };
   }
 
   // ---- The wall ----

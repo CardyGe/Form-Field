@@ -84,7 +84,10 @@ export function checkSet(show: ShowDocument, stats: CheckStats = {}): CheckResul
     const used = new Set(stats.midiInputs);
     for (const l of show.links) if (used.has(l.input)) out.push({ level: 'warning', zone: null, message: `Link "${l.name || l.target}" listens to a control the MIDImix layout also uses, so moving that control does both.` });
     for (const t of show.triggers) if (used.has(t.input)) out.push({ level: 'warning', zone: null, message: `A trigger (${t.action.kind}) listens to a control the MIDImix layout also uses, so pressing it does both.` });
-  }
+  } else out.push({ level: 'warning', zone: null, message: 'MIDI clashes are not checked until the MIDImix is set up.' });
+
+  const untimed = set.clips.filter(c => stats.prepareMs?.[c.id] === undefined).length;
+  if (untimed > 0) out.push({ level: 'warning', zone: null, message: `${untimed} ${untimed === 1 ? 'look has' : 'looks have'} not been timed yet. A rehearsal run will time them.` });
 
   out.push({ level: 'warning', zone: null, message: REMINDER });
   return out;

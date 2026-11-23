@@ -32,10 +32,11 @@ function room(): ShowDocument {
   show.performance.scenes = [scene('p1', Array.from({ length: 8 }, (_, i) => i === 7 ? 'c2' : 'c1'))];
   return show;
 }
-const messages = (show: ShowDocument, stats?: Parameters<typeof checkSet>[1]) => checkSet(show, stats).filter(r => !/does not analyse/.test(r.message));
+const STANDING = /does not analyse|not checked until|not been timed/;
+const messages = (show: ShowDocument, stats?: Parameters<typeof checkSet>[1]) => checkSet(show, stats).filter(r => !STANDING.test(r.message));
 
 test('a tidy set raises nothing but the standing reminder about flashing inside looks', () => {
-  const all = checkSet(room());
+  const all = checkSet(room(), { midiInputs: [], prepareMs: { c1: 100, c2: 100 } });
   assert.deepEqual(messages(room()), []);
   assert.equal(all.length, 1);
   assert.match(all[0].message, /by eye/);
@@ -67,7 +68,7 @@ test('a visible shape outside every zone is named, a hidden shape and a blocker 
   assert.equal(r.length, 1); assert.match(r[0].message, /Table/); assert.equal(r[0].zone, null);
 });
 
-test('a scene needing more than 8 renderers is an error', () => {
+test('a malformed scene naming more than 8 looks is an error (guards hand-edited sets)', () => {
   const show = room();
   show.sources = Array.from({ length: 9 }, (_, i) => source(`m${i}`));
   show.performance.clips = show.sources.map(s => clip(`k-${s.id}`, s.id));
@@ -159,7 +160,9 @@ test('import makes one row per Map scene from each zone\'s first shape, reusing 
   assert.equal(clipOf(0, 1), 's2'); assert.equal(clipOf(1, 1), 's2');
   assert.equal(out.scenes[0].cells[1], out.scenes[1].cells[1], 'the same look shares one clip');
   assert.equal(clipOf(0, 7), 's1'); assert.equal(clipOf(1, 7), null);
-  assert.equal(out.scenes[0].includeProtected, true); assert.equal(out.scenes[1].includeProtected, false);
+  assert.equal(out.scenes[0].includeProtected, false, 'a ceiling clip is kept in the cell, but the scene leaves the ceiling alone until switched on');
+  assert.equal(out.scenes[1].includeProtected, false);
+  assert.equal(out.scenes[0].cells[7] !== null, true);
   assert.equal(clipOf(0, 3), null);
   assert.ok(out.clips.every(c => show.sources.some(s => s.id === c.sourceId)));
   assert.equal(new Set(out.clips.map(c => c.id)).size, out.clips.length);
@@ -185,7 +188,7 @@ test('import adds after existing rows without touching them, up to the limit', (
   assert.ok(out.clips.some(c => c.id === 'keep'));
 });
 
-test('import skips Live-less plain colours, keeps Live and videos, and the live scene reads the shapes on screen', () => {
+test('import skips plain colours, keeps Live and videos, and reads the live scene from the shapes on screen', () => {
   const show = mapShow(1);
   show.videos = [{ id: 'video-1', path: '/x.mp4', name: 'Loop', speed: 1, tempoSync: null }];
   show.sceneId = 'm0';
@@ -208,4 +211,37 @@ test('import with no zone placed changes nothing', () => {
   show.performance.zones.forEach(z => { z.target = null; });
   const out = importMapScenes(show, counter());
   assert.deepEqual(out, show.performance);
+});
+
+test('import does not reuse a clip tuned with a hue, blend or band: it makes a default clip on the same source', () => {
+  const show = mapShow();
+  show.performance.clips = [{ ...clip('tuned', 's2'), hueOffset: 90 }, { ...clip('blended', 's1'), blend: { kind: 'fade', bars: 2 } }, { ...clip('banded', 's9'), audioBand: 'bass' }];
+  const out = importMapScenes(show, counter());
+  const used = out.scenes.flatMap(sc => sc.cells).filter((c): c is string => c !== null);
+  assert.ok(!used.includes('tuned') && !used.includes('blended'));
+  for (const id of used) { const c = out.clips.find(x => x.id === id)!; assert.equal(c.hueOffset, 0); assert.equal(c.blend, null); assert.equal(c.audioBand, 'level'); }
+  assert.deepEqual(out.clips.slice(0, 3), show.performance.clips, 'existing clips are untouched');
+  assert.ok(out.clips.every(c => c.sourceId === 's9' || show.sources.some(s => s.id === c.sourceId)));
+});
+
+test('import reuses an existing clip that has default settings', () => {
+  const show = mapShow();
+  show.performance.clips = [{ ...clip('plain', 's2'), audioBand: 'level' }];
+  const out = importMapScenes(show, counter());
+  assert.ok(out.scenes.flatMap(sc => sc.cells).includes('plain'));
+  assert.equal(out.clips.filter(c => c.sourceId === 's2').length, 1);
+});
+
+test('without midiInputs Check Set says MIDI clashes are not checked yet; with them it does not', () => {
+  const show = room();
+  const none = checkSet(show).filter(r => /not checked until the MIDImix is set up/.test(r.message));
+  assert.equal(none.length, 1); assert.equal(none[0].zone, null);
+  assert.equal(checkSet(show, { midiInputs: [] }).some(r => /not checked until/.test(r.message)), false);
+});
+
+test('Check Set says how many looks have not been timed', () => {
+  const show = room();
+  assert.equal(checkSet(show).filter(r => /2 looks have not been timed/.test(r.message) && /rehearsal/.test(r.message)).length, 1);
+  assert.equal(checkSet(show, { prepareMs: { c1: 100 } }).filter(r => /1 look has not been timed/.test(r.message)).length, 1);
+  assert.equal(checkSet(show, { prepareMs: { c1: 100, c2: 100 } }).some(r => /not been timed/.test(r.message)), false);
 });

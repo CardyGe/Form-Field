@@ -10,7 +10,7 @@ import { importMapScenes } from '../perform/import-scenes';
 import { addRow, assignZone, changeClip, changeRow, clipsInUse, placeClip, removeRow, setCell, zonesFromGroups } from '../perform/grid-edit';
 import type { PerformView } from '../perform/service';
 import { beatAt } from '../perform/timing';
-import { BEATS_PER_BAR, type Clip, type PerformanceSet, type Quantize } from '../perform/types';
+import { BEATS_PER_BAR, MAX_PERFORM_SCENES, type Clip, type PerformanceSet, type Quantize } from '../perform/types';
 import ControllerSurface from './ControllerSurface';
 import { kindArt } from './kindArt';
 import MapMenu, { type MenuEntry } from './MapMenu';
@@ -194,11 +194,13 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
     if (!before.zones.some(z => z.target)) { say('Give a zone a place first, so there is something to copy.'); return; }
     const next = importMapScenes(show, () => `p${stamp()}`);
     const added = next.scenes.length - before.scenes.length;
-    if (added <= 0) { say(`The set already has 16 scenes, so none were imported.`); return; }
+    if (added <= 0) { say(`The set already has ${MAX_PERFORM_SCENES} scenes, so none were imported.`); return; }
     if (!edit(next)) return;
     const skipped = mapScenes - added;
-    say(`Imported ${added} Map scene${added === 1 ? '' : 's'}${skipped > 0 ? `; ${skipped} skipped because the set holds 16` : ''}.`);
+    const fresh = next.scenes.slice(before.scenes.length), ceilingClip = fresh.some(sc => sc.cells.some((c, z) => c !== null && next.zones[z].protected));
+    say(`Imported ${added} Map scene${added === 1 ? '' : 's'}${skipped > 0 ? `; ${skipped} skipped because the set holds ${MAX_PERFORM_SCENES}` : ''}.${ceilingClip ? ' Imported scenes leave the ceiling alone until you switch it on for the scene.' : ''}`);
   };
+  const timed = useMemo(() => Object.fromEntries(set.clips.filter(c => view.prepareMs[c.sourceId] !== undefined).map(c => [c.id, view.prepareMs[c.sourceId]])), [set.clips, view.prepareMs]);
   const canStart = map.loaded && set.scenes.some(s => s.cells.some(c => c !== null));
   const line = nextLine(view, set, canStart);
   const shownLooks = useMemo(() => { const q = query.trim().toLowerCase(); return LOOKS.filter(l => !q || `${l.name} ${l.group}`.toLowerCase().includes(q)); }, [query]);
@@ -280,7 +282,7 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
     </aside>}
     {checkOpen && <aside className="pf-sound pf-check" aria-label="Check Set" data-controller-keys>
       <div className="pf-looks-head"><strong>Check Set</strong><button type="button" className="pf-head-btn" aria-label="Close Check Set" onClick={() => setCheckOpen(false)}>Close</button></div>
-      <ul>{checkSet(map.show, { bpm: view.running ? view.clock.bpm : undefined }).map((r, i) => <li key={i} className={r.level}><b>{r.level === 'error' ? 'Problem' : 'Check'}</b> {r.message}</li>)}</ul>
+      <ul>{checkSet(map.show, { bpm: view.running ? view.clock.bpm : undefined, prepareMs: timed }).map((r, i) => <li key={i} className={r.level}><b>{r.level === 'error' ? 'Problem' : 'Check'}</b> {r.message}</li>)}</ul>
     </aside>}
     {zoneMenu && <MapMenu x={zoneMenu.x} y={zoneMenu.y} label={`Place for zone ${zoneMenu.zone + 1}`} entries={zoneEntries(zoneMenu.zone)} onClose={() => setZoneMenu(null)} />}
     {confirming && <div className="pf-confirm" role="dialog" aria-modal="true" aria-label="End the show?" onKeyDown={e => { if (e.key === 'Escape') setConfirming(false); }}>

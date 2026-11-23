@@ -816,3 +816,20 @@ test('fader 0 and master 0 keep the ceiling black through bloom and breath', () 
   r.at(12100); r.frame();
   assert.equal(ceilingOf(r).brightness, 0);
 });
+
+test('the service times each source from arm request to ready, and keeps it in memory', () => {
+  const r = rig();
+  r.service.startShow();
+  r.at(1000);
+  r.ready();
+  const asked = r.ofType('performArm').at(-1)?.sourceIds ?? [];
+  assert.ok(asked.length > 0, 'something is armed at the start');
+  const id = asked[0], asked_at = r.now();
+  assert.deepEqual(r.service.view().prepareMs, {});
+  r.at(asked_at + 700);
+  r.service.wallState({ armed: [id] });
+  assert.equal(r.service.view().prepareMs[id], 700);
+  r.at(asked_at + 5000);
+  r.service.wallState({ armed: [id] });
+  assert.equal(r.service.view().prepareMs[id], 700, 'the first measurement stands');
+});

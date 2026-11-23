@@ -180,6 +180,15 @@ try {
     await studio.getByRole('button', { name: 'Close sound input' }).click();
   });
 
+  await check('Check Set opens and shows its standing lines', async () => {
+    await studio.getByRole('button', { name: 'Check Set' }).click();
+    const panel = studio.getByRole('complementary', { name: 'Check Set' });
+    await panel.waitFor({ timeout: 3000 });
+    await panel.getByText(/not checked until the MIDImix is set up/).waitFor({ timeout: 3000 });
+    await panel.getByText(/does not analyse flashing inside a look/).waitFor({ timeout: 3000 });
+    await studio.getByRole('button', { name: 'Close Check Set' }).click();
+  });
+
   let wall;
   const openWall = async () => {
     const opened = app.waitForEvent('window', { timeout: 15000 });
