@@ -24,7 +24,7 @@ import { ScopeRenderer } from './ScopeRenderer';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
-import { layerWarpView, warpActive, warpFragment, warpPoints } from './warp';
+import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -245,7 +245,7 @@ export class StudioRenderer {
     uLumaDirection: { value: new THREE.Vector2(0, 1) }, uLumaThreshold: { value: 0 }, uLumaSoft: { value: .2 }, uLumaChroma: { value: 0 },
     uPolarAmount: { value: 0 }, uPolarMode: { value: 0 }, uPolarCentre: { value: new THREE.Vector2() }, uPolarTwist: { value: 0 },
     uMirrorAmount: { value: 0 }, uMirrorMode: { value: 0 }, uMirrorSegments: { value: 6 }, uMirrorTurn: { value: 0 },
-    uLayerView: { value: new THREE.Matrix3() }, uLayerInverse: { value: new THREE.Matrix3() }, uLayerMoved: { value: 0 }, uLayerBounded: { value: 0 }, uLayerExtent: { value: new THREE.Vector2(1, 1) },
+    uLayerView: { value: new THREE.Matrix3() }, uLayerInverse: { value: new THREE.Matrix3() }, uLayerMoved: { value: 0 }, uLayerBounded: { value: 0 }, uLayerExtent: { value: new THREE.Vector2(1, 1) }, uPictureInset: { value: new THREE.Vector2(0, 0) },
   });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
@@ -996,13 +996,13 @@ export class StudioRenderer {
     // Whole turns only, so the loop closes.
     u.uMirrorTurn.value = number(layer, 'mirrorAngle', 0) * Math.PI / 180 + Math.round(number(layer, 'mirrorTurns', 0)) * phase;
     // Mirror and Polar pivot on the layer, so a moved picture stays in view.
-    const pose = layerWarpView(layer.transform, width / height);
+    const pose = layerWarpView(layer.transform, width / height), picture = warpPicture(layer, width, height);
     (u.uLayerView.value as THREE.Matrix3).copy(pose.view); (u.uLayerInverse.value as THREE.Matrix3).copy(pose.inverse);
-    u.uLayerMoved.value = Number(pose.moved);
-    u.uLayerBounded.value = Number(pose.moved && layer.kind === 'image' && number(layer, 'repeat', 1) <= 1);
-    // The picture's true rectangle: Cover runs past the layer box on one axis, and Contain's bars are not picture.
-    const fit = layer.kind === 'image' && layer.image ? imageFit(layer.image, width / height) : [1, 1];
-    (u.uLayerExtent.value as THREE.Vector2).set(fit[0], fit[1]);
+    // A bounded Image works in its layer's space even unmoved, where that space is the frame's.
+    u.uLayerMoved.value = Number(pose.moved || picture.bounded);
+    u.uLayerBounded.value = Number(picture.bounded);
+    (u.uLayerExtent.value as THREE.Vector2).set(picture.extent[0], picture.extent[1]);
+    (u.uPictureInset.value as THREE.Vector2).set(picture.inset[0], picture.inset[1]);
     this.draw(this.warp, output);
     return output.texture;
   }

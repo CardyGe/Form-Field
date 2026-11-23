@@ -7,7 +7,7 @@
  */
 import { Matrix3 } from 'three';
 import { LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, WARP_KEYS } from '../core/finishing';
-import { sourceViewMatrix } from './source-view';
+import { imageFit, sourceViewMatrix } from './source-view';
 import type { Layer } from '../shared/types';
 
 export const WARP_FIELDS = ['Waves', 'Noise', 'Ripple', 'Magnetic', 'Plasma'];
@@ -64,13 +64,35 @@ export function visibleBelow(layers: readonly Pick<Layer, 'id' | 'visible' | 'op
 /**
  * Mirror and Polar work in the layer's own space, so they pivot on its transformed centre and follow its turn and scale.
  * `view` takes a frame position to the layer's and `inverse` takes it back. A layer at its default transform is not
- * `moved`, and the pass then skips both, so its reads stay exactly what they were.
+ * `moved`, and unless it is a bounded Image the pass then skips both, so its reads stay exactly what they were.
  */
 export function layerWarpView(transform: Layer['transform'], aspect: number): { moved: boolean; view: Matrix3; inverse: Matrix3 } {
   const moved = transform.x !== 0 || transform.y !== 0 || transform.scale !== 1 || transform.rotation !== 0;
   if (!moved) return { moved, view: new Matrix3(), inverse: new Matrix3() };
   const view = sourceViewMatrix(transform, aspect);
   return { moved, view, inverse: view.clone().invert() };
+}
+
+/**
+ * The one definition of a bounded Image's picture, for Mirror and Polar. An Image shown once is bounded whenever its
+ * picture does not fill the frame: moved, or Contain with bars. `extent` is the picture's true rectangle about the
+ * layer's centre, in layer units: Cover runs past the layer box on one axis and Contain's bars are not picture.
+ * `inset` is how far inside that rectangle a read must stay so its filter touches picture only. The source is cut hard
+ * at the edge and read with a four-texel filter, which spans up to one texel along each frame axis, so across a turned
+ * edge that is |nx| + |ny| texels. Never more than half the picture, so the safe rectangle cannot turn inside out.
+ */
+export function warpPicture(layer: Pick<Layer, 'kind' | 'image' | 'params' | 'transform'>, width: number, height: number): { bounded: boolean; extent: [number, number]; inset: [number, number] } {
+  const aspect = width / height, pose = layerWarpView(layer.transform, aspect);
+  const extent: [number, number] = layer.kind === 'image' && layer.image ? imageFit(layer.image, aspect) : [1, 1];
+  const repeat = Number.isFinite(layer.params.repeat) ? layer.params.repeat : 1;
+  const bounded = layer.kind === 'image' && !!layer.image && repeat <= 1 && (pose.moved || extent[0] < 1 || extent[1] < 1);
+  const e = pose.inverse.elements;
+  const axis = (i: number, size: number): number => {
+    // One layer unit along this axis, in texels of the frame.
+    const x = e[i] * width, y = e[i + 1] * height;
+    return Math.min(size / 2, (Math.abs(x) + Math.abs(y)) / (x * x + y * y));
+  };
+  return { bounded, extent, inset: [axis(0, extent[0]), axis(3, extent[1])] };
 }
 
 /** Small deterministic generator, so the same seed always places the same points. */
@@ -138,7 +160,7 @@ uniform float uPolarAmount, uPolarTwist, uMirrorAmount, uMirrorTurn;
 uniform int uPolarMode, uMirrorMode, uMirrorSegments;
 uniform mat3 uLayerView, uLayerInverse;
 uniform int uLayerMoved, uLayerBounded;
-uniform vec2 uLayerExtent;
+uniform vec2 uLayerExtent, uPictureInset;
 const float TAU = 6.28318530718;
 const float PI = 3.14159265359;
 const int WARP_TAPS = 4;
@@ -382,6 +404,8 @@ vec2 readBase, readHead;
 vec2 moveDx, moveDy;
 /** True when Mirror or Polar shaped this read. */
 bool reshaped;
+// Set while this pixel's Mirror and Polar read is held inside a bounded Image's picture.
+bool pictureRead;
 
 vec2 rotated(vec2 p, float angle) {
   float c = cos(angle), s = sin(angle);
@@ -449,6 +473,31 @@ vec2 polarUv(vec2 uv) {
   return mix(uv, target, uPolarAmount);
 }
 
+/** The picture rule for a bounded Image, in the layer's space: every Mirror and Polar read made from inside the
+ * picture lands safely inside the picture, or the pixel keeps its own position. A read first folds back and forth
+ * between the picture's true edges, as a full-frame layer's does at the frame's. */
+vec2 foldPicture(vec2 at) {
+  vec2 m = mod(at - .5 + .5 * uLayerExtent, 2. * uLayerExtent);
+  return vec2(m.x > uLayerExtent.x ? 2. * uLayerExtent.x - m.x : m.x, m.y > uLayerExtent.y ? 2. * uLayerExtent.y - m.y : m.y) + .5 - .5 * uLayerExtent;
+}
+
+/** The nearest position whose filtered read touches picture only, so none mixes in the nothing past the edge. */
+vec2 safePicture(vec2 at) {
+  vec2 reach = .5 * uLayerExtent - uPictureInset;
+  return clamp(at, .5 - reach, .5 + reach);
+}
+
+bool offFrame(vec2 at) { return at.x < 0. || at.x > 1. || at.y < 0. || at.y > 1.; }
+
+/** One tap of a filtered read. Where a pixel squeezes much of the picture into itself, as at the middle of To circle,
+ * its taps spread further than any inset. Under the picture rule each tap of the Mirror and Polar read is itself held
+ * safely inside the picture, or falls back to the read's own centre. Later warps then carry it as they carry that centre. */
+vec2 tapUv(vec2 at, vec2 offset) {
+  if (!pictureRead) return at + offset;
+  vec2 tap = (uLayerInverse * vec3(safePicture(foldPicture((uLayerView * vec3(readBase + offset, 1.)).xy)), 1.)).xy;
+  return (offFrame(tap) ? readBase : tap) + (at - readBase);
+}
+
 /** Warp, Liquid and Luma, from a position Mirror and Polar have already set. */
 vec2 laterUv(vec2 uv) {
   vec2 frame = vec2(uAspect, 1.), moved = uv;
@@ -472,10 +521,11 @@ vec2 warpedUv(vec2 uv, bool folded) {
   readDx = plainDx; readDy = plainDy;
   vec2 base = uv;
   reshaped = folded || uPolarAmount > 0.;
-  // Skipped at a default transform, so those reads take exactly the path they always did.
+  pictureRead = false;
+  // Skipped at a default transform unless the layer is a bounded Image, so a full-frame read takes exactly the path it always did.
   bool inLayer = reshaped && uLayerMoved == 1;
   vec2 own = inLayer ? (uLayerView * vec3(uv, 1.)).xy : uv;
-  // A moved Image ends at its own edge: Cover puts that past the layer box on one axis, and Contain inside it.
+  // A bounded Image ends at its own edge: Cover puts that past the layer box on one axis, and Contain inside it.
   // Pixels beyond it take no fold, so no stray copy of the picture appears there.
   vec2 edgeLow = .5 - .5 * uLayerExtent, edgeHigh = .5 + .5 * uLayerExtent;
   // They stay marked as reshaped, so a 2x2 block on that edge keeps its worked-out footprint and not the jump between them.
@@ -488,15 +538,20 @@ vec2 warpedUv(vec2 uv, bool folded) {
     if (folded) base = mirrorUv(base);
     if (uPolarAmount > 0.) base = polarUv(base);
     if (inLayer) {
-      // Inside a bounded Image, a read past its edge folds back at that edge, as a full-frame layer does at the frame's.
-      if (uLayerBounded == 1) {
-        vec2 m = mod(base - edgeLow, 2. * uLayerExtent);
-        base = vec2(m.x > uLayerExtent.x ? 2. * uLayerExtent.x - m.x : m.x, m.y > uLayerExtent.y ? 2. * uLayerExtent.y - m.y : m.y) + edgeLow;
-      }
+      // The picture rule: inside a bounded Image, the read folds at the picture's edge and lands safely inside it.
+      vec2 atEdge = uLayerBounded == 1 ? foldPicture(base) : base;
+      if (uLayerBounded == 1) base = safePicture(atEdge);
       mat2 toFrame = mat2(uLayerInverse);
       base = (uLayerInverse * vec3(base, 1.)).xy; readDx = toFrame * readDx; readDy = toFrame * readDy;
-      // Source past the frame does not exist, so a pixel whose fold needs it stays unfolded and the picture never vanishes.
-      if (uLayerBounded == 1 && (base.x < 0. || base.x > 1. || base.y < 0. || base.y > 1.)) { base = uv; readDx = plainDx; readDy = plainDy; }
+      if (uLayerBounded == 1) {
+        // Or the pixel keeps its own position. A read at the edge that never left its own pixel is exact where it is,
+        // so a kept side stays plain to its last pixel. And source past the frame does not exist, so a fold that needs
+        // it is not taken and the picture never vanishes.
+        vec2 away = abs((uLayerInverse * vec3(atEdge, 1.)).xy - uv) * uResolution;
+        bool onOwn = atEdge != safePicture(atEdge) && away.x < .5 && away.y < .5;
+        if (onOwn || offFrame(base)) { base = uv; readDx = plainDx; readDy = plainDy; }
+        else pictureRead = true;
+      }
     }
   }
   readBase = base;
@@ -559,7 +614,7 @@ Gathered readAt(vec2 uv, vec2 footprint, float weight, inout float peak) {
   Gathered g = Gathered(vec3(0.), vec3(0.), 0.);
   vec2 reach = tapReach(footprint);
   if (reach == vec2(0.)) { gather(uv, weight, g, peak); return g; }
-  for (int i = 0; i < 4; i++) gather(uv + reach * tapPosition(i), .25 * weight, g, peak);
+  for (int i = 0; i < 4; i++) gather(tapUv(uv, reach * tapPosition(i)), .25 * weight, g, peak);
   return g;
 }
 

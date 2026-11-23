@@ -6,13 +6,12 @@ Proof for Warp, Liquid, Luma Warp, Polar and Mirror on branch `warp-engine`, aga
 
 | Command | Result |
 | --- | --- |
-| `node scripts/verify-warp.mjs --baseline=<baseline>` | 71 passed, 0 failed, with no exceptions |
-| `node scripts/verify-warp.mjs --baseline=<baseline> --previous=<checkout of 6c0c205> --only=default-pose` | 1 passed, 0 failed |
-| `node scripts/verify-warp.mjs --baseline=<baseline> --previous=<checkout of a185fc5> --only=moved-others,moved-contain-change,default-pose` | 3 passed, 0 failed |
+| `node scripts/verify-warp.mjs --baseline=<baseline>` | 72 passed, 0 failed, with no exceptions |
+| `node scripts/verify-warp.mjs --baseline=<baseline> --previous=<source of c4009b7> --only=others-unchanged,picture-change,default-pose` | 3 passed, 0 failed |
 | `npx tsc --noEmit` | clean |
-| `npm test` | 570 unit and 93 Electron tests pass, 0 fail |
-| `npm run test:workspace` | 14 passed, 0 failed on the third run of the final code. Runs 1 and 2 stopped at the known "Focus preview" timeout |
-| `npm run test:map` | Passed 3 of 3 on the final code. Across this branch's last fixes, 1 of 9 runs failed, and 0 of 4 on baseline; see below |
+| `npm test` | 571 unit and 93 Electron tests pass, 0 fail |
+| `npm run test:workspace` | 14 passed, 0 failed on the first run of the final code. Earlier commits on this branch have hit the known "Focus preview" timeout |
+| `npm run test:map` | Passed on its one run of the final code. Across this branch's last fixes, 1 of 10 runs failed, and 0 of 4 on baseline; see below |
 | `node scripts/verify-colour-time.mjs --baseline=<baseline>` | 52 passed, 0 failed, with no change to its tests |
 
 The final checks:
@@ -33,29 +32,44 @@ Each new gate was shown to fail on an injected defect:
 | Per-type gains all set to 1 | warp-strength | FAIL, 3.77x |
 | Chaos ridge feedback back at .35 | liquid-tear | FAIL, 0.064% |
 
-## Moved layers
+## Moved layers and bounded Images
 
-Mirror and Polar now work in the layer's own space. They pivot on its transformed centre and follow its turn and scale. Polar's centre controls are offsets from that pivot. A moved Image ends at its own edge, so a fold cannot leave a stray copy beyond it. Source past the frame does not exist, so a pixel whose fold needs it stays unfolded. That edge is the picture's true rectangle: Cover runs past the layer box on one axis, and Contain's transparent bars count as outside the picture, so a mirrored Contain Image folds at its visible edge.
+Mirror and Polar work in the layer's own space. They pivot on its transformed centre and follow its turn and scale. Polar's centre controls are offsets from that pivot.
+
+**The picture rule.** An Image shown once is bounded whenever its picture does not fill the frame: when it is moved, or when Contain leaves bars, at any transform. Its picture is one rectangle, defined once in `warpPicture`: Cover runs past the layer box on one axis, and Contain's bars are outside it. For a pixel inside the picture, every Mirror and Polar read resolves to a position safely inside the picture, or the pixel keeps its own position:
+
+1. The read folds back and forth between the picture's true edges.
+2. It then moves to the nearest position at least one filtered read inside the edge, so it never mixes in the nothing past the edge. That inset is one texel across a square edge and up to 1.41 texels across a turned one.
+3. Each tap of a filtered read is held inside the picture the same way. A tap that would leave the frame uses the read's own centre.
+4. The pixel keeps its own position when the read would land off-frame, because source past the frame does not exist, and when a read at the edge has stayed within half a texel of the pixel itself, where it is already exact.
+
+Pixels outside the picture take no fold, so no stray copy appears there. Full-frame Images, repeated Images and other layer kinds do not use the rule.
+
+**To circle's second cause.** With step 2 alone, every Mirror case in picture-solid was clean and 265 Polar cases still failed, with a lowest value of 0. Those were To circle and Unroll in every variant, alone and with Kaleidoscope. Polar squeezes many texels into one pixel, most of all toward the middle of To circle, so the four taps of a filtered read spread well past any fixed inset and landed on nothing. Step 3 cleared all of them. Where in the picture the dim pixels sat was not mapped.
 
 | Check | Covers | Result | Limit |
 | --- | --- | --- | --- |
-| moved-visible | Every Mirror and Polar mode, 3 poses, including Image at scale .45, x .3 | Left-right lit 19.2%, plain 19.2% (was 0%) | at least half of plain |
-| moved-symmetry | Symmetry about the layer's own axes, 2 turned poses | worst .455 of 255 | 1.5 |
-| moved-follows | The moved look against the unmoved look carried by the transform, including Unroll | worst .696 of 255 | 2 |
+| moved-visible | Every Mirror and Polar mode, 3 poses, including Image at scale .45, x .3 | Left-right lit 19.2%, plain 19.2% | at least half of plain |
+| moved-symmetry | Symmetry about the layer's own axes, 2 turned poses | worst .401 of 255 | 1.5 |
+| moved-follows | The moved look against the unmoved look carried by the transform, including Unroll | worst .476 of 255 | 2 |
 | moved-filter | Mirror reads at 4 mirror angles, 2 poses | spread 0 texels, 0 collapsed | .01 |
 | moved-engage | Amount .0001 on a moved layer | worst .0027 of 255 | .05 |
 | moved-no-ghost | A layer hanging off the frame under Left-right | 0% lit past its reflected edge | .1% |
-| moved-cover | One smooth square Cover Image at Mirror angle 0, 2 poses fully in frame, 960x540 and 720x900. Symmetry is measured on the four Mirror modes and To circle. Unroll has no symmetry and is judged by the other three measures | symmetry .416 of 255, box-edge step 2.70, 100% of the picture lit, 0% stray | 1.5, 12, over 99%, .1% |
-| moved-off-frame | Smooth 4:1 and 1:4 Images, Contain and Cover, 480x270 and 360x450, 8 in-frame and partly off-frame poses, every Mirror mode at 0, 45, 160 and -33 degrees, both Polar modes, plus the reported 4:1 Cover pose at 960x540 (1116 cases, after skipping poses with under .5% of the frame lit) | 0 cases under the limit, lowest .963x plain | .8x, no exceptions |
-| moved-others-unchanged | 126 renders against `a185fc5`, neutral and all six modes: Surface, Fractal, Liquid and repeated Image at 3 poses, in-frame 16:9 and Cover Images, and Cover and Contain at a default transform | all byte-identical | exact |
-| moved-contain-change | Report only: in-frame 4:1, 1:4 and square Contain Images against `a185fc5`, 2 poses | see below | none |
-| default-pose-unchanged | 124 Mirror and Polar renders at a default transform, against `6c0c205`, `51c257e`, `9f61b6d` and `a185fc5` | all byte-identical | exact |
+| moved-cover | One smooth square Cover Image at Mirror angle 0, 2 poses fully in frame, 960x540 and 720x900. Symmetry is measured on the four Mirror modes and To circle. Unroll has no symmetry and is judged by the other three measures | symmetry .378 of 255, box-edge step 2.71, 100% of the picture lit, 0% stray | 1.5, 12, over 99%, .1% |
+| picture-visible | Smooth 4:1 and 1:4 Images, Contain and Cover, 480x270 and 360x450, the default transform and 8 in-frame and partly off-frame poses, every Mirror mode at 0, 45, 160 and -33 degrees, both Polar modes, plus the reported 4:1 Cover pose at 960x540 (1260 cases, after skipping poses with under .5% of the frame lit) | 0 cases under the limit, lowest 1.000x plain | .8x, no exceptions |
+| picture-solid | Solid white 1:1, 4:1 and 1:4 Images, Contain and Cover, 960x540 and 360x450, 5 poses (the reported pose, the default transform, one small turned pose, two partly off-frame), every Mirror mode at 4 angles, both Polar modes, To circle twisted, off centre and at half amount, Unroll twisted, and Kaleidoscope with To circle (1380 cases). Every pixel the plain picture lights is counted, not only the interior | 0 cases with a dim pixel, lowest value 239 of a plain peak of 240 | every pixel at least .9x the plain peak, 0 pixels under |
+| mirror-symmetry, Contain rows | The busy 16:9 picture on Contain in a 720x900 frame at the default transform, under the three flips. The flip is compared pixel for pixel inside a 2-pixel rim, and the kept side against plain to its last pixel | flips off by 1 of 255, kept side off by 0 | 2 |
+| others-unchanged | 154 renders against `c4009b7`. Under neutral and all six modes: a 16:9 Image and a square Cover Image at the default transform, and Surface, Fractal, Liquid and a repeated Image at the default transform and 3 poses. Under neutral, Warp, Liquid and Luma Warp only: moved 16:9 and Cover Images, and a Contain Image with bars at the default transform and 2 poses | all byte-identical | exact |
+| picture-change | Report only: 4:1, 1:4 and square Images, Contain and Cover, at the default transform and 2 in-frame poses, against `c4009b7` | see below | none |
+| default-pose-unchanged | 124 Mirror and Polar renders of full-frame layers at a default transform, against `c4009b7` | all byte-identical | exact |
 
-Each check was shown to fail: the first three and moved-no-ghost on the code before the fix, moved-filter on a draft whose layer edge spread reads by 2188 texels, moved-engage on an injected .01 offset, default-pose-unchanged on a checkout with its fold line moved (40 of 124 changed), moved-cover on `51c257e` (symmetry 33.623, box-edge step 97.59), and moved-others-unchanged on a checkout with its fold line moved (36 of 126 changed). moved-off-frame failed on `9f61b6d` at 0.000x on the reported 4:1 Cover case. Its expanded form failed on `a185fc5`: 100 of 1116 cases under .8x, lowest .039x (Kaleidoscope at 160 degrees, 1:4 Contain, 360x450).
+Each check was shown to fail. moved-visible, moved-symmetry, moved-follows and moved-no-ghost failed on the code before the pivot. moved-filter failed on a draft whose layer edge spread reads by 2188 texels, moved-engage on an injected .01 offset, and moved-cover on `51c257e` (symmetry 33.623, box-edge step 97.59). picture-visible failed on `c4009b7`: 15 of 1260 cases under .8x, lowest .205x (Kaleidoscope at 160 degrees, 1:4 Contain, 360x450, default transform). picture-solid failed on `c4009b7`: 935 of 1380 cases, up to 97.35% of the picture dim, lowest value 0. The Contain rows of mirror-symmetry failed on an injected .01 offset in the picture fold (flips off by 232, kept side by 239), and the kept side failed on a draft without step 4's own-pixel clause (off by 151). others-unchanged failed against a copy of `c4009b7` with its fold line moved (36 of 154 changed).
 
-**In-frame Contain changes, by owner ruling.** Mirror and Polar on a moved Contain Image now fold at its visible edge. Across the 6 fixtures per mode, every render changed from `a185fc5`. Mean change out of 255: Left-right .03, Top-bottom .04, Four-way .04, Kaleidoscope 3.01, To circle 8.84, Unroll 7.42. The lowest lit share moved from .23x to 1.00x on Kaleidoscope, 1.38x to 1.00x on To circle and 1.22x to 1.00x on Unroll, because reads no longer land on the bars and the picture no longer spreads over them.
+**What changed from `c4009b7`, by owner ruling.** From picture-change, as mean change out of 255 over all six modes: moved Contain .03 (36 of 36 renders changed, most .06), moved Cover .06 (36 of 36, most .14), Contain at the default transform 20.16 (18 of 18, most 75.81 on To circle), Cover at the default transform 0 (0 of 18). On Contain at the default transform the lowest lit share rose from .22x to 1.00x plain. Moved pictures change by the inset and the held taps. Unmoved Contain pictures change because they now fold at their own edge and not the frame's.
 
-**Fixtures.** moved-visible, moved-symmetry, moved-follows, moved-engage and moved-no-ghost use one smooth 16:9 Image in a 960x540 frame, at the default Mirror angle. moved-filter feeds a smooth float source at 962x542 and measures the read footprint, not the picture. moved-cover uses one smooth square Cover Image, which overhangs its box vertically at 960x540 and sideways at 720x900. moved-off-frame uses smooth 4:1 and 1:4 Images and measures lit share only, so it proves a picture stays visible, not that its folds are symmetric.
+**Fixtures.** moved-visible, moved-symmetry, moved-follows, moved-engage and moved-no-ghost use one smooth 16:9 Image in a 960x540 frame, at the default Mirror angle. moved-filter feeds a smooth float source at 962x542 and measures the read footprint, not the picture. moved-cover uses one smooth square Cover Image, which overhangs its box vertically at 960x540 and sideways at 720x900. picture-visible measures lit share only, so it proves a picture stays visible, not that its folds are symmetric. picture-solid proves no read touches nothing; a solid picture cannot show whether the right part of the picture was read.
+
+**Two full-frame checks changed fixture.** mirror-symmetry and polar-shape run in a 720x900 frame as well as 960x540. They used the 16:9 test picture there, which on Contain has bars and is now a bounded Image. Their full-frame rows now use a picture of the frame's own shape, with the same limits, and mirror-symmetry gained the Contain rows above. The probe helper that feeds a frame-filling source now declares that source as the frame's shape.
 
 ## Retunes
 
@@ -142,7 +156,10 @@ Git-ignored, in `work/warp-proof/`:
 - **Map and Live with warps on.** Their suites pass, but neither was judged by eye with a warp applied.
 - **Non-default settings.** The sheets use one working amount per effect. Other scales, step counts and detail levels were not judged by eye.
 - **Moved layers by eye.** The moved-layer checks are measured on smooth test Images. No moved layer was judged by eye.
-- **Other Image shapes.** Symmetry on Cover was measured with one square picture, fully in frame. 4:1 and 1:4 Images were measured for lit share only. Busy pictures and symmetry on Contain Images with bars were not measured.
-- **Moved full-frame generators.** Surface, Fractal and Liquid are compared byte for byte with `a185fc5` when moved, which proves the bounded-Image fixes left them alone. Their moved look itself is not measured for symmetry or judged by eye.
-- **Symmetry on partly off-frame Images.** Source past the frame does not exist. A pixel whose Mirror or Polar read needs it stays unfolded, so the picture stays visible but symmetry is incomplete on those pixels. moved-off-frame measures lit share only.
-- **One Map failure, unclassified.** One `npm run test:map` run failed two Live checks: "switching the Live look mid-show" and "Live: Glow on the beat", which showed 1 instead of 2.5. It passed on the immediate rerun and did not recur in 7 further branch runs or 4 baseline runs, including runs straight after the workspace check. It could not be attributed to this branch or to baseline.
+- **Other Image shapes.** Symmetry on Cover was measured with one square picture, fully in frame. Symmetry on Contain with bars was measured with one busy 16:9 picture at the default transform under the three flips. 4:1 and 1:4 Images were measured for lit share and for dim pixels only. Symmetry of Kaleidoscope and Polar on a Contain Image with bars, and of any fold on a moved busy picture, was not measured.
+- **The picture's rim.** Within about a texel and a half of a bounded Image's edge, and of each crease where a fold meets that edge, a read is moved inward by up to that much. So symmetry there is approximate, and a rim pixel's read can step by up to about two texels as an amount passes the point where the read leaves its own pixel. Neither was measured on a busy moved picture or judged by eye.
+- **Pictures with their own transparency or soft edges.** The rule keeps reads inside the picture's rectangle. Transparency inside the picture, a layer mask, and softening by Feedback or Time before the warp are not covered by picture-solid.
+- **Bounded Images with Mirror or Polar and a later warp together.** Filter taps then follow the picture rule first and the later warp second. No check renders this on a bounded Image.
+- **Moved full-frame generators.** Surface, Fractal and Liquid are compared byte for byte with `c4009b7` when moved, which proves the bounded-Image fixes left them alone. Their moved look itself is not measured for symmetry or judged by eye.
+- **Symmetry on partly off-frame Images.** Source past the frame does not exist. A pixel whose Mirror or Polar read needs it stays unfolded, so the picture stays visible but symmetry is incomplete on those pixels. picture-visible measures lit share only.
+- **One Map failure, unclassified.** One `npm run test:map` run failed two Live checks: "switching the Live look mid-show" and "Live: Glow on the beat", which showed 1 instead of 2.5. It passed on the immediate rerun and did not recur in 8 further branch runs or 4 baseline runs, including runs straight after the workspace check. It could not be attributed to this branch or to baseline.

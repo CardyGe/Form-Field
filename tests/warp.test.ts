@@ -5,7 +5,7 @@ import { PRESETS, applyPreset, createLayer, createProject, validateProject, vary
 import { layerTileBlocker } from '../src/core/tile-edges';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { foldAngle, layerWarpView, loopOffset, lumaDriver, visibleBelow, warpActive, warpPoints } from '../src/rendering/warp';
+import { foldAngle, layerWarpView, loopOffset, lumaDriver, visibleBelow, warpActive, warpPicture, warpPoints } from '../src/rendering/warp';
 import { FINISH_EFFECTS } from '../src/ui/finish-rack';
 import { MirrorSection } from '../src/ui/WarpSections';
 
@@ -95,6 +95,43 @@ test('Mirror and Polar pivot on the layer: its centre, turn and scale', () => {
   near(cu, .5); near(cv, .5);
   const [u, v] = apply(inverse, ...apply(view, .21, .67) as [number, number]);
   near(u, .21); near(v, .67);
+});
+test('a bounded Image has one picture rectangle, with a safe inset for reads', () => {
+  const picture = (width: number, height: number, fit: 'contain' | 'cover', transform = {}, params = {}) => {
+    const layer = createLayer('image');
+    layer.image = { name: 'p.png', dataUrl: 'data:,', width, height, fit };
+    Object.assign(layer.params, params); layer.transform = { x: 0, y: 0, scale: 1, rotation: 0, ...transform };
+    return layer;
+  };
+  const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} vs ${b}`);
+  // Contain leaves bars at any transform, so the picture is bounded even unmoved, and the bars are not picture.
+  const tall = warpPicture(picture(256, 1024, 'contain'), 960, 540);
+  assert.equal(tall.bounded, true);
+  near(tall.extent[0], .25 / (16 / 9)); near(tall.extent[1], 1);
+  // One texel on each axis when the picture sits square to the frame.
+  near(tall.inset[0], 1 / 960); near(tall.inset[1], 1 / 540);
+  // A picture that fills the frame at the default transform has no edge to keep.
+  assert.equal(warpPicture(picture(960, 540, 'contain'), 960, 540).bounded, false);
+  assert.equal(warpPicture(picture(512, 512, 'cover'), 960, 540).bounded, false);
+  // Moved, the same pictures end at their own edge: Cover's runs past the layer box.
+  assert.equal(warpPicture(picture(960, 540, 'contain', { x: .1 }), 960, 540).bounded, true);
+  const cover = warpPicture(picture(512, 512, 'cover', { scale: .5 }), 960, 540);
+  assert.equal(cover.bounded, true);
+  near(cover.extent[0], 1); near(cover.extent[1], 16 / 9);
+  // Half size doubles a texel in the layer's own units.
+  near(cover.inset[0], 2 / 960); near(cover.inset[1], 2 / 540);
+  // Turned 45 degrees, the four texels of a filtered read span a texel's diagonal across the edge.
+  const turned = warpPicture(picture(100, 100, 'contain', { rotation: Math.PI / 4 }), 500, 500);
+  near(turned.inset[0], Math.SQRT2 / 500); near(turned.inset[1], Math.SQRT2 / 500);
+  // A picture smaller than its inset keeps a centre line and never turns inside out.
+  const speck = warpPicture(picture(256, 1024, 'contain', { scale: .001 }), 960, 540);
+  assert.ok(speck.inset[0] <= speck.extent[0] / 2 && speck.inset[1] <= speck.extent[1] / 2);
+  // Repeated Images, Images with no picture and other layers have no edge.
+  assert.equal(warpPicture(picture(256, 1024, 'contain', { x: .1 }, { repeat: 2 }), 960, 540).bounded, false);
+  const empty = createLayer('image'); empty.transform = { x: .1, y: 0, scale: 1, rotation: 0 };
+  assert.equal(warpPicture(empty, 960, 540).bounded, false);
+  const surface = createLayer('surface'); surface.transform = { x: .1, y: 0, scale: .5, rotation: .2 };
+  assert.equal(warpPicture(surface, 960, 540).bounded, false);
 });
 test('a locked Map choice control is disabled, and an unlocked one is not', () => {
   const layer = createLayer('surface'); layer.params.mirrorAmount = 1;

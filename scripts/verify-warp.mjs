@@ -83,14 +83,28 @@ const IN_FRAME_POSES = [{ x: .18, y: -.05, scale: .4, rotation: .5 }, { x: -.2, 
 // Partly off-frame: the reported 4:1 Cover case first.
 const OFF_FRAME_POSES = [{ x: -.75, y: 0, scale: .6, rotation: 0 }, { x: .6, y: .2, scale: .7, rotation: .4 }, { x: -.4, y: 0, scale: .8, rotation: 0 }, { x: .35, y: -.3, scale: .9, rotation: -.6 }];
 const OFF_FRAME_LIMIT = .8;
-// The two reported near-vanishing poses, and poses held inside the frame, join the off-frame ones.
-const LIT_POSES = [...OFF_FRAME_POSES, { x: -.55, y: .1, scale: 1.2, rotation: .35 }, { x: .1, y: 0, scale: .4, rotation: 0 }, ...IN_FRAME_POSES];
+const DEFAULT_POSE = { x: 0, y: 0, scale: 1, rotation: 0 };
+// The two reported near-vanishing poses, poses held inside the frame and the default transform join the off-frame ones.
+const LIT_POSES = [...OFF_FRAME_POSES, { x: -.55, y: .1, scale: 1.2, rotation: .35 }, { x: .1, y: 0, scale: .4, rotation: 0 }, ...IN_FRAME_POSES, DEFAULT_POSE];
 const LIT_FRAMES = [[480, 270], [360, 450]];
 const LIT_IMAGES = [['4:1', 1024, 256], ['1:4', 256, 1024]];
 const LIT_CASES = [
   ...MIRROR_NAMES.flatMap((name, i) => [0, 45, 160, -33].map(mirrorAngle => [`${name} ${mirrorAngle}deg`, { mirrorAmount: 1, mirrorMode: i, mirrorAngle }])),
   ...POLAR_NAMES.map((name, i) => [name, { polarAmount: 1, polarMode: i }]),
 ];
+// A solid white picture has no dark of its own, so any dim pixel inside it is a read that touched nothing.
+// The reported pose first, then the default transform, a small turned pose and two partly off-frame poses.
+const SOLID_POSES = [{ x: .05, y: 0, scale: .85, rotation: .35 }, DEFAULT_POSE, IN_FRAME_POSES[0], OFF_FRAME_POSES[2], OFF_FRAME_POSES[3]];
+const SOLID_FRAMES = [[960, 540], [360, 450]];
+const SOLID_IMAGES = [['1:1', 512, 512], ['4:1', 1024, 256], ['1:4', 256, 1024]];
+const SOLID_CASES = [
+  ...LIT_CASES,
+  ['To circle twisted', { polarAmount: 1, polarMode: 0, polarTwist: .4 }], ['To circle off centre', { polarAmount: 1, polarMode: 0, polarCentreX: .2, polarCentreY: -.1 }],
+  ['To circle at .5', { polarAmount: .5, polarMode: 0 }], ['Unroll twisted', { polarAmount: 1, polarMode: 1, polarTwist: .4 }],
+  ['Kaleidoscope + To circle', { mirrorAmount: 1, mirrorMode: 3, polarAmount: 1, polarMode: 0 }],
+];
+// Every pixel the plain picture lights must stay at or above this share of the plain peak.
+const SOLID_FLOOR = .9;
 
 const CHECKS = [
   {
@@ -1007,25 +1021,33 @@ const CHECKS = [
   {
     name: 'mirror-symmetry',
     // A busy picture for the flips, in a wide and a tall frame. A smooth one for the turn, which has to be resampled.
+    // Each picture is the frame's own shape, so it fills the frame and folds at the frame's edge. The tall frame then
+    // takes the wide picture on Contain as well: a bounded Image at the default transform, which folds at its own edge.
     run: async ({ page }) => {
       const r = await page.evaluate(async () => {
         const q = window.wq, flips = [], turns = [];
-        for (const [W, H] of [[960, 540], [720, 900]]) {
+        // Rows inside the picture, less a rim of `rim` pixels, where a safe read may sit up to a texel and a half inside.
+        const flip = async (W, H, label, make, top, bottom, rim) => {
           for (const [mode, h, v] of [[0, true, false], [1, false, true], [2, true, true]]) {
-            const px = await q.px(q.project([q.rich({ mirrorAmount: 1, mirrorMode: mode })]), .9, W, H);
-            const plain = await q.px(q.project([q.rich()]), .9, W, H);
+            const px = await q.px(q.project([make({ mirrorAmount: 1, mirrorMode: mode })]), .9, W, H);
+            const plain = await q.px(q.project([make({})]), .9, W, H);
             let worst = 0, kept = 0;
-            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) {
+            for (let y = top; y < bottom; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) {
               const a = px[(y * W + x) * 4 + c];
-              if (h) worst = Math.max(worst, Math.abs(a - px[(y * W + W - 1 - x) * 4 + c]));
-              if (v) worst = Math.max(worst, Math.abs(a - px[((H - 1 - y) * W + x) * 4 + c]));
-              // The left and top of the picture are the parts kept.
+              if (x >= rim && x < W - rim && y >= top + rim && y < bottom - rim) {
+                if (h) worst = Math.max(worst, Math.abs(a - px[(y * W + W - 1 - x) * 4 + c]));
+                if (v) worst = Math.max(worst, Math.abs(a - px[((H - 1 - y) * W + x) * 4 + c]));
+              }
+              // The left and top of the picture are the parts kept, to their last pixel.
               if ((!h || x < W / 2 - 2) && (!v || y < H / 2 - 2)) kept = Math.max(kept, Math.abs(a - plain[(y * W + x) * 4 + c]));
             }
-            flips.push({ W, H, mode, worst, kept, moved: q.difference(plain, px) });
+            flips.push({ label, mode, worst, kept, moved: q.difference(plain, px) });
           }
-          const px = await q.px(q.project([q.smooth({ mirrorAmount: 1, mirrorMode: 3, mirrorSegments: 6 })]), .9, W, H);
-          const plain = await q.px(q.project([q.smooth()]), .9, W, H);
+        };
+        for (const [W, H] of [[960, 540], [720, 900]]) {
+          await flip(W, H, `${W}x${H}`, params => q.image(q.richUrl, params, `rich-${W}`, W, H), 0, H, 0);
+          const px = await q.px(q.project([q.image(q.smoothUrl, { mirrorAmount: 1, mirrorMode: 3, mirrorSegments: 6 }, `smooth-${W}`, W, H)]), .9, W, H);
+          const plain = await q.px(q.project([q.image(q.smoothUrl, {}, `smooth-${W}`, W, H)]), .9, W, H);
           const side = Math.min(W, H), radius = side * .46, cos = Math.cos(Math.PI / 3), sin = Math.sin(Math.PI / 3);
           const read = (x, y, c) => {
             const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, at = (X, Y) => px[(Y * W + X) * 4 + c];
@@ -1040,10 +1062,12 @@ const CHECKS = [
           }
           turns.push({ W, H, worst, moved: q.difference(plain, px) });
         }
+        // The 16:9 picture on Contain in the tall frame: 720 by 405, with bars above and below.
+        await flip(720, 900, '720x900 Contain with bars', q.rich, Math.ceil(450 - 202.5), Math.floor(450 + 202.5), 2);
         return { flips, turns };
       });
       const ok = r.flips.every(f => f.worst <= 2 && f.kept <= 2 && f.moved > 1) && r.turns.every(t => t.worst <= 4 && t.moved > 1);
-      return { ok, detail: `${r.flips.map(f => `${f.W}x${f.H} ${MIRROR_NAMES[f.mode]} ${f.worst} (kept side off ${f.kept})`).join(', ')} (limit 2); ${r.turns.map(t => `${t.W}x${t.H} Kaleidoscope turn ${t.worst.toFixed(2)}`).join(', ')} (limit 4)` };
+      return { ok, detail: `${r.flips.map(f => `${f.label} ${MIRROR_NAMES[f.mode]} ${f.worst} (kept side off ${f.kept})`).join(', ')} (limit 2; the Contain rows skip a 2-pixel rim for the flip and keep it for the kept side); ${r.turns.map(t => `${t.W}x${t.H} Kaleidoscope turn ${t.worst.toFixed(2)}`).join(', ')} (limit 4)` };
     },
   },
   {
@@ -1619,8 +1643,8 @@ const CHECKS = [
     },
   },
   {
-    name: 'moved-off-frame',
-    // Thin pictures, both fits, both frame shapes, in and past the frame: a fold must never leave a visible picture dark.
+    name: 'picture-visible',
+    // Thin pictures, both fits, both frame shapes, at the default transform, in and past the frame: a fold must never leave a visible picture dark.
     run: async ({ page }) => {
       const rows = await page.evaluate(async ([images, poses, frames, cases, reported]) => {
         const q = window.wq, rows = [];
@@ -1638,11 +1662,40 @@ const CHECKS = [
       return { ok: rows.length > 0 && under.length === 0, detail: `${rows.length} cases, ${under.length} under ${OFF_FRAME_LIMIT}x plain; lowest ${low.name}, ${low.shape} ${low.fit}, ${low.W}x${low.H} at x ${low.x}: ${low.ratio.toFixed(3)}x` };
     },
   },
-  ...(previous ? [{
-    name: 'moved-others-unchanged',
-    // Against the previous commit: layers whose picture rectangle did not change, and repeated Images, which have no edge.
+  {
+    name: 'picture-solid',
+    // A solid picture under every fold: no pixel the plain picture lights may go dim, so no hairline, crease or pinch shows inside it.
     run: async ({ page }) => {
-      const r = await page.evaluate(async ([poses, inFrame, coverPoses, cases]) => {
+      const rows = await page.evaluate(async ([images, poses, frames, cases, floor]) => {
+        const q = window.wq, rows = [];
+        for (const [shape, width, height] of images) for (const fit of ['contain', 'cover']) for (const [W, H] of frames) for (const pose of poses) {
+          const at = params => { const l = q.solidImage(shape, width, height, params, fit); l.transform = pose; return q.project([l]); };
+          const plain = await q.px(at({}), .9, W, H);
+          let peak = 0;
+          for (let i = 0; i < plain.length; i += 4) peak = Math.max(peak, plain[i + 1]);
+          const inside = [];
+          for (let i = 0; i < plain.length; i += 4) if (plain[i + 1] >= floor * peak) inside.push(i);
+          if (peak < 200 || inside.length < .005 * W * H) continue;
+          for (const [name, params] of cases) {
+            const px = await q.px(at(params), .9, W, H);
+            let dim = 0, lowest = 255;
+            for (const i of inside) { const v = Math.min(px[i], px[i + 1], px[i + 2]); if (v < floor * peak) dim++; if (v < lowest) lowest = v; }
+            rows.push({ name, shape, fit, W, H, x: pose.x, peak, dim, share: dim / inside.length, lowest });
+          }
+        }
+        return rows;
+      }, [SOLID_IMAGES, SOLID_POSES, SOLID_FRAMES, SOLID_CASES, SOLID_FLOOR]);
+      const bad = rows.filter(r => r.dim > 0), worst = rows.reduce((a, r) => r.share > a.share || (r.share === a.share && r.lowest < a.lowest) ? r : a);
+      const label = r => `${r.name}, ${r.shape} ${r.fit}, ${r.W}x${r.H} at x ${r.x}`;
+      return { ok: rows.length > 0 && bad.length === 0, detail: `${rows.length} cases, ${bad.length} with a pixel under ${SOLID_FLOOR}x the plain peak (limit 0); most dim pixels ${(worst.share * 100).toFixed(2)}% at ${label(worst)}; lowest value ${Math.min(...rows.map(r => r.lowest))} of peak ${worst.peak}${bad.length ? `; first ${label(bad[0])}: ${bad[0].dim} pixels, lowest ${bad[0].lowest}; failing cases by mode: ${[...new Set(bad.map(r => r.name.replace(/ -?\d+deg$/, '')))].map(n => `${n} ${bad.filter(r => r.name.replace(/ -?\d+deg$/, '') === n).length}`).join(', ')}` : ''}` };
+    },
+  },
+  ...(previous ? [{
+    name: 'others-unchanged',
+    // Against the previous commit, byte for byte: everything the picture rule must leave alone. Full-frame Images, other
+    // layer kinds and repeated Images under every fold, and bounded Images with no Mirror or Polar on.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async ([poses, inFrame, coverPoses, cases, home]) => {
         const q = window.wq, before = new q.prior.StudioRenderer(document.querySelector('#b')), changed = [];
         let total = 0;
         const compare = async (label, make) => {
@@ -1651,42 +1704,49 @@ const CHECKS = [
           if (!q.same(await q.renderer.exportPNG(now, .9, 480, 270), await before.exportPNG(then, .9, 480, 270))) changed.push(label);
         };
         const scene = (api, l) => { const p = api.createProject(); p.id = 'others-unchanged'; p.layers = [l]; p.background = '#000000'; return p; };
+        const contain = params => { const l = q.coverSquare(params); l.image = { ...l.image, fit: 'contain' }; return l; };
         for (const [name, params] of [['Neutral', {}], ...cases]) {
-          for (const pose of inFrame) await compare(`16:9 image ${name} ${JSON.stringify(pose)}`, api => { const l = q.rich(params); l.transform = pose; return scene(api, l); });
-          for (const pose of coverPoses) await compare(`cover square ${name} ${JSON.stringify(pose)}`, api => { const l = q.coverSquare(params); l.transform = pose; return scene(api, l); });
-          for (const pose of poses) {
-            await compare(`repeated image ${name} ${JSON.stringify(pose)}`, api => { const l = q.coverSquare({ ...params, repeat: 2 }); l.image = { ...l.image, fit: 'contain' }; l.transform = pose; return scene(api, l); });
+          // Full-frame Images: the picture fills the frame at the default transform, so there is no edge to keep.
+          await compare(`16:9 image at default ${name}`, api => scene(api, q.rich(params)));
+          await compare(`cover at default ${name}`, api => scene(api, q.coverSquare(params)));
+          for (const pose of [home, ...poses]) {
+            await compare(`repeated image ${name} ${JSON.stringify(pose)}`, api => { const l = contain({ ...params, repeat: 2 }); l.transform = pose; return scene(api, l); });
             for (const kind of ['surface', 'fractal', 'liquid']) await compare(`${kind} ${name} ${JSON.stringify(pose)}`, api => { const l = api.applyPreset(api.createLayer(kind), api.PRESETS.find(p => p.kind === kind).id); l.id = `${kind}-unchanged`; Object.assign(l.params, params); l.transform = pose; return scene(api, l); });
           }
-          await compare(`cover at default ${name}`, api => scene(api, q.coverSquare(params)));
-          await compare(`contain at default ${name}`, api => { const l = q.coverSquare(params); l.image = { ...l.image, fit: 'contain' }; return scene(api, l); });
+        }
+        // Bounded Images: the rule belongs to Mirror and Polar, so without them nothing may change.
+        for (const [name, params] of [['Neutral', {}], ['Warp', { bendAmount: .3, bendChroma: .5 }], ['Liquid', { liquidAmount: .3 }], ['Luma', { lumaWarpAmount: .3 }]]) {
+          for (const pose of inFrame) await compare(`moved 16:9 image ${name} ${JSON.stringify(pose)}`, api => { const l = q.rich(params); l.transform = pose; return scene(api, l); });
+          for (const pose of coverPoses) await compare(`moved cover ${name} ${JSON.stringify(pose)}`, api => { const l = q.coverSquare(params); l.transform = pose; return scene(api, l); });
+          for (const pose of [home, ...inFrame]) await compare(`contain ${name} ${JSON.stringify(pose)}`, api => { const l = contain(params); l.transform = pose; return scene(api, l); });
         }
         before.dispose();
         return { total, changed };
-      }, [UNCHANGED_POSES, IN_FRAME_POSES, COVER_POSES, MOVED_CASES]);
+      }, [UNCHANGED_POSES, IN_FRAME_POSES, COVER_POSES, MOVED_CASES, DEFAULT_POSE]);
       return { ok: r.changed.length === 0, detail: r.changed.length ? `${r.changed.length} of ${r.total} changed, first ${r.changed[0]}` : `${r.total} renders byte-identical to the previous commit` };
     },
   }, {
-    name: 'moved-contain-change',
-    // Report only: how in-frame Contain Images differ from the previous commit, which the owner's ruling allows.
+    name: 'picture-change',
+    // Report only: how bounded Images under Mirror and Polar differ from the previous commit, which the owner's rulings allow.
     run: async ({ page }) => {
       const rows = await page.evaluate(async ([poses, cases]) => {
         const q = window.wq, before = new q.prior.StudioRenderer(document.querySelector('#b')), rows = [];
-        const make = (api, shape, width, height, params, pose) => { const l = q.thinImage(shape, width, height, params, 'contain'); l.transform = pose; const p = api.createProject(); p.id = 'contain-change'; p.layers = [l]; p.background = '#000000'; return p; };
-        for (const [shape, width, height] of [['4:1', 1024, 256], ['1:4', 256, 1024], ['1:1', 512, 512]]) for (const pose of poses) {
-          const plainProject = make(q.m, shape, width, height, {}, pose); await q.renderer.prepare(plainProject);
+        const make = (api, shape, width, height, fit, params, pose) => { const l = q.thinImage(shape, width, height, params, fit); l.transform = pose; const p = api.createProject(); p.id = 'picture-change'; p.layers = [l]; p.background = '#000000'; return p; };
+        for (const [shape, width, height] of [['4:1', 1024, 256], ['1:4', 256, 1024], ['1:1', 512, 512]]) for (const fit of ['contain', 'cover']) for (const pose of poses) {
+          const group = pose.scale === 1 && !pose.x && !pose.rotation ? `default ${fit}` : `moved ${fit}`;
+          const plainProject = make(q.m, shape, width, height, fit, {}, pose); await q.renderer.prepare(plainProject);
           const plainPx = await q.pixels(await q.renderer.exportPNG(plainProject, .9, 480, 270)), plain = q.litShare(plainPx);
           for (const [name, params] of cases) {
-            const now = make(q.m, shape, width, height, params, pose), then = make(q.prior, shape, width, height, params, pose);
+            const now = make(q.m, shape, width, height, fit, params, pose), then = make(q.prior, shape, width, height, fit, params, pose);
             await q.renderer.prepare(now); await before.prepare(then);
             const a = await q.pixels(await q.renderer.exportPNG(now, .9, 480, 270)), b = await q.pixels(await before.exportPNG(then, .9, 480, 270));
-            rows.push({ name, changed: !q.same(a, b), mean: q.difference(a, b), nowLit: q.litShare(a) / plain, thenLit: q.litShare(b) / plain });
+            rows.push({ group, name, changed: !q.same(a, b), mean: q.difference(a, b), nowLit: q.litShare(a) / plain, thenLit: q.litShare(b) / plain });
           }
         }
         before.dispose();
         return rows;
-      }, [IN_FRAME_POSES, MOVED_CASES]);
-      const by = MOVED_CASES.map(([name]) => { const g = rows.filter(r => r.name === name); return `${name}: ${g.filter(r => r.changed).length}/${g.length} changed, mean ${(g.reduce((a, r) => a + r.mean, 0) / g.length).toFixed(2)}, lowest lit ${Math.min(...g.map(r => r.thenLit)).toFixed(2)}x to ${Math.min(...g.map(r => r.nowLit)).toFixed(2)}x`; });
+      }, [[...IN_FRAME_POSES, DEFAULT_POSE], MOVED_CASES]);
+      const by = [...new Set(rows.map(r => r.group))].map(group => { const g = rows.filter(r => r.group === group), worst = g.reduce((a, r) => r.mean > a.mean ? r : a); return `${group}: ${g.filter(r => r.changed).length}/${g.length} changed, mean ${(g.reduce((a, r) => a + r.mean, 0) / g.length).toFixed(2)} of 255, most ${worst.mean.toFixed(2)} (${worst.name}), lowest lit ${Math.min(...g.map(r => r.thenLit)).toFixed(2)}x to ${Math.min(...g.map(r => r.nowLit)).toFixed(2)}x`; });
       return { ok: rows.length > 0, detail: `report only. ${by.join('; ')}` };
     },
   }, {
@@ -1867,6 +1927,9 @@ try {
     const squareUrl = await dataUrl(512, 512, (x, y) => [Math.round(128 + 90 * Math.sin(3.1 * x + .4)), Math.round(128 + 90 * Math.cos(4.3 * y - .7)), Math.round(128 + 70 * Math.sin(2.2 * x + 3.7 * y)), 255]);
     const thinFill = (x, y) => [Math.round(128 + 90 * Math.sin(3.1 * x + .4)), Math.round(128 + 90 * Math.cos(4.3 * y - .7)), Math.round(128 + 70 * Math.sin(2.2 * x + 3.7 * y)), 255];
     const thinUrls = { '4:1': await dataUrl(1024, 256, thinFill), '1:4': await dataUrl(256, 1024, thinFill), '1:1': await dataUrl(512, 512, thinFill) };
+    const solidUrls = {};
+    for (const [shape, w, h] of [['1:1', 512, 512], ['4:1', 1024, 256], ['1:4', 256, 1024]]) solidUrls[shape] = await dataUrl(w, h, () => [255, 255, 255, 255]);
+    const solidImage = (shape, width, height, params = {}, fit = 'contain') => { const l = image(solidUrls[shape], params, `solid-${width}x${height}`, width, height); l.image.fit = fit; return l; };
     const thinImage = (shape, width, height, params = {}, fit = 'cover') => { const l = image(thinUrls[shape], params, `thin-${width}x${height}`, width, height); l.image.fit = fit; return l; };
     const coverSquare = (params = {}) => { const l = image(squareUrl, params, 'square', 512, 512); l.image.fit = 'cover'; return l; };
     // Red marks the right half; green is busy everywhere, so a move shows even where red is flat.
@@ -1904,6 +1967,8 @@ try {
     };
     const feed = (params, sourceFill, belowFill = () => [0, 0, 0, 0], W = 960, H = 540, transform) => {
       const source = floats(sourceFill, W, H), under = floats(belowFill, W, H), layer = rich(params);
+      // The fed source fills the frame, so the layer's picture is the frame's shape and has no bars.
+      layer.image = { ...layer.image, width: W, height: H };
       if (transform) layer.transform = transform;
       renderer.warpSource(layer, layer, source, under, .9, W, H);
       const result = linear(W, H);
@@ -1974,7 +2039,7 @@ try {
       if (kind === 'image') return image(posterUrl, params, 'poster');
       const l = m.applyPreset(m.createLayer(kind), m.PRESETS.find(p => p.kind === kind).id); l.id = `${kind}-proof`; Object.assign(l.params, params); return l;
     };
-    window.wq = { thinImage, coverSquare, prior, litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
+    window.wq = { richUrl, smoothUrl, solidImage, thinImage, coverSquare, prior, litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
   }, [!!baseline, !!previous]);
 
   for (const check of selected) {
