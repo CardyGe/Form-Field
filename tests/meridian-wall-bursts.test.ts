@@ -176,27 +176,32 @@ test('a ratchet of small falls cannot climb past the threshold', () => {
   assert.ok(worst <= LIMIT, `${worst} changes`); assert.equal(together, 0);
 });
 
-// ---- Round 4: light that swaps places inside a block, which leaves the block's brightest pixel unchanged. ----
-function swapping(detailFor: (f: number) => { fall: number; rise: number; drop: number }, count = 360) {
-  const limiter = new WallLimiter(CELLS), light = new Float32Array(CELLS).fill(1), red = new Float32Array(CELLS), none = new Float32Array(CELLS);
-  const lightFall = new Float32Array(CELLS), lightRise = new Float32Array(CELLS), lightDrop = new Float32Array(CELLS), out: number[] = [];
+// ---- Rounds 4 and 5: light that changes inside a block while a steady pixel holds its brightest pixel up. ----
+function underSteadyPeak(report: (f: number) => { fell: number; drop: number; hot: number }, count = 360) {
+  const limiter = new WallLimiter(CELLS), light = new Float32Array(CELLS).fill(1), red = new Float32Array(CELLS), none = new Float32Array(CELLS), noFlags = new Uint8Array(CELLS);
+  const lightFell = new Uint8Array(CELLS), lightDrop = new Float32Array(CELLS), lightHot = new Float32Array(CELLS), out: number[] = [];
   limiter.step(0, light, red);
   for (let f = 0; f < count; f++) {
-    const d = detailFor(f); lightFall.fill(d.fall); lightRise.fill(d.rise); lightDrop.fill(d.drop);
-    limiter.step(1 / 60, light, red, { lightFall, lightRise, lightDrop, redFall: none, redRise: none, redDrop: none });
+    const d = report(f); lightFell.fill(d.fell); lightDrop.fill(d.drop); lightHot.fill(d.hot);
+    limiter.step(1 / 60, light, red, { lightFell, lightDrop, lightHot, redFell: noFlags, redDrop: none, redHot: none });
     out.push(limiter.shown[0]);
   }
   return out;
 }
 
-test('light swapping places inside a block is limited, though its brightest pixel never moves', () => {
-  const out = swapping(f => f % 6 === 0 ? { fall: 1, rise: 1, drop: 0 } : { fall: 0, rise: 0, drop: 1 });
+test('pixels flashing behind a steady bright pixel are limited, though the block peak never moves', () => {
+  const out = underSteadyPeak(f => f % 6 === 0 ? { fell: 1, drop: 0, hot: f >= 12 ? 1 : 0 } : { fell: 0, drop: 1, hot: f >= 12 ? 1 : 0 });
   assert.ok(Math.max(...out.slice(30)) <= LIMITER.band + 1e-6, `peak ${Math.max(...out.slice(30))}`);
 });
 
-test('an edge moving through a block is not a flash, and passes exactly', () => {
-  const out = swapping(() => ({ fall: 0, rise: 0, drop: 1 }));
-  assert.ok(out.every(v => v === 1));
+test('a block whose pixels report nothing passes exactly', () => {
+  assert.ok(underSteadyPeak(() => ({ fell: 0, drop: 1, hot: 0 })).every(v => v === 1));
+});
+
+test('a slow ramp is followed from where it turned, so it counts as a flash', () => {
+  const ramp: Light = t => { const at = ((t * 5) % 1 + 1) % 1; return .45 * (1 - Math.abs(2 * at - 1)); };
+  const times = clock(60, false), { raw, out } = run(ramp, times, 0);
+  assert.ok(worstSecond(raw, times) > LIMIT); assert.ok(worstSecond(out, times) <= LIMIT, `${worstSecond(out, times)} changes`);
 });
 
 test('switching the guard back on during its ease-out returns the limit gradually', () => {

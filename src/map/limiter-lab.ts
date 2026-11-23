@@ -13,10 +13,10 @@ const WHITE: Colour = [1, 1, 1], RED: Colour = [1, 0, 0];
 const RATCHET = [0, 1, .009, 1, .018, 1];
 
 /** A drawn pattern. `shape` 0 is the whole wall; `invert` swaps the two halves of the pattern, otherwise the lit half goes to black. */
-interface Spec { shape: 0 | 1 | 2; size: number; offset: number; invert: boolean; colour: Colour; blackout?: boolean; bpm?: number; band?: 'antiphase' | 'staggered'; ratchet?: boolean; lines?: { count: number; width: number; speed: number }; patch?: boolean; comb?: number }
+interface Spec { shape: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; size: number; offset: number; invert: boolean; colour: Colour; blackout?: boolean; bpm?: number; band?: 'antiphase' | 'staggered'; ratchet?: boolean; lines?: { count: number; width: number; speed: number }; patch?: boolean; comb?: number; ramp?: { amp: number; hz: number; grid: 0 | 3 | 4 }; shake?: 5 | 6; texture?: { scale: number; speed: number; grain: number } }
 /** `calm` patterns must come through byte for byte; every other non-beat pattern must be held within the limit. */
-export interface LabCase { name: string; fps: number; spec: Spec; control: boolean; beat: boolean; calm?: boolean; known?: boolean }
-export interface LabResult { worst: number; together: number; peak: number; swing: number; redWorst: number; redTogether: number; blackFrames: number; litInBlack: number; sum: number }
+export interface LabCase { name: string; fps: number; spec: Spec; control: boolean; beat: boolean; calm?: boolean; busy?: boolean }
+export interface LabResult { worst: number; together: number; peak: number; swing: number; redWorst: number; redTogether: number; blackFrames: number; litInBlack: number; sum: number; mean: number }
 
 const SIZES = [10, 20, 40, 80, 120], OFFSETS = [0, 13, 20];
 
@@ -52,8 +52,22 @@ export function labCases(): LabCase[] {
   for (const size of [1, 2, 3, 4, 6, 8]) add(`finest: white checker inverting ${size} px +13`, { shape: 1, size, offset: 13, invert: true, colour: WHITE }, 60, true);
   const combBase = { shape: 0, size: 1, offset: 0, invert: false, colour: WHITE } as const;
   add('comb: 1 px lines every 4 px, swapping by 2 px', { ...combBase, comb: 2 }, 60, true);
-  // Reported, not required: a line shaking by one pixel reads as an edge moving. Its light stays in the same place to the eye.
-  out.push({ name: 'known limit: 1 px lines every 4 px, shaking by 1 px', fps: 60, spec: { ...combBase, comb: 1 }, control: true, beat: false, known: true });
+  add('comb: 1 px lines every 4 px, shaking by 1 px', { ...combBase, comb: 1 }, 60, true);
+  // A smooth pulse under a fine steady grid: each frame's step is too small to see, and the grid holds every block's peak up.
+  for (const [amp, hz] of [[.55, 4], [.45, 5], [.25, 8], [1, 4], [.3, 4]]) for (const [gridName, grid] of [['no grid', 0], ['a dot in each 4 px block', 3], ['1 px lines every 4 px', 4]] as [string, 0 | 3 | 4][])
+    for (const fps of [30, 60, 120]) add(`ramp 0 to ${amp}, ${hz} Hz, ${gridName}, ${fps} fps`, { ...combBase, ramp: { amp, hz, grid } }, fps, true);
+  // Elements of 2 px shaken by 1 px. Only the exact 1 px line case above is an accepted limit.
+  for (const [name, shake] of [['2 px bars every 4 px', 5], ['2 px checker', 6]] as [string, 5 | 6][]) for (const fps of [30, 60, 120])
+    add(`shake: ${name}, 1 px, ${fps} fps`, { ...combBase, shake }, fps, true);
+  // Moving detail, like video or a dense instrument: reported as the share of its light the limiter keeps.
+  const busy = (name: string, spec: Partial<Spec>) => out.push({ name: `busy: ${name}`, fps: 60, spec: { ...combBase, ...spec }, control: true, beat: false, busy: true });
+  busy('1 px noise scrolling 2 px a frame', { texture: { scale: 1, speed: 2, grain: 0 } });
+  busy('2 px noise scrolling 1 px a frame', { texture: { scale: 2, speed: 1, grain: 0 } });
+  busy('soft 8 px texture scrolling 1 px a frame', { texture: { scale: 8, speed: 1, grain: 0 } });
+  busy('soft 24 px texture scrolling 2 px a frame', { texture: { scale: 24, speed: 2, grain: 0 } });
+  busy('soft 24 px texture, slow, with film grain', { texture: { scale: 24, speed: .25, grain: .04 } });
+  busy('1 px lines every 8 px moving 1 px a frame', { lines: { count: 240, width: 1, speed: 1 } });
+  busy('2 px lines every 16 px moving 2 px a frame', { lines: { count: 120, width: 2, speed: 2 } });
   // Calm content the limiter must leave alone.
   const none = { shape: 0, size: 1, offset: 0, invert: false, colour: WHITE } as const;
   for (const [count, width, speed] of [[12, 1, 1], [12, 2, 1], [12, 2, 3], [24, 1, 2]]) out.push({ name: `calm: ${count} lines ${width} px wide moving ${speed} px a frame`, fps: 60, spec: { ...none, lines: { count, width, speed } }, control: true, beat: false, calm: true });
@@ -68,9 +82,26 @@ const PAINT = `#version 300 es
 precision highp float;
 out vec4 o;
 uniform vec3 uColour;
-uniform float uSize, uOffset;
+uniform float uSize, uOffset, uGrain, uSeed;
 uniform int uShape, uInvert, uOn;
+float noise(vec2 p) { p = mod(p, 4096.); return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 void main() {
+  ivec2 i = ivec2(gl_FragCoord.xy);
+  int shift = int(uOffset);
+  if (uShape == 7) {
+    vec2 at = (gl_FragCoord.xy + vec2(uOffset, 0.)) / uSize, cell = floor(at), f = fract(at);
+    f = uSize > 2. ? f * f * (3. - 2. * f) : vec2(0.);
+    float v = mix(mix(noise(cell), noise(cell + vec2(1., 0.)), f.x), mix(noise(cell + vec2(0., 1.)), noise(cell + vec2(1., 1.)), f.x), f.y);
+    v = clamp(v + uGrain * (noise(gl_FragCoord.xy + uSeed) - .5) * 2., 0., 1.);
+    o = vec4(vec3(v), 1.);
+    return;
+  }
+  if (uShape >= 3) {
+    bool shown = uShape == 3 ? i.x % 4 == 0 && i.y % 4 == 0 : uShape == 4 ? i.x % 4 == 0 : uShape == 5 ? (i.x + shift) % 4 < 2 : (((i.x + shift) / 2 + i.y / 2) & 1) == 0;
+    if (!shown) discard;
+    o = vec4(uColour, 1.);
+    return;
+  }
   vec2 q = floor((gl_FragCoord.xy + uOffset) / uSize);
   int odd = uShape == 1 ? (int(q.x) + int(q.y)) & 1 : uShape == 2 ? int(q.x) & 1 : 0;
   bool lit = uInvert == 1 ? (odd == 0) == (uOn == 1) : odd == 0 && uOn == 1;
@@ -118,11 +149,12 @@ class Painter {
     this.program = gl.createProgram()!;
     gl.attachShader(this.program, make(gl.VERTEX_SHADER, PAINT_VERTEX)); gl.attachShader(this.program, make(gl.FRAGMENT_SHADER, PAINT));
     gl.bindAttribLocation(this.program, 0, 'aUnit'); gl.linkProgram(this.program);
-    this.u = Object.fromEntries(['uColour', 'uSize', 'uOffset', 'uShape', 'uInvert', 'uOn'].map(n => [n, gl.getUniformLocation(this.program, n)]));
+    this.u = Object.fromEntries(['uColour', 'uSize', 'uOffset', 'uGrain', 'uSeed', 'uShape', 'uInvert', 'uOn'].map(n => [n, gl.getUniformLocation(this.program, n)]));
   }
-  draw(spec: Spec, on: boolean): void {
+  draw(spec: Spec, on: boolean, grain = 0, seed = 0): void {
     const { gl, u } = this;
     gl.useProgram(this.program);
+    gl.uniform1f(u.uGrain, grain); gl.uniform1f(u.uSeed, seed);
     gl.uniform3fv(u.uColour, spec.colour); gl.uniform1f(u.uSize, spec.size); gl.uniform1f(u.uOffset, spec.offset);
     gl.uniform1i(u.uShape, spec.shape); gl.uniform1i(u.uInvert, spec.invert ? 1 : 0); gl.uniform1i(u.uOn, on ? 1 : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -150,6 +182,15 @@ function drawFrame(gl: WebGL2RenderingContext, painter: Painter, spec: Spec, fra
     gl.enable(gl.SCISSOR_TEST); gl.clearColor(1, 1, 1, 1);
     for (let i = 0; i < count; i++) { gl.scissor(Math.floor(i * W / count + frame * speed) % W, 0, width, STAGE_SIZE.height); gl.clear(gl.COLOR_BUFFER_BIT); }
     gl.disable(gl.SCISSOR_TEST);
+  } else if (spec.ramp) {
+    const { amp, hz, grid } = spec.ramp, at = ((t * hz) % 1 + 1) % 1, value = amp * (1 - Math.abs(2 * at - 1)), encoded = value <= .0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - .055;
+    gl.clearColor(encoded, encoded, encoded, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    if (grid) painter.draw({ ...spec, shape: grid }, true);
+  } else if (spec.texture) {
+    const { scale, speed, grain } = spec.texture;
+    painter.draw({ ...spec, shape: 7, size: scale, offset: Math.floor(frame * speed) }, true, grain, frame % 977);
+  } else if (spec.shake) {
+    painter.draw({ ...spec, shape: spec.shake, offset: phase(t) ? 0 : 1 }, true);
   } else if (spec.comb) {
     gl.enable(gl.SCISSOR_TEST); gl.clearColor(1, 1, 1, 1);
     for (let x = phase(t) ? 0 : spec.comb; x < STAGE_SIZE.width; x += 4) { gl.scissor(x, 0, 1, STAGE_SIZE.height); gl.clear(gl.COLOR_BUFFER_BIT); }
@@ -164,7 +205,7 @@ function drawFrame(gl: WebGL2RenderingContext, painter: Painter, spec: Spec, fra
 function play(gpu: Gpu, painter: Painter, item: LabCase, limited: boolean, bytes: Uint8Array): LabResult {
   const gl = gpu.gl, { fps, spec } = item, frames = fps * SECONDS, light = new Counter(.1, .8, LIGHT_LIMIT), red = new Counter(.0625, 2, RED_LIMIT);
   const lightValues = new Float32Array(POINTS), redValues = new Float32Array(POINTS);
-  let peak = 0, low = Infinity, blackFrames = 0, litInBlack = 0, sum = 0;
+  let peak = 0, low = Infinity, blackFrames = 0, litInBlack = 0, sum = 0, total = 0, counted = 0;
   // Starts from black, as a show does.
   gpu.begin();
   if (limited) gpu.limitStage(0, 1, true);
@@ -180,14 +221,15 @@ function play(gpu: Gpu, painter: Painter, item: LabCase, limited: boolean, bytes
       lightValues[i] = y; redValues[i] = sum > 1e-4 && cr / sum >= .8 ? Math.max(0, cr - cg - cb) : 0;
       if (y > brightest) brightest = y;
     }
+    if (f > fps / 2) { for (let i = 0; i < POINTS; i++) total += lightValues[i]; counted += POINTS; }
     if (f > fps / 2) { if (brightest > peak) peak = brightest; if (brightest < low) low = brightest; }
     if (dark) { blackFrames++; if (brightest > 0) litInBlack++; }
     light.see(lightValues, f, fps); red.see(redValues, f, fps);
   }
-  return { worst: light.worst, together: light.together, peak, swing: peak - (low === Infinity ? 0 : low), redWorst: red.worst, redTogether: red.together, blackFrames, litInBlack, sum };
+  return { worst: light.worst, together: light.together, peak, swing: peak - (low === Infinity ? 0 : low), redWorst: red.worst, redTogether: red.together, blackFrames, litInBlack, sum, mean: counted ? total / counted : 0 };
 }
 
-export type LabReport = Record<string, { fps: number; beat: boolean; calm: boolean; known: boolean; raw: LabResult | null; limited: LabResult }>;
+export type LabReport = Record<string, { fps: number; beat: boolean; calm: boolean; busy: boolean; raw: LabResult | null; limited: LabResult }>;
 
 /** The patterns whose names contain `only` (all of them by default), limited, and with the limiter off for the controls. */
 export async function runLimiterLab(only = ''): Promise<LabReport> {
@@ -199,7 +241,7 @@ export async function runLimiterLab(only = ''): Promise<LabReport> {
       const raw = item.control ? play(gpu, painter, item, false, bytes) : null;
       const limited = play(gpu, painter, item, true, bytes);
       if (gpu.guardError) throw new Error(`the limiter could not be built: ${gpu.guardError}`);
-      out[item.name] = { fps: item.fps, beat: item.beat, calm: !!item.calm, known: !!item.known, raw, limited };
+      out[item.name] = { fps: item.fps, beat: item.beat, calm: !!item.calm, busy: !!item.busy, raw, limited };
       await new Promise(done => setTimeout(done, 0));
     }
   } finally { gpu.gl.getExtension('WEBGL_lose_context')?.loseContext(); }
