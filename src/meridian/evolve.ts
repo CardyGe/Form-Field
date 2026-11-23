@@ -30,11 +30,13 @@ const GLIDE_SECONDS = 16;
 const TINT_FADE_SECONDS = 5;
 const NEXT_SECONDS = 11;
 const SHORTEST_MORPH = 11; // However restless Evolution is, one form takes at least this long to become the next.
+const SHORT_PATH_REACH = 0.0616; // A short export goes only as far towards a distant form as it can reach at a calm speed.
 const FULL_PATH_SECONDS = 46; // An export shorter than this travels only part of the way to its second form and back.
 const TIER_RATES = [1, -0.618, 0.382];
 const GLITCH_CELL = 2.2; // Seconds in which at most one glitch event happens.
 const EASE_PLACE = 0.78, EASE_ARC = 0.69, EASE_LIGHT = 2.8, EASE_TURN = 0.66; // Per second, the fastest a voice may travel during a Density move.
 const UNSEEN = 0.012;
+const SWAY_RADIANS = 0.42, SWAY_PERIOD = 73; // A binary's slow sway about its shared centre.
 const SPOKE_LIST = RING_VOICES * ARC_SLOTS, NODE_LIST = SPOKE_LIST + SPOKE_VOICES * 2; // Where each kind of voice starts in the display list.
 const ZOOM_SHARE = 0.55; // How much of the on-screen move limit a Scale move in progress keeps for itself.
 const SCALE_SPEED_SMALL = 0.72, SCALE_SPEED_LARGE = 1.2; // Share of the Scale fader per second.
@@ -45,7 +47,7 @@ const USER_FOLLOW = 3.6; // Density and Scale follow the fader as a critically d
 const RING_FIELDS = 5 + ARC_SLOTS * 2;
 const SPOKE_FIELDS = 6;
 const NODE_FIELDS = 3;
-const HERO_FIELDS = 6;
+const HERO_FIELDS = 7;
 const SPOKE_BASE = RING_VOICES * RING_FIELDS;
 const NODE_BASE = SPOKE_BASE + SPOKE_VOICES * SPOKE_FIELDS;
 const HERO_BASE = NODE_BASE + NODE_VOICES * NODE_FIELDS;
@@ -53,15 +55,20 @@ const POSE_SIZE = HERO_BASE + HERO_FIELDS;
 const R_RADIUS = 0, R_X = 1, R_Y = 2, R_WIDTH = 3, R_ALPHA = 4, R_ARCS = 5;
 const S_ANGLE = 0, S_INNER = 1, S_OUTER = 2, S_ALPHA = 3, S_WIDTH = 4, S_MIRROR = 5;
 const N_ANGLE = 0, N_ALPHA = 1, N_SIZE = 2;
-const H_RADIUS = 0, H_X = 1, H_Y = 2, H_WIDTH = 3, H_ALPHA = 4, H_GLOW = 5;
+const H_RADIUS = 0, H_X = 1, H_Y = 2, H_WIDTH = 3, H_ALPHA = 4, H_GLOW = 5, H_SWAY = 6;
 
-const AXIS = 0, NEST = 1, WHEEL = 2, ORBITS = 3, ROSETTE = 4, LATTICE = 5, HORIZON = 6, GATES = 7, VESICA = 8, HOME = 9;
-const JOURNEY_KINDS = 9;
+const AXIS = 0, NEST = 1, WHEEL = 2, ORBITS = 3, ROSETTE = 4, LATTICE = 5, HORIZON = 6, GATES = 7, VESICA = 8;
+const ECLIPSE = 9, RISE = 10, BINARY = 11, TUNNEL = 12, NECKLACE = 13, FAN = 14, HOME = 15;
+const OPENING_KINDS = 9; // The first form of a seed is drawn from the original nine, so every seed opens as it always has.
+const JOURNEY_KINDS = 15;
+const KIND_MEMORY = 6; // A kind does not return until this many others have passed.
+/** The name of each kind of form, in the order `evolveFormKind` numbers them. */
+export const EVOLVE_FORM_NAMES: readonly string[] = ['Axis', 'Nest', 'Wheel', 'Orbits', 'Rosette', 'Lattice', 'Horizon', 'Gates', 'Vesica', 'Eclipse', 'Rise', 'Binary', 'Tunnel', 'Necklace', 'Fan'];
 const ARC_COUNTS = [1, 2, 3, 4, 6];
 
 /** Values a performer can move, with how much of their range they may travel in a second. */
 const SMOOTHED: readonly (readonly [string, number])[] = [
-  ['macroDensity', 0.16], ['macroTension', 0.5], ['macroOrder', 0.5], ['macroSpeed', 0.8], ['macroWeight', 0.5], ['macroGlitch', 0.8], ['macroHeat', 0.4], ['macroScale', 0.15],
+  ['macroDensity', 0.16], ['macroTension', 0.5], ['macroOrder', 0.5], ['macroSpeed', 0.8], ['macroWeight', 0.5], ['macroGlitch', 0.8], ['macroHeat', 0.32], ['macroScale', 0.15],
   ['ringCount', 0.05], ['ringWeight', 0.1], ['ringOpacity', 0.5], ['ringArcShare', 0.1], ['ringRotationSpeed', 0.25], ['ringCounterRotation', 0.5],
   ['spokeCount', 0.03], ['spokeWeight', 0.1], ['spokeOpacity', 0.5], ['spokeInnerReach', 0.2], ['spokeOuterReach', 0.2], ['spokeOffsetAngle', 0.03],
   ['nodeDensity', 0.2], ['nodeSize', 0.1], ['nodeGlow', 0.25], ['nodeOpacity', 0.5],
@@ -130,6 +137,7 @@ class Form {
 const FORMS_PER_CLOCK = 4; // The two forms in play, plus the next pair while Next is crossing a boundary.
 const WHEEL_SPOKES = [5, 6, 8, 10];
 const ROSETTE_PETALS = [5, 6, 6, 8];
+const NECKLACE_BEADS = [7, 8, 9, 11];
 const poseA = new Float32Array(POSE_SIZE);
 const poseB = new Float32Array(POSE_SIZE);
 const scratchPlace = new Float64Array(64);
@@ -226,17 +234,25 @@ function setHero(form: Form, radius: number, x: number, y: number, width: number
   d[at + H_RADIUS] = radius; d[at + H_X] = x; d[at + H_Y] = y; d[at + H_WIDTH] = width; d[at + H_ALPHA] = alpha; d[at + H_GLOW] = glow;
 }
 
-/** The kind of form at a place in the journey. It never repeats either of the two before it. */
+/**
+ * The kind of form at a place in the journey, walked from the start so that every place has one answer. No kind returns
+ * until six others have passed, which also means a form never morphs into its own kind.
+ */
 function kindAt(seed: number, index: number): number {
-  let previous = -1, before = -1, kind = hash(seed, 0, 7) % JOURNEY_KINDS;
-  const from = Math.max(0, index - 12);
-  if (from > 0) kind = hash(seed, from, 7) % JOURNEY_KINDS;
-  for (let i = from; i <= index; i++) {
+  let kind = hash(seed, 0, 7) % OPENING_KINDS, recent = kind; // Five bits for each remembered kind, newest lowest.
+  for (let i = 1; i <= index; i++) {
     let candidate = hash(seed, i, 7) % JOURNEY_KINDS;
-    for (let tries = 1; candidate === previous || candidate === before; tries++) candidate = hash(seed, i, 7 + tries * 31) % JOURNEY_KINDS;
-    before = previous; previous = candidate; kind = candidate;
+    for (let tries = 1; seenIn(recent, candidate, Math.min(i, KIND_MEMORY)); tries++) candidate = hash(seed, i, 7 + tries * 31) % JOURNEY_KINDS;
+    kind = candidate;
+    recent = (recent * 32 + candidate) % 32 ** KIND_MEMORY;
   }
   return kind;
+}
+
+function seenIn(recent: number, kind: number, count: number): boolean {
+  let rest = recent;
+  for (let i = 0; i < count; i++) { if (rest % 32 === kind) return true; rest = Math.floor(rest / 32); }
+  return false;
 }
 
 function compile(form: Form, seed: number, index: number): void {
@@ -247,7 +263,7 @@ function compile(form: Form, seed: number, index: number): void {
   form.seed = seed; form.index = index; form.kind = kind; form.nodes = 0;
   d.fill(0);
   let rings = 3, spokes = 2, circular = false, spokeSpan = Math.PI, spokeBase = turn, spokeInner = 0.035, spokeOuter = 0.86, spokeAlpha = 0.62, mirror = 1;
-  let originX = 0, originY = 0;
+  let originX = 0, originY = 0, shape = 0, shapeB = 0, shapeC = 0;
   if (kind === AXIS) { rings = 1; spokes = 1; spokeOuter = 0.92; }
   else if (kind === NEST) { rings = 3 + Math.floor(random() * 3); spokes = random() < 0.5 ? 0 : 2; }
   else if (kind === WHEEL) { rings = 2; spokes = WHEEL_SPOKES[Math.floor(random() * 4)]; spokeInner = 0.06; spokeOuter = 0.43; }
@@ -263,6 +279,20 @@ function compile(form: Form, seed: number, index: number): void {
   }
   else if (kind === GATES) { rings = 4; spokes = random() < 0.4 ? 1 : 0; spokeOuter = 0.54; }
   else if (kind === VESICA) { rings = 2; circular = true; spokes = 1; spokeOuter = 0.74; }
+  else if (kind === ECLIPSE) { rings = 4; spokes = 0; shape = random() * TAU; shapeB = 0.36 + random() * 0.04; }
+  else if (kind === RISE) {
+    // A vast planet's edge low in the frame, with a small sun half risen on it.
+    rings = 5; spokes = 0; shape = (random() - 0.5) * 0.9; shapeB = 1.55 + random() * 0.35; shapeC = -0.2 - random() * 0.07;
+  }
+  else if (kind === BINARY) { rings = 6; spokes = 0; shape = random() * TAU; shapeB = 0.24 + random() * 0.05; shapeC = 0.15 + random() * 0.04; }
+  else if (kind === TUNNEL) { rings = 6; spokes = 2; shape = random() * TAU; shapeB = 0.18 + random() * 0.08; spokeInner = 0.04; spokeOuter = 0.5; spokeAlpha = 0.26; }
+  else if (kind === NECKLACE) { rings = NECKLACE_BEADS[Math.floor(random() * 4)]; circular = true; spokes = 0; shape = random() * TAU; shapeB = 0.36 + random() * 0.04; }
+  else if (kind === FAN) {
+    // Rings about a corner of the frame, so the frame itself cuts them to arcs and the far side stays empty.
+    const corner = Math.floor(random() * 4);
+    rings = 4; spokes = 6; originX = (corner & 1 ? 1 : -1) * (0.62 + random() * 0.12); originY = (corner & 2 ? 1 : -1) * (0.3 + random() * 0.08);
+    spokeInner = 0.235; spokeOuter = 0.95; spokeAlpha = 0.3;
+  }
   else if (kind === HOME) { rings = 3; spokes = 6; spokeOuter = 0.62; spokeAlpha = 0.46; }
   form.rings = rings; form.spokes = spokes;
 
@@ -282,6 +312,29 @@ function compile(form: Form, seed: number, index: number): void {
     else if (kind === LATTICE) setRing(form, voice, 0.44 * (0.4 ** f), 0, 0, line * 0.9, base ? 0.72 : 0.34);
     else if (kind === HORIZON) setRing(form, voice, Math.hypot(originX, originY) - 0.2 + f * 0.86, originX, originY, line, ink);
     else if (kind === GATES) setRing(form, voice, largest * (0.2 / largest) ** f, 0, 0, line * 1.08, ink, gateArcs, gateOpen * (voice % 2 ? 0.74 : 1));
+    else if (kind === ECLIPSE) {
+      // Nested rings all leaning to one side, nearly touching there, so the gaps between them are crescents.
+      const r = shapeB * (1 - 0.52 * f), lean = (shapeB - r) * 0.88;
+      setRing(form, voice, r, Math.cos(shape) * lean, Math.sin(shape) * lean, line, ink);
+    }
+    else if (kind === RISE) {
+      if (f < 0.4) { const r = shapeB + f * 0.34; setRing(form, voice, r, shape * 0.4, shapeC - shapeB, line * (f < 0.2 ? 1.1 : 0.8), f < 0.2 ? ink : ink * 0.6); }
+      else setRing(form, voice, 0.125 + (f - 0.4) * 0.3, shape, shapeC, line * 0.9, ink * (1.1 - f));
+    }
+    else if (kind === BINARY) {
+      const side = f < 0.5 ? -1 : 1, step = (f * 2) % 1, r = shapeC * (side < 0 ? 1 : 0.78) * (1 - 0.7 * step);
+      setRing(form, voice, r, Math.cos(shape) * shapeB * side, Math.sin(shape) * shapeB * side, line, ink);
+    }
+    else if (kind === TUNNEL) {
+      // Perspective: each ring is smaller and nearer the vanishing point than the one before.
+      const depth = 0.1 ** f, r = 0.4 * depth, vx = Math.cos(shape) * shapeB, vy = Math.sin(shape) * shapeB * 0.6;
+      setRing(form, voice, r, vx * (1 - depth), vy * (1 - depth), line * (0.7 + depth * 0.5), ink * (0.5 + depth * 0.5));
+    }
+    else if (kind === NECKLACE) {
+      const s = Math.sin(Math.PI / rings), bead = shapeB * s / (1 + s), a = shape + f * TAU;
+      setRing(form, voice, base ? bead : bead * 0.42, Math.cos(a) * (shapeB - bead), Math.sin(a) * (shapeB - bead), line * 0.95, base ? 0.86 : 0.4);
+    }
+    else if (kind === FAN) setRing(form, voice, 0.34 + f * 1.02, originX, originY, line, ink * (1 - f * 0.4));
     else { const side = f < 0.5 ? -1 : 1; setRing(form, voice, vesica * (1 - 0.34 * ((f * 2) % 1)), side * apart, 0, line, ink); }
   }
 
@@ -307,14 +360,20 @@ function compile(form: Form, seed: number, index: number): void {
   else if (kind === LATTICE) setHero(form, 0.34, 0, 0, 1.8, 0.68, 0.2);
   else if (kind === HORIZON) setHero(form, Math.hypot(originX, originY) + 0.2, originX, originY, 3, 0.94, 0.4);
   else if (kind === GATES) setHero(form, largest * 0.68, 0, 0, 2.2, 0.82, 0.28);
+  else if (kind === ECLIPSE) { const r = shapeB * 0.37, lean = (shapeB - r) * 0.88; setHero(form, r, Math.cos(shape) * lean, Math.sin(shape) * lean, 2.6, 0.92, 0.34); }
+  else if (kind === RISE) setHero(form, 0.085, shape, shapeC, 2.4, 0.95, 0.42);
+  else if (kind === BINARY) { setHero(form, shapeB, 0, 0, 1.1, 0.42, 0.1); d[HERO_BASE + H_SWAY] = 1; }
+  else if (kind === TUNNEL) setHero(form, 0.03, Math.cos(shape) * shapeB, Math.sin(shape) * shapeB * 0.6, 1.8, 0.86, 0.3);
+  else if (kind === NECKLACE) setHero(form, shapeB, 0, 0, 1.5, 0.66, 0.18);
+  else if (kind === FAN) setHero(form, 0.2, originX, originY, 2.2, 0.9, 0.3);
   else setHero(form, vesica + apart, 0, 0, 1.5, 0.48, 0.14);
 
   // Each form sits at its own size and place in the frame, so the piece travels through its negative space.
-  if (kind !== HOME && kind !== HORIZON) {
+  if (kind !== HOME && kind !== HORIZON && kind !== RISE && kind !== FAN) {
     const size = 0.74 + random() * 0.46, x = (random() - 0.5) * (1.18 - size) * 0.9, y = (random() - 0.5) * (1.18 - size) * 0.34;
     for (let voice = 0; voice < RING_VOICES; voice++) { const at = voice * RING_FIELDS; d[at + R_RADIUS] *= size; d[at + R_X] = d[at + R_X] * size + x; d[at + R_Y] = d[at + R_Y] * size + y; }
     for (let voice = 0; voice < SPOKE_VOICES; voice++) { const at = SPOKE_BASE + voice * SPOKE_FIELDS; d[at + S_INNER] *= size; d[at + S_OUTER] *= size; }
-    d[HERO_BASE + H_RADIUS] *= size; d[HERO_BASE + H_X] = x; d[HERO_BASE + H_Y] = y;
+    d[HERO_BASE + H_RADIUS] *= size; d[HERO_BASE + H_X] = d[HERO_BASE + H_X] * size + x; d[HERO_BASE + H_Y] = d[HERO_BASE + H_Y] * size + y;
   }
 }
 
@@ -665,6 +724,9 @@ const oscillate = (clock: EvolveClock, period: number, offset: number, speed: nu
   return Math.sin(TAU * Math.max(1, Math.round(clock.duration * speed / period)) * clock.turn + offset);
 };
 
+const swungX = (x: number, y: number, cx: number, cy: number, c: number, s: number): number => cx + (x - cx) * c - (y - cy) * s;
+const swungY = (x: number, y: number, cx: number, cy: number, c: number, s: number): number => cy + (x - cx) * s + (y - cy) * c;
+
 /** A soft beat of light, moving outwards. Raised to a power so most of the beat is calm. */
 function lightAt(clock: EvolveClock, radius: number): number {
   const wave = 0.5 + 0.5 * Math.cos(TAU * (clock.beat - radius * 0.72));
@@ -807,7 +869,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
       if (stops === 2) {
         // Out to one form and home again. A short loop goes only part of the way, so it never has to hurry.
         from = formFor(clock.forms, seed, -1); to = formFor(clock.forms, seed, 1);
-        amount = (index === 0 ? amount : 1 - amount) * clamp(clock.duration / FULL_PATH_SECONDS, 0.22, 1);
+        amount = (index === 0 ? amount : 1 - amount) * Math.min(clamp(clock.duration / FULL_PATH_SECONDS, 0.22, 1), SHORT_PATH_REACH * clock.duration / Math.max(0.001, travel(from, to)));
       } else {
         from = formFor(clock.forms, seed, index === 0 ? -1 : index);
         to = formFor(clock.forms, seed, index + 1 >= stops ? -1 : index + 1);
@@ -848,12 +910,17 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const glitchShape = glitchAmount > 0 ? glitchEnvelope(clock) * (1 - (1 - glitchAmount) * (1 - glitchAmount)) * (1 - home) : 0;
   const glitchVoice = glitchShape > 0 ? clock.glitchVoice : -1;
 
+  // A binary's two systems sway about their shared centre. Every other form has no sway, and this leaves it untouched.
+  const centreX = pull(pose[HERO_BASE + H_X], tuck) * draw, centreY = pull(pose[HERO_BASE + H_Y], tuck) * draw;
+  const swing = pose[HERO_BASE + H_SWAY] * SWAY_RADIANS * oscillate(clock, SWAY_PERIOD, 0.9, speed), swingCos = Math.cos(swing), swingSin = Math.sin(swing);
+
   for (let voice = 0; voice < RING_VOICES; voice++) {
     const at = voice * RING_FIELDS, phase = voice * 1.91;
     const breathe = 1 + breathDepth * oscillate(clock, 29 + voice * 2.3, phase, speed) + life * 0.03 * oscillate(clock, 67 - voice * 2.6, phase * 1.4, speed) + organic * 0.05 * oscillate(clock, 37 + voice * 3.1, phase * 1.7, speed);
     const radius = pull(pose[at + R_RADIUS], tuck) * breathe * draw;
-    const x = (pull(pose[at + R_X], tuck) + organic * 0.028 * oscillate(clock, 43 + voice * 2.9, phase * 2.3, speed)) * draw;
-    const y = (pull(pose[at + R_Y], tuck) + organic * 0.028 * oscillate(clock, 47 + voice * 2.7, phase * 3.1, speed)) * draw;
+    const driftX = (pull(pose[at + R_X], tuck) + organic * 0.028 * oscillate(clock, 43 + voice * 2.9, phase * 2.3, speed)) * draw;
+    const driftY = (pull(pose[at + R_Y], tuck) + organic * 0.028 * oscillate(clock, 47 + voice * 2.7, phase * 3.1, speed)) * draw;
+    const x = swungX(driftX, driftY, centreX, centreY, swingCos, swingSin), y = swungY(driftX, driftY, centreX, centreY, swingCos, swingSin);
     const tier = voice % 3;
     const turn = clock.ringTurns[tier];
     const beatLight = lightAt(clock, Math.abs(radius)), ripple = rippleAt(clock, Math.abs(radius));
@@ -873,7 +940,6 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const spokeTurn = clock.spokeTurn + finite(params.spokeOffsetAngle, 0) * Math.PI / 180;
   const inner = clamp(finite(params.spokeInnerReach, 0), 0, 1), reach = clamp(finite(params.spokeOuterReach, 1), 0, 1);
   const spokeLine = clamp(finite(params.spokeWeight, 1), 0, 16) * weight, spokeInk = clamp(finite(params.spokeOpacity, 1), 0, 1);
-  const centreX = pull(pose[HERO_BASE + H_X], tuck) * draw, centreY = pull(pose[HERO_BASE + H_Y], tuck) * draw;
   for (let voice = 0; voice < SPOKE_VOICES; voice++) {
     const at = SPOKE_BASE + voice * SPOKE_FIELDS, phase = voice * 2.37;
     const pairing = life * 0.085 * (voice % 2 ? 1 : -1) * oscillate(clock, 71, 0.6 + (voice >> 1) * 0.5, speed);
@@ -895,7 +961,8 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     const turn = clock.ringTurns[(node % 4) % 3];
     const angle = pose[at + N_ANGLE] + turn, radius = pull(pose[ringVoice + R_RADIUS], tuck) * draw;
     const beatLight = lightAt(clock, radius), ripple = rippleAt(clock, radius);
-    const x = pull(pose[ringVoice + R_X], tuck) * draw + Math.cos(angle) * radius, y = pull(pose[ringVoice + R_Y], tuck) * draw + Math.sin(angle) * radius;
+    const ringX = pull(pose[ringVoice + R_X], tuck) * draw, ringY = pull(pose[ringVoice + R_Y], tuck) * draw;
+    const x = swungX(ringX, ringY, centreX, centreY, swingCos, swingSin) + Math.cos(angle) * radius, y = swungY(ringX, ringY, centreX, centreY, swingCos, swingSin) + Math.sin(angle) * radius;
     const ink = pose[at + N_ALPHA] * nodeInk * (1 + lightDepth * 1.3 * (beatLight - 0.3) + ripple);
     out.push(PRIMITIVE.dot, x, y, pose[at + N_SIZE] * nodeSize * Math.min(1, 0.45 + pose[at + N_ALPHA]), 0, 0, 0, 0.16 * nodeGlow + beatLight * 0.1 + ripple * 0.4, tintAt(clock, heat, node % 9 + 40, speed), ink, 0, node * 0.013);
   }
@@ -920,7 +987,8 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   // Glitch shards exist only above the centre of the slider, so at or below it the list is untouched by them.
   if (glitch > 0.5) {
     const at = clock.glitchVoice * RING_FIELDS, shardSeed = clock.glitchSeed;
-    const radius = pull(pose[at + R_RADIUS], tuck) * draw, x = pull(pose[at + R_X], tuck) * draw, y = pull(pose[at + R_Y], tuck) * draw, cell = clock.glitchCell;
+    const radius = pull(pose[at + R_RADIUS], tuck) * draw, ringX = pull(pose[at + R_X], tuck) * draw, ringY = pull(pose[at + R_Y], tuck) * draw, cell = clock.glitchCell;
+    const x = swungX(ringX, ringY, centreX, centreY, swingCos, swingSin), y = swungY(ringX, ringY, centreX, centreY, swingCos, swingSin);
     for (let i = 0; i < GLITCH_SHARDS; i++) {
       const a = hashUnit(shardSeed, cell, 430 + i), b = hashUnit(shardSeed, cell, 450 + i), reachOut = glitchShape * (0.012 + glitchAmount * 0.038);
       const start = a * TAU, sweep = 0.16 + b * 0.5;

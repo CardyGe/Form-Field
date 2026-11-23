@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createLayer, createProject, PRESETS, validateProject } from '../src/core/project';
 import { DisplayList, STRIDE } from '../src/meridian/display-list';
-import { advanceEvolve, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveCompileCount, EVOLVE_ELEMENTS, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveMoves, type EvolveTransport } from '../src/meridian/evolve';
+import { advanceEvolve, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveCompileCount, EVOLVE_ELEMENTS, EVOLVE_FORM_NAMES, evolveFormKind, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveMoves, type EvolveTransport } from '../src/meridian/evolve';
 import { applyLockedVariation } from '../src/meridian/panel';
 import { MACRO_KEYS, MERIDIAN_DEFAULTS } from '../src/meridian/parameters';
 import { SCORE_STYLE_DENSE, SCORE_STYLE_PULSE } from '../src/meridian/pulse';
@@ -497,6 +497,53 @@ test('nothing on the per-frame path allocates', () => {
     assert.ok(!/=>|\bfunction\b/.test(name === 'pull' || name === 'foldFor' || name === 'oscillate' || name === 'tierRate' || name === 'growth' || name === 'ringVoices' || name === 'speedRate' || name === 'hashUnit' ? code.replace(/^=> /, '') : code), `${name} builds a closure`);
   }
   assert.ok(!/from 'three'|from 'react'|document\.|window\./.test(source));
+});
+
+/** Where each change of form falls in a seed's journey, as [position just after it, kind before, kind after]. */
+function changes(seed: number, until: number): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  let kind = evolveFormKind(seed, 0);
+  for (let e = 0.5; e < until; e += 0.5) { const now = evolveFormKind(seed, e); if (now !== kind) { out.push([e, kind, now]); kind = now; } }
+  return out;
+}
+
+test('every seed still opens on its original form', () => {
+  // Recorded from the nine-form journey at 1fd261b.
+  const opening: Record<number, number> = {1: 1, 2: 7, 3: 2, 5: 3, 8: 1, 13: 3, 21: 3, 34: 4, 55: 7, 77: 5, 555: 2, 1729: 0, 4096: 0, 12345: 7, 31337: 5, 900001: 0};
+  for (const [seed, kind] of Object.entries(opening)) assert.equal(evolveFormKind(Number(seed), 0), kind, `seed ${seed}`);
+  for (let seed = 0; seed < 400; seed++) assert.ok(evolveFormKind(seed * 7919, 0) < 9, `seed ${seed * 7919} opens on a new form`);
+});
+
+test('the journey has one answer for each place, reaches every form and never revisits one soon', () => {
+  assert.equal(EVOLVE_FORM_NAMES.length, 15);
+  for (const seed of SEEDS) {
+    const list = changes(seed, 4000), kinds = [evolveFormKind(seed, 0), ...list.map(c => c[2])];
+    assert.equal(new Set(kinds).size, 15, `seed ${seed} reaches ${new Set(kinds).size} kinds`);
+    for (let i = 1; i < kinds.length; i++) for (let back = 1; back <= Math.min(i, 6); back++) assert.notEqual(kinds[i], kinds[i - back], `seed ${seed}, form ${i} repeats ${back} back`);
+    for (const [e, , after] of [...list].reverse().slice(0, 20)) assert.equal(evolveFormKind(seed, e), after, 'the same place gives the same kind, in any order');
+  }
+});
+
+test('every form morphs into every other inside the limits', () => {
+  const found = new Map<string, [number, number]>();
+  for (let seed = 1; found.size < 15 * 14 && seed < 400; seed++) for (const [e, a, b] of changes(seed, 1800)) if (!found.has(`${a}>${b}`)) found.set(`${a}>${b}`, [seed, e]);
+  assert.equal(found.size, 15 * 14, 'all ordered pairs were found');
+  const p = params(), list = new DisplayList(2000), view: Record<string, number> = {};
+  for (const [pair, [seed, boundary]] of found) {
+    const kind = evolveFormKind(seed, boundary - 1);
+    let start = boundary - 1;
+    while (start > boundary - 38 && start > 0 && evolveFormKind(seed, start - 0.5) === kind) start -= 0.5;
+    const transport = createEvolveTransport(), watch = new Watch();
+    advanceEvolve(transport, 0, LOOP, 0, seed, p, idle);
+    transport.clock.evolution = start;
+    for (let f = 1; f < 60 * 180 && transport.clock.evolution < boundary + 0.5; f++) {
+      const clock = advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, seed, p, idle);
+      Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); watch.see(list);
+    }
+    assert.ok(transport.clock.evolution >= boundary, `${pair} finished`);
+    assert.ok(watch.minDrawn >= 5, `${pair}: ${watch.minDrawn} drawn`);
+    within(watch, `${pair} (seed ${seed})`);
+  }
 });
 
 test('the library leads with Evolve looks', () => {
