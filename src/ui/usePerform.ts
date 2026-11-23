@@ -57,7 +57,7 @@ export function usePerform() {
   useEffect(() => {
     setView(service.view());
     const test = window.__studioTest ?? {};
-    window.__studioTest = { ...test, perform: () => service.view() };
+    window.__studioTest = { ...test, perform: () => service.view(), performControl: (e: ControlEvent) => service.control(e) };
     return service.subscribe(setView);
   }, [service]);
 

@@ -134,6 +134,8 @@ export interface CompositorStats {
   linked?: Record<string, number>;
   /** How many times a playing effect took new settings without being prepared again (for checks). */
   adjusted?: number;
+  /** How many applied drafts have crossfaded on to the wall (for checks). */
+  crossfades?: number;
   staggered?: number;
   delayed?: number;
   /** Perform: the armed sources that are ready to land, and (once, as they happen) the launches that landed. */
@@ -267,7 +269,8 @@ export class MapCompositor {
       if (blend && !this.lost && (shouldFade(was, next) || appears)) this.startBlend(shape, was, blend, before, mixes?.get(shape.id));
       // Handing back: a shape whose look is still being made ready waits in black, then fades in.
       else if (handover && !this.lost && shape.sourceId !== null && !shape.blocker && !this.fades.has(shape.id) && shownOnWall(show, shape, this.options.solo) && !this.isReady(shape.sourceId)) this.fades.set(shape.id, { from: '#000000', start: null, duration, kind: 'fade' });
-      else if (shouldFade(was, next) && !this.lost) {
+      // An applied draft keeps playing its old look until the new one is ready: frame() starts that crossfade.
+      else if (shouldFade(was, next) && !this.lost && !(was?.sourceId === shape.sourceId && shape.sourceId !== null && this.swaps.has(shape.sourceId))) {
         const old = was!.sourceId === LIVE_SOURCE_ID ? this.live?.current ?? null : isVideoId(was!.sourceId) ? this.videoSlots.get(was!.sourceId)?.current ?? null : was!.sourceId ? this.slots.get(was!.sourceId)?.texture : null;
         const held = this.fades.get(shape.id);
         // Changing again before the last change was ready keeps fading from what is on the wall, not from the colour.
@@ -382,17 +385,43 @@ export class MapCompositor {
     for (const shape of show.shapes) {
       const blend = blendFor(shape.id), was = this.playing.get(shape.id);
       if (!blend || blend.kind === 'cut' || !(blend.durationMs > 0) || !was || was.sourceId === shape.sourceId || !this.fades.has(shape.id)) continue;
-      // As it was last drawn, links and all, so the held picture is the one on the wall.
-      const drawn = this.drawn.show.shapes.find(s => s.id === shape.id);
-      if (!drawn || drawn.blocker || !shownOnWall(this.drawn.show, drawn, this.options.solo)) continue;
-      const picture = this.pictureOf(drawn, this.drawn.show, this.fadeClock);
-      if (!picture || !picture.from) continue; // its blend had just finished
-      const b = picture.p.box, x = Math.max(0, Math.floor(b.x)), y = Math.max(0, Math.floor(b.y));
-      const rect = { x, y, w: Math.min(STAGE_SIZE.width, Math.ceil(b.x + b.w)) - x, h: Math.min(STAGE_SIZE.height, Math.ceil(b.y + b.h)) - y };
-      if (rect.w < 1 || rect.h < 1) continue;
-      out.set(shape.id, { texture: this.gpu.hold(picture, rect), inv: heldInverse(rect) });
+      const mix = this.holdMix(shape.id);
+      if (mix) out.set(shape.id, mix);
     }
     return out;
+  }
+  /** A shape in the middle of a blend, as one picture of what is on the wall now. Null when it has none to hold. */
+  private holdMix(shapeId: string): { texture: Texture; inv: H3 } | null {
+    // As it was last drawn, links and all, so the held picture is the one on the wall.
+    const drawn = this.drawn.show.shapes.find(s => s.id === shapeId);
+    if (!drawn || drawn.blocker || !shownOnWall(this.drawn.show, drawn, this.options.solo)) return null;
+    const picture = this.pictureOf(drawn, this.drawn.show, this.fadeClock);
+    if (!picture || !picture.from) return null; // its blend had just finished
+    const b = picture.p.box, x = Math.max(0, Math.floor(b.x)), y = Math.max(0, Math.floor(b.y));
+    const rect = { x, y, w: Math.min(STAGE_SIZE.width, Math.ceil(b.x + b.w)) - x, h: Math.min(STAGE_SIZE.height, Math.ceil(b.y + b.h)) - y };
+    if (rect.w < 1 || rect.h < 1) return null;
+    return { texture: this.gpu.hold(picture, rect), inv: heldInverse(rect) };
+  }
+
+  // ---- Perform: a draft applied to the show ----
+  /** Sources with a new composition on its way: their old look plays on until it is ready, then crossfades. */
+  private readonly swaps = new Set<string>();
+  private crossfades = 0;
+  /** The next composition this source takes crossfades in. A source with no picture on the wall has nothing to fade from. */
+  crossfadeNext(id: string): void { if (this.slots.get(id)?.texture) this.swaps.add(id); }
+  /** The new composition is ready and not drawn yet: every shape playing it fades from the picture on the wall now. */
+  private startSwap(id: string, texture: Texture): void {
+    let faded = false;
+    for (const shape of this.show.shapes) {
+      if (shape.sourceId !== id || shape.blocker || !shownOnWall(this.show, shape, this.options.solo)) continue;
+      const mix = this.fades.has(shape.id) ? this.holdMix(shape.id) : null;
+      // Read after holdMix, which ends a blend that has just finished.
+      const held = this.fades.get(shape.id);
+      if (held) { if (typeof held.from !== 'string') this.gpu.free(held.from); this.dropBorder(held); }
+      this.fades.set(shape.id, { from: mix?.texture ?? this.gpu.copy(texture), ...(mix ? { fromInv: mix.inv } : {}), start: this.fadeClock, duration: CHANGE_FADE_MS });
+      faded = true;
+    }
+    if (faded) this.crossfades++;
   }
   /** A launch lands on a shape: it leaves what it showed through the launch's blend. A cut has no blend at all. */
   private startBlend(shape: Shape, was: Playing | undefined, blend: ShapeBlend, previous: PlayShow, mix: { texture: Texture; inv: H3 } | undefined): void {
@@ -573,6 +602,10 @@ export class MapCompositor {
       // A drag while a restart is still being prepared: the newer settings wait for it, rather than restarting it again.
       else if (slot.pending && project !== slot.pending && project !== slot.project && !needsPrepare(slot.pending, project)) slot.latest = project;
       else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) { slot.latest = null; this.prepare(slot, project, !!source.followOutline); }
+      if (this.swaps.has(source.id)) {
+        if (slot.project === project) { this.swaps.delete(source.id); if (slot.texture) this.startSwap(source.id, slot.texture); }
+        else if (slot.failedProject === project) this.swaps.delete(source.id);
+      }
       if (!slot.project || !slot.renderer) continue;
       if (waiting && slot.shown === slot.project && slot.texture) continue;
       // Perform's speed for this source (1 without a show), and the beats taken off the count for its bar.
@@ -655,6 +688,7 @@ export class MapCompositor {
       videos: Object.fromEntries([...this.videoSlots].map(([id, v]) => [id, { state: v.state, playsAs: v.playsAs }])),
       // For the scripted checks: the effect settings links are moving now, as drawn (source:layer:key → value).
       adjusted: this.adjusted,
+      crossfades: this.crossfades,
       // Stage 7, for the scripted checks: sources keeping a history for Stagger, and shapes shown with a delay.
       staggered: this.histories.size, delayed: this.delays.size,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
@@ -683,6 +717,7 @@ export class MapCompositor {
       fade.fromSource = null;
     }
     this.carried.delete(id);
+    this.swaps.delete(id);
     slot.renderer?.dispose();
     slot.renderer = null;
     if (!this.lost) this.gpu.free(slot.texture);

@@ -91,7 +91,7 @@ function acceptMapMessage(value) {
   if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MESSAGE_LIMIT)) return false;
   switch (value.type) {
     case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && value.fadeMs >= 0 && value.fadeMs <= 30000));
-    case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && value.revision >= 0 && plain(value.project);
+    case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && value.revision >= 0 && plain(value.project) && (value.crossfade === undefined || value.crossfade === true);
     case 'blackout':
     case 'testGrid':
     case 'freeze': return typeof value.on === 'boolean';

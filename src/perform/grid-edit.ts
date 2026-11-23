@@ -20,6 +20,12 @@ export function clipsInUse(launcher: Pick<LauncherState, 'playing' | 'previous' 
   return [...new Set(ids.filter((id): id is string => id !== null))];
 }
 
+/** Every zone with a cell that plays this source: they share one look, so a change to it reaches them all. */
+export function zonesSharingSource(set: PerformanceSet, sourceId: string): number[] {
+  const clips = new Set(set.clips.filter(c => c.sourceId === sourceId).map(c => c.id));
+  return Array.from({ length: ZONE_COUNT }, (_, zone) => zone).filter(zone => set.scenes.some(s => { const id = s.cells[zone]; return id !== null && clips.has(id); }));
+}
+
 export type HistoryBlock = 'scenes' | 'layout' | 'picture' | 'playing';
 const sceneBar = (s: ShowDocument) => JSON.stringify([s.sceneId, s.sceneFade, s.autoAdvance ?? null, s.scenes.map(sc => [sc.id, sc.name, sc.fadeSeconds])]);
 const sameValue = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);

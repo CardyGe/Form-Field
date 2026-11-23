@@ -37,7 +37,8 @@
 
 /* Editing a Map shape's composition in Studio */
 .shape-edit-bar { display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 12px; border-radius: 6px; background: #26301a; color: var(--accent); font-size: 12px; white-space: nowrap; }
-.shape-edit-bar .primary-button { min-height: 26px; padding: 3px 10px; }
+.shape-edit-bar .primary-button, .shape-edit-bar .secondary-button { min-height: 26px; padding: 3px 10px; }
+.shape-edit-bar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Stage 3: tools, the bar under the stage, groups in the list, Details sections */
 .map-centre { display: flex; flex-direction: column; min-width: 0; min-height: 0; }

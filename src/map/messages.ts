@@ -13,8 +13,8 @@ import type { PerformValues, WallLaunch } from '../perform/wall-perform';
 export type MapMessage =
   /** fadeMs: this show is a scene switch, crossfading over that long. */
   | { type: 'show'; show: WireShow; fadeMs?: number }
-  /** One source's composition, sent once per revision. */
-  | { type: 'source'; id: string; revision: number; project: Project }
+  /** One source's composition, sent once per revision. crossfade: a draft applied during a show, held until ready and then faded in. */
+  | { type: 'source'; id: string; revision: number; project: Project; crossfade?: true }
   | { type: 'blackout'; on: boolean }
   | { type: 'testGrid'; on: boolean }
   | { type: 'freeze'; on: boolean }
@@ -145,7 +145,7 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
   if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MAP_MESSAGE_LIMIT)) return false;
   switch (value.type) {
     case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && (value.fadeMs as number) >= 0 && (value.fadeMs as number) <= 30000));
-    case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && (value.revision as number) >= 0 && plain(value.project);
+    case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && (value.revision as number) >= 0 && plain(value.project) && (value.crossfade === undefined || value.crossfade === true);
     case 'blackout':
     case 'testGrid':
     case 'freeze': return typeof value.on === 'boolean';

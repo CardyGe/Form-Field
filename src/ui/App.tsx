@@ -30,7 +30,8 @@ import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
 import LivePanel from './LivePanel';
 import { KIND_LABELS } from '../core/library';
-import { beginStudioEdit, endStudioEdit, onStudioWallWarning, studioEdit, wallStaysOpen } from './useMap';
+import { applyClipDraft, beginClipEdit, beginStudioEdit, clipDraftZones, discardClipDraft, endStudioEdit, onStudioWallWarning, studioEdit, wallStaysOpen } from './useMap';
+import { performService } from '../perform/service';
 import { projectForStudioSave, stashStudio, type ShapeEdit } from './studio-edit';
 import MapPanel from './MapPanel';
 import PerformPanel from './PerformPanel';
@@ -319,17 +320,20 @@ export default function App() {
   useEffect(() => { onStudioWallWarning(text => notify(`Map: ${text}.`)); return () => onStudioWallWarning(null); }, [notify]);
   /** Opens a Map shape's composition in Studio, setting Studio's own project, history and file aside. */
   const editShapeInStudio = (sourceId: string, shapeId: string, clip?: { name: string }) => {
-    if (shapeEditRef.current) return;
+    // One edit at a time: an open draft is never replaced by another.
+    if (shapeEditRef.current) { if (shapeEditRef.current.draft) { notify('Apply or discard the open draft first.'); setMode('studio'); } return; }
     // Studio must have restored its own project first, or the restore could land on the shape's composition.
     if (!ready) { notify('Studio is still opening. Try again in a moment.'); return; }
     // Studio's own latest change is saved before it is set aside.
     if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
     const own = validateProject(projectRef.current);
-    const begun = beginStudioEdit(sourceId, shapeId, clip?.name);
+    // During a show every edit is a draft, also one opened from Map: the source may be on the wall.
+    const draft = performService().running;
+    const begun = clip ? beginClipEdit(sourceId, draft) : beginStudioEdit(sourceId, shapeId, undefined, draft);
     if (!begun) return;
     void (window.studio ? window.studio.saveAutosave(own) : Promise.resolve(localStorage.setItem('formfield-autosave', JSON.stringify(own))))
       .then(() => setSaved('Autosaved')).catch(() => setSaved('Save project to keep changes'));
-    const edit: ShapeEdit = { sourceId, shapeName: begun.shapeName, from: clip ? 'perform' : 'map', stash: stashStudio({ project: projectRef.current, history: history.current, future: future.current, filePath, selectedId, phase: phase.current }) };
+    const edit: ShapeEdit = { sourceId, shapeName: clip?.name ?? begun.shapeName, from: clip ? 'perform' : 'map', draft, stash: stashStudio({ project: projectRef.current, history: history.current, future: future.current, filePath, selectedId, phase: phase.current }) };
     shapeEditRef.current = edit; setShapeEdit(edit);
     history.current = []; future.current = [];
     // Shown without being recorded: opening the composition is not an edit to it.
@@ -339,6 +343,23 @@ export default function App() {
   };
   /** Back from editing a Map shape: Studio's own project, history and file return as they were. */
   const finishShapeEdit = (to: 'studio' | 'live' | 'map' | 'perform') => {
+    // A draft stays open while the operator moves about, so going to play the show never loses it.
+    if (shapeEditRef.current?.draft) setMode(to); else closeShapeEdit(to);
+  };
+  const applyDraft = () => {
+    const edit = shapeEditRef.current;
+    if (!edit) return;
+    const refused = applyClipDraft();
+    if (refused) { notify(`That draft could not be applied: ${refused}. It is still open.`); return; }
+    closeShapeEdit(edit.from ?? 'perform');
+  };
+  const discardDraft = () => {
+    const edit = shapeEditRef.current;
+    if (!edit) return;
+    discardClipDraft();
+    closeShapeEdit(edit.from ?? 'perform');
+  };
+  const closeShapeEdit = (to: 'studio' | 'live' | 'map' | 'perform') => {
     const edit = shapeEditRef.current;
     if (!edit) { setMode(to); return; }
     endStudioEdit();
@@ -351,6 +372,17 @@ export default function App() {
     if (to !== 'map' && to !== 'perform' && !wallStaysOpen()) void window.studio?.map?.closeOutput().catch(() => {});
     setMode(to);
   };
+  // The draft's bar says plainly when the show it was opened in has ended.
+  // Read as it is at each render, so the bar never shows a wrong word for a frame; the subscription only asks for that render.
+  const [, setShowSeen] = useState(false);
+  const draftShowRunning = !!shapeEdit?.draft && performService().running;
+  useEffect(() => {
+    if (!shapeEdit?.draft) return;
+    const service = performService();
+    setShowSeen(service.running);
+    return service.subscribe(v => setShowSeen(v.running));
+  }, [shapeEdit]);
+  const draftZones = shapeEdit?.draft ? clipDraftZones() : [];
   useEffect(() => window.studio?.onExportProgress(p => { if (p.jobId === activeJob.current) setProgress(p); }), []);
 
   const addLayer = (kind: LayerKind) => {
@@ -443,7 +475,8 @@ export default function App() {
     <input ref={imageInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0]); e.target.value = ''; }} />
     <input ref={maskInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0], true); e.target.value = ''; }} />
     <header className="app-header" inert={mode !== 'studio'}>{modeSwitch}
-      {shapeEdit && <div className="shape-edit-bar" role="status">Editing <strong>{shapeEdit.shapeName}</strong> from {shapeEdit.from === 'perform' ? 'Perform' : 'Map'} · changes show on the projector<button className="primary-button" onClick={() => finishShapeEdit(shapeEdit.from ?? 'map')}>Back to {shapeEdit.from === 'perform' ? 'Perform' : 'Map'}</button></div>}
+      {shapeEdit?.draft && <div className="shape-edit-bar" role="status"><span>Draft of <strong>{shapeEdit.shapeName}</strong> · {draftShowRunning ? 'the projector keeps playing until you apply' : 'The show has ended. This draft is kept'}{draftZones.length > 1 && ` · Apply changes zones ${draftZones.map(z => z + 1).join(', ')}: they share this look`}</span><button className="primary-button" onClick={applyDraft}>{draftShowRunning ? 'Apply to show' : 'Apply to clip'}</button><button className="secondary-button" onClick={discardDraft}>Discard</button></div>}
+      {shapeEdit && !shapeEdit.draft && <div className="shape-edit-bar" role="status">Editing <strong>{shapeEdit.shapeName}</strong> from {shapeEdit.from === 'perform' ? 'Perform' : 'Map'} · changes show on the projector<button className="primary-button" onClick={() => finishShapeEdit(shapeEdit.from ?? 'map')}>Back to {shapeEdit.from === 'perform' ? 'Perform' : 'Map'}</button></div>}
       <div className="project-title"><EditableName label="Project name" value={project.name} maxLength={80} onCommit={name => edit(p => ({ ...p, name }))} />{fileName && <span className="project-file" title={filePath}>{fileName}</span>}<span role="status" className={saved === 'Save project to keep changes' ? 'save-failed' : ''}>{saved}</span></div>
       <div className="header-actions"><button className="icon-button" title="Undo · ⌘Z" disabled={!history.current.length} onClick={undo}><Icon name="undo" /></button><button className="icon-button" title="Redo · ⇧⌘Z" disabled={!future.current.length} onClick={redo}><Icon name="redo" /></button><span className="divider" /><button className="text-button" title="New composition · ⌘N" disabled={exporting || !!shapeEdit} onClick={() => void newProject()}><Icon name="plus" size={16} />New</button><button className="text-button" title="Open · ⌘O" disabled={!!shapeEdit} onClick={() => void open()}><Icon name="folder" size={16} />Open</button><button className="text-button" title={fileName ? `Save to ${fileName} · ⌘S\nShift-click or ⇧⌘S to save as a new file` : 'Save · ⌘S'} disabled={!!shapeEdit} onClick={e => void save(e.shiftKey)}><Icon name="save" size={16} />Save</button><button className="primary-button" disabled={!!shapeEdit} title={shapeEdit ? 'Go back to Map to export your own composition' : undefined} onClick={e => { e.currentTarget.focus(); setExportOpen(true); }}><Icon name="download" size={16} />Export</button></div>
     </header>
@@ -516,7 +549,7 @@ export default function App() {
     </main>
     {mode === 'live' && <LivePanel header={modeSwitch} onError={reportError} />}
     {mode === 'map' && <MapPanel header={modeSwitch} onError={reportError} onEditInStudio={editShapeInStudio} />}
-    {mode === 'perform' && <PerformPanel header={modeSwitch} onError={reportError} onEditClip={(sourceId, name) => editShapeInStudio(sourceId, '', { name })} />}
+    {mode === 'perform' && <PerformPanel header={modeSwitch} onError={reportError} onEditClip={(sourceId, name) => editShapeInStudio(sourceId, '', { name })} draftName={shapeEdit?.draft ? shapeEdit.shapeName : null} onOpenDraft={() => setMode('studio')} />}
 
     <footer className="app-footer" inert={mode !== 'studio'}><span className="workspace-shortcuts"><kbd>F</kbd> focus <kbd>B</kbd> library <kbd>L</kbd> layers <kbd>I</kbd> inspector</span><span className="footer-status"><span className={status && (!status.ffmpeg || !status.ffprobe) ? 'engine-unavailable' : ''}>{status?.ffmpeg && status.ffprobe ? 'Export engine ready' : status ? 'Export engine unavailable' : 'Movies and sequences require the desktop app'}</span><span className="build-label" title={`Commit ${__FORM_FIELD_BUILD__.commit}${__FORM_FIELD_BUILD__.modified ? ' with uncommitted changes' : ''} · built ${new Date(__FORM_FIELD_BUILD__.date).toLocaleString()}`}>v{__FORM_FIELD_BUILD__.version} · build {__FORM_FIELD_BUILD__.build}{__FORM_FIELD_BUILD__.modified ? '+' : ''}</span></span></footer>
     {!exportOpen && <Notices message={message} error={error} onDismiss={() => setError('')} />}

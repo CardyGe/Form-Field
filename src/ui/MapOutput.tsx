@@ -66,8 +66,10 @@ export default function MapOutput() {
     apply();
     const off = bridge.onMessage(message => {
       const kind = (message as { type?: string })?.type;
-      const before = state.perform;
+      const before = state.perform, heldProjects = state.projects;
       state = applyMapMessage(state, message);
+      // A draft applied during a show: the running look holds until the new one is ready, then crossfades.
+      if (kind === 'source' && state.projects !== heldProjects && (message as { crossfade?: unknown }).crossfade === true) compositor.crossfadeNext((message as { id: string }).id);
       if (typeof kind === 'string' && kind.startsWith('perform')) {
         // A refused message, or one for a show that is not running, changes nothing.
         if (state.perform === before) return;

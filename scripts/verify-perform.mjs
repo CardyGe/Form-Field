@@ -432,6 +432,109 @@ try {
     await until(async () => (await litIn(wall)).slice(0, 3).every(v => v > LIT), 15000, 'the picture on the new wall');
     assert.ok((await litIn(wall))[3] < .005, 'the unassigned shape is lit on the new wall');
   });
+  // ---- Clip drafts: zone 3 plays one steady look, and Hide layer changes it plainly ----
+  const crossfades = () => wall.evaluate(() => window.__mapStats?.crossfades ?? 0);
+  const colourGap = (a, b) => Math.hypot(a[2][0] - b[2][0], a[2][1] - b[2][1], a[2][2] - b[2][2]);
+  const stillLit = colours => colours[2][0] + colours[2][1] + colours[2][2] > 150;
+  /** What the wall has done to zone 3's source: prepared it again, or adjusted a playing effect. Reported once a second. */
+  const wallWork = async () => {
+    const id = await studio.evaluate(() => { const v = window.__studioTest.perform(), s = window.__studioTest.performSet(); return s.clips.find(c => c.id === v.launcher.playing[2])?.sourceId; });
+    return wall.evaluate(source => JSON.stringify([window.__mapStats?.prepares?.[source], window.__mapStats?.adjusted]), id);
+  };
+  // The layer list starts collapsed, which hides its eye buttons.
+  const toggleLayer = async () => {
+    const expand = studio.getByRole('button', { name: 'Expand layer list' });
+    if (await expand.count()) await expand.click();
+    await studio.getByTitle(/^(Hide|Show) layer$/).first().click();
+  };
+  const openDraft = async () => {
+    const row = await studio.evaluate(() => { const v = window.__studioTest.perform(), s = window.__studioTest.performSet(); return s.scenes.findIndex(r => r.cells[2] === v.launcher.playing[2]); });
+    await cell(row, 2).click({ button: 'right' });
+    await studio.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+    await studio.getByRole('button', { name: 'Apply to show' }).waitFor({ timeout: 5000 });
+  };
+  await check('a draft leaves the wall alone, and the controller keeps working while it is open', async () => {
+    const fades = await crossfades(), work = await wallWork(), setBefore = await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet()));
+    await openDraft();
+    await toggleLayer();
+    await sleep(1400);
+    // This look moves by itself, so its colour cannot prove stillness. The wall's own count of work on the source can,
+    // and a hidden layer that leaked would turn the zone almost black.
+    const during = await zoneColours(wall);
+    console.log(`draft: zone 3 colour sum ${(during[2][0] + during[2][1] + during[2][2]).toFixed(0)} while its layer is hidden in the draft`);
+    assert.ok(stillLit(during), 'the hidden layer reached the wall during a draft');
+    assert.equal(await wallWork(), work, 'the wall worked on the source during a draft');
+    assert.equal(await crossfades(), fades);
+    assert.equal(await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet())), setBefore);
+    // Typing in a Studio field never reaches the controller.
+    const queued = (await view(studio)).launcher.queue.length;
+    const name = studio.getByLabel('Project name', { exact: true });
+    await name.click();
+    await studio.keyboard.type('1q[');
+    await studio.keyboard.press('Escape');
+    assert.equal((await view(studio)).launcher.queue.length, queued, 'typing in Studio launched something');
+    assert.equal((await view(studio)).shift, false);
+    // The controller's own path into the show, as MIDI takes it.
+    const playing = (await view(studio)).launcher.playing[0];
+    await studio.evaluate(() => { const c = window.__studioTest.performControl; c({ kind: 'amber', strip: 0, down: true }); c({ kind: 'amber', strip: 0, down: false }); });
+    await until(async () => (await view(studio)).launcher.playing[0] !== playing, 12000, 'the controller to change zone 1 during a draft');
+  });
+  await check('Discard leaves the show as it was and goes back to Perform', async () => {
+    const setBefore = await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet())), fades = await crossfades();
+    await studio.getByRole('button', { name: 'Discard' }).click();
+    await studio.getByRole('region', { name: 'Perform' }).waitFor({ timeout: 3000 });
+    await sleep(600);
+    assert.equal(await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet())), setBefore);
+    assert.equal(await crossfades(), fades);
+  });
+  await check('Apply to show crossfades the wall once, and undoing it is refused', async () => {
+    const fades = await crossfades(), before = await zoneColours(wall), work = await wallWork();
+    await openDraft();
+    await toggleLayer();
+    await sleep(1400);
+    assert.ok(stillLit(await zoneColours(wall)), 'the hidden layer reached the wall before Apply');
+    assert.equal(await wallWork(), work, 'the wall worked on the source before Apply');
+    await studio.getByRole('button', { name: 'Apply to show' }).click();
+    await studio.getByRole('region', { name: 'Perform' }).waitFor({ timeout: 3000 });
+    await until(async () => await crossfades() === fades + 1, 5000, 'one crossfade on the wall');
+    await sleep(700);
+    const after = await zoneColours(wall), gap = colourGap(before, after);
+    console.log(`apply: zone 3 colour moved ${gap.toFixed(1)}`);
+    assert.ok(gap > 10, `the wall did not take the new look: ${gap.toFixed(1)}`);
+    assert.equal(await crossfades(), fades + 1, 'more than one crossfade');
+    await studio.getByRole('button', { name: 'Undo', exact: true }).click();
+    await studio.getByText('That undo would change the running picture').first().waitFor({ timeout: 2000 });
+    await sleep(600);
+    assert.ok(colourGap(after, await zoneColours(wall)) < 8, 'the refused undo changed the wall');
+  });
+  await check('Duplicate and edit during a show opens the copy as a draft', async () => {
+    await cell(0, 1).click({ button: 'right' });
+    await studio.getByRole('menuitem', { name: 'Duplicate and edit' }).click();
+    await studio.getByRole('button', { name: 'Apply to show' }).waitFor({ timeout: 5000 });
+    await studio.getByRole('button', { name: 'Discard' }).click();
+    await studio.getByRole('region', { name: 'Perform' }).waitFor({ timeout: 3000 });
+  });
+  await check('End show with a draft open keeps the draft, says so, and applies nothing', async () => {
+    await openDraft();
+    await toggleLayer();
+    await go('Perform');
+    await studio.getByRole('button', { name: 'Back to draft' }).waitFor({ timeout: 3000 });
+    const setBefore = await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet())), fades = await crossfades();
+    await studio.getByRole('button', { name: 'End show' }).click();
+    await studio.getByRole('button', { name: 'End show now' }).click();
+    await until(async () => !(await view(studio)).running, 3000, 'the show to end');
+    await studio.getByRole('button', { name: 'Back to draft' }).click();
+    await studio.getByText('The show has ended').waitFor({ timeout: 3000 });
+    assert.equal(await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet())), setBefore);
+    assert.equal(await crossfades(), fades, 'End show applied the draft');
+    await studio.getByRole('button', { name: 'Discard' }).click();
+    await studio.getByRole('region', { name: 'Perform' }).waitFor({ timeout: 3000 });
+    await studio.getByRole('button', { name: 'Start show' }).click();
+    await studio.getByRole('button', { name: 'Send All' }).click();
+    await until(async () => (await view(studio)).controls.ready, 2000, 'Send All');
+    await studio.getByRole('button', { name: 'Bank next' }).click();
+    await until(async () => (await view(studio)).launcher.sceneIndex === 0, 12000, 'the show to play again');
+  });
   await check('ending the show asks first, then the wall stays open with Map\'s own picture', async () => {
     await studio.getByRole('button', { name: 'End show' }).click();
     await studio.getByRole('button', { name: 'Keep playing' }).click();

@@ -47,7 +47,7 @@ function nextLine(view: PerformView, set: PerformanceSet, canStart: boolean): { 
 const audioWord = (a: PerformView['audio']) => a.state === 'on' ? 'on' : a.state === 'starting' ? 'starting' : a.state === 'off' ? 'off' : a.state === 'refused' ? 'not allowed' : 'lost';
 const audioTone = (a: PerformView['audio']) => a.state === 'on' ? 'good' : a.state === 'off' || a.state === 'starting' ? 'quiet' : 'bad';
 
-export default function PerformPanel({ header, onError, onEditClip }: { header: ReactNode; onError: (message: string) => void; onEditClip: (sourceId: string, name: string) => void }) {
+export default function PerformPanel({ header, onError, onEditClip, draftName, onOpenDraft }: { header: ReactNode; onError: (message: string) => void; onEditClip: (sourceId: string, name: string) => void; /** A clip draft left open in Studio. */ draftName: string | null; onOpenDraft: () => void }) {
   const map = useMap(onError);
   const perform = usePerform();
   const { view, service } = perform;
@@ -105,9 +105,17 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
     const sourceId = newSourceId();
     apply({ type: 'addClipSource', sourceId, project, performance: placeClip(base, row, zone, newClip(preset.name, sourceId), inUse()) });
   };
+  /** One draft at a time, so a second edit can never replace one that has not been applied. */
+  const draftInTheWay = () => { if (draftName !== null) say(`Apply or discard the draft of ${draftName} first.`); return draftName !== null; };
+  const editClip = (row: number, zone: number) => {
+    const base = current(), clip = base.clips.find(c => c.id === base.scenes[row]?.cells[zone]);
+    if (!clip || clip.sourceId === LIVE_SOURCE_ID || isVideoId(clip.sourceId) || draftInTheWay()) return;
+    onEditClip(clip.sourceId, clip.name);
+  };
   const duplicate = (row: number, zone: number) => {
     const base = current(), clipId = base.scenes[row]?.cells[zone], clip = base.clips.find(c => c.id === clipId), show = map.currentShow();
     if (!clip || clip.sourceId === LIVE_SOURCE_ID) return;
+    if (!isVideoId(clip.sourceId) && draftInTheWay()) return;
     const name = `${clip.name.slice(0, 35)} copy`;
     if (isVideoId(clip.sourceId)) {
       const video = show.videos.find(v => v.id === clip.sourceId);
@@ -120,9 +128,7 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
     if (!source) return;
     const sourceId = newSourceId(), copy = { ...newClip(name, sourceId), hueOffset: clip.hueOffset, blend: clip.blend, audioBand: clip.audioBand };
     if (!apply({ type: 'addClipSource', sourceId, project: structuredClone(source.project), speed: source.speed, tempoSync: source.tempoSync, performance: placeClip(base, row, zone, copy, inUse()) })) return;
-    // Clip drafts arrive later: during a show the copy is made and left for after it.
-    if (service.running) say('Copy made. End the show to edit it in Studio.');
-    else onEditClip(sourceId, name);
+    onEditClip(sourceId, name);
   };
 
   const actions: GridActions = {
@@ -130,6 +136,7 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
     linkClip: (row, zone, clipId) => { edit(setCell(current(), row, zone, clipId, inUse())); },
     clear: (row, zone) => { edit(setCell(current(), row, zone, null, inUse())); },
     duplicate,
+    editClip,
     setBlend: (clipId, blend) => { edit(changeClip(current(), clipId, { blend })); },
     setBand: (clipId, audioBand) => { edit(changeClip(current(), clipId, { audioBand })); },
     setTiming: (sourceId, beats) => { apply({ type: 'setTempoSync', sourceId, beats }); },
@@ -222,6 +229,7 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
     </div>
     {/* Always there at one height, so a note appearing never moves the grid during a show. */}
     <div className="pf-notices" role="status" title={[note, ...view.notices].filter(Boolean).join('\n')}>
+      {draftName !== null && <span>Draft of {draftName} is open <button type="button" className="pf-head-btn" onClick={onOpenDraft}>Back to draft</button></span>}
       {note && <span>{note}</span>}
       {view.stuck.length > 0 && <span className="bad"><i className="pf-dot-red" />{view.stuck.length === 1 ? 'A look is' : `${view.stuck.length} looks are`} too heavy to get ready. The zone keeps its current look.</span>}
       {view.notices.map(n => <span key={n} className="bad">{n}</span>)}

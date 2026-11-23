@@ -14,7 +14,7 @@ import { MeterStore } from '../react/meter';
 import { usesEmberSmokeAudio } from '../react/ember-smoke';
 import { autoAdvanceDue, nextAutoScene } from '../map/wild';
 import { linkPerformToMap, performService, type PerformService } from '../perform/service';
-import { clipsInUse, historyBlock, savedShow, type HistoryBlock } from '../perform/grid-edit';
+import { clipsInUse, historyBlock, savedShow, zonesSharingSource, type HistoryBlock } from '../perform/grid-edit';
 import { validateLiveSettings } from '../live/settings';
 
 /** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
@@ -77,8 +77,11 @@ interface Session {
   blackout: boolean;
   testGrid: boolean;
   freeze: boolean;
-  /** A shape's composition being edited in Studio: the wall stays open and follows the edits. */
-  studioEdit: { sourceId: string; shapeId: string; first: boolean } | null;
+  /**
+   * A composition being edited in Studio: the wall stays open and follows the edits. A draft (begun during a show)
+   * holds its changes in `latest` instead, and neither the show nor the wall hears of them until Apply.
+   */
+  studioEdit: { sourceId: string; shapeId: string; first: boolean; draft: boolean; latest: Project | null } | null;
   /** How many Map screens are mounted (React may mount one twice in development). */
   mounted: number;
   /** A Studio edit waiting to reach the wall at the next frame (edits come faster than frames while a slider moves). */
@@ -199,18 +202,72 @@ function pushToWall(s: Session, show: ShowDocument): { show: boolean; sources: b
  * Starts editing a shape's composition in Studio. The wall stays open and follows each change.
  * Returns the composition and the shape's name, or null when the shape plays no composition.
  */
-export function beginStudioEdit(sourceId: string, shapeId: string, clipName?: string): { project: Project; shapeName: string } | null {
+export function beginStudioEdit(sourceId: string, shapeId: string, clipName?: string, draft = false): { project: Project; shapeName: string } | null {
   const s = mapSession();
   const source = s.state.show.sources.find(src => src.id === sourceId);
   const shape = s.state.show.shapes.find(sh => sh.id === shapeId);
   // A Perform clip may play on no shape yet: it is named by the clip instead.
   const shapeName = shape?.name ?? clipName;
   if (!source || shapeName === undefined) return null;
-  s.studioEdit = { sourceId, shapeId, first: true };
-  // The Map screen's crosshair and flash belong to Map: they leave the wall while Studio has it.
-  if (s.outputOpen) { window.studio?.map.send({ type: 'crosshair', point: null, shapeId: null }); window.studio?.map.send({ type: 'identify', shapeId: null }); }
+  s.studioEdit = { sourceId, shapeId, first: true, draft, latest: null };
+  // The Map screen's crosshair and flash belong to Map: they leave the wall while Studio has it. A draft sends nothing.
+  if (s.outputOpen && !draft) { window.studio?.map.send({ type: 'crosshair', point: null, shapeId: null }); window.studio?.map.send({ type: 'identify', shapeId: null }); }
   return { project: source.project, shapeName };
 }
+
+/** Opens a clip's look in Studio: as a private draft during a show, or editing live, as a Map shape does, without one. */
+export function beginClipEdit(sourceId: string, draft: boolean): { project: Project; shapeName: string } | null {
+  const clip = mapSession().state.show.performance.clips.find(c => c.sourceId === sourceId);
+  return clip ? beginStudioEdit(sourceId, '', clip.name, draft) : null;
+}
+
+/** Whether a draft is open. */
+export function clipDraftOpen(): boolean { return !!mapSession().studioEdit?.draft; }
+/** The zones an open draft would change: all those sharing its look. */
+export function clipDraftZones(): number[] {
+  const s = mapSession(), edit = s.studioEdit;
+  return edit?.draft ? zonesSharingSource(s.state.show.performance, edit.sourceId) : [];
+}
+
+/**
+ * Puts the open draft into the show: one undo step, and one source update that the wall holds and then crossfades.
+ * Returns why it could not, in words, and the draft stays open. A draft with no real change closes and changes nothing.
+ */
+export function applyClipDraft(): string | null {
+  const s = mapSession(), edit = s.studioEdit;
+  if (!edit?.draft) return null;
+  const close = () => { s.studioEdit = null; return null; };
+  if (edit.latest === null) return close();
+  const before = s.state, was = before.show.sources.find(x => x.id === edit.sourceId);
+  if (!was) return 'that clip is no longer in the set';
+  const next = applyStudioEdit(before, edit.sourceId, edit.latest, true);
+  if (next.show === before.show) return STUDIO_REFUSALS[next.refusal ?? ''] ?? next.refusal ?? 'the change could not be made';
+  const source = next.show.sources.find(x => x.id === edit.sourceId)!;
+  if (JSON.stringify(source.project) === JSON.stringify(was.project)) return close();
+  const message: MapMessage = { type: 'source', id: source.id, revision: source.revision, project: source.project, crossfade: true };
+  // Checked before anything changes, so the show and the wall never disagree.
+  if (s.outputOpen && !acceptMapMessage(message as unknown)) return 'the composition is too large to send to the projector';
+  s.state = next;
+  s.saver.save(next.show);
+  s.onStateTidied?.(next);
+  if (s.outputOpen) { window.studio?.map.send(message); s.sentSources = new Map(s.sentSources).set(source.id, source.revision); }
+  return close();
+}
+
+/** Drops the open draft. The show was never touched, so there is nothing to put back. */
+export function discardClipDraft(): void {
+  const s = mapSession();
+  if (s.studioEdit?.draft) s.studioEdit = null;
+}
+
+/** For tests: puts a show into the session, as if it had been loaded. */
+export const mapSessionForTest = {
+  load(state: MapState): void { const s = mapSession(); s.state = state; s.loaded = true; s.studioEdit = null; },
+  state: (): MapState => mapSession().state,
+  /** The show changes under an open edit. */
+  replace(state: MapState): void { mapSession().state = state; },
+  markAllSent(): void { const s = mapSession(); s.sentSources = new Map(s.state.show.sources.map(x => [x.id, x.revision])); },
+};
 
 /** Why Map could not take a change made in Studio, in words. */
 const STUDIO_REFUSALS: Record<string, string> = {
@@ -224,6 +281,7 @@ const STUDIO_REFUSALS: Record<string, string> = {
 export function studioEdit(project: Project): string | null {
   const s = mapSession(), edit = s.studioEdit;
   if (!edit) return null;
+  if (edit.draft) { edit.latest = project; return null; }
   const before = s.state;
   s.state = applyStudioEdit(before, edit.sourceId, project, edit.first);
   if (s.state.show === before.show) return STUDIO_REFUSALS[s.state.refusal ?? ''] ?? s.state.refusal;
