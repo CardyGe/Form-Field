@@ -10,7 +10,7 @@
  */
 import { STAGE_SIZE } from './show';
 import { IDENTITY, type H3 } from './homography';
-import { FALL_SHARE, MOST_AGE, LIGHT_RULE, LIMITER, RED_RULE, type ChannelRule } from '../meridian/wall-limiter';
+import { FALL_SHARE, MOST_AGE, LIGHT_RULE, LIMITER, LIMITER_BLOCK, RED_RULE, type ChannelRule } from '../meridian/wall-limiter';
 
 const VERTEX = `#version 300 es
 in vec2 aUnit;
@@ -103,27 +103,59 @@ void main() {
 
 const LINEAR_GLSL = `vec3 lin(vec3 c) { return mix(c / 12.92, pow((c + .055) / 1.055, vec3(2.4)), step(.04045, c)); }
 vec3 enc(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }`;
-/** The wall limiter's first step: each output pixel is the true average light of a block of the source. */
+/**
+ * The wall limiter's first step, per 4 px block: the brightest pixel, and the largest fall and rise of any one pixel since the
+ * last frame, for light and for saturated red. Light that swaps places inside a block leaves the peak alone but not these.
+ */
 const MEASURE = `#version 300 es
 precision highp float;
-out vec4 o;
-uniform sampler2D uTex;
-uniform int uCell;
-uniform int uEncoded;       // 1: the source holds the square root of light; 0: it is the display-encoded stage
-uniform int uLinearOut;     // 1: write linear light to a float target; 0: its square root, to 8 bits
+layout(location = 0) out vec4 oLight;
+layout(location = 1) out vec4 oRed;
+uniform sampler2D uTex, uPrev;
 // The sRGB curve to within about 1%, without a pow for each of the many texels read here.
 vec3 lin(vec3 c) { return c * (c * (c * .305306011 + .682171111) + .012522878); }
-void main() {
-  ivec2 p = ivec2(gl_FragCoord.xy) * uCell;
-  vec3 sum = vec3(0.);
-  for (int y = 0; y < uCell; y++) for (int x = 0; x < uCell; x++) {
-    vec3 c = texelFetch(uTex, p + ivec2(x, y), 0).rgb;
-    sum += uEncoded == 1 ? c * c : lin(c);
+float lightOf(vec3 c) { return dot(c, vec3(.2126, .7152, .0722)); }
+float redOf(vec3 c) { float sum = c.r + c.g + c.b; return sum > 1e-6 && c.r / sum >= .8 ? max(0., c.r - c.g - c.b) : 0.; }
+// One channel's pixels: (peak, largest fall, largest rise, lowest value a fallen pixel reached), and how many fell and rose.
+struct Read { vec4 m; int fell, rose, lone; };
+void see(inout Read r, float now, float was, float edge, float beside) {
+  r.m.x = max(r.m.x, now);
+  if (was - now >= edge) { r.m.y = max(r.m.y, was - now); r.m.w = min(r.m.w, now); r.fell++; }
+  if (now - was >= edge) { r.m.z = max(r.m.z, now - was); r.rose++; if (now - beside >= edge) r.lone++; }
+}
+// Half the block or less trading light, every risen pixel lit from right beside it, is an edge moving through. Anything else is light swapping places.
+vec4 settled(Read r) {
+  if (r.fell > 0 && r.rose > 0 && r.lone == 0 && r.fell + r.rose <= ${LIMITER_BLOCK * LIMITER_BLOCK / 2}) { r.m.y = 0.; r.m.z = 0.; r.m.w = r.m.x; }
+  r.m.w = min(r.m.w, r.m.x);
+  return r.m;
+}
+// The most light and red any of a pixel's four neighbours held last frame.
+vec2 besideWas(ivec2 q) {
+  ivec2 top = textureSize(uPrev, 0) - 1;
+  vec2 most = vec2(0.);
+  for (int i = 0; i < 4; i++) {
+    ivec2 d = i == 0 ? ivec2(1, 0) : i == 1 ? ivec2(-1, 0) : i == 2 ? ivec2(0, 1) : ivec2(0, -1);
+    vec3 c = lin(texelFetch(uPrev, clamp(q + d, ivec2(0), top), 0).rgb);
+    most = max(most, vec2(lightOf(c), redOf(c)));
   }
-  sum /= float(uCell * uCell);
-  o = vec4(uLinearOut == 1 ? sum : sqrt(sum), 1.);
+  return most;
+}
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy) * ${LIMITER_BLOCK};
+  Read l = Read(vec4(0., 0., 0., 2.), 0, 0, 0), r = Read(vec4(0., 0., 0., 2.), 0, 0, 0);
+  for (int y = 0; y < ${LIMITER_BLOCK}; y++) for (int x = 0; x < ${LIMITER_BLOCK}; x++) {
+    ivec2 q = p + ivec2(x, y);
+    vec3 now = lin(texelFetch(uTex, q, 0).rgb), was = lin(texelFetch(uPrev, q, 0).rgb);
+    float a = lightOf(now), b = lightOf(was), c = redOf(now), d = redOf(was);
+    vec2 beside = a - b >= ${(LIMITER.band * FALL_SHARE).toFixed(5)} || c - d >= ${(LIMITER.redBand * FALL_SHARE).toFixed(5)} ? besideWas(q) : vec2(2.);
+    see(l, a, b, ${(LIMITER.band * FALL_SHARE).toFixed(5)}, beside.x);
+    see(r, c, d, ${(LIMITER.redBand * FALL_SHARE).toFixed(5)}, beside.y);
+  }
+  oLight = settled(l); oRed = settled(r);
 }`;
-const MEASURE_COLS = 48, MEASURE_ROWS = 27;
+const BLOCK_COLS = STAGE_SIZE.width / LIMITER_BLOCK, BLOCK_ROWS = STAGE_SIZE.height / LIMITER_BLOCK;
+/** Blocks are summed in two steps, so no single shader reads all 129,600 of them. */
+const AREA_STEP = 10, AREA_COLS = BLOCK_COLS / AREA_STEP, AREA_ROWS = BLOCK_ROWS / AREA_STEP;
 const glslRule = (r: ChannelRule) => `vec3(${r.band.toFixed(5)}, ${r.hold.toFixed(5)}, ${r.climb.toFixed(5)})`;
 /** The rule of src/meridian/wall-limiter.ts. A channel's state is (allowed value, low, high, seconds since the low). */
 const LIMIT_RULE = `
@@ -137,86 +169,103 @@ const float FALL_SHARE = ${FALL_SHARE.toFixed(5)};
 float lightOf(vec3 c) { return dot(c, vec3(.2126, .7152, .0722)); }
 float redOf(vec3 c) { float sum = c.r + c.g + c.b; return sum > 1e-6 && c.r / sum >= .8 ? max(0., c.r - c.g - c.b) : 0.; }
 float capOf(vec4 s, float dt, vec3 rule, float scale) { float first = s.g + rule.x; return s.a >= rule.y * scale ? max(first, s.r + rule.z * min(dt, ${LIMITER.longestClimb.toFixed(5)})) : first; }`;
-/** Follows the input's own changes per cell: (anchor, direction, seconds since it last rose, since it last fell). */
+/** Follows the input's own changes per block: (anchor, directions, seconds since it last rose, since the rise before). */
 const LIMIT_INPUT = `#version 300 es
 precision highp float;
 layout(location = 0) out vec4 oLight;
 layout(location = 1) out vec4 oRed;
-uniform sampler2D uCells, uInLight, uInRed;
+layout(location = 2) out vec4 oOlder;   // seconds since the third-latest rise: light, red
+uniform sampler2D uBlock, uBlockRed, uInLight, uInRed, uInOlder;
 uniform float uDt;
 uniform int uInit;
 ${LIMIT_RULE}
-vec4 follow(vec4 s, float x, float size) {
-  float anchor = s.r, way = s.g, up = min(2., s.b + uDt), down = min(2., s.a + uDt);
+vec4 follow(vec4 s, vec3 m, float size, float edge, inout float older) {
+  older = min(2., older + uDt);
+  float x = m.x, anchor = s.r, pixel = round(s.g / 4.), way = s.g - 4. * pixel, up = min(2., s.b + uDt), before = min(2., s.a + uDt);
+  bool rose = false;
   if (way > .5 && x > anchor) anchor = x;
   else if (way < -.5 && x < anchor) anchor = x;
-  if (way > -.5 && x <= anchor - size) { way = -1.; anchor = x; down = 0.; }
-  else if (way < .5 && x >= anchor + size) { way = 1.; anchor = x; up = 0.; }
-  return vec4(anchor, way, up, down);
+  if (way > -.5 && x <= anchor - size) { way = -1.; anchor = x; }
+  else if (way < .5 && x >= anchor + size) { way = 1.; anchor = x; rose = true; }
+  if (m.z >= edge) { if (pixel < -.5) rose = true; pixel = 1.; }
+  if (m.y >= edge) pixel = -1.;
+  if (rose) { older = before; before = up; up = 0.; }
+  return vec4(anchor, way + 4. * pixel, up, before);
 }
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
-  vec3 c = texelFetch(uCells, p, 0).rgb;
-  float x = lightOf(c), r = redOf(c);
-  if (uInit == 1) { oLight = vec4(x, 0., 2., 2.); oRed = vec4(r, 0., 2., 2.); return; }
-  oLight = follow(texelFetch(uInLight, p, 0), x, ${LIMITER.lightStep.toFixed(5)});
-  oRed = follow(texelFetch(uInRed, p, 0), r, ${LIMITER.redStep.toFixed(5)});
+  vec3 l = texelFetch(uBlock, p, 0).rgb, r = texelFetch(uBlockRed, p, 0).rgb;
+  if (uInit == 1) { oLight = vec4(l.x, 0., 2., 2.); oRed = vec4(r.x, 0., 2., 2.); oOlder = vec4(2., 2., 0., 1.); return; }
+  vec2 older = texelFetch(uInOlder, p, 0).rg;
+  oLight = follow(texelFetch(uInLight, p, 0), l, ${LIMITER.lightStep.toFixed(5)}, LIGHT_RULE.x * FALL_SHARE, older.x);
+  oRed = follow(texelFetch(uInRed, p, 0), r, ${LIMITER.redStep.toFixed(5)}, RED_RULE.x * FALL_SHARE, older.y);
+  oOlder = vec4(older, 0., 1.);
 }`;
-/** Which cells are trying to change more than they may, or have changed both ways within the last second. */
+/** Which blocks are trying to rise past what they may show, or have risen three times within the last second. */
 const LIMIT_WANT = `#version 300 es
 precision highp float;
 out vec4 o;
-uniform sampler2D uCells, uLight, uRed, uInLight, uInRed;
+uniform sampler2D uBlock, uBlockRed, uLight, uRed, uInLight, uInRed, uInOlder;
 uniform float uDt;
 uniform vec2 uHold;
 ${LIMIT_RULE}
-bool flashing(vec4 s) { return s.b < WINDOW && s.a < WINDOW; }
+bool flashing(vec4 s, float older) { return s.b < WINDOW && s.a < WINDOW && older < WINDOW; }
+bool over(float x, vec4 s, vec3 rule, float scale) { return x > max(s.r, capOf(s, uDt, rule, scale)) + 1e-4; }
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
-  vec3 c = texelFetch(uCells, p, 0).rgb;
-  o = vec4(lightOf(c) > capOf(texelFetch(uLight, p, 0), uDt, LIGHT_RULE, uHold.x) + 1e-4 || flashing(texelFetch(uInLight, p, 0)) ? 1. : 0.,
-           redOf(c) > capOf(texelFetch(uRed, p, 0), uDt, RED_RULE, uHold.y) + 1e-4 || flashing(texelFetch(uInRed, p, 0)) ? 1. : 0., 0., 1.);
+  vec2 older = texelFetch(uInOlder, p, 0).rg;
+  o = vec4(over(texelFetch(uBlock, p, 0).x, texelFetch(uLight, p, 0), LIGHT_RULE, uHold.x) || flashing(texelFetch(uInLight, p, 0), older.x) ? 1. : 0.,
+           over(texelFetch(uBlockRed, p, 0).x, texelFetch(uRed, p, 0), RED_RULE, uHold.y) || flashing(texelFetch(uInRed, p, 0), older.y) ? 1. : 0., 0., 1.);
 }`;
-/** The exact share of cells wanting to change. A mip chain is not used: at 48 x 27 it can drop whole columns from the average. */
+/** The exact share of blocks wanting to change, in two box steps. A mip chain is not used: it can drop whole columns from the average. */
 const LIMIT_AREA = `#version 300 es
 precision highp float;
 out vec4 o;
 uniform sampler2D uWant;
+uniform ivec2 uAcross;      // how many texels of the source one output pixel sums
 void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy) * uAcross;
   vec2 sum = vec2(0.);
-  for (int y = 0; y < ${MEASURE_ROWS}; y++) for (int x = 0; x < ${MEASURE_COLS}; x++) sum += texelFetch(uWant, ivec2(x, y), 0).rg;
-  o = vec4(sum / float(${MEASURE_COLS * MEASURE_ROWS}), 0., 1.);
+  for (int y = 0; y < uAcross.y; y++) for (int x = 0; x < uAcross.x; x++) sum += texelFetch(uWant, p + ivec2(x, y), 0).rg;
+  o = vec4(sum / float(uAcross.x * uAcross.y), 0., 1.);
 }`;
 const LIMIT_UPDATE = `#version 300 es
 precision highp float;
 layout(location = 0) out vec4 oLight;
 layout(location = 1) out vec4 oRed;
 layout(location = 2) out vec4 oMisc;
-uniform sampler2D uCells, uLight, uRed, uWant;
+uniform sampler2D uBlock, uBlockRed, uLight, uRed, uWant;
 uniform float uDt;
 uniform vec2 uHold;
 uniform int uInit;
 ${LIMIT_RULE}
-vec4 advance(vec4 s, float x, bool engaged, vec3 rule, float scale) {
-  float was = s.r, v = x <= was || !engaged ? x : min(x, max(was, capOf(s, uDt, rule, scale)));
-  float low = s.g, high = max(s.b, v), age = s.a;
-  // A partial fall can neither raise the low nor restart the hold: only a return to the low, or a fall after a real climb.
+// A partial fall can neither raise the low nor restart the hold: only a return to the low, or a fall after a real climb.
+vec4 move(vec4 s, float v, vec3 rule) {
+  float was = s.r, low = s.g, high = max(s.b, v), age = s.a;
   if (v < low) { low = v; high = v; age = 0.; }
   else if (was > low + AT_LOW && v <= low + AT_LOW) { high = v; age = 0.; }
   else if (high > low + rule.x + OVER && high - v >= rule.x * FALL_SHARE) { low = v; high = v; age = 0.; }
-  return vec4(v, low, high, min(${MOST_AGE.toFixed(1)}, age + uDt));
+  return vec4(v, low, high, age);
+}
+vec4 advance(vec4 s, vec4 m, bool engaged, vec3 rule, float scale) {
+  float x = m.x;
+  // A pixel that fell is a fall for the block, even when another pixel keeps the block's peak up.
+  if (m.y >= rule.x * FALL_SHARE && m.w < s.r) s = move(s, m.w, rule);
+  float v = x <= s.r || !engaged ? x : min(x, max(s.r, capOf(s, uDt, rule, scale)));
+  s = move(s, v, rule);
+  s.a = min(${MOST_AGE.toFixed(1)}, s.a + uDt);
+  return s;
 }
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
-  vec3 c = texelFetch(uCells, p, 0).rgb;
-  float x = lightOf(c), r = redOf(c);
-  if (uInit == 1) { oLight = vec4(x, x, x, 0.); oRed = vec4(r, r, r, 0.); oMisc = vec4(1.); return; }
+  vec4 l = texelFetch(uBlock, p, 0), r = texelFetch(uBlockRed, p, 0);
+  if (uInit == 1) { oLight = vec4(l.x, l.x, l.x, 0.); oRed = vec4(r.x, r.x, r.x, 0.); oMisc = vec4(1.); return; }
   vec2 area = texelFetch(uWant, ivec2(0), 0).rg;
-  oLight = advance(texelFetch(uLight, p, 0), x, area.r >= TRIGGER, LIGHT_RULE, uHold.x);
+  oLight = advance(texelFetch(uLight, p, 0), l, area.r >= TRIGGER, LIGHT_RULE, uHold.x);
   oRed = advance(texelFetch(uRed, p, 0), r, area.g >= TRIGGER, RED_RULE, uHold.y);
-  oMisc = vec4(x > 1e-4 ? clamp(oLight.r / x, 0., 1.) : 1., r > 1e-4 ? clamp(oRed.r / r, 0., 1.) : 1., 0., 1.);
+  oMisc = vec4(l.x > 1e-4 ? clamp(oLight.r / l.x, 0., 1.) : 1., r.x > 1e-4 ? clamp(oRed.r / r.x, 0., 1.) : 1., 0., 1.);
 }`;
-/** The limit on the flat stage, as a smooth gain per cell, in linear light. Where nothing is limited the pixel is left exactly as it was. */
+/** The limit on the flat stage, as a gain per block in linear light. Where nothing is limited the pixel is left exactly as it was. */
 const LIMIT_APPLY = `#version 300 es
 precision highp float;
 out vec4 o;
@@ -226,8 +275,8 @@ uniform float uFade;
 ${LINEAR_GLSL}
 void main() {
   vec4 c = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0);
-  // Softened across cell edges, but never above the pixel's own cell: a dark neighbour cannot lend it gain.
-  vec2 own = texelFetch(uGain, ivec2(gl_FragCoord.xy) / ${STAGE_SIZE.width / MEASURE_COLS}, 0).rg;
+  // Softened across block edges, but never above the pixel's own block: a dark neighbour cannot lend it gain.
+  vec2 own = texelFetch(uGain, ivec2(gl_FragCoord.xy) / ${LIMITER_BLOCK}, 0).rg;
   vec2 g = mix(clamp(texture(uGain, gl_FragCoord.xy / uStage).rg, own * ${LIMITER.softEdge.toFixed(3)}, own), vec2(1.), uFade);
   if (g.r >= .9995 && g.g >= .9995) { o = c; return; }
   vec3 l = lin(c.rgb);
@@ -235,11 +284,9 @@ void main() {
   l = max(vec3(grey) + (l - vec3(grey)) * g.g, vec3(0.)) * g.r;
   o = vec4(enc(l), c.a);
 }`;
-const MEASURE_MIDDLE = { width: 480, height: 270 };
-const MEASURE_SIZE = { width: MEASURE_COLS, height: MEASURE_ROWS };
 /** How often, in drawn frames, the operator's status is read back. It never drives the limiter. */
 const STATUS_EVERY = 12;
-interface LimitState { light: WebGLTexture; red: WebGLTexture; misc: WebGLTexture; fb: WebGLFramebuffer; inLight: WebGLTexture; inRed: WebGLTexture; inFb: WebGLFramebuffer }
+interface LimitState { light: WebGLTexture; red: WebGLTexture; misc: WebGLTexture; fb: WebGLFramebuffer; inLight: WebGLTexture; inRed: WebGLTexture; inOlder: WebGLTexture; inFb: WebGLFramebuffer }
 type LimitProgram = { program: WebGLProgram; u: Record<string, WebGLUniformLocation | null> };
 
 export interface Texture { tex: WebGLTexture; width: number; height: number }
@@ -285,12 +332,13 @@ export class Gpu {
   private areaP!: Program;
   private inputP!: Program;
   private areaTex!: WebGLTexture;
-  private middleTex!: WebGLTexture;
-  private middleFb!: WebGLFramebuffer;
-  private cellsTex!: WebGLTexture;
-  private cellsFb!: WebGLFramebuffer;
+  private blockTex!: WebGLTexture;
+  private blockRedTex!: WebGLTexture;
+  private blockFb!: WebGLFramebuffer;
   private wantTex!: WebGLTexture;
   private wantFb!: WebGLFramebuffer;
+  private wantCoarseTex!: WebGLTexture;
+  private wantCoarseFb!: WebGLFramebuffer;
   private statusFb!: WebGLFramebuffer;
   private statusBuffer!: WebGLBuffer;
   private statusSync: WebGLSync | null = null;
@@ -298,6 +346,8 @@ export class Gpu {
   private readonly statusBytes = new Uint8Array(4);
   private limitStates: [LimitState, LimitState] | null = null;
   private stageCopy: WebGLTexture | null = null;
+  private pointsFb: WebGLFramebuffer | null = null;
+  private pointsStride = 0;
   private guardState: 'unbuilt' | 'ready' | 'failed' = 'unbuilt';
   /** Why the wall limiter could not be built; null when it is fine or not yet needed. */
   guardError: string | null = null;
@@ -338,7 +388,7 @@ export class Gpu {
     ({ tex: this.previewTex, fb: this.previewFb } = target(PREVIEW.width, PREVIEW.height));
     // The wall guard's passes are built the first time a show with Meridian needs them.
     this.guardState = 'unbuilt'; this.guardError = null;
-    this.stageCopy = null; this.limitStates = null; this.statusSync = null; this.statusCount = 0; this.limitedArea = 0;
+    this.stageCopy = null; this.pointsFb = null; this.limitStates = null; this.statusSync = null; this.statusCount = 0; this.limitedArea = 0;
     this.copyFb = gl.createFramebuffer()!;
     this.drawFb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -381,21 +431,28 @@ export class Gpu {
     const gl = this.gl;
     try {
       if (!gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buffer_half_float')) throw new Error('this graphics card cannot draw to floating-point pictures');
-      this.measureP = this.compile(MEASURE, ['uRect', 'uStage', 'uTex', 'uCell', 'uEncoded', 'uLinearOut']);
-      this.wantP = this.compile(LIMIT_WANT, ['uRect', 'uStage', 'uCells', 'uLight', 'uRed', 'uInLight', 'uInRed', 'uDt', 'uHold']);
-      this.updateP = this.compile(LIMIT_UPDATE, ['uRect', 'uStage', 'uCells', 'uLight', 'uRed', 'uWant', 'uDt', 'uHold', 'uInit']);
-      this.inputP = this.compile(LIMIT_INPUT, ['uRect', 'uStage', 'uCells', 'uInLight', 'uInRed', 'uDt', 'uInit']);
-      this.areaP = this.compile(LIMIT_AREA, ['uRect', 'uStage', 'uWant']);
+      this.measureP = this.compile(MEASURE, ['uRect', 'uStage', 'uTex', 'uPrev']);
+      this.wantP = this.compile(LIMIT_WANT, ['uRect', 'uStage', 'uBlock', 'uBlockRed', 'uLight', 'uRed', 'uInLight', 'uInRed', 'uInOlder', 'uDt', 'uHold']);
+      this.updateP = this.compile(LIMIT_UPDATE, ['uRect', 'uStage', 'uBlock', 'uBlockRed', 'uLight', 'uRed', 'uWant', 'uDt', 'uHold', 'uInit']);
+      this.inputP = this.compile(LIMIT_INPUT, ['uRect', 'uStage', 'uBlock', 'uBlockRed', 'uInLight', 'uInRed', 'uInOlder', 'uDt', 'uInit']);
+      this.areaP = this.compile(LIMIT_AREA, ['uRect', 'uStage', 'uWant', 'uAcross']);
       this.applyP = this.compile(LIMIT_APPLY, ['uRect', 'uStage', 'uTex', 'uGain', 'uFade']);
-      ({ tex: this.middleTex, fb: this.middleFb } = this.target(MEASURE_MIDDLE.width, MEASURE_MIDDLE.height));
-      const { width: w, height: h } = MEASURE_SIZE;
-      const float = () => { const t = this.texture(); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null); return t; };
-      this.cellsTex = float();
-      this.cellsFb = gl.createFramebuffer()!;
-      gl.bindFramebuffer(gl.FRAMEBUFFER, this.cellsFb);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.cellsTex, 0);
+      const w = BLOCK_COLS, h = BLOCK_ROWS;
+      const floatAt = (width: number, height: number) => { const t = this.texture(); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null); return t; };
+      const float = () => floatAt(w, h);
+      this.blockTex = float(); this.blockRedTex = float();
+      this.blockFb = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.blockFb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.blockTex, 0);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.blockRedTex, 0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('the limiter picture could not be made');
       ({ tex: this.wantTex, fb: this.wantFb } = this.target(w, h));
+      this.wantCoarseTex = floatAt(AREA_COLS, AREA_ROWS);
+      this.wantCoarseFb = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.wantCoarseFb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.wantCoarseTex, 0);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('the limiter picture could not be made');
       ({ tex: this.areaTex, fb: this.statusFb } = this.target(1, 1));
       this.statusBuffer = gl.createBuffer()!;
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.statusBuffer);
@@ -409,13 +466,14 @@ export class Gpu {
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, misc, 0);
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
         if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('the limiter state could not be made');
-        const inLight = float(), inRed = float(), inFb = gl.createFramebuffer()!;
+        const inLight = float(), inRed = float(), inOlder = float(), inFb = gl.createFramebuffer()!;
         gl.bindFramebuffer(gl.FRAMEBUFFER, inFb);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, inLight, 0);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, inRed, 0);
-        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, inOlder, 0);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
         if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('the limiter state could not be made');
-        return { light, red, misc, fb, inLight, inRed, inFb };
+        return { light, red, misc, fb, inLight, inRed, inOlder, inFb };
       };
       this.limitStates = [state(), state()];
       this.guardState = 'ready';
@@ -525,29 +583,24 @@ export class Gpu {
    */
   limitStage(dt: number, fade: number, init: boolean, holds: { light: number; red: number } = { light: 1, red: 1 }): boolean {
     if (!this.ensureGuard() || !this.limitStates) return false;
-    const gl = this.gl, [from, to] = this.limitStates, { width: w, height: h } = MEASURE_SIZE;
+    const gl = this.gl, [from, to] = this.limitStates, w = BLOCK_COLS, h = BLOCK_ROWS;
     const rect = (u: Program['u'], width: number, height: number) => { gl.uniform4f(u.uRect, 0, 0, width, height); gl.uniform2f(u.uStage, width, height); };
     const bind = (unit: number, location: WebGLUniformLocation | null, texture: WebGLTexture) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, texture); gl.uniform1i(location, unit); };
     gl.disable(gl.BLEND);
-    // The stage to 48 x 27 cells of linear light.
+    // The stage to 4 px blocks: each block's peak, and its pixels' own falls and rises since the last input frame.
     let p = this.measureP;
     gl.useProgram(p.program);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.middleFb);
-    gl.viewport(0, 0, MEASURE_MIDDLE.width, MEASURE_MIDDLE.height);
-    rect(p.u, MEASURE_MIDDLE.width, MEASURE_MIDDLE.height);
-    bind(0, p.u.uTex, this.stageTex); gl.uniform1i(p.u.uCell, 4); gl.uniform1i(p.u.uEncoded, 0); gl.uniform1i(p.u.uLinearOut, 0);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.cellsFb);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.blockFb);
     gl.viewport(0, 0, w, h);
     rect(p.u, w, h);
-    bind(0, p.u.uTex, this.middleTex); gl.uniform1i(p.u.uCell, 10); gl.uniform1i(p.u.uEncoded, 1); gl.uniform1i(p.u.uLinearOut, 1);
+    bind(0, p.u.uTex, this.stageTex); bind(1, p.u.uPrev, init || !this.stageCopy ? this.stageTex : this.stageCopy);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     // The input's own changes, over a rolling second.
     p = this.inputP;
     gl.useProgram(p.program);
     gl.bindFramebuffer(gl.FRAMEBUFFER, to.inFb);
     rect(p.u, w, h);
-    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uInLight, from.inLight); bind(2, p.u.uInRed, from.inRed);
+    bind(0, p.u.uBlock, this.blockTex); bind(1, p.u.uBlockRed, this.blockRedTex); bind(2, p.u.uInLight, from.inLight); bind(3, p.u.uInRed, from.inRed); bind(4, p.u.uInOlder, from.inOlder);
     gl.uniform1f(p.u.uDt, dt); gl.uniform1i(p.u.uInit, init ? 1 : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     // How much of the wall is trying to change more than it may.
@@ -555,23 +608,28 @@ export class Gpu {
     gl.useProgram(p.program);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.wantFb);
     rect(p.u, w, h);
-    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uLight, from.light); bind(2, p.u.uRed, from.red); bind(3, p.u.uInLight, to.inLight); bind(4, p.u.uInRed, to.inRed);
+    bind(0, p.u.uBlock, this.blockTex); bind(1, p.u.uBlockRed, this.blockRedTex); bind(2, p.u.uLight, from.light); bind(3, p.u.uRed, from.red); bind(4, p.u.uInLight, to.inLight); bind(5, p.u.uInRed, to.inRed); bind(6, p.u.uInOlder, to.inOlder);
     gl.uniform1f(p.u.uDt, dt); gl.uniform2f(p.u.uHold, holds.light, holds.red);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     p = this.areaP;
     gl.useProgram(p.program);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.wantCoarseFb);
+    gl.viewport(0, 0, AREA_COLS, AREA_ROWS);
+    rect(p.u, AREA_COLS, AREA_ROWS);
+    bind(0, p.u.uWant, this.wantTex); gl.uniform2i(p.u.uAcross, AREA_STEP, AREA_STEP);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.statusFb);
     gl.viewport(0, 0, 1, 1);
     rect(p.u, 1, 1);
-    bind(0, p.u.uWant, this.wantTex);
+    bind(0, p.u.uWant, this.wantCoarseTex); gl.uniform2i(p.u.uAcross, AREA_COLS, AREA_ROWS);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.viewport(0, 0, w, h);
-    // Each cell moves as far as it may.
+    // Each block moves as far as it may.
     p = this.updateP;
     gl.useProgram(p.program);
     gl.bindFramebuffer(gl.FRAMEBUFFER, to.fb);
     rect(p.u, w, h);
-    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uLight, from.light); bind(2, p.u.uRed, from.red); bind(4, p.u.uWant, this.areaTex);
+    bind(0, p.u.uBlock, this.blockTex); bind(1, p.u.uBlockRed, this.blockRedTex); bind(2, p.u.uLight, from.light); bind(3, p.u.uRed, from.red); bind(4, p.u.uWant, this.areaTex);
     gl.uniform1f(p.u.uDt, dt); gl.uniform2f(p.u.uHold, holds.light, holds.red); gl.uniform1i(p.u.uInit, init ? 1 : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     this.limitStates = [to, from];
@@ -622,6 +680,21 @@ export class Gpu {
   readStage(out: Uint8Array): void {
     this.backToStage();
     this.gl.readPixels(0, 0, STAGE_SIZE.width, STAGE_SIZE.height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, out);
+  }
+
+  /** For the scripted checks: every `stride`th pixel of the flat stage, exactly as it stands, unfiltered. */
+  readStagePoints(out: Uint8Array, stride: number): void {
+    const gl = this.gl, w = Math.floor(STAGE_SIZE.width / stride), h = Math.floor(STAGE_SIZE.height / stride);
+    if (!this.pointsFb || this.pointsStride !== stride) {
+      ({ fb: this.pointsFb } = this.target(w, h)); this.pointsStride = stride;
+    }
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.stageFb);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.pointsFb);
+    gl.blitFramebuffer(0, 0, w * stride, h * stride, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.pointsFb);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    this.backToStage();
   }
 
   backToStage(): void {

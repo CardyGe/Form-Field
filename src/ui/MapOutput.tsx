@@ -80,9 +80,11 @@ export default function MapOutput() {
       if (compositor.requestPreview()) { sentPicture = now; busy = true; reading = true; changed = false; }
     };
     raf = requestAnimationFrame(tick);
-    (window as unknown as { __mapGuardProbe?: () => unknown }).__mapGuardProbe = () => compositor.probeGuardCost();
-    // For the scripted checks only: loaded when asked for, on its own graphics context.
-    (window as unknown as { __mapLimiterLab?: () => Promise<unknown> }).__mapLimiterLab = () => import('../map/limiter-lab').then(lab => lab.runLimiterLab());
+    // For the scripted checks only, in their own test window. A real wall never has these.
+    if (bridge.checks) {
+      (window as unknown as { __mapGuardProbe?: () => unknown }).__mapGuardProbe = () => compositor.probeGuardCost();
+      (window as unknown as { __mapLimiterLab?: (only?: string) => Promise<unknown> }).__mapLimiterLab = only => import('../map/limiter-lab').then(lab => lab.runLimiterLab(only));
+    }
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };
     window.addEventListener('keydown', key);
     bridge.ready();
