@@ -17,6 +17,8 @@ import { ownCornersPinnable, pinCorners } from './placement';
 const boxPin = (shape: Shape): Point[] => pinCorners({ ...shape, points: shape.points.length === 4 ? [...shape.points, shape.points[0]] : shape.points, placement: { ...shape.placement, pin: null } }).map(q => ({ x: q.x / STAGE_SIZE.width, y: q.y / STAGE_SIZE.height }));
 import { PRESETS, applyPreset, createLayer, createProject, readParameterDefinitions, validateProject, varyLayer } from '../core/project';
 import type { Project } from '../shared/types';
+import { validatePerformanceSet } from '../perform/set';
+import type { PerformanceSet } from '../perform/types';
 
 /** ring: which outline of a shape a point belongs to. Missing or -1 is the shape's own outline; 0 and up are its holes. */
 type RingRef = { ring?: number };
@@ -112,7 +114,11 @@ export type EditAction =
   | { type: 'removeTrigger'; triggerId: string }
   | { type: 'addReaction'; reaction: Reaction; shapeId: string; ids: string[] }
   | { type: 'setTempoSync'; sourceId: string; beats: number | null }
-  | { type: 'moveStageCorner'; index: number; to: Point };
+  | { type: 'moveStageCorner'; index: number; to: Point }
+  // Perform: the whole set as one undo step. A clip's new source or video arrives with the set that names it, or it would be tidied away.
+  | { type: 'setPerformance'; performance: PerformanceSet }
+  | { type: 'addClipSource'; sourceId: string; project: Project; performance: PerformanceSet; speed?: number; tempoSync?: number | null }
+  | { type: 'addClipVideo'; videoId: string; path: string; name: string; performance: PerformanceSet; speed?: number; tempoSync?: number | null };
 
 export type EditResult = { ok: true; show: ShowDocument } | { ok: false; reason: string };
 
@@ -352,6 +358,7 @@ function stage(show: ShowDocument, action: EditAction): Staged {
 
   switch (action.type) {
     case 'varySource': case 'setSourcePalette': case 'setSourceSpeed': case 'setSourceProject': case 'setSourceLayer': return stageSource(next, action);
+    case 'setPerformance': case 'addClipSource': case 'addClipVideo': return stagePerformance(next, action, show);
     case 'addRectangle': return stage(show, { type: 'addShape', id: action.id, points: rectangleFromDrag(clampToStage(action.a), clampToStage(action.b)), colour: action.colour });
     case 'addShape': {
       if (next.shapes.length >= MAX_SHAPES) return { reason: 'too-many-shapes' };
@@ -866,6 +873,31 @@ function pinnable(shape: Shape): Shape {
 }
 
 /** Scene edits. The shapes on screen are the live scene, so it is written back before another is brought in. */
+/** Perform's set, checked as a file would be. Sources only the old set played go; a new one comes in with the set naming it. */
+function stagePerformance(next: ShowDocument, action: Extract<EditAction, { type: 'setPerformance' | 'addClipSource' | 'addClipVideo' }>, original: ShowDocument): Staged {
+  if (action.type === 'addClipSource') {
+    if (action.sourceId === LIVE_SOURCE_ID || isVideoId(action.sourceId) || next.sources.some(s => s.id === action.sourceId)) return { reason: 'duplicate-id' };
+    if (next.sources.length >= MAX_SOURCES) return { reason: 'too-many-sources' };
+    next.sources = [...next.sources, { id: action.sourceId, kind: 'instrument', project: action.project, speed: action.speed ?? 1, revision: 0, tempoSync: action.tempoSync ?? null }];
+  }
+  if (action.type === 'addClipVideo') {
+    if (!isVideoPath(action.path)) return { reason: 'not-a-video' };
+    if (!isVideoId(action.videoId) || next.videos.some(v => v.id === action.videoId)) return { reason: 'duplicate-id' };
+    if (next.videos.length >= MAX_VIDEOS) return { reason: 'too-many-videos' };
+    next.videos = [...next.videos, { id: action.videoId, path: action.path, name: cleanName(action.name).slice(0, 120), speed: action.speed ?? 1, tempoSync: action.tempoSync ?? null }];
+  }
+  const known = new Set([LIVE_SOURCE_ID, ...next.sources.map(s => s.id), ...next.videos.map(v => v.id)]);
+  const { set } = validatePerformanceSet(action.performance, known);
+  for (const zone of set.zones) {
+    const t = zone.target;
+    if (t && !(t.kind === 'group' ? next.groups.some(g => g.id === t.id) : next.shapes.some(s => s.id === t.id))) zone.target = null;
+  }
+  if (action.type === 'setPerformance' && JSON.stringify(set) === JSON.stringify(original.performance)) return { show: original, touched: [] };
+  next.performance = set;
+  dropUnplayed(next);
+  return { show: next, touched: [] };
+}
+
 function stageScene(next: ShowDocument, action: Extract<EditAction, { type: 'addScene' | 'renameScene' | 'deleteScene' | 'setSceneFade' | 'switchScene' }>, original: ShowDocument): Staged {
   const keepLive = () => { if (next.sceneId) next.scenes = next.scenes.map(sc => sc.id === next.sceneId ? { ...sc, shapes: capture(next.shapes) } : sc); };
   if (action.type === 'setSceneFade' && action.sceneId === null) {

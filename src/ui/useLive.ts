@@ -5,6 +5,7 @@ import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { reactivity, type ReactivityEngine } from '../react/engine';
 import { MeterStore } from '../react/meter';
+import { performService } from '../perform/service';
 
 export interface Display { id: number; label: string; primary: boolean }
 
@@ -148,6 +149,8 @@ export function useLive(onError: (message: string) => void) {
   const clear = () => { stage.current?.renderer.clear(); if (outputOpen) bridge?.send({ type: 'clear' }); };
   const openOutput = async () => {
     if (!settings || settings.display === null) return;
+    // Live's output would take over the projector from a running show.
+    if (performService().running) { onError('A Perform show is using the projector. End the show before opening Live\'s output.'); return; }
     try { await bridge?.openOutput(settings.display); }
     catch (error) { onError((error as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); await refreshDisplays(); }
   };

@@ -3,7 +3,7 @@ import type { Project } from '../shared/types';
 /** Studio's own state, set aside while a Map shape's composition is edited in Studio, and put back afterwards. */
 export interface StudioStash { project: Project; history: Project[]; future: Project[]; filePath: string; selectedId: string; phase: number }
 /** A Map shape being edited in Studio: which source, for the bar's wording, and Studio's own state. */
-export interface ShapeEdit { sourceId: string; shapeName: string; stash: StudioStash }
+export interface ShapeEdit { sourceId: string; shapeName: string; stash: StudioStash; /** The section the edit came from and returns to. */ from?: 'map' | 'perform' }
 
 /** Copies the history lists, so later edits in Studio cannot change what is put back. */
 export function stashStudio(state: StudioStash): StudioStash {

@@ -30,10 +30,10 @@ import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
 import LivePanel from './LivePanel';
 import { KIND_LABELS } from '../core/library';
-import { beginStudioEdit, endStudioEdit, onStudioWallWarning, studioEdit } from './useMap';
-import { performService } from '../perform/service';
+import { beginStudioEdit, endStudioEdit, onStudioWallWarning, studioEdit, wallStaysOpen } from './useMap';
 import { projectForStudioSave, stashStudio, type ShapeEdit } from './studio-edit';
 import MapPanel from './MapPanel';
+import PerformPanel from './PerformPanel';
 import { sameCanvasValues } from '../core/canvas-interaction';
 
 const TAU = Math.PI * 2;
@@ -162,7 +162,7 @@ export default function App() {
   };
   const [playing, setPlaying] = useState(true), phase = useRef(0), rendererRef = useRef<StudioRenderer | null>(null);
   /** Live is a separate screen over the studio; the studio pauses underneath it. */
-  const [mode, setMode] = useState<'studio' | 'live' | 'map'>('studio');
+  const [mode, setMode] = useState<'studio' | 'live' | 'map' | 'perform'>('studio');
   const [emberSound, setEmberSound] = useState<ReactivityEngine | null>(null);
   const emberMeters = useMemo(() => new MeterStore(), []);
   const hasEmber = project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1);
@@ -318,18 +318,18 @@ export default function App() {
 
   useEffect(() => { onStudioWallWarning(text => notify(`Map: ${text}.`)); return () => onStudioWallWarning(null); }, [notify]);
   /** Opens a Map shape's composition in Studio, setting Studio's own project, history and file aside. */
-  const editShapeInStudio = (sourceId: string, shapeId: string) => {
+  const editShapeInStudio = (sourceId: string, shapeId: string, clip?: { name: string }) => {
     if (shapeEditRef.current) return;
     // Studio must have restored its own project first, or the restore could land on the shape's composition.
     if (!ready) { notify('Studio is still opening. Try again in a moment.'); return; }
     // Studio's own latest change is saved before it is set aside.
     if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
     const own = validateProject(projectRef.current);
-    const begun = beginStudioEdit(sourceId, shapeId);
+    const begun = beginStudioEdit(sourceId, shapeId, clip?.name);
     if (!begun) return;
     void (window.studio ? window.studio.saveAutosave(own) : Promise.resolve(localStorage.setItem('formfield-autosave', JSON.stringify(own))))
       .then(() => setSaved('Autosaved')).catch(() => setSaved('Save project to keep changes'));
-    const edit: ShapeEdit = { sourceId, shapeName: begun.shapeName, stash: stashStudio({ project: projectRef.current, history: history.current, future: future.current, filePath, selectedId, phase: phase.current }) };
+    const edit: ShapeEdit = { sourceId, shapeName: begun.shapeName, from: clip ? 'perform' : 'map', stash: stashStudio({ project: projectRef.current, history: history.current, future: future.current, filePath, selectedId, phase: phase.current }) };
     shapeEditRef.current = edit; setShapeEdit(edit);
     history.current = []; future.current = [];
     // Shown without being recorded: opening the composition is not an edit to it.
@@ -338,7 +338,7 @@ export default function App() {
     workspace.closePopovers(); setExportOpen(false); setMode('studio');
   };
   /** Back from editing a Map shape: Studio's own project, history and file return as they were. */
-  const finishShapeEdit = (to: 'studio' | 'live' | 'map') => {
+  const finishShapeEdit = (to: 'studio' | 'live' | 'map' | 'perform') => {
     const edit = shapeEditRef.current;
     if (!edit) { setMode(to); return; }
     endStudioEdit();
@@ -348,7 +348,7 @@ export default function App() {
     setSelectedId(edit.stash.selectedId); phase.current = edit.stash.phase; setFilePath(edit.stash.filePath);
     // Going to Live instead of Map: the Map wall that stayed open for the edit closes, as leaving Map does.
     // A running show keeps it, wherever the operator goes.
-    if (to !== 'map' && !performService().running) void window.studio?.map?.closeOutput().catch(() => {});
+    if (to !== 'map' && to !== 'perform' && !wallStaysOpen()) void window.studio?.map?.closeOutput().catch(() => {});
     setMode(to);
   };
   useEffect(() => window.studio?.onExportProgress(p => { if (p.jobId === activeJob.current) setProgress(p); }), []);
@@ -438,12 +438,12 @@ export default function App() {
   };
 
   const modeSwitch = <><div className="brand"><div className="brand-mark">f<span>f</span></div><div>Form <span>&</span> Field</div></div>
-    <div className="mode-switch" role="group" aria-label="Section"><button aria-pressed={mode === 'studio'} onClick={() => setMode('studio')}>Studio</button><button aria-pressed={mode === 'live'} disabled={exporting} title={exporting ? 'Live is available when the export has finished' : 'Live camera to projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('live'); }}>Live</button><button aria-pressed={mode === 'map'} disabled={exporting} title={exporting ? 'Map is available when the export has finished' : 'Map shapes onto the projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('map'); }}>Map</button></div></>;
+    <div className="mode-switch" role="group" aria-label="Section"><button aria-pressed={mode === 'studio'} onClick={() => setMode('studio')}>Studio</button><button aria-pressed={mode === 'live'} disabled={exporting} title={exporting ? 'Live is available when the export has finished' : 'Live camera to projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('live'); }}>Live</button><button aria-pressed={mode === 'map'} disabled={exporting} title={exporting ? 'Map is available when the export has finished' : 'Map shapes onto the projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('map'); }}>Map</button><button aria-pressed={mode === 'perform'} disabled={exporting} title={exporting ? 'Perform is available when the export has finished' : 'Play clips and scenes live'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('perform'); }}>Perform</button></div></>;
   return <div className={`studio-shell ${workspace.layersExpanded ? 'layers-expanded' : 'layers-collapsed'} ${workspace.inspectorOpen ? '' : 'inspector-hidden'} ${workspace.focusMode ? 'focus-preview' : ''}`}>
     <input ref={imageInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0]); e.target.value = ''; }} />
     <input ref={maskInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0], true); e.target.value = ''; }} />
     <header className="app-header" inert={mode !== 'studio'}>{modeSwitch}
-      {shapeEdit && <div className="shape-edit-bar" role="status">Editing <strong>{shapeEdit.shapeName}</strong> from Map · changes show on the projector<button className="primary-button" onClick={() => finishShapeEdit('map')}>Back to Map</button></div>}
+      {shapeEdit && <div className="shape-edit-bar" role="status">Editing <strong>{shapeEdit.shapeName}</strong> from {shapeEdit.from === 'perform' ? 'Perform' : 'Map'} · changes show on the projector<button className="primary-button" onClick={() => finishShapeEdit(shapeEdit.from ?? 'map')}>Back to {shapeEdit.from === 'perform' ? 'Perform' : 'Map'}</button></div>}
       <div className="project-title"><EditableName label="Project name" value={project.name} maxLength={80} onCommit={name => edit(p => ({ ...p, name }))} />{fileName && <span className="project-file" title={filePath}>{fileName}</span>}<span role="status" className={saved === 'Save project to keep changes' ? 'save-failed' : ''}>{saved}</span></div>
       <div className="header-actions"><button className="icon-button" title="Undo · ⌘Z" disabled={!history.current.length} onClick={undo}><Icon name="undo" /></button><button className="icon-button" title="Redo · ⇧⌘Z" disabled={!future.current.length} onClick={redo}><Icon name="redo" /></button><span className="divider" /><button className="text-button" title="New composition · ⌘N" disabled={exporting || !!shapeEdit} onClick={() => void newProject()}><Icon name="plus" size={16} />New</button><button className="text-button" title="Open · ⌘O" disabled={!!shapeEdit} onClick={() => void open()}><Icon name="folder" size={16} />Open</button><button className="text-button" title={fileName ? `Save to ${fileName} · ⌘S\nShift-click or ⇧⌘S to save as a new file` : 'Save · ⌘S'} disabled={!!shapeEdit} onClick={e => void save(e.shiftKey)}><Icon name="save" size={16} />Save</button><button className="primary-button" disabled={!!shapeEdit} title={shapeEdit ? 'Go back to Map to export your own composition' : undefined} onClick={e => { e.currentTarget.focus(); setExportOpen(true); }}><Icon name="download" size={16} />Export</button></div>
     </header>
@@ -516,6 +516,7 @@ export default function App() {
     </main>
     {mode === 'live' && <LivePanel header={modeSwitch} onError={reportError} />}
     {mode === 'map' && <MapPanel header={modeSwitch} onError={reportError} onEditInStudio={editShapeInStudio} />}
+    {mode === 'perform' && <PerformPanel header={modeSwitch} onError={reportError} onEditClip={(sourceId, name) => editShapeInStudio(sourceId, '', { name })} />}
 
     <footer className="app-footer" inert={mode !== 'studio'}><span className="workspace-shortcuts"><kbd>F</kbd> focus <kbd>B</kbd> library <kbd>L</kbd> layers <kbd>I</kbd> inspector</span><span className="footer-status"><span className={status && (!status.ffmpeg || !status.ffprobe) ? 'engine-unavailable' : ''}>{status?.ffmpeg && status.ffprobe ? 'Export engine ready' : status ? 'Export engine unavailable' : 'Movies and sequences require the desktop app'}</span><span className="build-label" title={`Commit ${__FORM_FIELD_BUILD__.commit}${__FORM_FIELD_BUILD__.modified ? ' with uncommitted changes' : ''} · built ${new Date(__FORM_FIELD_BUILD__.date).toLocaleString()}`}>v{__FORM_FIELD_BUILD__.version} · build {__FORM_FIELD_BUILD__.build}{__FORM_FIELD_BUILD__.modified ? '+' : ''}</span></span></footer>
     {!exportOpen && <Notices message={message} error={error} onDismiss={() => setError('')} />}

@@ -20,7 +20,7 @@ const AUTO_CHOICES: { label: string; every: number; unit: AutoAdvance['unit'] }[
 const autoKey = (a: { every: number; unit: string }) => `${a.unit}:${a.every}`;
 
 export default function MapScenes({ map }: { map: Map }) {
-  const show = map.show;
+  const show = map.show, paused = map.performing;
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const add = () => {
@@ -46,16 +46,17 @@ export default function MapScenes({ map }: { map: Map }) {
   };
   return <div className="map-scenes" role="toolbar" aria-label="Scenes">
     <span className="muted-text">Scenes</span>
-    {show.scenes.map((scene, i) => renaming === scene.id
+    {paused && <span className="map-scenes-paused" role="status">Map scenes are paused while the show runs. They work again after End show.</span>}
+    {show.scenes.map((scene, i) => renaming === scene.id && !paused
       ? <input key={scene.id} autoFocus aria-label="Scene name" className="map-scene-name" defaultValue={scene.name} maxLength={MAX_NAME_LENGTH}
           onBlur={e => rename(scene.id, e.target.value)} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { e.stopPropagation(); setRenaming(null); } }} />
-      : <button key={scene.id} className="text-button map-scene" aria-pressed={show.sceneId === scene.id}
+      : <button key={scene.id} className="text-button map-scene" aria-pressed={show.sceneId === scene.id} disabled={paused}
           title={`${i < 9 ? `Key ${i + 1} · ` : ''}fade ${seconds(scene.fadeSeconds ?? show.sceneFade)} · right-click to rename, set its fade or delete`}
           onClick={() => map.switchScene(scene.id)}
-          onContextMenu={e => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, id: scene.id }); }}>
+          onContextMenu={e => { e.preventDefault(); if (!paused) setMenu({ x: e.clientX, y: e.clientY, id: scene.id }); }}>
           {i < 9 && <kbd>{i + 1}</kbd>}{scene.name}</button>)}
-    <button className="text-button" disabled={show.scenes.length >= MAX_SCENES} title={show.scenes.length ? 'Keep the stage as it is now as a new scene' : 'Keep the stage as it is now as scene 1; change it, then + again for scene 2'} onClick={add}>+ Scene</button>
-    {show.scenes.length > 0 && <label className="map-inline-range">Fade<select aria-label="Scene fade" value={show.sceneFade} onChange={e => map.dispatch({ type: 'setSceneFade', sceneId: null, seconds: Math.min(FADE_RANGE.max, Number(e.target.value)) })}>
+    <button className="text-button" disabled={paused || show.scenes.length >= MAX_SCENES} title={show.scenes.length ? 'Keep the stage as it is now as a new scene' : 'Keep the stage as it is now as scene 1; change it, then + again for scene 2'} onClick={add}>+ Scene</button>
+    {show.scenes.length > 0 && <label className="map-inline-range">Fade<select aria-label="Scene fade" disabled={paused} value={show.sceneFade} onChange={e => map.dispatch({ type: 'setSceneFade', sceneId: null, seconds: Math.min(FADE_RANGE.max, Number(e.target.value)) })}>
       {(FADES.includes(show.sceneFade) ? FADES : [...FADES, show.sceneFade].sort((a, b) => a - b)).map(f => <option key={f} value={f}>{seconds(f)}</option>)}</select></label>}
     {(show.scenes.length > 1 || show.autoAdvance) && <AutoAdvanceField map={map} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label="Scene" entries={entries(menu.id)} onClose={() => setMenu(null)} />}
@@ -69,10 +70,10 @@ function AutoAdvanceField({ map }: { map: Map }) {
   const inRange = (a: AutoAdvance) => a.unit === 'bars' ? a.every >= AUTO_BARS.min && a.every <= AUTO_BARS.max : a.every >= AUTO_SECONDS.min && a.every <= AUTO_SECONDS.max;
   const choices = auto && !AUTO_CHOICES.some(c => autoKey(c) === autoKey(auto)) && inRange(auto) ? [...AUTO_CHOICES, { label: auto.unit === 'bars' ? `${auto.every} bars` : `${auto.every} s`, every: auto.every, unit: auto.unit }] : AUTO_CHOICES;
   return <>
-    <label className="map-inline-range" title="Moves to another scene on its own; Freeze and Blackout pause it">Auto<select aria-label="Scene auto-advance" value={auto ? autoKey(auto) : ''}
+    <label className="map-inline-range" title="Moves to another scene on its own; Freeze and Blackout pause it">Auto<select aria-label="Scene auto-advance" disabled={map.performing} value={auto ? autoKey(auto) : ''}
       onChange={e => { const c = choices.find(x => autoKey(x) === e.target.value); set(c ? { every: c.every, unit: c.unit, order: auto?.order ?? 'next' } : null); }}>
       <option value="">Off</option>{choices.map(c => <option key={autoKey(c)} value={autoKey(c)}>Every {c.label}</option>)}</select></label>
-    {auto && <label className="map-inline-range">Order<select aria-label="Auto-advance order" value={auto.order} onChange={e => set({ ...auto, order: e.target.value as AutoAdvance['order'] })}>
+    {auto && <label className="map-inline-range">Order<select aria-label="Auto-advance order" disabled={map.performing} value={auto.order} onChange={e => set({ ...auto, order: e.target.value as AutoAdvance['order'] })}>
       <option value="next">In order</option><option value="random">Random</option></select></label>}
   </>;
 }

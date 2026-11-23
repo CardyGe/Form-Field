@@ -33,7 +33,26 @@ const TOO_LARGE = 'This show is too large to send to the wall. The wall keeps it
 const TOO_LARGE_SOURCE = 'A composition is too large to send to the projector, so its shape keeps what the projector already had, or its colour.';
 export const SAVE_FAILED = 'Could not save — keep working, then use Save As';
 const DAMAGED = 'That file could not be read. Nothing was changed.';
-const SCENES_PAUSED = 'Map scenes are paused while a Perform show is running.';
+const SCENES_PAUSED = 'Map scenes are paused while a Perform show is running. They work again after End show.';
+const UNDO_PLAYING = 'That undo would remove a clip the show is playing. End the show first.';
+const UNDO_LAYOUT = 'That undo would change the zones or scenes the show is using. End the show first.';
+const OPEN_PAUSED = 'End the Perform show before opening another show file.';
+/** Everything on Map's scene bar: none of it changes while a show runs. */
+const SCENE_BAR_EDITS: ReadonlySet<EditAction['type']> = new Set(['addScene', 'renameScene', 'deleteScene', 'setSceneFade', 'switchScene', 'setAutoAdvance']);
+const sceneBarKey = (s: ShowDocument) => JSON.stringify([s.sceneId, s.sceneFade, s.autoAdvance ?? null, s.scenes.map(sc => [sc.id, sc.name, sc.fadeSeconds])]);
+/** Why an undo or redo to this show cannot happen during a show, or null. */
+function showBlocksHistory(now: ShowDocument, target: ShowDocument | undefined): string | null {
+  const service = performService();
+  if (!service.running || !target) return null;
+  if (sceneBarKey(now) !== sceneBarKey(target)) return SCENES_PAUSED;
+  // The launcher counts rows by position and the wall was told each zone's shapes, so neither may move under a running show.
+  const layout = (s: ShowDocument) => JSON.stringify([s.performance.zones, s.performance.scenes.map(sc => sc.id)]);
+  if (layout(now) !== layout(target)) return UNDO_LAYOUT;
+  const { playing, queue } = service.view().launcher;
+  const inUse = [...playing, ...queue.flatMap(l => l.changes.map(c => c.clipId))].filter((id): id is string => id !== null);
+  const source = (show: ShowDocument, id: string) => show.performance.clips.find(c => c.id === id)?.sourceId;
+  return inUse.some(id => source(target, id) !== source(now, id)) ? UNDO_PLAYING : null;
+}
 const fileName = (file: string) => file.split(/[\\/]/).pop() || file;
 /** How many shapes in a file did not survive validation. */
 const leftOut = (raw: unknown, show: ShowDocument): number => {
@@ -76,6 +95,8 @@ interface Session {
   photoShown: boolean;
   /** Live's settings as last known, so a running show can resend them while Map is not shown. */
   live: LiveSettings | null;
+  /** A show ended with the wall open: it stays open, on Map's picture, until the operator closes it. */
+  wallHeld: boolean;
 }
 let session: Session | null = null;
 function mapSession(): Session {
@@ -84,7 +105,7 @@ function mapSession(): Session {
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
     outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, mounted: 0, wallFrame: null, onStudioWarning: null,
-    solo: { shapes: [], groups: [] }, snap: true, photoShown: true, live: null,
+    solo: { shapes: [], groups: [] }, snap: true, photoShown: true, live: null, wallHeld: false,
     saver: autosaveSchedule<ShowDocument>(async show => {
       if (!bridge) return;
       // A failed write is reported, never swallowed: the operator keeps working and can Save As.
@@ -100,7 +121,7 @@ function mapSession(): Session {
   });
   // Followed for the window's life, so the session knows whether the wall is open even while Map is not shown.
   // A wall that opens or reloads during a show is told the show again from here, whichever section is on screen.
-  bridge?.onOutputChanged(open => { created.outputOpen = open; if (open) { created.sentSources = new Map(); performService().wallReopened(); } });
+  bridge?.onOutputChanged(open => { created.outputOpen = open; if (!open) created.wallHeld = false; if (open) { created.sentSources = new Map(); performService().wallReopened(); } });
   bridge?.onState(state => performService().wallState(state));
   linkPerformToMap({
     send: message => bridge?.send(message),
@@ -133,6 +154,16 @@ export function performSession(): PerformService {
   return performService();
 }
 
+/** Ends the show. An open wall stays open on Map's own picture, whichever section is on screen, until it is closed. */
+export function endPerformShow(): void {
+  const s = mapSession(), service = performService();
+  if (!service.running) return;
+  s.wallHeld = s.outputOpen;
+  service.endShow();
+}
+/** Whether leaving a section must keep the wall open: a show is running, or one has just ended on it. */
+export function wallStaysOpen(): boolean { return performService().running || mapSession().wallHeld; }
+
 /** Sends the wall the compositions it lacks, then the show. False when something was too large to send. */
 function pushToWall(s: Session, show: ShowDocument): { show: boolean; sources: boolean } {
   const bridge = window.studio?.map;
@@ -150,15 +181,17 @@ function pushToWall(s: Session, show: ShowDocument): { show: boolean; sources: b
  * Starts editing a shape's composition in Studio. The wall stays open and follows each change.
  * Returns the composition and the shape's name, or null when the shape plays no composition.
  */
-export function beginStudioEdit(sourceId: string, shapeId: string): { project: Project; shapeName: string } | null {
+export function beginStudioEdit(sourceId: string, shapeId: string, clipName?: string): { project: Project; shapeName: string } | null {
   const s = mapSession();
   const source = s.state.show.sources.find(src => src.id === sourceId);
   const shape = s.state.show.shapes.find(sh => sh.id === shapeId);
-  if (!source || !shape) return null;
+  // A Perform clip may play on no shape yet: it is named by the clip instead.
+  const shapeName = shape?.name ?? clipName;
+  if (!source || shapeName === undefined) return null;
   s.studioEdit = { sourceId, shapeId, first: true };
   // The Map screen's crosshair and flash belong to Map: they leave the wall while Studio has it.
   if (s.outputOpen) { window.studio?.map.send({ type: 'crosshair', point: null, shapeId: null }); window.studio?.map.send({ type: 'identify', shapeId: null }); }
-  return { project: source.project, shapeName: shape.name };
+  return { project: source.project, shapeName };
 }
 
 /** Why Map could not take a change made in Studio, in words. */
@@ -280,7 +313,7 @@ export function useMap(onError: (message: string) => void) {
     return () => {
       offOutput(); offDisplays(); offPreview(); offState(); kept.onSaveResult = null; saver.flush().catch(() => {});
       kept.mounted--;
-      setTimeout(() => { if (kept.mounted === 0 && !kept.studioEdit && !performService().running) void bridge.closeOutput().catch(() => {}); }, 0);
+      setTimeout(() => { if (kept.mounted === 0 && !kept.studioEdit && !wallStaysOpen()) void bridge.closeOutput().catch(() => {}); }, 0);
     };
   }, []);
   useEffect(() => { if (!outputOpen) { setWallPicture(null); setWallState(null); } }, [outputOpen]);
@@ -399,13 +432,24 @@ export function useMap(onError: (message: string) => void) {
   }, []);
   const dispatch = useCallback((action: EditAction, merge?: string) => {
     if (!canEdit(loadedRef.current)) { setLastRefusal('Loading the show…'); return false; }
+    if (performService().running && SCENE_BAR_EDITS.has(action.type)) { setLastRefusal(SCENES_PAUSED); return false; }
     const after = step({ type: 'edit', action, merge });
     // What triggers and auto-advance do never clears a note the operator may be reading.
     if (merge !== 'trigger' || after.refusal !== null) setLastRefusal(after.refusal);
     return after.refusal === null;
   }, [step]);
-  const undo = useCallback(() => { if (canEdit(loadedRef.current)) step({ type: 'undo' }); }, [step]);
-  const redo = useCallback(() => { if (canEdit(loadedRef.current)) step({ type: 'redo' }); }, [step]);
+  const undo = useCallback(() => {
+    if (!canEdit(loadedRef.current)) return;
+    const { show: now, past } = stateRef.current, blocked = showBlocksHistory(now, past.at(-1));
+    if (blocked) setLastRefusal(blocked); else step({ type: 'undo' });
+  }, [step]);
+  const redo = useCallback(() => {
+    if (!canEdit(loadedRef.current)) return;
+    const { show: now, future } = stateRef.current, blocked = showBlocksHistory(now, future[0]);
+    if (blocked) setLastRefusal(blocked); else step({ type: 'redo' });
+  }, [step]);
+  const [performing, setPerforming] = useState(() => performService().running);
+  useEffect(() => { setPerforming(performService().running); return performService().subscribe(v => setPerforming(v.running)); }, []);
 
   const setBlackout = (on: boolean) => { kept.blackout = on; setBlackoutState(on); if (outputOpen) bridge?.send({ type: 'blackout', on }); };
   const setTestGrid = (on: boolean) => { kept.testGrid = on; setTestGridState(on); if (outputOpen) bridge?.send({ type: 'testGrid', on }); };
@@ -545,6 +589,7 @@ export function useMap(onError: (message: string) => void) {
   // Open replaces the held show and its undo history through the normal load path. A cancel does nothing and says nothing.
   const openShow = async () => {
     if (!bridge || !canEdit(loadedRef.current)) return;
+    if (performService().running) { setLastRefusal(OPEN_PAUSED); return; }
     // Open replaces everything here, so it asks first when there is something to lose.
     const count = stateRef.current.show.shapes.length;
     if (count > 0 && !window.confirm(`Open a show file? It replaces the ${count} shape${count === 1 ? '' : 's'} here. Use Save As first to keep ${count === 1 ? 'it' : 'them'}.`)) return;
@@ -591,7 +636,7 @@ export function useMap(onError: (message: string) => void) {
   const setSnap = (on: boolean) => { kept.snap = on; setSnapState(on); };
   const setPhotoShown = (on: boolean) => { kept.photoShown = on; setPhotoShownState(on); };
 
-  return { currentShow: () => stateRef.current.show, live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, retryVideos, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
+  return { performing, currentRefusal: () => stateRef.current.refusal, currentShow: () => stateRef.current.show, live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, retryVideos, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
     show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
     solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
     lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
