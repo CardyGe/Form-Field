@@ -269,6 +269,17 @@ test('a Density move during Burst never throws a lit voice across the frame', ()
   }
 });
 
+test('lit glitch shards stay inside the ruling when Scale and Density fall together', () => {
+  // Seed 12345 from 330 s, with the move starting on frame 10, is the recorded case: 4.51% on frame 73, carried by a voice at zero alpha.
+  const cases = [[12345, 330], ...SEEDS.flatMap(seed => [120, 330, AFTER_TEN_MINUTES].map(start => [seed, start]))];
+  for (const [seed, start] of cases) for (const glitch of [0.7, 1]) for (const seconds of [1, 0]) for (const lead of [10, 0, 30]) {
+    const watch = new Watch(true), base = params({ macroScale: 1, macroDensity: 1, macroGlitch: glitch });
+    const level = (f: number) => f <= lead ? 1 : seconds ? 1 - Math.min(1, (f - lead) / FPS) : 0;
+    run(seed, 3, base, f => ({ params: { ...base, macroScale: level(f), macroDensity: level(f) } }), watch, start);
+    within(watch, `seed ${seed} at ${start}s, Glitch ${glitch}, Scale and Density 1->0 over ${seconds}s after ${lead} frames`, MAX_USER_MOVE);
+  }
+});
+
 /** The summed change of visible marks between two frames: both ends of each, plus its light. */
 function pictureGap(a: Float32Array, b: Float32Array): number {
   const p = new Float64Array(4), q = new Float64Array(4);

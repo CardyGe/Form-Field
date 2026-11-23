@@ -724,6 +724,8 @@ function easePose(clock: EvolveClock, scale: number): void {
       const at = NODE_BASE + node * NODE_FIELDS;
       if (Math.max(pose[at + N_ALPHA], last[at + N_ALPHA], shown[NODE_LIST + node]) > UNSEEN) carrying |= 1 << (node % 4);
     }
+    // Glitch shards are placed from their ring, so a ring with visible shards counts as seen even at zero alpha of its own.
+    for (let shard = 0; shard < GLITCH_SHARDS; shard++) if (shown[EVOLVE_ELEMENTS + shard] > UNSEEN) { carrying |= 1 << clock.glitchVoice; break; }
     for (let voice = 0; voice < RING_VOICES; voice++) {
       // An arc's end travels further on a larger ring, so a smaller ring may open and close faster.
       const at = voice * RING_FIELDS, arc = EASE_ARC * room * clock.wall / Math.max(0.2, Math.abs(pose[at + R_RADIUS]));
