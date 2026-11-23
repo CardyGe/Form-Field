@@ -14,7 +14,7 @@ import { MeterStore } from '../react/meter';
 import { usesEmberSmokeAudio } from '../react/ember-smoke';
 import { autoAdvanceDue, nextAutoScene } from '../map/wild';
 import { linkPerformToMap, performService, type PerformService } from '../perform/service';
-import { historyBlock, savedShow, type HistoryBlock } from '../perform/grid-edit';
+import { clipsInUse, historyBlock, savedShow, type HistoryBlock } from '../perform/grid-edit';
 import { validateLiveSettings } from '../live/settings';
 
 /** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
@@ -47,9 +47,7 @@ const AFTER_HANDOVER_MS = 3000;
 function showBlocksHistory(now: ShowDocument, target: ShowDocument | undefined): string | null {
   const service = performService();
   if (!service.running || !target) return null;
-  const { playing, queue } = service.view().launcher;
-  const inUse = [...playing, ...queue.flatMap(l => l.changes.map(c => c.clipId))].filter((id): id is string => id !== null);
-  const blocked = historyBlock(now, target, inUse);
+  const blocked = historyBlock(now, target, clipsInUse(service.view().launcher));
   return blocked && HISTORY_NOTES[blocked];
 }
 const fileName = (file: string) => file.split(/[\\/]/).pop() || file;
@@ -162,7 +160,17 @@ export function endPerformShow(): void {
   s.wallHeld = s.outputOpen;
   service.endShow();
   // Clips only the show was still holding go once the wall has finished handing over, so its last picture is not pulled away.
-  setTimeout(() => dropShowOnlyClips(s), s.outputOpen ? AFTER_HANDOVER_MS : 0);
+  // One timer: a later Start or End replaces it, so it can never land in another show's handover.
+  clearShowEndTimer();
+  showEndTimer = setTimeout(() => { showEndTimer = null; dropShowOnlyClips(s); }, s.outputOpen ? AFTER_HANDOVER_MS : 0);
+}
+let showEndTimer: ReturnType<typeof setTimeout> | null = null;
+function clearShowEndTimer(): void { if (showEndTimer !== null) clearTimeout(showEndTimer); showEndTimer = null; }
+/** Starts the show, and calls off any tidying left from the one before. */
+export function startPerformShow(): void {
+  mapSession();
+  clearShowEndTimer();
+  performService().startShow();
 }
 function dropShowOnlyClips(s: Session): void {
   if (performService().running) return;

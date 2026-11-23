@@ -5,7 +5,7 @@ import { PRESETS } from '../core/project';
 import { KIND_LABELS } from '../core/library';
 import { LIVE_SOURCE_ID, isVideoId, type ShowDocument } from '../map/show';
 import { presetComposition, type EditAction } from '../map/editor';
-import { addRow, assignZone, changeClip, changeRow, placeClip, removeRow, setCell, zonesFromGroups } from '../perform/grid-edit';
+import { addRow, assignZone, changeClip, changeRow, clipsInUse, placeClip, removeRow, setCell, zonesFromGroups } from '../perform/grid-edit';
 import type { PerformView } from '../perform/service';
 import { beatAt } from '../perform/timing';
 import { BEATS_PER_BAR, type Clip, type PerformanceSet, type Quantize } from '../perform/types';
@@ -15,7 +15,7 @@ import MapMenu, { type MenuEntry } from './MapMenu';
 import { newSourceId, randomSeed } from './mapActions';
 import PerformGrid, { LOOK_DRAG, type GridActions } from './PerformGrid';
 import { ReactDevices } from './ReactControls';
-import { useMap } from './useMap';
+import { startPerformShow, useMap } from './useMap';
 import { keysBelongElsewhere, usePerform } from './usePerform';
 
 const QUANTIZE: { value: Quantize; label: string }[] = [{ value: '1/4', label: '1 beat' }, { value: '1/2', label: '2 beats' }, { value: '1bar', label: '1 bar' }, { value: '2bar', label: '2 bars' }, { value: '4bar', label: '4 bars' }];
@@ -79,10 +79,7 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
   }, [map.undo, map.redo]);
 
   /** What the running show still needs, so an edit can never pull a clip out from under it. */
-  const inUse = () => {
-    const { playing, queue } = service.view().launcher;
-    return [...playing, ...queue.flatMap(l => l.changes.map(c => c.clipId))].filter((id): id is string => id !== null);
-  };
+  const inUse = () => clipsInUse(service.view().launcher);
   const apply = (action: EditAction) => {
     const ok = map.dispatch(action);
     if (!ok) say(REFUSALS[map.currentRefusal() ?? ''] ?? 'That change could not be made.');
@@ -136,7 +133,7 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
     setBlend: (clipId, blend) => { edit(changeClip(current(), clipId, { blend })); },
     setBand: (clipId, audioBand) => { edit(changeClip(current(), clipId, { audioBand })); },
     setTiming: (sourceId, beats) => { apply({ type: 'setTempoSync', sourceId, beats }); },
-    addScene: () => { edit(addRow(current(), `pscene-${stamp()}`)); },
+    addScene: () => { if (service.running) say('End the show to add a scene.'); else edit(addRow(current(), `pscene-${stamp()}`)); },
     removeScene: row => { if (service.running) say('End the show before deleting a scene.'); else edit(removeRow(current(), row)); },
     renameScene: (row, name) => { edit(changeRow(current(), row, { name })); },
     setIncludeCeiling: (row, includeProtected) => { edit(changeRow(current(), row, { includeProtected })); },
@@ -174,7 +171,7 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
     if (map.testGrid) map.setTestGrid(false);
     if (map.freeze) map.setFreeze(false);
     setLooksOpen(false);
-    service.startShow();
+    startPerformShow();
     if (cleared.length) say(`${cleared.join(' and ')} turned off for the show.`);
   };
   const canStart = map.loaded && set.scenes.some(s => s.cells.some(c => c !== null));
@@ -237,8 +234,8 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
           <div className="pf-looks-head"><strong>{selected ? `${set.scenes[selected.row]?.name ?? 'Scene'} · ${set.zones[selected.zone].name}` : 'Looks'}</strong>
             <button type="button" className="pf-head-btn" aria-label="Close looks" onClick={() => setLooksOpen(false)}>Close</button></div>
           <input type="search" aria-label="Search looks" placeholder="Search looks…" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.stopPropagation()} />
-          <p>Click to fill the chosen cell, or drag on to any cell.</p>
-          <div className="pf-look-list">{shownLooks.map(l => <button key={l.value} type="button" draggable data-pf-look={l.value} className="pf-look"
+          <p>{view.running ? 'Click to fill the chosen cell.' : 'Click to fill the chosen cell, or drag on to any cell.'}</p>
+          <div className="pf-look-list">{shownLooks.map(l => <button key={l.value} type="button" draggable={!view.running} data-pf-look={l.value} className="pf-look"
             onDragStart={e => { e.dataTransfer.setData(LOOK_DRAG, l.value); e.dataTransfer.effectAllowed = 'copy'; }}
             onClick={() => { if (selected) fillCell(selected.row, selected.zone, l.value); else say('Click a cell first.'); }}>
             <span className="pf-look-art">{l.art && <img src={l.art} alt="" />}</span><span><b>{l.name}</b><small>{l.group}</small></span></button>)}</div>
@@ -247,7 +244,9 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
       <ControllerSurface view={view} set={set} held={perform.held} press={perform.press} release={perform.release} control={e => service.control(e)} sendAll={perform.sendAll} />
     </div>
     {launchMenu && <MapMenu x={launchMenu.x} y={launchMenu.y} label="Launch timing" onClose={closeLaunchMenu} entries={QUANTIZE.map((q): MenuEntry => ({ kind: 'item', label: q.label, checked: set.launchQuantize === q.value, onSelect: () => { edit({ ...current(), launchQuantize: q.value }); } }))} />}
-    {soundOpen && <aside className="pf-sound" aria-label="Sound input" onChange={e => (e.target as HTMLElement).blur()}>
+    {soundOpen && <aside className="pf-sound" aria-label="Sound input" data-controller-keys onChange={e => (e.target as HTMLElement).blur()}
+      onKeyDown={e => { if (e.key === 'Escape' && (e.target as HTMLElement).tagName === 'SELECT') (e.target as HTMLElement).blur(); }}
+      onKeyUp={e => { if (e.key === 'Escape' && (e.target as HTMLElement).tagName === 'SELECT') (e.target as HTMLElement).blur(); }}>
       <div className="pf-looks-head"><strong>Sound input</strong><button type="button" className="pf-head-btn" aria-label="Close sound input" onClick={() => setSoundOpen(false)}>Close</button></div>
       <ReactDevices audioOnly engine={map.engine} meter={map.signals} onStart={() => map.startEngine()} />
     </aside>}

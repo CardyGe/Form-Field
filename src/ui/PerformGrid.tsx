@@ -135,19 +135,20 @@ export default function PerformGrid({ set, show, view, selected, actions }: { se
           <b>{i + 1}</b><span>{z.name}</span>{shared.length > 0 && <em title={`Shares one picture with zone ${shared.map(n => n + 1).join(', ')}`}>⇄ {shared.map(n => n + 1).join(' ')}</em>}
         </button>;
       })}
-      <div className="pf-zone pf-scenes-head">Scenes<button type="button" className="pf-add" aria-label="Add scene" title="Add a scene" disabled={set.scenes.length >= 16} onClick={actions.addScene}>+ Scene</button></div>
+      <div className="pf-zone pf-scenes-head">Scenes<button type="button" className="pf-add" aria-label="Add scene" title={running ? 'End the show to add a scene' : 'Add a scene'} aria-disabled={running} disabled={set.scenes.length >= 16} onClick={actions.addScene}>+ Scene</button></div>
     </div>
     <div className="pf-rows" ref={rowsBox} data-density={set.scenes.length <= 4 ? 'large' : set.scenes.length <= 8 ? 'medium' : 'compact'} onWheel={() => { wheeled.current = performance.now(); }}>
       {set.scenes.map((scene, row) => <div className={`pf-row ${launcher.sceneIndex === row ? 'current' : ''}`} data-row={row} key={scene.id}>
         {scene.cells.map((clipId, zone) => {
           const clip = clipOf(clipId), state = stateOf(row, zone, clipId), ready = clip ? readiness(clip, state) : null, key = `${row}-${zone}`;
-          return <button key={zone} type="button" data-cell={key} data-filled={clip ? 'true' : 'false'} data-state={state} draggable={!!clip}
+          return <button key={zone} type="button" data-cell={key} data-filled={clip ? 'true' : 'false'} data-state={state} draggable={!!clip && !running}
             aria-label={`${scene.name}, ${set.zones[zone].name}: ${clip ? `${clip.name}${state === 'playing' ? ', playing' : state === 'queued' ? ', queued' : ''}` : 'empty'}`}
             className={`pf-cell ${state} ${selected?.row === row && selected.zone === zone ? 'selected' : ''} ${over === key ? 'over' : ''}`}
-            onClick={() => actions.clickCell(row, zone)}
+            onPointerDown={e => { if (running && e.button === 0 && !e.ctrlKey) actions.clickCell(row, zone); }}
+            onClick={e => { if (!running || e.detail === 0) actions.clickCell(row, zone); }}
             onContextMenu={e => { e.preventDefault(); if (clip) setMenu({ x: e.clientX, y: e.clientY, row, zone }); else actions.fillCell(row, zone); }}
-            onDragStart={e => { if (clip) { e.dataTransfer.setData(CLIP_DRAG, clip.id); e.dataTransfer.effectAllowed = 'copy'; } }}
-            onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(key); }} onDragLeave={() => setOver(o => o === key ? null : o)} onDrop={e => drop(e, row, zone)}>
+            onDragStart={e => { if (clip && !running) { e.dataTransfer.setData(CLIP_DRAG, clip.id); e.dataTransfer.effectAllowed = 'copy'; } }}
+            onDragOver={e => { if (running) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(key); }} onDragLeave={() => setOver(o => o === key ? null : o)} onDrop={e => { if (!running) drop(e, row, zone); }}>
             {clip ? <>
               <span className="pf-mark" aria-hidden>{state === 'playing' ? '▶' : state === 'queued' ? '◆' : ''}</span>
               <span className="pf-clip-name">{clip.name}</span>
@@ -160,7 +161,8 @@ export default function PerformGrid({ set, show, view, selected, actions }: { se
               onBlur={e => { setRenaming(null); const name = e.target.value.trim(); if (name && name !== scene.name) actions.renameScene(row, name); }}
               onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenaming(null); }} />
           : <button type="button" className={`pf-scene ${launcher.sceneIndex === row ? 'playing' : ''} ${queuedRow === row ? 'queued' : ''}`} title={running ? 'Click to launch this scene on the next boundary · right-click for options' : 'Right-click to rename, include the ceiling, or delete'}
-              onClick={() => actions.clickScene(row)}
+              onPointerDown={e => { if (running && e.button === 0 && !e.ctrlKey) actions.clickScene(row); }}
+              onClick={e => { if (e.detail === 0) actions.clickScene(row); }}
               onContextMenu={e => { e.preventDefault(); setSceneMenu({ x: e.clientX, y: e.clientY, row }); }} onDoubleClick={() => { if (!running) setRenaming(row); }}>
               <span className="pf-mark" aria-hidden>{queuedRow === row ? '◆' : launcher.sceneIndex === row ? '▶' : ''}</span>{scene.name}{scene.includeProtected && <small> +ceiling</small>}
             </button>}

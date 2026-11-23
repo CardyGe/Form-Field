@@ -13,7 +13,9 @@ const NOT_TYPING = new Set(['range', 'checkbox', 'radio', 'button', 'submit', 'r
 export function keysBelongElsewhere(target: EventTarget | null): boolean {
   const el = target as (HTMLElement & { type?: string }) | null;
   if (!el || typeof el.tagName !== 'string') return false;
-  if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable) return true;
+  // A menu on the Perform screen can be closed without any event reaching the page, so it must never hold the keys.
+  if (el.tagName === 'SELECT') return !el.closest?.('[data-controller-keys]');
+  if (el.tagName === 'TEXTAREA' || el.isContentEditable) return true;
   if (el.tagName === 'INPUT' && !NOT_TYPING.has(el.type ?? 'text')) return true;
   return !!el.closest?.('[role="menu"], [role="dialog"], dialog');
 }

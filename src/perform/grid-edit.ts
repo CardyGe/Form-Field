@@ -1,5 +1,6 @@
 /** Editing the Perform grid. Pure: each function returns a new set, and a clip still playing or queued is never dropped. */
 import { playedBy, type ShowDocument } from '../map/show';
+import type { LauncherState } from './launcher';
 import { MAX_PERFORM_SCENES, ZONE_COUNT, type Clip, type PerformanceSet, type Zone } from './types';
 
 /**
@@ -11,6 +12,12 @@ export function savedShow(show: ShowDocument): ShowDocument {
   if (performance.clips.length === show.performance.clips.length) return show;
   const next = { ...show, performance };
   return { ...next, sources: next.sources.filter(s => playedBy(next, s.id)), videos: next.videos.filter(v => playedBy(next, v.id)) };
+}
+
+/** The clips a running show still needs: playing, queued, or what Solo + Amber would go back to. */
+export function clipsInUse(launcher: Pick<LauncherState, 'playing' | 'previous' | 'queue'>): string[] {
+  const ids = [...launcher.playing, ...launcher.previous, ...launcher.queue.flatMap(l => l.changes.map(c => c.clipId))];
+  return [...new Set(ids.filter((id): id is string => id !== null))];
 }
 
 export type HistoryBlock = 'scenes' | 'layout' | 'picture' | 'playing';
@@ -28,7 +35,8 @@ export function historyBlock(now: ShowDocument, target: ShowDocument, inUse: rea
   for (const key of keys) if (!sameValue(now[key], target[key])) return 'picture';
   for (const s of now.sources) {
     const t = target.sources.find(x => x.id === s.id);
-    if (t && t !== s && (t.project !== s.project || t.revision !== s.revision || t.speed !== s.speed || t.tempoSync !== s.tempoSync)) return 'picture';
+    // The whole source, so a field added later cannot slip past this guard.
+    if (t && !sameValue(t, s)) return 'picture';
   }
   for (const v of now.videos) {
     const t = target.videos.find(x => x.id === v.id);

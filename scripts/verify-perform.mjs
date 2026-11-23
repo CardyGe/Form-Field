@@ -120,7 +120,8 @@ try {
     const big = await cell(0, 0).boundingBox();
     assert.ok(big.height >= 100, `one scene's row is only ${big.height}px tall`);
     await studio.getByRole('button', { name: 'Add scene' }).click();
-    await place(0, 1, 'preset:porcelain-shutters');
+    // A steady look on zone 2, so the per-zone pixel comparison below can really fail.
+    await place(0, 1, 'preset:salt-mandala');
     await place(0, 2, 'preset:salt-mandala');
     await place(1, 0, 'preset:porcelain-shutters');
     await studio.screenshot({ path: path.join(shots, 'perform-looks.png') });
@@ -160,7 +161,8 @@ try {
     assert.equal(clip.audioBand, 'bass');
     await cell(0, 1).click({ button: 'right' });
     assert.equal(await studio.getByRole('menuitemradio', { name: '4 beats', exact: true }).getAttribute('aria-checked'), 'true');
-    await studio.keyboard.press('Escape');
+    // Back to Free: a fast locked loop would make this zone too restless for the per-zone pixel comparison.
+    await studio.getByRole('menuitemradio', { name: 'Free', exact: true }).click();
   });
   await check('Duplicate and edit opens an independent copy in Studio, and comes back', async () => {
     const before = await studio.evaluate(() => { const s = window.__studioTest.performSet(); return s.clips.find(c => c.id === s.scenes[0].cells[1]); });
@@ -247,7 +249,8 @@ try {
       for (let i = 0; i < 11; i++) await studio.keyboard.press('ArrowDown');
     }
     await studio.evaluate(() => document.activeElement?.blur());
-    await sleep(600);
+    // Zone 2's clip was given a two-bar fade above: it must have finished arriving before its drift is measured.
+    await sleep(4500);
     const distance = (a, b) => a.map((c, i) => Math.hypot(c[0] - b[i][0], c[1] - b[i][1], c[2] - b[i][2]));
     const drift0 = await zoneColours(wall);
     await sleep(2600);
@@ -269,7 +272,10 @@ try {
     const said = `zone colour change ${moved.map(v => v.toFixed(1))}; drift alone ${drift.map(v => v.toFixed(1))}`;
     console.log(said);
     assert.ok(moved[0] > 10 && moved[0] > 2 * drift[0], said);
-    for (const z of [1, 2]) assert.ok(moved[z] < Math.max(10, 2.5 * drift[z]), said);
+    for (const z of [1, 2]) {
+      assert.ok(drift[z] < 8, `zone ${z + 1} is too restless for this comparison to mean anything: ${said}`);
+      assert.ok(moved[z] < 12, `zone ${z + 1} changed: ${said}`);
+    }
   });
   await check('during a show a click plays: a cell, then a scene, and nothing on screen moves', async () => {
     const place = async () => JSON.stringify([await cell(0, 0).boundingBox(), await cell(1, 0).boundingBox(), await studio.getByRole('button', { name: 'Amber 1', exact: true }).boundingBox()]);
@@ -284,6 +290,43 @@ try {
     await studio.locator('.pf-scene', { hasText: 'Scene 2' }).click();
     await until(async () => (await view(studio)).launcher.sceneIndex === 1, 12000, 'the clicked scene to land');
     assert.equal(await place(), layout, 'the layout moved');
+  });
+  await check('during a show a press with slight mouse movement still launches, and never overwrites a cell', async () => {
+    const setBefore = await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet().scenes));
+    const clipAt = row => studio.evaluate(r => window.__studioTest.performSet().scenes[r].cells[0], row);
+    const rows = [await clipAt(0), await clipAt(1)];
+    assert.equal(await cell(0, 0).getAttribute('draggable'), 'false', 'a cell can be dragged during a show');
+    for (const d of [3, 8, 12]) {
+      const playing = (await view(studio)).launcher.playing[0], row = rows[0] === playing ? 1 : 0, box = await cell(row, 0).boundingBox();
+      // Pressed near the cell's edge and released past it, over the other row.
+      const x = box.x + box.width / 2, y = row === 0 ? box.y + box.height - 2 : box.y + 2;
+      await studio.mouse.move(x, y); await studio.mouse.down();
+      await studio.mouse.move(x + d / 2, y + (row === 0 ? d : -d), { steps: 4 }); await studio.mouse.up();
+      await until(async () => { const v = await view(studio); return v.launcher.playing[0] === rows[row] || v.launcher.queue.some(l => l.changes.some(c => c.zone === 0 && c.clipId === rows[row])); }, 1000, `the ${d}px press to launch`);
+      await until(async () => (await view(studio)).launcher.playing[0] === rows[row], 12000, `the ${d}px press to land`);
+    }
+    assert.equal(await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet().scenes)), setBefore, 'a cell was overwritten');
+  });
+  await check('+ Scene is off during a show and says why', async () => {
+    const before = await studio.locator('[data-row]').count();
+    const add = studio.getByRole('button', { name: 'Add scene' });
+    assert.equal(await add.getAttribute('aria-disabled'), 'true');
+    await add.click({ force: true });
+    await studio.getByText('End the show to add a scene.').waitFor({ timeout: 1500 });
+    assert.equal(await studio.locator('[data-row]').count(), before);
+  });
+  await check('closing the sound input menu with Escape gives the keyboard back', async () => {
+    await studio.getByRole('button', { name: /^AUDIO/ }).click();
+    const select = studio.locator('.pf-sound select').first();
+    await select.waitFor({ timeout: 3000 });
+    await select.focus();
+    await studio.keyboard.press('Escape');
+    assert.equal(await studio.evaluate(() => document.activeElement?.tagName), 'BODY');
+    await studio.keyboard.down('Shift');
+    await until(async () => (await view(studio)).shift, 1000, 'the keyboard to work');
+    await studio.keyboard.up('Shift');
+    await until(async () => !(await view(studio)).shift, 1000, 'Shift to release');
+    await studio.getByRole('button', { name: 'Close sound input' }).click();
   });
   await check('an open right-click menu keeps its focus while the show plays', async () => {
     await cell(0, 1).click({ button: 'right' });
@@ -448,6 +491,30 @@ try {
     await studio.getByRole('button', { name: 'End show' }).click();
     await studio.getByRole('button', { name: 'End show now' }).click();
     await studio.setViewportSize({ width: 1512, height: 982 });
+  });
+  await check('End, Start, End within the handover keeps a show-only clip until the last handover is over', async () => {
+    const clips = () => studio.evaluate(() => window.__studioTest.performSet().clips.length);
+    const end = async () => { await studio.getByRole('button', { name: 'End show' }).click(); await studio.getByRole('button', { name: 'End show now' }).click(); await until(async () => !(await view(studio)).running, 2000, 'the show to end'); };
+    await studio.getByRole('button', { name: 'Start show' }).click();
+    await studio.getByRole('button', { name: 'Send All' }).click();
+    await studio.locator('[data-row="0"] .pf-scene').click();
+    await until(async () => (await view(studio)).launcher.sceneIndex === 0, 12000, 'scene 1 to land');
+    await cell(0, 2).click({ button: 'right' });
+    await studio.getByRole('menuitem', { name: 'Clear' }).click();
+    await studio.locator('[data-cell="0-2"][data-filled="false"]').waitFor({ timeout: 2000 });
+    const held = await clips();
+    await end();
+    const firstEnd = Date.now();
+    await sleep(600);
+    await studio.getByRole('button', { name: 'Start show' }).click();
+    await studio.getByRole('button', { name: 'End show' }).waitFor();
+    await sleep(600);
+    await end();
+    const secondEnd = Date.now();
+    await sleep(Math.max(0, firstEnd + 3300 - Date.now()));
+    assert.ok(Date.now() < secondEnd + 2900, 'the check ran too slowly to prove anything');
+    assert.equal(await clips(), held, 'the first End show\'s timer removed a clip during the second handover');
+    await until(async () => await clips() === held - 1, secondEnd + 4500 - Date.now(), 'the clip to go after the last handover');
   });
   await check('no page errors', async () => assert.deepEqual(errors, []));
 } catch (error) {

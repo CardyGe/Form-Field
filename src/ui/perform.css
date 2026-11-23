@@ -89,7 +89,8 @@ button.pf-zone:hover { background: #1b1d1b; }
 .pf-scene.queued { border: 2px dashed var(--pf-amber); color: var(--pf-amber); animation: pf-pulse .5s ease-in-out infinite alternate; }
 .pf-scene-name { min-width: 0; height: 100%; padding: 4px 8px; border: 2px solid var(--accent); border-radius: 6px; background: #161816; color: var(--ink); font-size: 15px; font-weight: 700; }
 .pf-add { height: 32px; margin-left: auto; padding: 0 8px; border: 1px dashed #5a5c5a; border-radius: 6px; font-size: 13px; font-weight: 700; color: #cfcfca; }
-.pf-add:hover:not(:disabled) { background: #1b1d1b; }
+.pf-add:hover:not(:disabled):not([aria-disabled="true"]) { background: #1b1d1b; }
+.pf-add[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
 .pf-empty-note { flex: 1; font-size: 19px; font-weight: 600; color: #b9b9b4; text-align: center; }
 
 .pf-menu { position: fixed; z-index: 70; display: flex; flex-direction: column; gap: 5px; width: 348px; max-height: calc(100vh - 16px); overflow-y: auto; padding: 11px; border: 1px solid #555; border-radius: 8px; background: #1b1d1b; box-shadow: 0 10px 34px #000b; }

@@ -109,7 +109,8 @@ export function queueCell(s: LauncherState, set: PerformanceSet, row: number, zo
 
 export function returnZone(s: LauncherState, set: PerformanceSet, zone: number, clock: ClockSnapshot, nowMs: number, id: string): LauncherState {
   const clipId = s.previous[zone];
-  if (clipId === null) return s;
+  // A previous clip that has since been removed has nothing to go back to: the zone keeps playing.
+  if (clipId === null || !clipById(set, clipId)) return s;
   return queueChange(s, zone, clipId, blendFor(clipById(set, clipId), zone, 'amber', clock.bpm), clock, nowMs, set.launchQuantize, id);
 }
 
