@@ -1,9 +1,10 @@
 /** Meridian's control surface: macros, moves, seed bank and A/B on top, every deep parameter in lockable groups below. */
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Icon, Parameter } from './LayerControls';
 import { MACRO_KEYS, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
-import { applyLockedVariation, applyMorph, captureMorph, filterParameters, MAX_STORED_SEED, MERIDIAN_CHOICES, PANEL_PARAMETERS, performanceShortcut, KeyHolds, recallSeed, SEED_SLOTS, storeSeed, toggleGroupLock, type MoveKey, type PerformanceAction } from '../meridian/panel';
+import { musicStatus } from '../meridian/music-status';
+import { EVOLVE_INACTIVE, applyLockedVariation, applyMorph, captureMorph, filterParameters, MAX_STORED_SEED, MERIDIAN_CHOICES, PANEL_PARAMETERS, performanceShortcut, KeyHolds, recallSeed, SEED_SLOTS, storeSeed, toggleGroupLock, type MoveKey, type PerformanceAction } from '../meridian/panel';
 import { heldMoves } from '../meridian/held-moves';
 import { assertImportableImage, MAX_IMPORT_SIDE, meridianMark } from '../core/project';
 import './meridian.css';
@@ -247,7 +248,33 @@ function PulseStrip({ layer, setParam, onStart, onEnd }: { layer: Layer; setPara
   </section>;
 }
 
-export function MeridianControls({ layer, edit, performance, notify, onAnimateKey, onStart, onEnd, queued }: {
+const STATUS_NAMES = { locked: 'Locked to the music', holding: 'Holding the last tempo', free: 'Free · no music heard' } as const;
+
+/** Where the sound comes from, and whether the piece is following it. Exports never use this. */
+function MusicBlock({ slot }: { slot: ReactNode }) {
+  const [shown, setShown] = useState({ status: musicStatus.status, bpm: musicStatus.bpm });
+  useEffect(() => {
+    const timer = window.setInterval(() => setShown(now => now.status === musicStatus.status && Math.round(now.bpm) === Math.round(musicStatus.bpm) ? now : { status: musicStatus.status, bpm: musicStatus.bpm }), 250);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <section className="m-block m-music" aria-label="Music">
+    <div className="m-heading"><span>Music</span><small role="status">{STATUS_NAMES[shown.status]}{shown.status === 'free' ? '' : ` · ${Math.round(shown.bpm)} BPM`}</small></div>
+    {slot}
+    <p className="m-music-note">Music moves the light in the preview. Exports stay as composed.</p>
+  </section>;
+}
+
+/** Turning the guard off takes a second, deliberate press. */
+function FlashGuardControl({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  const [asking, setAsking] = useState(false), on = value >= .5;
+  if (!on) return <div className="m-guard is-off"><strong>Flash guard is off</strong><button className="m-capture" onClick={() => onChange(1)}>Turn on</button></div>;
+  if (asking) return <div className="m-guard" role="alertdialog" aria-label="Turn off Flash guard?"><span>Large bright flashes will no longer be limited. This can harm people with photosensitive epilepsy.</span>
+    <button className="m-capture" onClick={() => setAsking(false)}>Keep on</button><button className="m-capture" onClick={() => { setAsking(false); onChange(0); }}>Turn off</button></div>;
+  return <div className="m-guard"><span>Flash guard on</span><button className="m-capture" onClick={() => setAsking(true)}>Turn off…</button></div>;
+}
+
+export function MeridianControls({ layer, edit, performance, notify, onAnimateKey, onStart, onEnd, queued, soundSlot }: {
+  soundSlot?: ReactNode;
   layer: Layer; edit: (change: (l: Layer) => Layer) => void; performance: MeridianPerformance; notify: (message: string) => void;
   onAnimateKey?: (key: string) => void; onStart: () => void; onEnd: () => void;
   /** Structural keys waiting for the next phrase. The Conductor supplies this; nothing is queued without it. */
@@ -256,15 +283,16 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
   const [query, setQuery] = useState(''), [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const searching = query.trim().length > 0;
   const groups = filterParameters(PANEL_PARAMETERS, query);
-  const locks = layer.meridian?.locks ?? [];
+  const locks = layer.meridian?.locks ?? [], evolve = Math.round(layer.params.scoreStyle ?? 2) === 2;
   const setParam = (key: string, value: number) => edit(l => ({ ...l, params: { ...l.params, [key]: value } }));
   const toggle = (group: string) => setOpen(now => { const next = new Set(now); if (!next.delete(group)) next.add(group); return next; });
   const control = (d: ParameterDefinition) => {
     const value = layer.params[d.key] ?? d.default, choices = MERIDIAN_CHOICES[d.key];
-    const body = d.key === 'seed' ? <SeedField value={value} onChange={n => setParam('seed', n)} />
+    const unused = evolve && EVOLVE_INACTIVE.includes(d.key);
+    const body = d.key === 'safetyFlashGuard' ? <FlashGuardControl value={value} onChange={n => setParam(d.key, n)} /> : d.key === 'seed' ? <SeedField value={value} onChange={n => setParam('seed', n)} />
       : choices ? <ChoiceParameter label={d.label} name={d.label} options={[...choices]} value={value} resetTo={d.default} onChange={n => setParam(d.key, n)} />
       : <Parameter definition={d} value={value} animated={!!layer.modulations[d.key]} onChange={n => setParam(d.key, n)} onAnimate={!onAnimateKey || d.step === 1 || d.structural ? undefined : () => onAnimateKey(d.key)} onStart={onStart} onEnd={onEnd} />;
-    return <div className="m-param" key={d.key}>{queued?.has(d.key) && <span className="m-next">Next phrase</span>}{body}</div>;
+    return <div className={`m-param ${unused ? 'is-unused' : ''}`} key={d.key} title={unused ? 'Not used by Evolve' : undefined}>{unused && <span className="m-unused">Not in Evolve</span>}{queued?.has(d.key) && <span className="m-next">Next phrase</span>}{body}</div>;
   };
   return <div className="meridian-controls">
     <section className="m-block" aria-label="Macros"><div className="m-macros">{MACROS.map(d => <MacroFader key={d.key} d={d} value={layer.params[d.key] ?? d.default} onChange={n => setParam(d.key, n)} onStart={onStart} onEnd={onEnd} />)}</div></section>
@@ -277,6 +305,7 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
       <Morph layer={layer} edit={edit} onStart={onStart} onEnd={onEnd} />
       <MarkControl layer={layer} edit={edit} notify={notify} />
     </section>
+    {evolve && soundSlot && <MusicBlock slot={soundSlot} />}
     <label className="m-search"><Icon name="search" size={14} /><input type="search" aria-label="Search parameters" placeholder={`Search ${PANEL_PARAMETERS.length} parameters`} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') setQuery(''); }} /></label>
     <div className="m-groups">
       {MERIDIAN_GROUPS.filter(group => groups.has(group)).map(group => {

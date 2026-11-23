@@ -50,6 +50,22 @@ export function filterParameters(definitions: readonly ParameterDefinition[], qu
   return groups;
 }
 
+const inGroupExcept = (group: string, active: readonly string[]) => MERIDIAN_PARAMETERS.filter((d) => d.group === group && !active.includes(d.key)).map((d) => d.key);
+/** Controls that have no effect while the style is Evolve. The panel marks them, and a test proves each one does nothing. */
+export const EVOLVE_INACTIVE: readonly string[] = [
+  'scorePulseBars', 'scoreLoopPhrase', 'scoreBars', 'scoreQuantise', 'scoreRepeat', 'scoreDraw', 'scoreBuild', 'scoreCharge', 'scorePeak', 'scoreCollapse', 'scoreRest',
+  'symmetry', 'zones', 'structureRadialRatio', 'structureSquareMix', 'structureNegativeSpace',
+  'ringThinWeight', 'ringMediumWeight', 'ringSpacingJitter', 'ringDashCount', 'ringDashGap', 'ringTicks', 'ringTickLength', 'ringDrawOnStyle', 'ringWobble',
+  'spokeTwinShare', 'spokeTwinGap', 'spokeLengthJitter', 'spokeSweepSpeed', 'spokeRetractStyle', 'spokeEndNodes',
+  'latticeType', 'nodeShape', 'nodeJitter', 'nodeChaseSpeed', 'nodeChasePattern', 'nodeRingSnap', 'nodeColourAccent', 'nodeTwinkle',
+  'heroIgnition', 'heroContraction', 'heroOvershoot', 'heroInnerFill',
+  ...inGroupExcept('Rhythm', ['rhythmAccent', 'rhythmSwing']), ...inGroupExcept('Glitch', []),
+  'lightAfterglow', 'lightTrailLength', 'colourPeakPalette', 'colourHueDrift', 'colourAccentFrequency', 'colourByAge',
+];
+
+/** What the Motion tab may animate on a Meridian layer: macros and moves are played, not keyframed. */
+export const motionParameters = (definitions: readonly ParameterDefinition[]): ParameterDefinition[] => definitions.filter((d) => d.group !== PERFORMANCE_GROUP);
+
 export function toggleGroupLock(layer: Layer, group: string): Layer {
   const locks = layer.meridian?.locks ?? [];
   return { ...layer, meridian: { ...layer.meridian, locks: locks.includes(group) ? locks.filter((lock) => lock !== group) : [...locks, group] } };

@@ -3,10 +3,15 @@ import type { Layer } from '../shared/types';
 import { compose } from '../meridian/composer';
 import { DisplayList, STRIDE } from '../meridian/display-list';
 import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate';
-import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveScheme, exactEvolveClock, SCORE_STYLE_EVOLVE, type EvolveClock, type EvolveTransport } from '../meridian/evolve';
+import { Conductor } from '../meridian/conductor';
+import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveMoveLight, evolveScheme, exactEvolveClock, SCORE_STYLE_EVOLVE, type EvolveClock, type EvolveTransport } from '../meridian/evolve';
 import { heldMoves } from '../meridian/held-moves';
 import { applyMacros } from '../meridian/macros';
 import { markFromOutput, type MarkPlacement } from '../meridian/mark-placement';
+import { MoveRouter } from '../meridian/moves';
+import { litShare, MusicLight } from '../meridian/music-light';
+import { musicStatus } from '../meridian/music-status';
+import { applyLockedVariation, MAX_STORED_SEED } from '../meridian/panel';
 import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
 import { advanceTransport, applyPulseLight, createTransport, evaluatePulse, exactClock, isPulse, pulseRestStart, pulseScheme, type PulseClock, type PulseTransport } from '../meridian/pulse';
 import { MERIDIAN_SCHEMES, SEED_SCHEME } from '../meridian/schemes';
@@ -47,6 +52,10 @@ const MARK_OUT = .22;  // Share of Rest over which it closes back to the point.
 const STRUCTURAL = MERIDIAN_PARAMETERS.filter(d => d.structural).map(d => d.key);
 const ALL_KEYS = MERIDIAN_PARAMETERS.map(d => d.key);
 const BLOOM_UNIFORMS = BLOOM_HEIGHTS.map((_, i) => `uBloom${i}`);
+
+/** One layer's live performance: its clock, its light, and what linked moves have changed for this session only. */
+interface EvolveLive { conductor: Conductor; light: MusicLight; router: MoveRouter; baseSeed: number; seed: number | null; mutated: Record<string, number> | null; presses: number }
+const NO_SIGNALS: Readonly<Record<string, number>> = Object.freeze({});
 
 interface CachedScore { signature: Float64Array; score: Score; used: number }
 
@@ -164,6 +173,7 @@ export class MeridianRenderer {
   private readonly evolveMoves = { next: false, hold: false, drop: false, collapse: false, burst: false };
   private readonly evolveView: Record<string, number> = {};
   private readonly evolveWalls = new Map<string, number>();
+  private readonly evolveLive = new Map<string, EvolveLive>();
 
   constructor() {
     for (const [instances, material] of [[this.curves, this.curveMaterial], [this.marks, this.markMaterial]] as const) {
@@ -247,7 +257,10 @@ export class MeridianRenderer {
 
   /** Evolve: free-running and eased in the preview, an exact closed path in an export. It has no Rest, so the Mark stays off. */
   private drawEvolve(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, runtime?: MeridianRuntime): void {
-    const live = this.live, seed = live.seed >>> 0, duration = runtime?.duration ?? DEFAULT_LOOP_FRAMES / 30;
+    const live = this.live, duration = runtime?.duration ?? DEFAULT_LOOP_FRAMES / 30;
+    let seed = live.seed >>> 0;
+    const performer = runtime?.live ? this.evolvePerformer(layer, seed) : null;
+    if (performer) { if (performer.seed !== null) seed = performer.seed; if (performer.mutated) Object.assign(live, performer.mutated); }
     const view = Object.assign(this.evolveView, live);
     let list = runtime?.list, scheme = seed;
     if (runtime?.live) {
@@ -257,8 +270,14 @@ export class MeridianRenderer {
       this.evolveWalls.set(layer.id, now);
       if (wall > .25) transport.lastPhase = null; // Back after a gap, such as another style: carry on from here rather than leaping.
       const moves = this.evolveMoves;
-      moves.next = heldMoves.get(layer.id, 'moveNext') > 0; moves.hold = heldMoves.get(layer.id, 'moveHold') > 0; moves.drop = heldMoves.get(layer.id, 'moveDrop') > 0;
-      moves.collapse = heldMoves.get(layer.id, 'moveCollapse') > 0; moves.burst = heldMoves.get(layer.id, 'moveBurst') > 0;
+      if (performer) {
+        this.applyLinkedEdit(performer, layer, seed, moves);
+        if (performer.seed !== null) seed = performer.seed;
+        if (performer.mutated) { Object.assign(live, performer.mutated); Object.assign(view, performer.mutated); }
+        const dt = Math.min(wall, .25), frame = performer.conductor.update({ dt, signals: runtime.signals ?? NO_SIGNALS, params: live });
+        performer.light.update(frame, live, dt, litShare(list ?? this.list, width / height), this.redShare(live), evolveMoveLight(transport.clock), transport.clock.music);
+        musicStatus.status = frame.status; musicStatus.bpm = frame.bpm;
+      }
       const clock = advanceEvolve(transport, phase, duration, wall, seed, live, moves);
       Object.assign(view, transport.values);
       if (!list) { list = this.list; evaluateEvolve(seed, clock, view, list); }
@@ -283,6 +302,37 @@ export class MeridianRenderer {
     sourceViewMatrix(layer.transform, width / height, this.view);
     this.view.invert();
     this.renderList(renderer, list, live, layer.palette, this.view, layer.transform.scale, 0, 0, width, height, target, draw);
+  }
+
+  private evolvePerformer(layer: Layer, seed: number): EvolveLive {
+    let state = this.evolveLive.get(layer.id);
+    if (!state) { state = { conductor: new Conductor(), light: new MusicLight(), router: new MoveRouter(), baseSeed: seed, seed: null, mutated: null, presses: 0 }; this.evolveLive.set(layer.id, state); }
+    if (state.baseSeed !== seed) { state.baseSeed = seed; state.seed = null; } // The performer chose a seed, which replaces a linked one.
+    return state;
+  }
+
+  /** Keys and links reach Evolve through one router. A linked Mutate, Reseed or Recall lasts for this session and never edits the show. */
+  private applyLinkedEdit(state: EvolveLive, layer: Layer, seed: number, moves: typeof this.evolveMoves): void {
+    const edit = state.router.read(key => heldMoves.get(layer.id, key), layer.params, moves);
+    if (edit.kind === 'none') return;
+    state.presses++;
+    const picked = (Math.imul(seed ^ 0x51ed270b, 0x9e3779b1) + Math.imul(state.presses, 0x85ebca6b)) >>> 0;
+    if (edit.kind === 'reseed' && !layer.meridian?.locks.includes('Score')) state.seed = 1 + picked % MAX_STORED_SEED;
+    else if (edit.kind === 'recall') { const stored = layer.params[`seedSlot${edit.slot}`]; if (stored) state.seed = stored >>> 0; }
+    else if (edit.kind === 'mutate') {
+      // Only what Mutate moved is kept, so every other slider stays live.
+      const before = { ...layer.params, ...state.mutated }, after = applyLockedVariation({ ...layer, params: before }, picked, 'mutate').params, moved: Record<string, number> = { ...state.mutated };
+      for (const key of Object.keys(after)) if (after[key] !== before[key]) moved[key] = after[key];
+      state.mutated = moved;
+    }
+  }
+
+  /** How saturated a red the current inks are, 0 to 1. */
+  private redShare(p: Readonly<Record<string, number>>): number {
+    const inks = this.shared.uInks.value;
+    let red = 0;
+    for (let i = 0; i < inks.length; i++) red = Math.max(red, inks[i].r - Math.max(inks[i].g, inks[i].b));
+    return Math.min(1, red * Math.min(1, read(p, 'colourSaturation')));
   }
 
   /** Pulse: the sequencer draws the picture and carries its own brief, local tears, so the full-frame tear stays off. */

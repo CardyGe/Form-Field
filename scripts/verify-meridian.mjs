@@ -112,7 +112,7 @@ async function verifySurface(real, ui, qa, failures) {
   const recalled = await seedShown();
   result.keys = { reseedChanged: reseeded !== stored, recallRestored: recalled === stored };
   if (reseeded === stored) failures.push('R did not change the seed');
-  if (recalled !== stored) failures.push('1 did not recall the stored seed');
+  if (recalled !== stored) failures.push(`1 did not recall the stored seed (stored ${stored}, reseeded ${reseeded}, shown ${recalled})`);
 
   await ui.keyboard.down('Digit1');
   await ui.waitForTimeout(40);

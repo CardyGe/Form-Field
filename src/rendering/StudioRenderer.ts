@@ -1125,8 +1125,10 @@ export class StudioRenderer {
     }
   }
 
-  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }): void {
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean }): void {
     if (this.exporting) return;
+    // With the tempo source on the detected beat and no sound, the tempo clock is only a default: Meridian stays on its own.
+    this.meridianRuntime.signals = sound && (sound.externalTempo || sound.signals['audio.level'] !== undefined) ? sound.signals : undefined;
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();

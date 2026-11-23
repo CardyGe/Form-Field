@@ -975,7 +975,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
   for (const key of [...(ADDED_FIELDS[kind] ?? []),...FINISH_KEYS,...(isInstrument(kind)?INSTRUMENT_UPGRADE_KEYS[kind]:[])]) {
     if (!own(params, key)) params[key] = DEFINITIONS[kind].find((definition) => definition.key === key)!.default;
   }
-  if (kind === 'meridian') repairMeridianParams(params);
+  if (kind === 'meridian') { repairMeridianParams(params); for (const d of MERIDIAN_PARAMETERS) if (d.momentary && own(params, d.key)) params[d.key] = 0; } // A move is a press, never a saved state.
   keys(params, ['seed', ...DEFINITIONS[kind].map((definition) => definition.key)], `${path}.params`);
   number(params.seed, `${path}.params.seed`, 0, 0xffffffff, true);
   for (const definition of DEFINITIONS[kind]) number(params[definition.key], `${path}.params.${definition.key}`, definition.min, definition.max, definition.step === 1);

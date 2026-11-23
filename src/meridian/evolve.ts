@@ -1,4 +1,5 @@
 import { STRIDE, type DisplayList } from './display-list';
+import { createMusicLight, sparkleAt, waveAt, type MusicLightFrame } from './music-light';
 import { MERIDIAN_PARAMETERS } from './parameters';
 import { PRIMITIVE } from './types';
 
@@ -104,6 +105,8 @@ export interface EvolveClock {
   densityMoving: boolean; easing: boolean; wall: number;
   /** How far far-flung forms have folded in for a small Scale. Eased separately, so the fold never adds to the zoom's speed. */
   fold: number;
+  /** What the music adds to the light. Quiet unless the live preview is hearing something; an export never touches it. */
+  readonly music: MusicLightFrame;
   /** How far anything beyond the frame is drawn back in, for a large Scale. Eased like the fold, so it never throws a mark. */
   frameReach: number;
   /** How fast Scale is moving, as a share of its top speed. */
@@ -540,7 +543,7 @@ export function evolutionRate(params: Readonly<Record<string, number>>): number 
 }
 
 export function createEvolveClock(): EvolveClock {
-  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, frameReach: 0, zooming: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
+  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, music: createMusicLight(), frameReach: 0, zooming: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
 }
 
 export function createEvolveTransport(): EvolveTransport {
@@ -670,7 +673,7 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   clock.fold = firstFrame ? foldTo : clock.fold + clamp(foldTo - clock.fold, -FOLD_SPEED * wall, FOLD_SPEED * wall);
   const reachTo = reachFor(unit(values.macroScale));
   clock.frameReach = firstFrame ? reachTo : clock.frameReach + clamp(reachTo - clock.frameReach, -REACH_SPEED * wall, REACH_SPEED * wall);
-  clock.performing = transport.follow[0] !== 0 || transport.follow[1] !== 0 || clock.fold !== foldTo || clock.frameReach !== reachTo || values.macroGlitch !== finite(params.macroGlitch, 0) || clock.ripples[0] >= 0 || clock.ripples[1] >= 0 || clock.ripples[2] >= 0;
+  clock.performing = transport.follow[0] !== 0 || transport.follow[1] !== 0 || clock.fold !== foldTo || clock.frameReach !== reachTo || clock.music.active || values.macroGlitch !== finite(params.macroGlitch, 0) || clock.ripples[0] >= 0 || clock.ripples[1] >= 0 || clock.ripples[2] >= 0;
 
   let moved = 0;
   if (transport.lastPhase !== null && Number.isFinite(phase) && Number.isFinite(duration) && duration > 0) {
@@ -683,7 +686,11 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   const running = moved > 0 ? moved : 0;
   clock.exact = false; clock.turn = 0; clock.duration = duration;
   clock.motion = Math.max(0, clock.motion + moved * speedRate(values.macroSpeed));
-  clock.beat = Math.max(0, clock.beat + moved * clamp(values.scoreBpm, 20, 400) / 60);
+  if (clock.music.following) {
+    // The beat of light joins the music by leaning at most 8% on its speed, so it never jumps.
+    const off = clock.music.beats - clock.beat, error = off - Math.round(off);
+    clock.beat = Math.max(0, clock.beat + moved * clock.music.bpm / 60 * (1 + clamp(error * 0.8, -0.08, 0.08)));
+  } else clock.beat = Math.max(0, clock.beat + moved * clamp(values.scoreBpm, 20, 400) / 60);
   clock.held = false;
   clock.spokeTurn = TURN_RADIANS * clock.motion;
   const turning = moved * speedRate(values.macroSpeed) * TURN_RADIANS * finite(values.ringRotationSpeed, 1);
@@ -703,7 +710,7 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   transport.nextDown = moves.next;
 
   const held = moves.hold || (params.scoreAutopilot ?? 1) < 0.5;
-  const wantedRate = held ? 0 : evolutionRate(params);
+  const wantedRate = held ? 0 : evolutionRate(params) * (1 + clock.music.evolutionLift);
   const rateStep = wall * 1.4;
   transport.evolveRate += clamp(wantedRate - transport.evolveRate, -rateStep, rateStep);
   if (transport.chase !== null) {
@@ -734,6 +741,13 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   for (let i = 0; i < clock.ripples.length; i++) if (clock.ripples[i] >= 0) { clock.ripples[i] += wall; if (clock.ripples[i] > 3.2) clock.ripples[i] = -1; }
   transport.evaluated = true;
   return clock;
+}
+
+/** How much Burst and Drop are adding to the light right now, for Flash Guard. */
+export function evolveMoveLight(clock: EvolveClock): number {
+  let light = clock.swell * 0.3;
+  for (let i = 0; i < clock.ripples.length; i++) { const age = clock.ripples[i]; if (age >= 0) light += 0.5 * smooth(age / 0.5) * (1 - smooth((age - 1.6) / 1.6)); }
+  return light;
 }
 
 /** The accent scheme for a seed, a number into MERIDIAN_SCHEMES from 1. It holds for the whole piece. */
@@ -800,7 +814,7 @@ function rippleAt(clock: EvolveClock, radius: number): number {
     const front = age * 0.46, into = (radius - front) / 0.13, rise = smooth(age / 0.5), fall = 1 - smooth((age - 1.6) / 1.6);
     light += rise * fall * Math.exp(-into * into);
   }
-  return light;
+  return light * clock.music.gain;
 }
 
 /** Colour arrives on a voice rarely and slowly, and leaves the same way. */
@@ -961,7 +975,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const heroSwell = (0.012 + tension * tension * 0.075) * heroPulse * heroBreath + clock.swell * 0.055;
   const lineGain = clamp(finite(params.ringWeight, 1), 0, 16) * weight;
   const ringInk = clamp(finite(params.ringOpacity, 1), 0, 1);
-  const lightDepth = 0.14;
+  const lightDepth = 0.14, music = clock.music, swellLight = clock.swell * music.gain;
   const life = 1 - home; // Even while a form rests, its rings drift, its arcs part and its spokes lean into pairs.
 
   const glitchAmount = glitch > 0.5 ? (glitch - 0.5) * 2 : 0;
@@ -984,15 +998,17 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     const turn = clock.ringTurns[tier];
     const beatLight = lightAt(clock, Math.abs(radius)), ripple = rippleAt(clock, Math.abs(radius));
     const broken = voice === glitchVoice ? 1 - glitchShape * 0.72 : 1;
-    const ink = pose[at + R_ALPHA] * ringInk * (1 + lightDepth * (beatLight - 0.3) + ripple * 0.75 + clock.swell * 0.12) * broken;
+    const heard = music.wave * waveAt(music, Math.abs(radius));
+    const ink = pose[at + R_ALPHA] * ringInk * (1 + lightDepth * (beatLight - 0.3) + ripple * 0.75 + swellLight * 0.12 + heard + music.mids * 0.4 + music.lift) * broken;
     const width = -Math.max(0.0001, pose[at + R_WIDTH] * lineGain * (1 + beatLight * 0.08 + ripple * 0.45)) / REFERENCE_HEIGHT;
-    const glow = 0.05 + beatLight * 0.07 + ripple * 0.5 + heat * 0.1;
+    const glow = 0.05 + beatLight * 0.07 + ripple * 0.5 + heat * 0.1 + heard * 0.14;
     const colour = tintAt(clock, heat, voice, speed);
     const slot = TAU / ARC_SLOTS, parting = oscillate(clock, 59 + voice * 4.1, phase * 0.7, speed), opening = life * (parting > 0 ? parting * parting : 0) * 0.74, every = tier === 0 ? 6 : tier === 1 ? 4 : 3;
     for (let k = 0; k < ARC_SLOTS; k++) {
       const low = pose[at + R_ARCS + k * 2], high = 1 - (1 - pose[at + R_ARCS + k * 2 + 1]) * Math.min(arcShare, 1) - Math.max(0, arcShare - 1) * 0.28 * (1 - pose[at + R_ARCS + k * 2 + 1]);
       const share = Math.max(0, (k % every === every - 1 ? high * (1 - opening) : high) - low), arcFade = 0.05 + 0.25 * Math.min(1, arcMoved / Math.max(share, 0.001)) * (1 - smooth(pose[at + R_ARCS + k * 2 + 1] / 0.05));
-      out.push(PRIMITIVE.arc, x, y, radius, wrapAngle(turn + (k + low) * slot), share * slot, width, glow, colour, ink * smooth(share / arcFade), 0, voice * 0.07);
+      const tip = k % every === every - 1 ? music.highs * 0.7 * sparkleAt(music, voice * 12 + k) * pose[at + R_ALPHA] * ringInk : 0;
+      out.push(PRIMITIVE.arc, x, y, radius, wrapAngle(turn + (k + low) * slot), share * slot, width, glow, colour, (ink + tip) * smooth(share / arcFade), 0, voice * 0.07);
     }
   }
 
@@ -1007,7 +1023,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     const start = framed(pull(pose[at + S_INNER] + (pose[at + S_OUTER] - pose[at + S_INNER]) * inner * 0.8, tuck) * spokeReach * draw, reach);
     const cos = Math.cos(angle), sin = Math.sin(angle), middle = (start + outer) * 0.5;
     const beatLight = lightAt(clock, middle), ripple = rippleAt(clock, middle);
-    const ink = pose[at + S_ALPHA] * spokeInk * (1 + lightDepth * (beatLight - 0.3) + ripple * 0.7);
+    const ink = pose[at + S_ALPHA] * spokeInk * (1 + lightDepth * (beatLight - 0.3) + ripple * 0.7 + music.wave * waveAt(music, middle) + music.mids * 0.4 + music.lift);
     const width = -Math.max(0.0001, pose[at + S_WIDTH] * spokeLine) / REFERENCE_HEIGHT;
     const colour = tintAt(clock, heat, voice + 20, speed) * 0.8;
     out.push(PRIMITIVE.segment, centreX + cos * start, centreY + sin * start, centreX + cos * outer, centreY + sin * outer, 0, width, 0.03 + ripple * 0.3, colour, ink, 0, voice * 0.05);
@@ -1022,8 +1038,9 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     const beatLight = lightAt(clock, radius), ripple = rippleAt(clock, radius);
     const ringX = framed(pull(pose[ringVoice + R_X], tuck) * draw, reach), ringY = framed(pull(pose[ringVoice + R_Y], tuck) * draw, reach);
     const x = swungX(ringX, ringY, centreX, centreY, swingCos, swingSin) + Math.cos(angle) * radius, y = swungY(ringX, ringY, centreX, centreY, swingCos, swingSin) + Math.sin(angle) * radius;
-    const ink = pose[at + N_ALPHA] * nodeInk * (1 + lightDepth * 1.3 * (beatLight - 0.3) + ripple);
-    out.push(PRIMITIVE.dot, x, y, pose[at + N_SIZE] * nodeSize * Math.min(1, 0.45 + pose[at + N_ALPHA]), 0, 0, 0, 0.16 * nodeGlow + beatLight * 0.1 + ripple * 0.4, tintAt(clock, heat, node % 9 + 40, speed), ink, 0, node * 0.013);
+    const glint = music.highs * sparkleAt(music, node);
+    const ink = pose[at + N_ALPHA] * nodeInk * (1 + lightDepth * 1.3 * (beatLight - 0.3) + ripple + music.wave * 1.2 * waveAt(music, radius) + glint + music.lift);
+    out.push(PRIMITIVE.dot, x, y, pose[at + N_SIZE] * nodeSize * Math.min(1, 0.45 + pose[at + N_ALPHA]), 0, 0, 0, 0.16 * nodeGlow + beatLight * 0.1 + ripple * 0.4 + glint * 0.3, tintAt(clock, heat, node % 9 + 40, speed), ink, 0, node * 0.013);
   }
 
   const heroGain = clamp(finite(params.heroWeight, 1), 0, 16) * Math.max(0.6, weight), heroLight = clamp(finite(params.heroGlow, 1), 0, 8) * clamp(finite(params.heroHaloStrength, 1), 0, 2);
@@ -1031,9 +1048,9 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const heroRadius = framed(pull(pose[HERO_BASE + H_RADIUS], tuck) * heroPlace * (1 + heroSwell) * draw, reach);
   const heroX = centreX, heroY = centreY;
   const heroBeat = lightAt(clock, heroRadius), heroRipple = rippleAt(clock, heroRadius);
-  const heroInk = pose[HERO_BASE + H_ALPHA] * (1 + lightDepth * 0.8 * (heroBeat - 0.3) + heroRipple * 0.5 + clock.swell * 0.28);
-  const heroWidth = -pose[HERO_BASE + H_WIDTH] * heroGain * (1 + heroBreath * 0.12 + clock.swell * 0.8) / REFERENCE_HEIGHT;
-  const heroHalo = pose[HERO_BASE + H_GLOW] * heroLight * (0.72 + heroBreath * 0.28 + heroBeat * 0.14 + clock.swell * 1.3) * (0.55 + heat * 0.9) + heroRipple * 0.5;
+  const heroInk = pose[HERO_BASE + H_ALPHA] * (1 + lightDepth * 0.8 * (heroBeat - 0.3) + heroRipple * 0.5 + swellLight * 0.28 + music.wave * 0.7 * waveAt(music, heroRadius) + music.bass * 0.6 + music.lift);
+  const heroWidth = -pose[HERO_BASE + H_WIDTH] * heroGain * (1 + heroBreath * 0.12 + swellLight * 0.8 + music.bass * 0.25) / REFERENCE_HEIGHT;
+  const heroHalo = pose[HERO_BASE + H_GLOW] * heroLight * (0.72 + heroBreath * 0.28 + heroBeat * 0.14 + swellLight * 1.3 + music.bass * 1.1) * (0.55 + heat * 0.9) + heroRipple * 0.5;
   const heroColour = tintAt(clock, heat, 60, speed);
   const splitGap = 1 + split * 0.09;
   out.push(PRIMITIVE.ring, heroX, heroY, heroRadius / (split > 0 ? 1 + split * 0.03 : 1), 0, 0.5, heroWidth, heroHalo, heroColour, heroInk, 0, 0.9);
