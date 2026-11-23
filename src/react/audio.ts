@@ -68,7 +68,8 @@ export class AudioInput {
     source.connect(analyser); source.connect(ctx.destination);
     source.start();
     this.ctx = ctx; this.analyser = analyser; this.file = source;
-    void ctx.resume();
+    // Stopping straight away closes the context, which rejects a resume still waiting.
+    void ctx.resume().catch(() => {});
     this.set({ state: 'on', label: REHEARSAL });
   }
 
