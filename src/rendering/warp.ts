@@ -125,6 +125,12 @@ const float PI = 3.14159265359;
 const int WARP_TAPS = 4;
 const int TRAIL_SAMPLES = 8;
 
+// Per-type strength, so one Warp amount pushes about as far on every type. Measured in docs/warp-proof.md.
+const float WAVES_GAIN = .55, NOISE_GAIN = 1.6, RIPPLE_GAIN = 1.8, MAGNETIC_GAIN = 2.4, PLASMA_GAIN = 1.25;
+
+/** A strengthened field never pushes past the amount's own ceiling. */
+vec2 withinReach(vec2 v) { float size = length(v); return size > 1. ? v / size : v; }
+
 /** Waves: two sines along the chosen direction. Length is at most 1. */
 vec2 wavesField(vec2 p) {
   vec2 across = vec2(-uBendDirection.y, uBendDirection.x);
@@ -170,6 +176,7 @@ vec2 rippleField(vec2 p) {
     float r = length(d);
     sum += uBendPoints[i].z * d / sqrt(r * r + .0025) * sin(TAU * uBendScale * r - uBendTurn) * exp(-r * fade);
   }
+  sum *= RIPPLE_GAIN;
   return sum / sqrt(1. + dot(sum, sum));
 }
 
@@ -183,6 +190,7 @@ vec2 magneticField(vec2 p) {
     float r = length(d);
     sum += uBendPoints[i].z * d / sqrt(r * r + .01) * exp(-r * fade);
   }
+  sum *= MAGNETIC_GAIN;
   return sum / sqrt(1. + dot(sum, sum));
 }
 
@@ -195,11 +203,11 @@ vec2 plasmaField(vec2 p) {
 }
 
 vec2 bendField(vec2 p) {
-  if (uBendField == 0) return wavesField(p);
-  if (uBendField == 1) return noiseField(p);
+  if (uBendField == 0) return wavesField(p) * WAVES_GAIN;
+  if (uBendField == 1) return withinReach(noiseField(p) * NOISE_GAIN);
   if (uBendField == 2) return rippleField(p);
   if (uBendField == 3) return magneticField(p);
-  return plasmaField(p);
+  return withinReach(plasmaField(p) * PLASMA_GAIN);
 }
 
 /** Value noise with its slope: x is the value, yz the gradient. Same lattice as valueNoise. */
@@ -253,7 +261,7 @@ vec2 liquidCurrent(vec2 p) {
     // Chaos is Ridge plus Vortex. The ridges are read at a position they have already moved, once,
     // and Swirl shares the first noise read.
     vec3 n = liquidNoise(p);
-    v = ridgeCurrent(p + ridgeFrom(n) * .35 / uLiquidScale) + turned(n.yz) + spiralCurrent(p);
+    v = ridgeCurrent(p + ridgeFrom(n) * .2 / uLiquidScale) + turned(n.yz) + spiralCurrent(p);
   }
   // Speed is at most 1, so a step never travels further than its share of the amount.
   float speed = length(v);
