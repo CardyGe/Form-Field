@@ -712,6 +712,48 @@ try {
   for (const [key, r] of Object.entries(report.evolve)) if (r.best < 1) failures.push(`Evolve ${key}: 0 against 1 changes too little (${r.each.join(', ')} % of pixels)`);
   console.log('evolve macros', JSON.stringify(report.evolve));
 
+  // Flash Guard on rendered export pixels: a Motion pulse on opacity at 5 Hz, read across the loop point and in any order.
+  report.flashExport = await page.evaluate(async () => {
+    const { m, studio } = window.meridianQA, w = 160, h = 90, cols = 32, rows = 18, total = 120;
+    const make = guard => {
+      const project = m.createProject(), layer = m.createLayer('meridian');
+      Object.assign(layer.params, { scoreStyle: 2, macroDensity: 1, macroHeat: 1, ringWeight: 14, spokeWeight: 14, safetyFlashGuard: guard });
+      layer.modulations.opacity = { kind: 'pulse', cycles: 10, phase: 0, amount: 1, points: [{ time: 0, value: 0 }, { time: .5, value: 1 }] };
+      project.layers = [layer]; project.background = '#000000'; project.duration = 2; project.fps = { num: 60, den: 1 };
+      return project;
+    };
+    const linear = v => { const c = v / 255; return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; };
+    const cells = async (project, frame) => {
+      const bitmap = await createImageBitmap(new Blob([await studio.exportPNG(project, m.phaseAtFrame(frame, total), w, h)], { type: 'image/png' }));
+      const canvas = new OffscreenCanvas(w, h), paint = canvas.getContext('2d', { willReadFrequently: true }); paint.drawImage(bitmap, 0, 0);
+      const px = paint.getImageData(0, 0, w, h).data, out = new Float32Array(cols * rows);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const at = (y * w + x) * 4; out[Math.floor(y / h * rows) * cols + Math.floor(x / w * cols)] += (.2126 * linear(px[at]) + .7152 * linear(px[at + 1]) + .0722 * linear(px[at + 2])) / 25; }
+      return out;
+    };
+    const flashes = series => {
+      const anchor = Float32Array.from(series[0]), way = new Int8Array(cols * rows), events = [];
+      for (let f = 1; f < series.length * 3; f++) {
+        const v = series[f % series.length]; let turned = 0;
+        for (let i = 0; i < v.length; i++) {
+          if (way[i] === 1 && v[i] > anchor[i]) anchor[i] = v[i]; if (way[i] === -1 && v[i] < anchor[i]) anchor[i] = v[i];
+          if (way[i] >= 0 && v[i] <= anchor[i] - .1 && v[i] < .8) { way[i] = -1; anchor[i] = v[i]; turned++; }
+          else if (way[i] <= 0 && v[i] >= anchor[i] + .1) { way[i] = 1; anchor[i] = v[i]; turned++; }
+        }
+        if (turned / v.length >= .25) events.push(f);
+      }
+      let worst = 0; for (let i = 0; i < events.length; i++) { let n = 0; for (let k = i; k < events.length && events[k] < events[i] + 60; k++) n++; worst = Math.max(worst, n); }
+      return Math.ceil(worst / 2);
+    };
+    const render = async guard => { const project = make(guard), series = []; for (let f = 0; f < total; f++) series.push(await cells(project, f)); return { project, series }; };
+    const on = await render(1), off = await render(0), first = Array.from(on.series[37]);
+    await cells(on.project, 90); await cells(on.project, 3);
+    return { on: flashes(on.series), off: flashes(off.series), sameInAnyOrder: first.every((v, i) => v === (0, on.series[37])[i]) && Array.from(await cells(on.project, 37)).every((v, i) => v === first[i]) };
+  });
+  console.log('flash export', JSON.stringify(report.flashExport));
+  if (report.flashExport.off < 4) failures.push(`the export flash check is not strobing without the guard (${report.flashExport.off} a second)`);
+  if (report.flashExport.on > 3) failures.push(`an export shows ${report.flashExport.on} large flashes in a second with the guard on`);
+  if (!report.flashExport.sameInAnyOrder) failures.push('a guarded export frame depends on render order');
+
   report.ui = await verifyInApp(page, failures);
   console.log(JSON.stringify({ firstFrame: report.firstFrame, mark: report.mark, structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));

@@ -1,15 +1,18 @@
 import * as THREE from 'three';
-import type { Layer } from '../shared/types';
+import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
+import type { Layer, Project } from '../shared/types';
 import { compose } from '../meridian/composer';
 import { DisplayList, STRIDE } from '../meridian/display-list';
 import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate';
 import { Conductor } from '../meridian/conductor';
-import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveMoveLight, evolveScheme, exactEvolveClock, SCORE_STYLE_EVOLVE, type EvolveClock, type EvolveTransport } from '../meridian/evolve';
+import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, EVOLVE_ELEMENTS, evolveScheme, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveClock, type EvolveTransport } from '../meridian/evolve';
+import { FlashGuard, guardLoopTable, type FlashSample } from '../meridian/flash-guard';
 import { heldMoves } from '../meridian/held-moves';
 import { applyMacros } from '../meridian/macros';
 import { markFromOutput, type MarkPlacement } from '../meridian/mark-placement';
-import { MoveRouter } from '../meridian/moves';
-import { litShare, MusicLight } from '../meridian/music-light';
+import { composeLight, measureList, type LightMeasure, type LightPlacement } from '../meridian/light-measure';
+import { LinkedOverrides, MoveRouter, type LinkedEdit } from '../meridian/moves';
+import { MusicLight } from '../meridian/music-light';
 import { musicStatus } from '../meridian/music-status';
 import { applyLockedVariation, MAX_STORED_SEED } from '../meridian/panel';
 import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
@@ -19,6 +22,8 @@ import { PRIMITIVE, type PerformanceState, type Score, type ScoreForm } from '..
 import { BLOOM_HEIGHTS, BloomPyramid, lightTarget } from './bloom';
 import { CURVE_SIDES, curveVertex, lightFragment, markFragment, markVertex, resolveFragment, tearFragment } from './meridian-shaders';
 import { fullscreenVertex } from './shaders';
+import { frameAtPhase } from './feedback';
+import { slitActive } from './slitscan';
 import { sourceViewMatrix } from './source-view';
 
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
@@ -34,6 +39,8 @@ export interface MeridianRuntime {
   live?: boolean;
   /** The project's length in seconds. */
   duration?: number;
+  /** The tempo comes from MIDI, tap or a fixed number rather than from the sound. */
+  externalTempo?: boolean;
 }
 
 const TAU = Math.PI * 2;
@@ -54,7 +61,14 @@ const ALL_KEYS = MERIDIAN_PARAMETERS.map(d => d.key);
 const BLOOM_UNIFORMS = BLOOM_HEIGHTS.map((_, i) => `uBloom${i}`);
 
 /** One layer's live performance: its clock, its light, and what linked moves have changed for this session only. */
-interface EvolveLive { conductor: Conductor; light: MusicLight; router: MoveRouter; baseSeed: number; seed: number | null; mutated: Record<string, number> | null; presses: number }
+interface EvolveLive {
+  conductor: Conductor; light: MusicLight; router: MoveRouter; overrides: LinkedOverrides; baseSeed: number; presses: number;
+  readonly input: { dt: number; signals: Readonly<Record<string, number>>; params: Readonly<Record<string, number>>; externalTempo: boolean };
+}
+/** One Evolve layer's picture for this composition frame, drawn once and measured before anything reaches the screen. */
+interface EvolveEntry { readonly list: DisplayList; stamp: number; phase: number; seed: number; scheme: number; area: number; light: number; red: number; gain: number }
+const EXPORT_TABLES = 8;
+const isEvolveLayer = (layer: Layer): boolean => layer.visible && layer.kind === 'meridian' && Math.round(layer.params.scoreStyle ?? SCORE_STYLE_EVOLVE) === SCORE_STYLE_EVOLVE;
 const NO_SIGNALS: Readonly<Record<string, number>> = Object.freeze({});
 
 interface CachedScore { signature: Float64Array; score: Score; used: number }
@@ -174,6 +188,22 @@ export class MeridianRenderer {
   private readonly evolveView: Record<string, number> = {};
   private readonly evolveWalls = new Map<string, number>();
   private readonly evolveLive = new Map<string, EvolveLive>();
+  private readonly evolveEntries = new Map<string, EvolveEntry>();
+  private readonly sampleEntry: EvolveEntry = this.createEntry();
+  private readonly sampleRuntime: MeridianRuntime = { live: false };
+  private readonly evaluated = new Map<string, Layer>();
+  private readonly flashGuard = new FlashGuard();
+  private readonly guardSettings: Record<string, number> = { safetyFlashGuard: 0, safetyMaxFlashes: 3, safetyRedLimit: 1, safetyFullField: 1 };
+  private readonly exportTables = new Map<string, Float32Array>();
+  private readonly areas = new Float64Array(4);
+  private readonly lights = new Float64Array(4);
+  private readonly reds = new Float64Array(4);
+  private readonly composed = { light: 0, area: 0, red: 0 };
+  private readonly placement: LightPlacement = { aspect: 1, a: 1, b: 0, c: 0, d: 1, x: 0, y: 0, level: 1 };
+  private readonly measured: LightMeasure = { area: 0, light: 0 };
+  private readonly measureView = new THREE.Matrix3();
+  private compositionStamp = 0;
+  private lastComposition: number | null = null;
 
   constructor() {
     for (const [instances, material] of [[this.curves, this.curveMaterial], [this.marks, this.markMaterial]] as const) {
@@ -211,17 +241,21 @@ export class MeridianRenderer {
     return score;
   }
 
-  draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, runtime?: MeridianRuntime): void {
+  private loadLive(layer: Layer, structure: Readonly<Record<string, number>> | undefined): void {
     const live = this.live, source = layer.params;
     for (let i = 0; i < ALL_KEYS.length; i++) {
       const value = source[ALL_KEYS[i]];
       live[ALL_KEYS[i]] = Number.isFinite(value) ? value : MERIDIAN_DEFAULTS[ALL_KEYS[i]];
     }
-    const structure = runtime?.structure;
     if (structure) for (let i = 0; i < STRUCTURAL.length; i++) {
       const value = structure[STRUCTURAL[i]];
       live[STRUCTURAL[i]] = Number.isFinite(value) ? value : MERIDIAN_DEFAULTS[STRUCTURAL[i]];
     }
+  }
+
+  draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, runtime?: MeridianRuntime): void {
+    const live = this.live, source = layer.params;
+    this.loadLive(layer, runtime?.structure);
     if (Math.round(live.scoreStyle) === SCORE_STYLE_EVOLVE) { this.drawEvolve(renderer, layer, phase, width, height, target, draw, runtime); return; }
     if (isPulse(live)) { this.drawPulse(renderer, layer, phase, width, height, target, draw, runtime); return; }
     this.pulseSeededScheme = undefined;
@@ -255,49 +289,196 @@ export class MeridianRenderer {
     this.renderList(renderer, list, live, layer.palette, this.view, layer.transform.scale, position.progress, peak, width, height, target, draw);
   }
 
-  /** Evolve: free-running and eased in the preview, an exact closed path in an export. It has no Rest, so the Mark stays off. */
-  private drawEvolve(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, runtime?: MeridianRuntime): void {
-    const live = this.live, duration = runtime?.duration ?? DEFAULT_LOOP_FRAMES / 30;
+  private createEntry(): EvolveEntry {
+    return { list: new DisplayList(EVOLVE_ELEMENTS + GLITCH_SHARDS), stamp: -1, phase: 0, seed: 0, scheme: 0, area: 0, light: 0, red: 0, gain: 1 };
+  }
+
+  private entryFor(id: string): EvolveEntry {
+    let entry = this.evolveEntries.get(id);
+    if (!entry) { entry = this.createEntry(); this.evolveEntries.set(id, entry); }
+    return entry;
+  }
+
+  /**
+   * Before any layer is drawn: every Evolve layer's picture for this frame is made and measured, so one Flash Guard budget
+   * judges the composition. An export reads a table of the whole loop instead, so no frame depends on render order.
+   */
+  beginComposition(project: Project, phase: number, width: number, height: number, duration: number, exporting: boolean, runtime: MeridianRuntime): void {
+    this.compositionStamp++;
+    this.evaluated.clear();
+    const settings = this.guardSettings;
+    settings.safetyFlashGuard = 0; settings.safetyMaxFlashes = 3; settings.safetyRedLimit = 1; settings.safetyFullField = 1;
+    let count = 0;
+    for (let i = 0; i < project.layers.length; i++) {
+      const original = project.layers[i];
+      if (!isEvolveLayer(original)) continue;
+      this.evaluated.set(original.id, evaluateLayer(original, phase));
+      count++;
+      const p = original.params;
+      if (read(p, 'safetyFlashGuard') >= .5) {
+        settings.safetyFlashGuard = 1;
+        settings.safetyMaxFlashes = Math.min(settings.safetyMaxFlashes, read(p, 'safetyMaxFlashes'));
+        settings.safetyRedLimit = Math.min(settings.safetyRedLimit, read(p, 'safetyRedLimit'));
+        settings.safetyFullField = Math.min(settings.safetyFullField, read(p, 'safetyFullField'));
+      }
+    }
+    if (!count) { this.lastComposition = null; return; }
+    let gain = 1;
+    if (exporting) gain = settings.safetyFlashGuard ? this.exportGain(project, phase, width, height, duration) : 1;
+    else {
+      let n = 0;
+      for (let i = 0; i < project.layers.length; i++) {
+        const original = project.layers[i];
+        if (!isEvolveLayer(original)) continue;
+        const layer = this.evaluated.get(original.id)!, entry = this.entryFor(original.id);
+        runtime.structure = original.params; runtime.live = !slitActive(original); runtime.duration = duration;
+        if (layer.opacity > 0) {
+          this.loadLive(layer, original.params);
+          this.prepareEvolve(layer, phase, width, height, runtime, entry);
+          entry.stamp = this.compositionStamp; entry.phase = phase;
+          this.measureEntry(layer, entry, width, height);
+        } else entry.light = 0;
+        this.areas[n] = entry.area; this.lights[n] = entry.light; this.reds[n] = entry.red; n++;
+      }
+      composeLight(this.areas, this.lights, this.reds, n, this.composed);
+      const now = performance.now(), dt = this.lastComposition === null ? 1 / 60 : Math.min(.25, Math.max(0, (now - this.lastComposition) / 1000));
+      this.lastComposition = now;
+      gain = this.flashGuard.update(dt, this.composed.light, this.composed.area, this.composed.red, settings);
+    }
+    for (let i = 0; i < project.layers.length; i++) {
+      const original = project.layers[i];
+      if (isEvolveLayer(original)) { const entry = this.entryFor(original.id); entry.gain = read(original.params, 'safetyFlashGuard') >= .5 ? gain : 1; if (exporting) entry.stamp = this.compositionStamp; }
+    }
+  }
+
+  /** This frame's evaluated layer, already made for the composition, so it is not evaluated twice. */
+  evaluatedFor(original: Layer): Layer | undefined { return this.evaluated.get(original.id); }
+
+  /** What Flash Guard allows this layer's light to be, this frame. Lines stay where they are; only their light is lowered. */
+  layerGain(original: Layer): number {
+    const entry = this.evolveEntries.get(original.id);
+    return entry && entry.stamp === this.compositionStamp && isEvolveLayer(original) ? entry.gain : 1;
+  }
+
+  /** A project was loaded: what linked moves changed in the last one must not carry over. */
+  resetPerformance(): void {
+    this.evolveLive.clear();
+    this.flashGuard.reset();
+    this.lastComposition = null;
+  }
+
+  private exportGain(project: Project, phase: number, width: number, height: number, duration: number): number {
+    const total = frameCount(project), evolve = project.layers.filter(isEvolveLayer);
+    const key = JSON.stringify([total, project.fps, width / height, duration, this.guardSettings, evolve.map(l => [l.params, l.modulations, l.transform, l.opacity, l.palette])]);
+    let table = this.exportTables.get(key);
+    if (!table) {
+      const fps = project.fps.num / project.fps.den, sample = (frame: number, out: FlashSample) => {
+        const at = phaseAtFrame(frame, total);
+        for (let i = 0; i < evolve.length; i++) {
+          const original = evolve[i], layer = evaluateLayer(original, at), runtime = this.sampleRuntime, entry = this.sampleEntry;
+          runtime.structure = original.params; runtime.duration = duration;
+          if (layer.opacity > 0) { this.loadLive(layer, original.params); this.prepareEvolve(layer, at, width, height, runtime, entry); this.measureEntry(layer, entry, width, height); }
+          else entry.light = 0;
+          this.areas[i] = entry.area; this.lights[i] = entry.light; this.reds[i] = entry.red;
+        }
+        composeLight(this.areas, this.lights, this.reds, evolve.length, out);
+      };
+      table = guardLoopTable(sample, total, fps, this.guardSettings);
+      if (this.exportTables.size >= EXPORT_TABLES) this.exportTables.delete(this.exportTables.keys().next().value as string);
+      this.exportTables.set(key, table);
+    }
+    const wrapped = ((phase % TAU) + TAU) % TAU;
+    return table[frameAtPhase(wrapped, total) % total];
+  }
+
+  /** The layer's own lit area, light and red, from its own list, placement and colours. */
+  private measureEntry(layer: Layer, entry: EvolveEntry, width: number, height: number): void {
+    const p = this.evolveView, aspect = width / height, place = this.placement;
+    const zoom = read(p, 'structureZoom') * (1 - 2 * read(p, 'outputSafeMargin')), angle = read(p, 'structureRotation') * Math.PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
+    const squash = (1 - read(p, 'structureEllipse') * .6) * (1 - read(p, 'structureTilt') * .62);
+    const s00 = cos * zoom, s01 = -sin * zoom * squash, s10 = sin * zoom, s11 = cos * zoom * squash, cx = read(p, 'structureCentreX'), cy = read(p, 'structureCentreY');
+    const m = sourceViewMatrix(layer.transform, aspect, this.measureView).invert().elements;
+    const u0 = m[0] * (cx + .5) + m[3] * (cy + .5) + m[6], v0 = m[1] * (cx + .5) + m[4] * (cy + .5) + m[7];
+    place.aspect = aspect;
+    place.a = (m[0] * s00 / aspect + m[3] * s10) * aspect; place.b = (m[0] * s01 / aspect + m[3] * s11) * aspect;
+    place.c = m[1] * s00 / aspect + m[4] * s10; place.d = m[1] * s01 / aspect + m[4] * s11;
+    place.x = (u0 - .5) * aspect; place.y = v0 - .5;
+    place.level = read(p, 'lightExposure') * Math.max(0, layer.opacity);
+    measureList(entry.list, place, this.measured);
+    entry.area = this.measured.area; entry.light = this.measured.light;
+    this.form = undefined;
+    this.pulseSeededScheme = evolveScheme(entry.scheme);
+    this.setColours(this.live, layer.palette, 0, 0);
+    entry.red = this.redShare(p);
+  }
+
+  /** Moves this layer's clock on and draws its list. Runs once per composition frame. */
+  private prepareEvolve(layer: Layer, phase: number, width: number, height: number, runtime: MeridianRuntime | undefined, entry: EvolveEntry): void {
+    const live = this.live, duration = runtime?.duration ?? DEFAULT_LOOP_FRAMES / 30, structure = runtime?.structure ?? layer.params;
     let seed = live.seed >>> 0;
     const performer = runtime?.live ? this.evolvePerformer(layer, seed) : null;
-    if (performer) { if (performer.seed !== null) seed = performer.seed; if (performer.mutated) Object.assign(live, performer.mutated); }
-    const view = Object.assign(this.evolveView, live);
-    let list = runtime?.list, scheme = seed;
-    if (runtime?.live) {
+    if (performer) { performer.overrides.apply(structure, live); if (performer.overrides.seed !== null) seed = performer.overrides.seed; }
+    const view = Object.assign(this.evolveView, live), list = runtime?.list;
+    let scheme = seed;
+    if (runtime?.live && performer) {
       let transport = this.evolveTransports.get(layer.id);
       if (!transport) { transport = createEvolveTransport(); this.evolveTransports.set(layer.id, transport); }
       const now = performance.now(), last = this.evolveWalls.get(layer.id), wall = last === undefined ? 0 : (now - last) / 1000;
       this.evolveWalls.set(layer.id, now);
       if (wall > .25) transport.lastPhase = null; // Back after a gap, such as another style: carry on from here rather than leaping.
-      const moves = this.evolveMoves;
-      if (performer) {
-        this.applyLinkedEdit(performer, layer, seed, moves);
-        if (performer.seed !== null) seed = performer.seed;
-        if (performer.mutated) { Object.assign(live, performer.mutated); Object.assign(view, performer.mutated); }
-        const dt = Math.min(wall, .25), frame = performer.conductor.update({ dt, signals: runtime.signals ?? NO_SIGNALS, params: live });
-        performer.light.update(frame, live, dt, litShare(list ?? this.list, width / height), this.redShare(live), evolveMoveLight(transport.clock), transport.clock.music);
-        musicStatus.status = frame.status; musicStatus.bpm = frame.bpm;
+      const moves = this.evolveMoves, edit = performer.router.read(heldMoves, layer.id, layer.params, moves);
+      if (edit.kind !== 'none') {
+        this.applyLinkedEdit(performer, edit, layer, structure, seed);
+        performer.overrides.apply(structure, live);
+        Object.assign(view, live);
+        if (performer.overrides.seed !== null) seed = performer.overrides.seed;
       }
+      const input = performer.input;
+      input.dt = Math.min(wall, .25); input.signals = runtime.signals ?? NO_SIGNALS; input.params = live; input.externalTempo = runtime.externalTempo === true;
+      const frame = performer.conductor.update(input);
+      performer.light.update(frame, live, input.dt, transport.clock.music);
+      musicStatus.status = frame.status; musicStatus.bpm = frame.bpm;
+      transport.clock.aspect = width / height;
       const clock = advanceEvolve(transport, phase, duration, wall, seed, live, moves);
       Object.assign(view, transport.values);
-      if (!list) { list = this.list; evaluateEvolve(seed, clock, view, list); }
+      if (!list) evaluateEvolve(seed, clock, view, entry.list);
       scheme = clock.schemeSeed;
     } else {
-      // An animated Speed, Evolution or ring rotation would change how many turns the closed path makes, so the saved values set it.
-      view.macroSpeed = runtime?.structure?.macroSpeed ?? live.macroSpeed;
-      view.scoreEvolution = runtime?.structure?.scoreEvolution ?? live.scoreEvolution;
-      view.ringRotationSpeed = runtime?.structure?.ringRotationSpeed ?? live.ringRotationSpeed;
-      view.ringCounterRotation = runtime?.structure?.ringCounterRotation ?? live.ringCounterRotation;
+      this.exactView(view, runtime);
       let exact = this.evolveExact.get(layer.id);
       if (!exact) { exact = createEvolveClock(); this.evolveExact.set(layer.id, exact); }
+      exact.aspect = width / height;
       const clock = exactEvolveClock(phase, duration, view, exact);
-      if (!list) { list = this.list; evaluateEvolve(seed, clock, view, list); }
+      if (!list) evaluateEvolve(seed, clock, view, entry.list);
     }
+    entry.seed = seed; entry.scheme = scheme;
+  }
+
+  /** An animated Speed, Evolution or ring rotation would change how many turns the closed path makes, so the saved values set it. */
+  private exactView(view: Record<string, number>, runtime: MeridianRuntime | undefined): void {
+    const live = this.live;
+    view.macroSpeed = runtime?.structure?.macroSpeed ?? live.macroSpeed;
+    view.scoreEvolution = runtime?.structure?.scoreEvolution ?? live.scoreEvolution;
+    view.ringRotationSpeed = runtime?.structure?.ringRotationSpeed ?? live.ringRotationSpeed;
+    view.ringCounterRotation = runtime?.structure?.ringCounterRotation ?? live.ringCounterRotation;
+  }
+
+  /** Evolve: free-running and eased in the preview, an exact closed path in an export. It has no Rest, so the Mark stays off. */
+  private drawEvolve(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, runtime?: MeridianRuntime): void {
+    const live = this.live, entry = this.entryFor(layer.id);
+    if (runtime?.live && !runtime.list && entry.stamp === this.compositionStamp && entry.phase === phase) {
+      // Already moved on and drawn for this frame; only the values the light needs are read back.
+      this.evolveLive.get(layer.id)?.overrides.apply(runtime.structure ?? layer.params, live);
+      Object.assign(this.evolveView, live);
+      const transport = this.evolveTransports.get(layer.id);
+      if (transport) Object.assign(this.evolveView, transport.values);
+    } else this.prepareEvolve(layer, phase, width, height, runtime, entry);
+    const view = this.evolveView, list = runtime?.list ?? entry.list;
     applyEvolveLight(view, live);
     this.tearAmount = 0;
     this.markAlpha = 0;
     this.form = undefined;
-    this.pulseSeededScheme = evolveScheme(scheme);
+    this.pulseSeededScheme = evolveScheme(entry.scheme);
     this.shared.uOwnGlow.value = 1;
     sourceViewMatrix(layer.transform, width / height, this.view);
     this.view.invert();
@@ -306,24 +487,21 @@ export class MeridianRenderer {
 
   private evolvePerformer(layer: Layer, seed: number): EvolveLive {
     let state = this.evolveLive.get(layer.id);
-    if (!state) { state = { conductor: new Conductor(), light: new MusicLight(), router: new MoveRouter(), baseSeed: seed, seed: null, mutated: null, presses: 0 }; this.evolveLive.set(layer.id, state); }
-    if (state.baseSeed !== seed) { state.baseSeed = seed; state.seed = null; } // The performer chose a seed, which replaces a linked one.
+    if (!state) { state = { conductor: new Conductor(), light: new MusicLight(), router: new MoveRouter(), overrides: new LinkedOverrides(), baseSeed: seed, presses: 0, input: { dt: 0, signals: NO_SIGNALS, params: this.live, externalTempo: false } }; this.evolveLive.set(layer.id, state); }
+    if (state.baseSeed !== seed) { state.baseSeed = seed; state.overrides.seed = null; } // The performer chose a seed, which replaces a linked one.
     return state;
   }
 
-  /** Keys and links reach Evolve through one router. A linked Mutate, Reseed or Recall lasts for this session and never edits the show. */
-  private applyLinkedEdit(state: EvolveLive, layer: Layer, seed: number, moves: typeof this.evolveMoves): void {
-    const edit = state.router.read(key => heldMoves.get(layer.id, key), layer.params, moves);
-    if (edit.kind === 'none') return;
+  /** A linked Mutate, Reseed or Recall lasts for this session and never edits the show. */
+  private applyLinkedEdit(state: EvolveLive, edit: LinkedEdit, layer: Layer, structure: Readonly<Record<string, number>>, seed: number): void {
     state.presses++;
     const picked = (Math.imul(seed ^ 0x51ed270b, 0x9e3779b1) + Math.imul(state.presses, 0x85ebca6b)) >>> 0;
-    if (edit.kind === 'reseed' && !layer.meridian?.locks.includes('Score')) state.seed = 1 + picked % MAX_STORED_SEED;
-    else if (edit.kind === 'recall') { const stored = layer.params[`seedSlot${edit.slot}`]; if (stored) state.seed = stored >>> 0; }
+    if (edit.kind === 'reseed' && !layer.meridian?.locks.includes('Score')) state.overrides.seed = 1 + picked % MAX_STORED_SEED;
+    else if (edit.kind === 'recall') { const stored = layer.params[`seedSlot${edit.slot}`]; if (stored) state.overrides.seed = stored >>> 0; }
     else if (edit.kind === 'mutate') {
-      // Only what Mutate moved is kept, so every other slider stays live.
-      const before = { ...layer.params, ...state.mutated }, after = applyLockedVariation({ ...layer, params: before }, picked, 'mutate').params, moved: Record<string, number> = { ...state.mutated };
-      for (const key of Object.keys(after)) if (after[key] !== before[key]) moved[key] = after[key];
-      state.mutated = moved;
+      const current = { ...structure };
+      state.overrides.apply(structure, current);
+      state.overrides.mutated(structure, applyLockedVariation({ ...layer, params: current }, picked, 'mutate').params);
     }
   }
 

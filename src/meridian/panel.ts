@@ -63,6 +63,9 @@ export const EVOLVE_INACTIVE: readonly string[] = [
   'lightAfterglow', 'lightTrailLength', 'colourPeakPalette', 'colourHueDrift', 'colourAccentFrequency', 'colourByAge',
 ];
 
+/** Whether this layer uses the sound input. Only a visible Evolve layer does, so no other keeps the microphone open. */
+export const listensToMusic = (layer: Layer): boolean => layer.visible && layer.kind === 'meridian' && Math.round(layer.params.scoreStyle ?? 2) === 2;
+
 /** What the Motion tab may animate on a Meridian layer: macros and moves are played, not keyframed. */
 export const motionParameters = (definitions: readonly ParameterDefinition[]): ParameterDefinition[] => definitions.filter((d) => d.group !== PERFORMANCE_GROUP);
 

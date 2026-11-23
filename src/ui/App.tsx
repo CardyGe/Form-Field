@@ -35,7 +35,7 @@ import { beginStudioEdit, endStudioEdit, onStudioWallWarning, studioEdit } from 
 import { projectForStudioSave, stashStudio, type ShapeEdit } from './studio-edit';
 import MapPanel from './MapPanel';
 import { MeridianControls, useMeridianPerformance } from './MeridianControls';
-import { motionParameters } from '../meridian/panel';
+import { listensToMusic, motionParameters } from '../meridian/panel';
 import { sameCanvasValues } from '../core/canvas-interaction';
 
 const TAU = Math.PI * 2;
@@ -169,7 +169,7 @@ export default function App() {
   const [emberSound, setEmberSound] = useState<ReactivityEngine | null>(null);
   const emberMeters = useMemo(() => new MeterStore(), []);
   const hasEmber = project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1);
-  const hasMeridian = project.layers.some(l => l.visible && l.kind === 'meridian');
+  const hasMeridian = project.layers.some(listensToMusic);
   const flashGuardOff = project.layers.some(l => l.visible && l.kind === 'meridian' && (l.params.safetyFlashGuard ?? 1) < .5);
   useEffect(() => {
     if (!emberSound || mode !== 'studio' || !(hasEmber || hasMeridian)) return;
@@ -238,13 +238,13 @@ export default function App() {
   // Recorded like any edit, so Undo brings the previous composition back.
   const newProject = async () => { try {
     const next = createProject();
-    replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath('');
+    rendererRef.current?.resetMeridianPerformance(); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath('');
     await window.studio?.forgetProjectPath();
     notify('New composition. Undo brings the previous one back.');
   } catch (e) { reportError(String(e)); } };
   const open = async () => { try {
-    if (window.studio) { const result = await window.studio.openProject(); if (result.project) { const next = validateProject(result.project); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath(result.path ?? ''); } }
-    else { const input = document.createElement('input'); input.type = 'file'; input.accept = '.formfield,.json'; input.onchange = async () => { try { const file = input.files?.[0]; if (file) { const next = validateProject(JSON.parse(await file.text())); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; } } catch (e) { reportError(String(e)); } }; input.click(); }
+    if (window.studio) { const result = await window.studio.openProject(); if (result.project) { const next = validateProject(result.project); rendererRef.current?.resetMeridianPerformance(); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath(result.path ?? ''); } }
+    else { const input = document.createElement('input'); input.type = 'file'; input.accept = '.formfield,.json'; input.onchange = async () => { try { const file = input.files?.[0]; if (file) { const next = validateProject(JSON.parse(await file.text())); rendererRef.current?.resetMeridianPerformance(); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; } } catch (e) { reportError(String(e)); } }; input.click(); }
   } catch (e) { reportError(String(e)); } };
 
   useEffect(() => { let alive = true; startupTask.current = (async () => {
@@ -258,14 +258,14 @@ export default function App() {
         if (restored.status === 'fulfilled') {
           // Not while a Map shape is being edited: the restored project is Studio's own, not the shape's.
           if (restored.value && history.current.length === 0 && !shapeEditRef.current) {
-            try { const next = validateProject(restored.value); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); }
+            try { const next = validateProject(restored.value); rendererRef.current?.resetMeridianPerformance(); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); }
             catch (error) { issues.push(`Project recovery: ${String(error)}. The previous autosave is retained in the application recovery folder.`); }
           }
         } else issues.push(`Project recovery: ${String(restored.reason)}. The previous autosave is retained in the application recovery folder.`);
         if (issues.length) reportError(issues.join('\n'));
       } else {
         const text = localStorage.getItem('formfield-autosave');
-        if (text && history.current.length === 0) { const next = validateProject(JSON.parse(text)); if (alive) { replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); } }
+        if (text && history.current.length === 0) { const next = validateProject(JSON.parse(text)); if (alive) { rendererRef.current?.resetMeridianPerformance(); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); } }
       }
     } catch (e) { if (alive) reportError(`Recovery: ${String(e)}`); }
     finally { if (alive) setReady(true); }

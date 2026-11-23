@@ -5,8 +5,9 @@ import { advanceEvolve, createEvolveTransport, evaluateEvolve, EVOLVE_FORM_NAMES
 import { MERIDIAN_DEFAULTS } from '../src/meridian/parameters';
 import { PRIMITIVE } from '../src/meridian/types';
 
-const ASPECT = 16 / 9, idle: EvolveMoves = { next: false, hold: false, drop: false, collapse: false, burst: false };
-const inFrame = (x: number, y: number) => Math.abs(x) <= ASPECT / 2 && Math.abs(y) <= 0.5;
+const ASPECTS = [16 / 9, 1, 9 / 16], idle: EvolveMoves = { next: false, hold: false, drop: false, collapse: false, burst: false };
+let aspect = 16 / 9;
+const inFrame = (x: number, y: number) => Math.abs(x) <= aspect / 2 && Math.abs(y) <= 0.5;
 
 /** How much of a mark's drawn line is inside the frame, in frame heights, by walking along it. */
 function onScreenLength(d: Float32Array, at: number): number {
@@ -37,8 +38,9 @@ function visible(list: DisplayList): { marks: number; length: number } {
 test('every form keeps visible structure on screen at every Seed, Density, Scale and Tension', () => {
   const list = new DisplayList(2000), kinds = new Set<number>(), failures: string[] = [];
   let worstMarks = Infinity, worstLength = Infinity;
-  for (let seed = 1; seed <= 24; seed++) for (const macroScale of [0, 0.25, 0.5, 0.65, 0.8, 0.9, 1]) for (const macroDensity of [0, 0.5, 1]) for (const macroTension of [0, 0.5, 1]) {
+  for (const shape of ASPECTS) for (let seed = 1; seed <= 24; seed++) for (const macroScale of [0, 0.25, 0.5, 0.65, 0.8, 0.9, 1]) for (const macroDensity of [0, 0.5, 1]) for (const macroTension of [0, 0.5, 1]) {
     const p = { ...MERIDIAN_DEFAULTS, macroScale, macroDensity, macroTension }, transport = createEvolveTransport(), view: Record<string, number> = {};
+    aspect = shape; transport.clock.aspect = shape;
     const clock = advanceEvolve(transport, 0, 60, 0, seed, p, idle);
     Object.assign(view, p, transport.values);
     for (let evolution = 0; evolution < 900; evolution += 19) {
@@ -47,7 +49,7 @@ test('every form keeps visible structure on screen at every Seed, Density, Scale
       evaluateEvolve(seed, clock, view, list);
       const { marks, length } = visible(list);
       worstMarks = Math.min(worstMarks, marks); worstLength = Math.min(worstLength, length);
-      if ((marks < 5 || length < 0.3) && failures.length < 8) failures.push(`seed ${seed} ${EVOLVE_FORM_NAMES[evolveFormKind(seed, evolution)]} t${evolution} scale ${macroScale} density ${macroDensity} tension ${macroTension}: ${marks} marks, ${length.toFixed(3)} long`);
+      if ((marks < 5 || length < 0.3) && failures.length < 8) failures.push(`${shape.toFixed(2)} seed ${seed} ${EVOLVE_FORM_NAMES[evolveFormKind(seed, evolution)]} t${evolution} scale ${macroScale} density ${macroDensity} tension ${macroTension}: ${marks} marks, ${length.toFixed(3)} long`);
     }
   }
   assert.equal(kinds.size, EVOLVE_FORM_NAMES.length, 'the sweep must reach every form');

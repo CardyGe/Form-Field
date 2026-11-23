@@ -110,6 +110,8 @@ export interface EvolveClock {
   readonly music: MusicLightFrame;
   /** How far anything beyond the frame is drawn back in, for a large Scale. Eased like the fold, so it never throws a mark. */
   frameReach: number;
+  /** The output's width over its height. A frame narrower than 16:9 draws far-flung marks back further. */
+  aspect: number;
   /** How fast Scale is moving, as a share of its top speed. */
   zooming: number;
   /** True while a performer's move is under way. Light then changes at a limited rate, however the moves combine. */
@@ -546,7 +548,7 @@ export function evolutionRate(params: Readonly<Record<string, number>>): number 
 }
 
 export function createEvolveClock(): EvolveClock {
-  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, music: createMusicLight(), frameReach: 0, zooming: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), shownGlow: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
+  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, music: createMusicLight(), frameReach: 0, aspect: 16 / 9, zooming: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), shownGlow: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
 }
 
 export function createEvolveTransport(): EvolveTransport {
@@ -674,7 +676,7 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   clock.zooming = Math.abs(transport.follow[1]) / SCALE_SPEED_SMALL;
   const foldTo = foldFor(unit(values.macroScale));
   clock.fold = firstFrame ? foldTo : clock.fold + clamp(foldTo - clock.fold, -FOLD_SPEED * wall, FOLD_SPEED * wall);
-  const reachTo = reachFor(unit(values.macroScale));
+  const reachTo = reachFor(unit(values.macroScale), clock.aspect);
   clock.frameReach = firstFrame ? reachTo : clock.frameReach + clamp(reachTo - clock.frameReach, -REACH_SPEED * wall, REACH_SPEED * wall);
   clock.performing = transport.follow[0] !== 0 || transport.follow[1] !== 0 || clock.fold !== foldTo || clock.frameReach !== reachTo || clock.music.active || values.macroGlitch !== finite(params.macroGlitch, 0) || clock.ripples[0] >= 0 || clock.ripples[1] >= 0 || clock.ripples[2] >= 0;
 
@@ -746,13 +748,6 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   return clock;
 }
 
-/** How much Burst and Drop are adding to the light right now, for Flash Guard. */
-export function evolveMoveLight(clock: EvolveClock): number {
-  let light = clock.swell * 0.3;
-  for (let i = 0; i < clock.ripples.length; i++) { const age = clock.ripples[i]; if (age >= 0) light += 0.5 * smooth(age / 0.5) * (1 - smooth((age - 1.6) / 1.6)); }
-  return light;
-}
-
 /** The accent scheme for a seed, a number into MERIDIAN_SCHEMES from 1. It holds for the whole piece. */
 export function evolveScheme(seed: number): number {
   const schemes = [1, 2, 4, 5, 7, 8, 11, 12];
@@ -792,12 +787,14 @@ const oscillate = (clock: EvolveClock, period: number, offset: number, speed: nu
  * Above the centre of Scale, anything that would land beyond the frame is drawn back towards it, so a vast horizon or an
  * enclosing ring still crosses the picture. At or below the centre this returns its input exactly.
  */
-const FRAME_REACH = 0.72, FRAME_KEEP = 0.14;
-const reachFor = (scale: number): number => clamp((scale - 0.5) / 0.3, 0, 1);
-const framed = (value: number, reach: number): number => {
+const FRAME_REACH = 0.72, FRAME_KEEP = 0.14, WIDE = 16 / 9;
+/** How much of a 16:9 frame's width this frame has. */
+const frameFit = (aspect: number): number => (aspect >= WIDE - 1e-6 ? 1 : clamp(aspect / WIDE, 0.1, 1));
+const reachFor = (scale: number, aspect: number): number => (frameFit(aspect) < 1 ? 1 : clamp((scale - 0.5) / 0.3, 0, 1));
+const framed = (value: number, reach: number, limit: number, keep: number): number => {
   const size = Math.abs(value);
-  if (reach <= 0 || size <= FRAME_REACH) return value;
-  return (value < 0 ? -1 : 1) * (FRAME_REACH + (size - FRAME_REACH) * (1 - reach * (1 - FRAME_KEEP)));
+  if (reach <= 0 || size <= limit) return value;
+  return (value < 0 ? -1 : 1) * (limit + (size - limit) * (1 - reach * (1 - keep)));
 };
 
 const swungX = (x: number, y: number, cx: number, cy: number, c: number, s: number): number => cx + (x - cx) * c - (y - cy) * s;
@@ -817,7 +814,7 @@ function rippleAt(clock: EvolveClock, radius: number): number {
     const front = age * 0.46, into = (radius - front) / 0.13, rise = smooth(age / 0.5), fall = 1 - smooth((age - 1.6) / 1.6);
     light += rise * fall * Math.exp(-into * into);
   }
-  return light * clock.music.gain;
+  return light;
 }
 
 /** Colour arrives on a voice rarely and slowly, and leaves the same way. */
@@ -975,7 +972,8 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   if (!clock.exact) easePose(clock, scale);
 
   // Turning, breathing and drift, all continuous in the motion clock.
-  const organic = chaos * chaos * (1 - home), reach = clock.exact ? reachFor(unit(params.macroScale)) : clock.frameReach;
+  const organic = chaos * chaos * (1 - home), reach = clock.exact ? reachFor(unit(params.macroScale), clock.aspect) : clock.frameReach;
+  const fit = frameFit(clock.aspect), reachX = FRAME_REACH * fit, reachY = FRAME_REACH * (0.6 + 0.4 * fit), reachR = FRAME_REACH * fit ** 0.9, keep = FRAME_KEEP * fit;
   const draw = (1.22 - tension * 0.44) * (1 - clock.gather * 0.62) * scale, tuck = clock.exact ? foldFor(unit(params.macroScale)) : clock.fold;
   const breathDepth = 0.008 + tension * 0.012;
   const heroBreath = 0.5 + 0.5 * oscillate(clock, 17, 1.3, speed);
@@ -983,7 +981,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const heroSwell = (0.012 + tension * tension * 0.075) * heroPulse * heroBreath + clock.swell * 0.055;
   const lineGain = clamp(finite(params.ringWeight, 1), 0, 16) * weight;
   const ringInk = clamp(finite(params.ringOpacity, 1), 0, 1);
-  const lightDepth = 0.14, music = clock.music, swellLight = clock.swell * music.gain;
+  const lightDepth = 0.14, music = clock.music, swellLight = clock.swell;
   const life = 1 - home; // Even while a form rests, its rings drift, its arcs part and its spokes lean into pairs.
 
   const glitchAmount = glitch > 0.5 ? (glitch - 0.5) * 2 : 0;
@@ -992,15 +990,15 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   const glitchVoice = glitchShape > 0 ? clock.glitchVoice : -1;
 
   // A binary's two systems sway about their shared centre. Every other form has no sway, and this leaves it untouched.
-  const centreX = framed(pull(pose[HERO_BASE + H_X], tuck) * draw, reach), centreY = framed(pull(pose[HERO_BASE + H_Y], tuck) * draw, reach);
+  const centreX = framed(pull(pose[HERO_BASE + H_X], tuck) * draw, reach, reachX, keep), centreY = framed(pull(pose[HERO_BASE + H_Y], tuck) * draw, reach, reachY, keep);
   const swing = pose[HERO_BASE + H_SWAY] * SWAY_RADIANS * oscillate(clock, SWAY_PERIOD, 0.9, speed), swingCos = Math.cos(swing), swingSin = Math.sin(swing);
 
   for (let voice = 0; voice < RING_VOICES; voice++) {
     const at = voice * RING_FIELDS, phase = voice * 1.91;
     const breathe = 1 + breathDepth * oscillate(clock, 29 + voice * 2.3, phase, speed) + life * 0.03 * oscillate(clock, 67 - voice * 2.6, phase * 1.4, speed) + organic * 0.05 * oscillate(clock, 37 + voice * 3.1, phase * 1.7, speed);
-    const radius = framed(pull(pose[at + R_RADIUS], tuck) * breathe * draw, reach);
-    const driftX = framed((pull(pose[at + R_X], tuck) + organic * 0.028 * oscillate(clock, 43 + voice * 2.9, phase * 2.3, speed)) * draw, reach);
-    const driftY = framed((pull(pose[at + R_Y], tuck) + organic * 0.028 * oscillate(clock, 47 + voice * 2.7, phase * 3.1, speed)) * draw, reach);
+    const radius = framed(pull(pose[at + R_RADIUS], tuck) * breathe * draw, reach, reachR, keep);
+    const driftX = framed((pull(pose[at + R_X], tuck) + organic * 0.028 * oscillate(clock, 43 + voice * 2.9, phase * 2.3, speed)) * draw, reach, reachX, keep);
+    const driftY = framed((pull(pose[at + R_Y], tuck) + organic * 0.028 * oscillate(clock, 47 + voice * 2.7, phase * 3.1, speed)) * draw, reach, reachY, keep);
     const x = swungX(driftX, driftY, centreX, centreY, swingCos, swingSin), y = swungY(driftX, driftY, centreX, centreY, swingCos, swingSin);
     const tier = voice % 3;
     const turn = clock.ringTurns[tier];
@@ -1027,8 +1025,8 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     const at = SPOKE_BASE + voice * SPOKE_FIELDS, phase = voice * 2.37;
     const pairing = life * 0.085 * (voice % 2 ? 1 : -1) * oscillate(clock, 71, 0.6 + (voice >> 1) * 0.5, speed);
     const angle = pose[at + S_ANGLE] + spokeTurn + pairing + organic * 0.2 * oscillate(clock, 41 + voice * 1.7, phase, speed);
-    const outer = framed(pull(pose[at + S_OUTER], tuck) * spokeReach * draw * (1 + organic * 0.08 * oscillate(clock, 53 + voice * 2.1, phase * 1.3, speed)), reach);
-    const start = framed(pull(pose[at + S_INNER] + (pose[at + S_OUTER] - pose[at + S_INNER]) * inner * 0.8, tuck) * spokeReach * draw, reach);
+    const outer = framed(pull(pose[at + S_OUTER], tuck) * spokeReach * draw * (1 + organic * 0.08 * oscillate(clock, 53 + voice * 2.1, phase * 1.3, speed)), reach, reachR, keep);
+    const start = framed(pull(pose[at + S_INNER] + (pose[at + S_OUTER] - pose[at + S_INNER]) * inner * 0.8, tuck) * spokeReach * draw, reach, reachR, keep);
     const cos = Math.cos(angle), sin = Math.sin(angle), middle = (start + outer) * 0.5;
     const beatLight = lightAt(clock, middle), ripple = rippleAt(clock, middle);
     const heard = music.wave * waveAt(music, middle);
@@ -1043,9 +1041,9 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   for (let node = 0; node < NODE_VOICES; node++) {
     const at = NODE_BASE + node * NODE_FIELDS, ringVoice = (node % 4) * RING_FIELDS;
     const turn = clock.ringTurns[(node % 4) % 3];
-    const angle = pose[at + N_ANGLE] + turn, radius = framed(pull(pose[ringVoice + R_RADIUS], tuck) * draw, reach);
+    const angle = pose[at + N_ANGLE] + turn, radius = framed(pull(pose[ringVoice + R_RADIUS], tuck) * draw, reach, reachR, keep);
     const beatLight = lightAt(clock, radius), ripple = rippleAt(clock, radius);
-    const ringX = framed(pull(pose[ringVoice + R_X], tuck) * draw, reach), ringY = framed(pull(pose[ringVoice + R_Y], tuck) * draw, reach);
+    const ringX = framed(pull(pose[ringVoice + R_X], tuck) * draw, reach, reachX, keep), ringY = framed(pull(pose[ringVoice + R_Y], tuck) * draw, reach, reachY, keep);
     const x = swungX(ringX, ringY, centreX, centreY, swingCos, swingSin) + Math.cos(angle) * radius, y = swungY(ringX, ringY, centreX, centreY, swingCos, swingSin) + Math.sin(angle) * radius;
     const glint = music.highs * sparkleAt(music, node);
     const ink = pose[at + N_ALPHA] * nodeInk * (1 + lightDepth * 1.3 * (beatLight - 0.3) + ripple + music.wave * 1.2 * waveAt(music, radius) + glint + music.lift);
@@ -1054,7 +1052,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
 
   const heroGain = clamp(finite(params.heroWeight, 1), 0, 16) * Math.max(0.6, weight), heroLight = clamp(finite(params.heroGlow, 1), 0, 8) * clamp(finite(params.heroHaloStrength, 1), 0, 2);
   const heroPlace = 0.8 + clamp(finite(params.heroRadius, 0.5), 0, 1) * 0.4, split = clamp(finite(params.heroSplit, 0), 0, 1);
-  const heroRadius = framed(pull(pose[HERO_BASE + H_RADIUS], tuck) * heroPlace * (1 + heroSwell) * draw, reach);
+  const heroRadius = framed(pull(pose[HERO_BASE + H_RADIUS], tuck) * heroPlace * (1 + heroSwell) * draw, reach, reachR, keep);
   const heroX = centreX, heroY = centreY;
   const heroBeat = lightAt(clock, heroRadius), heroRipple = rippleAt(clock, heroRadius);
   const heroInk = pose[HERO_BASE + H_ALPHA] * (1 + lightDepth * 0.8 * (heroBeat - 0.3) + heroRipple * 0.5 + swellLight * 0.28 + music.wave * 0.7 * waveAt(music, heroRadius) + music.bass * 0.6 + music.lift);
@@ -1072,7 +1070,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
   // Glitch shards exist only above the centre of the slider, so at or below it the list is untouched by them.
   if (glitch > 0.5) {
     const at = clock.glitchVoice * RING_FIELDS, shardSeed = clock.glitchSeed;
-    const radius = framed(pull(pose[at + R_RADIUS], tuck) * draw, reach), ringX = framed(pull(pose[at + R_X], tuck) * draw, reach), ringY = framed(pull(pose[at + R_Y], tuck) * draw, reach), cell = clock.glitchCell;
+    const radius = framed(pull(pose[at + R_RADIUS], tuck) * draw, reach, reachR, keep), ringX = framed(pull(pose[at + R_X], tuck) * draw, reach, reachX, keep), ringY = framed(pull(pose[at + R_Y], tuck) * draw, reach, reachY, keep), cell = clock.glitchCell;
     const x = swungX(ringX, ringY, centreX, centreY, swingCos, swingSin), y = swungY(ringX, ringY, centreX, centreY, swingCos, swingSin);
     for (let i = 0; i < GLITCH_SHARDS; i++) {
       const a = hashUnit(shardSeed, cell, 430 + i), b = hashUnit(shardSeed, cell, 450 + i), reachOut = glitchShape * (0.012 + glitchAmount * 0.038);

@@ -5,7 +5,7 @@ import { Conductor, type ConductorFrame } from '../src/meridian/conductor';
 import { DisplayList, STRIDE } from '../src/meridian/display-list';
 import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, exactEvolveClock, type EvolveMoves } from '../src/meridian/evolve';
 import { MoveRouter } from '../src/meridian/moves';
-import { litShare, MusicLight } from '../src/meridian/music-light';
+import { MusicLight } from '../src/meridian/music-light';
 import { EVOLVE_INACTIVE, motionParameters } from '../src/meridian/panel';
 import { MACRO_KEYS, MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../src/meridian/parameters';
 
@@ -22,7 +22,7 @@ function play(seconds: number, p: Record<string, number>, signals: ((t: number) 
   advanceEvolve(transport, 0, LOOP, 0, seed, p, idle);
   for (let f = 1; f <= seconds * 60; f++) {
     const t = f * DT;
-    if (signals) music.update(conductor.update({ dt: DT, signals: signals(t), params: p }), p, DT, litShare(list, 16 / 9), 0, transport.clock.swell, transport.clock.music);
+    if (signals) music.update(conductor.update({ dt: DT, signals: signals(t), params: p }), p, DT, transport.clock.music);
     const clock = advanceEvolve(transport, phaseAt(t), LOOP, DT, seed, p, idle);
     Object.assign(view, p, transport.values);
     evaluateEvolve(seed, clock, view, list);
@@ -67,21 +67,22 @@ test('under every reaction setting no mark changes light faster than the existin
 test('energy lifts Evolution slowly and only while there is sound', () => {
   const music = new MusicLight(), conductor = new Conductor(), out = createEvolveClock().music;
   let frame!: ConductorFrame, first = 0;
-  for (let f = 1; f <= 1800; f++) { frame = conductor.update({ dt: DT, signals: sound(f * DT), params: MERIDIAN_DEFAULTS }); music.update(frame, MERIDIAN_DEFAULTS, DT, 0, 0, 0, out); if (f === 30) first = out.evolutionLift; }
+  for (let f = 1; f <= 1800; f++) { frame = conductor.update({ dt: DT, signals: sound(f * DT), params: MERIDIAN_DEFAULTS }); music.update(frame, MERIDIAN_DEFAULTS, DT, out); if (f === 30) first = out.evolutionLift; }
   assert.ok(first < 0.06 && out.evolutionLift > 0.15 && out.evolutionLift <= 0.4, `${first} then ${out.evolutionLift}`);
 });
 
 test('moves from keys and links share one path, and a linked edit fires once per press', () => {
-  const router = new MoveRouter(), out = { ...idle }, none = () => 0;
-  assert.equal(router.read(none, { moveNext: 0.8 }, out).kind, 'none'); assert.equal(out.next, true);
-  router.read(key => (key === 'moveHold' ? 1 : 0), {}, out); assert.deepEqual([out.hold, out.next], [true, false]);
+  const router = new MoveRouter(), out = { ...idle }, none = { get: () => 0 }, press = (...keys: string[]) => ({ get: (_: string, key: string) => (keys.includes(key) ? 1 : 0) });
+  assert.equal(router.read(none, 'a', { moveNext: 0.8 }, out).kind, 'none'); assert.equal(out.next, true);
+  router.read(press('moveHold'), 'a', {}, out); assert.deepEqual([out.hold, out.next], [true, false]);
   const fired: string[] = [];
-  for (const v of [0, 1, 1, 1, 0, 1]) fired.push(router.read(none, { moveReseed: v }, out).kind);
+  for (const v of [0, 1, 1, 1, 0, 1]) fired.push(router.read(none, 'a', { moveReseed: v }, out).kind);
   assert.deepEqual(fired.filter(k => k !== 'none'), ['reseed', 'reseed']);
   // A key press has already made its edit in the panel, so the router must not make it again.
-  for (let i = 0; i < 3; i++) assert.equal(router.read(key => (key === 'moveMutate' || key === 'moveReseed' || key === 'moveRecall' ? 1 : 0), {}, out).kind, 'none');
-  const recall = router.read(none, { moveRecall: 3 }, out); assert.deepEqual([recall.kind, recall.slot], ['recall', 2]);
-  assert.equal(router.read(none, { moveRecall: 3 }, out).kind, 'none');
+  for (let i = 0; i < 3; i++) assert.equal(router.read(press('moveMutate', 'moveReseed', 'moveRecall'), 'a', {}, out).kind, 'none');
+  router.read(none, 'a', { moveRecall: 3 }, out); router.read(none, 'a', { moveRecall: 3 }, out);
+  const recall = router.read(none, 'a', { moveRecall: 3 }, out); assert.deepEqual([recall.kind, recall.slot], ['recall', 2]);
+  assert.equal(router.read(none, 'a', { moveRecall: 3 }, out).kind, 'none');
 });
 
 test('momentary moves are cleared on load and in saved snapshots', () => {

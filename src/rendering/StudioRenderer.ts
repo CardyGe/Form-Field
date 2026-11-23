@@ -812,6 +812,11 @@ export class StudioRenderer {
     const total = frameCount(project);
     this.meridianRuntime.loopFrames = total;
     this.releaseFeedback(project);
+    for (let i = 0; i < project.layers.length; i++) if (project.layers[i].kind === 'meridian') {
+      this.meridian ??= new MeridianRenderer();
+      this.meridian.beginComposition(project, wrapped, width, height, duration, this.exporting, this.meridianRuntime);
+      break;
+    }
     for (const original of project.layers) {
       if (!original.visible) continue;
       // Feedback layers advance in whole loop frames: every frame of the
@@ -819,7 +824,7 @@ export class StudioRenderer {
       const feedback = feedbackActive(original);
       const framePhase = feedback ? phaseAtFrame(frameAtPhase(wrapped, total), total) : wrapped;
       const sourcePhase = this.sourcePhase(original, framePhase, duration);
-      const layer = evaluateLayer(original, sourcePhase);
+      const layer = (original.kind === 'meridian' ? this.meridian?.evaluatedFor(original) : undefined) ?? evaluateLayer(original, sourcePhase);
       if (layer.opacity <= 0) continue;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
@@ -829,7 +834,7 @@ export class StudioRenderer {
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
       (u.uTexel.value as THREE.Vector2).set(1 / width, 1 / height);
       u.uAspect.value = width / height; u.uScale.value = layer.transform.scale;
-      u.uRotation.value = layer.transform.rotation; u.uOpacity.value = layer.opacity;
+      u.uRotation.value = layer.transform.rotation; u.uOpacity.value = layer.opacity * (original.kind === 'meridian' ? this.meridian?.layerGain(original) ?? 1 : 1);
       u.uPatternRepeat.value = layer.kind === 'graphic' ? (graphicRenderPlan(layer,sourcePhase,width,height,this.maxTargetSize).inView ? 2 : 1) : 0;
       u.uSourceInView.value=Number(layer.kind!=='graphic');
       (u.uSourceViewInverse.value as THREE.Matrix3).copy(sourceViewMatrix(layer.transform,width/height)).invert();
@@ -1125,10 +1130,14 @@ export class StudioRenderer {
     }
   }
 
+  /** A project was loaded: linked Meridian moves from the last one end here. */
+  resetMeridianPerformance(): void { this.meridian?.resetPerformance(); }
+
   render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean }): void {
     if (this.exporting) return;
     // With the tempo source on the detected beat and no sound, the tempo clock is only a default: Meridian stays on its own.
     this.meridianRuntime.signals = sound && (sound.externalTempo || sound.signals['audio.level'] !== undefined) ? sound.signals : undefined;
+    this.meridianRuntime.externalTempo = sound?.externalTempo === true;
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();

@@ -8,20 +8,27 @@ const HOLD = 0.9;               // A refused rise stops this share of the way to
 const WINDOW = 1;
 const SLOTS = 32;               // More changes than any permitted second can hold.
 const MAX_AREA = 0.25;
+const LOOP_PASSES = 8;          // Passes over a loop allowed for its gains to settle into one repeating pattern.
 
 export class FlashGuard {
   private readonly turns = new Float64Array(SLOTS);
-  private head = 0; private count = 0; private now = 0; private anchor = 0; private way = 0; private started = false; private gain = 1;
+  private head = 0; private count = 0; private now = 0; private anchor = 0; private previous = 0; private way = 0; private started = false; private gain = 1; private heldUntil = -1;
 
-  reset(): void { this.head = this.count = this.way = 0; this.now = this.anchor = 0; this.started = false; this.gain = 1; }
+  reset(): void { this.head = this.count = this.way = 0; this.now = this.anchor = this.previous = 0; this.started = false; this.gain = 1; this.heldUntil = -1; }
 
   /** `light` is the frame's changing light, `area` the share of the frame it covers, `red` how saturated red it is (0 to 1). */
   update(dt: number, light: number, area: number, red: number, params: Readonly<Record<string, number>>): number {
     if (!Number.isFinite(dt) || dt < 0 || !Number.isFinite(light)) return this.gain;
     this.now += dt;
-    if ((params.safetyFlashGuard ?? 1) < 0.5) { this.anchor = light; this.way = 0; this.started = true; return this.gain = 1; }
+    if ((params.safetyFlashGuard ?? 1) < 0.5) { this.anchor = this.previous = light; this.way = 0; this.started = true; this.heldUntil = -1; return this.gain = 1; }
     const field = Number.isFinite(params.safetyFullField) ? params.safetyFullField : 0.5;
-    if (!this.started || area <= Math.min(MAX_AREA, 0.05 + 0.4 * field)) { this.anchor = light; this.way = 0; this.started = true; return this.gain = 1; }
+    // Once a large area has been lit, the decision holds through the flash, so an area that rises and falls with the light cannot reset it.
+    if (area > Math.min(MAX_AREA, 0.05 + 0.4 * field)) this.heldUntil = this.now + WINDOW;
+    if (!this.started || this.now >= this.heldUntil) {
+      // One frame behind, so a rise first seen on the frame before the area caught up is still measured from the dark.
+      this.anchor = this.started ? this.previous : light; this.previous = light; this.way = 0; this.started = true;
+      return this.gain = 1;
+    }
 
     while (this.count > 0 && this.now - this.turns[(this.head - this.count + SLOTS) % SLOTS] >= WINDOW) this.count--;
     const redLimit = Number.isFinite(params.safetyRedLimit) ? Math.min(1, Math.max(0, params.safetyRedLimit)) : 0.5;
@@ -29,13 +36,14 @@ export class FlashGuard {
     const allowed = 2 * Math.max(1, Math.floor(flashes * (1 - Math.min(1, Math.max(0, red)) * (1 - redLimit))));
 
     let out = light;
-    if (this.way >= 0 && out > this.anchor && this.way === 1) this.anchor = out;
-    if (this.way <= 0 && out < this.anchor) { if (this.way === -1) this.anchor = out; }
-    if (this.way >= 0 && out <= this.anchor - FLASH_STEP) { this.turn(-1, out); }
+    if (this.way === 1 && out > this.anchor) this.anchor = out;
+    if (this.way === -1 && out < this.anchor) this.anchor = out;
+    if (this.way >= 0 && out <= this.anchor - FLASH_STEP) this.turn(-1, out);
     else if (this.way <= 0 && out >= this.anchor + FLASH_STEP) {
       if (this.count + 2 <= allowed) this.turn(1, out);
       else out = this.anchor + FLASH_STEP * HOLD;
     }
+    this.previous = out;
     return this.gain = light > 1e-9 ? Math.min(1, out / light) : 1;
   }
 
@@ -43,4 +51,89 @@ export class FlashGuard {
     this.way = way; this.anchor = value;
     this.turns[this.head] = this.now; this.head = (this.head + 1) % SLOTS; this.count = Math.min(SLOTS, this.count + 1);
   }
+}
+
+/** The most changes of light in any second of the loop played round three times, counting only frames over a large area. */
+function loopTurns(lights: Float32Array, gains: Float32Array, areas: Float32Array, dt: number, params: Readonly<Record<string, number>>): number {
+  const count = lights.length, field = Number.isFinite(params.safetyFullField) ? params.safetyFullField : 0.5, limit = Math.min(MAX_AREA, 0.05 + 0.4 * field), span = Math.max(1, Math.round(WINDOW / dt));
+  let large = false;
+  for (let f = 0; f < count; f++) if (areas[f] > limit) large = true;
+  if (!large) return 0;
+  const at = new Int32Array(count * 3);
+  let n = 0, anchor = lights[0] * gains[0], way = 0;
+  for (let i = 1; i < count * 3; i++) {
+    const v = lights[i % count] * gains[i % count];
+    if (way === 1 && v > anchor) anchor = v;
+    if (way === -1 && v < anchor) anchor = v;
+    if (way >= 0 && v <= anchor - FLASH_STEP) { way = -1; anchor = v; at[n++] = i; }
+    else if (way <= 0 && v >= anchor + FLASH_STEP) { way = 1; anchor = v; at[n++] = i; }
+  }
+  let worst = 0;
+  for (let i = 0, k = 0; i < n; i++) { while (at[i] - at[k] >= span) k++; worst = Math.max(worst, i - k + 1); }
+  return worst;
+}
+
+/**
+ * Gains that repeat exactly with the loop: the loop is cut into equal slots and each may hold one rise, early in the slot, so
+ * rises stay far enough apart across every slot edge and the loop point. Returns false if the loop is too short for one.
+ */
+function slottedGains(lights: Float32Array, budget: number, dt: number, out: Float32Array): boolean {
+  const count = lights.length, gap = Math.ceil(WINDOW / (budget - 0.5) / dt), slots = Math.floor(count / (gap * 2)) || (count >= gap ? 1 : 0);
+  if (!slots) return false;
+  const before = new Float32Array(count);
+  let anchor = lights[0], way = 0, rose = -1;
+  for (let lap = 0; lap < 5; lap++) {
+    let same = lap > 0;
+    rose = -1;
+    for (let f = 0; f < count; f++) {
+      const slot = Math.floor(f * slots / count), start = Math.ceil(slot * count / slots), end = Math.ceil((slot + 1) * count / slots), open = f - start < Math.max(1, end - start - gap);
+      let value = lights[f];
+      if (way === 1 && value > anchor) anchor = value;
+      if (way === -1 && value < anchor) anchor = value;
+      if (way >= 0 && value <= anchor - FLASH_STEP) { way = -1; anchor = value; }
+      else if (way <= 0 && value >= anchor + FLASH_STEP) {
+        if (open && rose !== slot) { way = 1; anchor = value; rose = slot; }
+        else value = anchor + FLASH_STEP * HOLD;
+      }
+      const gain = Math.fround(lights[f] > 1e-9 ? Math.min(1, value / lights[f]) : 1);
+      if (gain !== before[f]) same = false;
+      before[f] = gain;
+    }
+    if (same) { out.set(before); return true; }
+  }
+  return false;
+}
+
+export interface FlashSample { light: number; area: number; red: number }
+
+/**
+ * The gain of every frame of a closed loop, played round until it repeats, so the limit holds across the loop point and a
+ * frame's gain never depends on which frames were rendered before it. A loop that will not settle is held flat.
+ */
+export function guardLoopTable(sample: (frame: number, out: FlashSample) => void, frames: number, fps: number, params: Readonly<Record<string, number>>): Float32Array {
+  const count = Math.max(1, Math.round(frames)), dt = 1 / (fps > 0 ? fps : 30), table = new Float32Array(count).fill(1);
+  if ((params.safetyFlashGuard ?? 1) < 0.5) return table;
+  const lights = new Float32Array(count), areas = new Float32Array(count), reds = new Float32Array(count), one: FlashSample = { light: 0, area: 0, red: 0 };
+  for (let f = 0; f < count; f++) { sample(f, one); lights[f] = one.light; areas[f] = one.area; reds[f] = one.red; }
+  const guard = new FlashGuard(), last = new Float32Array(count);
+  // The first pass only warms the guard with the end of the loop.
+  for (let f = Math.max(0, count - Math.ceil(fps)); f < count; f++) guard.update(dt, lights[f], areas[f], reds[f], params);
+  for (let pass = 0; pass < LOOP_PASSES; pass++) {
+    let same = pass > 0;
+    for (let f = 0; f < count; f++) { const gain = Math.fround(guard.update(dt, lights[f], areas[f], reds[f], params)); if (gain !== last[f]) same = false; last[f] = gain; }
+    if (same) { table.set(last); return table; }
+  }
+  // Still changing from pass to pass, which a budget of whole flashes often does. The last pass stands if it keeps the limit when it repeats.
+  let reddest = 0;
+  for (let f = 0; f < count; f++) reddest = Math.max(reddest, reds[f]);
+  const redLimit = Number.isFinite(params.safetyRedLimit) ? Math.min(1, Math.max(0, params.safetyRedLimit)) : 0.5;
+  const flashes = Math.max(1, Math.min(3, Math.round(params.safetyMaxFlashes ?? 3)));
+  const budget = Math.max(1, Math.floor(flashes * (1 - Math.min(1, reddest) * (1 - redLimit))));
+  if (loopTurns(lights, last, areas, dt, params) <= 2 * budget) { table.set(last); return table; }
+  if (slottedGains(lights, budget, dt, last) && loopTurns(lights, last, areas, dt, params) <= 2 * budget) { table.set(last); return table; }
+  let low = Infinity;
+  for (let f = 0; f < count; f++) low = Math.min(low, lights[f]);
+  const ceiling = low + FLASH_STEP * HOLD;
+  for (let f = 0; f < count; f++) table[f] = lights[f] > ceiling ? ceiling / lights[f] : 1;
+  return table;
 }

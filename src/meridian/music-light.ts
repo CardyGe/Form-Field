@@ -1,21 +1,15 @@
 import type { ConductorFrame } from './conductor';
-import { STRIDE, type DisplayList } from './display-list';
-import { FlashGuard } from './flash-guard';
-import { PRIMITIVE } from './types';
 
 /** What the music adds to Evolve's light this frame. All zero, with a gain of 1, leaves the picture exactly as drawn. */
 export interface MusicLightFrame {
   active: boolean; following: boolean; beats: number; bpm: number; waveBeats: number;
   wave: number; bass: number; mids: number; highs: number; lift: number; evolutionLift: number;
-  /** Flash Guard's limit on every transient of light, including Burst and Drop. */
-  gain: number;
 }
-export const createMusicLight = (): MusicLightFrame => ({ active: false, following: false, beats: 0, bpm: 124, waveBeats: 0, wave: 0, bass: 0, mids: 0, highs: 0, lift: 0, evolutionLift: 0, gain: 1 });
+export const createMusicLight = (): MusicLightFrame => ({ active: false, following: false, beats: 0, bpm: 124, waveBeats: 0, wave: 0, bass: 0, mids: 0, highs: 0, lift: 0, evolutionLift: 0 });
 
 const TAU = Math.PI * 2;
 const WAVE_DEPTH = 0.24, BASS_DEPTH = 0.7, MIDS_DEPTH = 0.5, HIGHS_DEPTH = 0.8, LIFT_DEPTH = 0.09, EVOLUTION_DEPTH = 0.4;
 const PRESENCE_RISE = 0.15, PRESENCE_FALL = 1.2;
-const FLOOR = 0.2, SPAN = 0.6; // The light the guard is shown: a steady floor plus the transient.
 const clamp = (value: number, low: number, high: number): number => (value < low ? low : value > high ? high : value);
 const amount = (value: number | undefined, fallback: number): number => (Number.isFinite(value) ? clamp(value as number, 0, 2) : fallback);
 
@@ -37,25 +31,10 @@ export function sparkleAt(music: MusicLightFrame, index: number): number {
   return q * q * q * q;
 }
 
-/** A generous estimate of the share of the frame that is lit, with each line's glow. Flash Guard's area. */
-export function litShare(list: DisplayList, aspect: number): number {
-  const d = list.data;
-  let area = 0;
-  for (let i = 0; i < list.count; i++) {
-    const at = i * STRIDE, kind = d[at], alpha = clamp(d[at + 9], 0, 1);
-    if (alpha <= 0) continue;
-    const length = kind === PRIMITIVE.segment ? Math.hypot(d[at + 3] - d[at + 1], d[at + 4] - d[at + 2]) : kind === PRIMITIVE.arc ? Math.abs(d[at + 3] * d[at + 5]) : kind === PRIMITIVE.ring ? Math.abs(d[at + 3]) * TAU : d[at + 3] * 2;
-    area += length * (Math.abs(d[at + 6]) * 2 + Math.max(0, d[at + 7]) * 0.05) * alpha;
-  }
-  return clamp(area / aspect, 0, 1);
-}
-
 export class MusicLight {
-  private readonly guard = new FlashGuard();
   private lastBeats = Number.NaN; private wave = 0; private presence = 0;
 
-  /** `area` and `red` describe the light on screen; `moves` is how much Burst and Drop are adding. */
-  update(frame: ConductorFrame, params: Readonly<Record<string, number>>, dt: number, area: number, red: number, moves: number, out: MusicLightFrame): void {
+  update(frame: ConductorFrame, params: Readonly<Record<string, number>>, dt: number, out: MusicLightFrame): void {
     const step = Number.isFinite(this.lastBeats) ? frame.beats - this.lastBeats : 0;
     this.lastBeats = frame.beats;
     this.wave += step * (Number.isFinite(params.reactionTempoMultiplier) ? clamp(params.reactionTempoMultiplier, 0.25, 4) : 1);
@@ -70,11 +49,8 @@ export class MusicLight {
 
     out.following = frame.status !== 'free'; out.beats = frame.beats; out.bpm = frame.bpm;
     out.waveBeats = swung(this.wave, params.rhythmSwing ?? 0);
-    const crest = 0.5 + 0.5 * Math.cos(TAU * out.waveBeats), transient = wave * crest * crest + bass * 0.7 + mids * 0.3 + highs * 0.15 + Math.max(0, moves);
-    const light = FLOOR + SPAN * transient, limited = this.guard.update(safeDt, light, area, red, params);
-    const gain = limited >= 1 || transient <= 0 ? 1 : clamp((light * limited - FLOOR) / (SPAN * transient), 0, 1);
-    out.gain = gain; out.wave = wave * gain; out.bass = bass * gain; out.mids = mids * gain; out.highs = highs * gain; out.lift = lift * gain;
+    out.wave = wave; out.bass = bass; out.mids = mids; out.highs = highs; out.lift = lift;
     out.evolutionLift = anyReaction ? clamp(frame.energy, 0, 1) * EVOLUTION_DEPTH * 0.5 : 0;
-    out.active = anyReaction && frame.status !== 'free' || out.wave > 0 || out.bass > 0 || out.mids > 0 || out.highs > 0 || gain < 1;
+    out.active = anyReaction && frame.status !== 'free' || out.wave > 0 || out.bass > 0 || out.mids > 0 || out.highs > 0;
   }
 }
