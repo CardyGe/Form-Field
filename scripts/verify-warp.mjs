@@ -819,25 +819,39 @@ const CHECKS = [
   },
   {
     name: 'polar-seam',
-    // The wrap angle is a vertical line through the centre. Each frame shape, plain and twisted.
+    // Twist bends the wrap into a spiral, so steps are taken across that path, on both lines where the angle folds.
     run: async ({ page }) => {
       const rows = await page.evaluate(async () => {
         const q = window.wq, rows = [];
-        for (const [W, H] of [[960, 540], [720, 900]]) for (const polarTwist of [0, .5]) for (const polarAmount of [1, .6]) {
+        for (const [W, H] of [[960, 540], [720, 900]]) for (const polarTwist of [0, .5, -1.25]) for (const polarAmount of [1, .6]) {
           const px = await q.px(q.project([q.smooth({ polarAmount, polarTwist })]), .9, W, H);
           const moved = q.difference(px, await q.px(q.project([q.smooth()]), .9, W, H));
-          const step = (x, y0, y1) => { let sum = 0; for (let y = y0; y < y1; y++) for (let c = 0; c < 3; c++) sum += Math.abs(px[(y * W + x) * 4 + c] - px[(y * W + x + 1) * 4 + c]); return sum / (y1 - y0) / 3; };
-          const mid = W / 2 - 1;
-          for (const [y0, y1] of [[8, (H >> 1) - 24], [(H >> 1) + 24, H - 8]]) {
-            const around = [-6, -5, -4, -3, 3, 4, 5, 6].map(d => step(mid + d, y0, y1));
-            rows.push({ W, H, polarTwist, polarAmount, moved, seam: step(mid, y0, y1), near: around.reduce((a, b) => a + b) / around.length });
+          const a = W / H, reach = Math.hypot(a / 2, .5), top = Math.min(a, 1) * .47;
+          const read = (x, y, c) => {
+            const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, at = (X, Y) => px[(Y * W + X) * 4 + c];
+            return at(x0, y0) * (1 - fx) * (1 - fy) + at(x0 + 1, y0) * fx * (1 - fy) + at(x0, y0 + 1) * (1 - fx) * fy + at(x0 + 1, y0 + 1) * fx * fy;
+          };
+          // d is pixels along the arc from the fold line at this radius. Screen rows run down, the pass's run up.
+          const point = (r, line, d) => { const t = line - Math.PI * 2 * polarTwist * r / reach + d / (r * H); return [r * Math.sin(t) * H + W / 2 - .5, H / 2 - r * Math.cos(t) * H - .5]; };
+          const step = (line, d) => {
+            let sum = 0, n = 0;
+            for (let r = .09; r < top; r += 1.5 / H) {
+              const [x0, y0] = point(r, line, d), [x1, y1] = point(r, line, d + 1);
+              for (let c = 0; c < 3; c++) sum += Math.abs(read(x0, y0, c) - read(x1, y1, c));
+              n += 3;
+            }
+            return sum / n;
+          };
+          for (const line of [Math.PI, 0]) {
+            const around = [-6.5, -5.5, -4.5, -3.5, 2.5, 3.5, 4.5, 5.5].map(d => step(line, d));
+            rows.push({ W, H, polarTwist, polarAmount, line, moved, seam: step(line, -.5), near: around.reduce((x, y) => x + y) / around.length });
           }
         }
         return rows;
       });
       const worst = rows.reduce((a, r) => (r.seam / Math.max(r.near, .05) > a.seam / Math.max(a.near, .05) ? r : a));
       const ok = rows.every(r => r.moved > 1 && r.seam <= Math.max(r.near, .05) * 1.25);
-      return { ok, detail: `${rows.some(r => r.moved <= 1) ? 'Polar does not change the render. ' : ''}worst ${worst.W}x${worst.H} twist ${worst.polarTwist} amount ${worst.polarAmount}: step ${worst.seam.toFixed(3)} against neighbours ${worst.near.toFixed(3)} (limit 1.25x)` };
+      return { ok, detail: `${rows.some(r => r.moved <= 1) ? 'Polar does not change the render. ' : ''}${rows.length} paths; worst ${worst.W}x${worst.H} twist ${worst.polarTwist} amount ${worst.polarAmount}: step ${worst.seam.toFixed(3)} against neighbours ${worst.near.toFixed(3)} (limit 1.25x)` };
     },
   },
   {
@@ -1026,6 +1040,83 @@ const CHECKS = [
         return rows;
       }, MIRROR_NAMES.length);
       return { ok: rows.every(r => r.collapsed === 0), detail: `${rows.map(r => `${MIRROR_NAMES[r.mode]} ${r.mirrorAngle}deg low ${r.low.toFixed(3)}, collapsed ${r.collapsed}`).join(', ')} (limit 1.95)` };
+    },
+  },
+  {
+    name: 'mirror-reach',
+    // A reflection covers exactly one texel per pixel at every angle, so Mirror alone must never spread its reads.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async count => {
+        const q = window.wq, W = 962, H = 542, rows = [];
+        for (let mode = 0; mode < count; mode++) for (const mirrorAngle of [0, 17, 22.5, 45, 67.5, 101, -33]) {
+          const out = q.probe('vec4(tapReach(footprint) * uResolution, 0., 1.)', { mirrorAmount: 1, mirrorMode: mode, mirrorAngle }, W, H);
+          let most = 0;
+          for (let i = 0; i < out.length; i += 4) most = Math.max(most, out[i], out[i + 1]);
+          rows.push({ mode, mirrorAngle, most });
+        }
+        return rows;
+      }, MIRROR_NAMES.length);
+      const worst = rows.reduce((a, r) => r.most > a.most ? r : a);
+      return { ok: rows.every(r => r.most < .01), detail: `${rows.length} mode and angle pairs; widest spread ${worst.most.toFixed(4)} texels at ${MIRROR_NAMES[worst.mode]} ${worst.mirrorAngle}deg (limit .01)` };
+    },
+  },
+  {
+    name: 'mirror-sharp',
+    // Fine detail at many orientations, so the kept and reflected sides hold the same amount of it. A reflected read
+    // lands between texels and loses a little to one bilinear read; a spread of four reads loses far more.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async names => {
+        const q = window.wq, W = 960, H = 540, rows = [];
+        const fill = (u, v) => { const x = u * W, y = v * H; let t = 0; for (const [a, l] of [[.3, 5.3], [1.1, 6.1], [1.9, 5.7], [2.7, 6.7]]) t += Math.sin(Math.PI * 2 * (x * Math.cos(a) + y * Math.sin(a)) / l); const g = .5 + .1 * t; return [g, g, g, 1]; };
+        const detail = (out, keep) => {
+          let sum = 0, n = 0;
+          for (let y = 12; y < H - 12; y++) for (let x = 12; x < W - 12; x++) {
+            if (!keep(x, y)) continue;
+            const at = (X, Y) => out[(Y * W + X) * 4 + 1];
+            sum += Math.abs(4 * at(x, y) - at(x - 1, y) - at(x + 1, y) - at(x, y - 1) - at(x, y + 1)); n++;
+          }
+          return sum / n;
+        };
+        for (const mode of [0, 1]) for (const mirrorAngle of [22.5, 45, 17]) {
+          const out = q.feed({ mirrorAmount: 1, mirrorMode: mode, mirrorAngle }, fill), t = mirrorAngle * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+          const signed = (x, y) => { const px = (x + .5 - W / 2), py = (y + .5 - H / 2), rx = c * px + s * py, ry = -s * px + c * py; return mode === 0 ? -rx : ry; };
+          const kept = detail(out, (x, y) => signed(x, y) > 4), reflected = detail(out, (x, y) => signed(x, y) < -4);
+          rows.push({ name: `${names[mode]} ${mirrorAngle}deg`, kept, reflected, ratio: reflected / kept });
+        }
+        const plain = q.feed({ polarAmount: 1e-9 }, fill), wedge = q.feed({ mirrorAmount: 1, mirrorMode: 3 }, fill), all = () => true;
+        rows.push({ name: 'Kaleidoscope default', kept: detail(plain, all), reflected: detail(wedge, all), ratio: detail(wedge, all) / detail(plain, all) });
+        return rows;
+      }, MIRROR_NAMES);
+      return { ok: rows.every(r => r.ratio > .88), detail: `${rows.map(r => `${r.name} ${r.ratio.toFixed(3)}`).join(', ')} (reflected detail over kept, limit .88)` };
+    },
+  },
+  {
+    name: 'mirror-stack-sparkle',
+    // Strong Warp over a fold, with the fold inside a 2x2 block. Warp's own squeeze must still count on the fold line,
+    // where a screen derivative of its move cancels between the two mirrored pixels.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.wq, W = 962, H = 542, rows = [], mid = W / 2 - 1;
+        for (const look of [{ bendAmount: .5, bendField: 0, bendScale: 9, bendAngle: 0 }, { liquidAmount: .6, liquidStyle: 0, liquidScale: 9 }]) {
+          const out = q.probe('vec4(footprint, 0., 1.)', { mirrorAmount: 1, mirrorMode: 0, ...look }, W, H);
+          const wide = (x, y) => Math.max(out[(y * W + x) * 4], out[(y * W + x) * 4 + 1]);
+          // The same measure on columns away from the fold shows how much the field itself varies over three pixels.
+          const measure = column => {
+            let under = 0, squeezed = 0;
+            for (let y = 12; y < H - 12; y++) {
+              const near = (wide(column - 2, y) + wide(column - 3, y)) / 2;
+              if (near < 1.5) continue;
+              squeezed++;
+              if (wide(column, y) < near * .7) under++;
+            }
+            return { squeezed, share: under / Math.max(squeezed, 1) };
+          };
+          const fold = measure(mid), away = [-24, -48, -72, -96].map(d => measure(mid + d).share);
+          rows.push({ ...fold, control: Math.max(...away) });
+        }
+        return rows;
+      });
+      return { ok: rows.every(r => r.squeezed > 40 && r.share < r.control + .05), detail: `${rows.map((r, i) => `${['Warp', 'Liquid'][i]}: ${r.squeezed} squeezed rows, ${(r.share * 100).toFixed(1)}% under-read at the fold, ${(r.control * 100).toFixed(1)}% on plain columns`).join('; ')} (limit: plain columns + 5 points)` };
     },
   },
   {

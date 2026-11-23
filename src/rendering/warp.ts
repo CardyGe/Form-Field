@@ -318,8 +318,12 @@ vec2 lumaUv(vec2 uv) {
 /** How the position leaving Mirror and Polar changes per screen pixel, worked out by hand. A screen derivative of a
  * folded or wrapped position is wrong on the pixels that straddle the line, so these stages never take one. */
 vec2 readDx, readDy;
-/** The position leaving Mirror and Polar. Later warps are smooth moves from here, so their derivatives are safe. */
-vec2 readBase;
+/** The position leaving Mirror and Polar, and the final head position. */
+vec2 readBase, readHead;
+/** How the later warps' move changes per screen pixel. */
+vec2 moveDx, moveDy;
+/** True when Mirror or Polar shaped this read. */
+bool reshaped;
 
 vec2 rotated(vec2 p, float angle) {
   float c = cos(angle), s = sin(angle);
@@ -385,23 +389,52 @@ vec2 polarUv(vec2 uv) {
   return mix(uv, target, uPolarAmount);
 }
 
+/** Warp, Liquid and Luma, from a position Mirror and Polar have already set. */
+vec2 laterUv(vec2 uv) {
+  vec2 frame = vec2(uAspect, 1.), moved = uv;
+  // Warp: amount 1 moves a pixel at most half the frame height.
+  if (uBendAmount > 0.) {
+    vec2 move = bendField((moved - .5) * frame) * uBendAmount * .5 / frame;
+    moved += move;
+    warpFringe += move * uBendChroma * .08;
+  }
+  if (uLiquidAmount > 0.) moved = liquidUv(moved);
+  if (uLumaAmount > 0.) moved = lumaUv(moved);
+  return moved;
+}
+
 /** Where this pixel reads from. Warps compose here in order: Mirror, Polar, Warp, Liquid, Luma.
  * Not folded is the plain side of Mirror's crossfade. */
 vec2 warpedUv(vec2 uv, bool folded) {
-  vec2 frame = vec2(uAspect, 1.), warped = uv;
   warpFringe = vec2(0.);
   readDx = dFdx(uv); readDy = dFdy(uv);
-  if (folded) warped = mirrorUv(warped);
-  if (uPolarAmount > 0.) warped = polarUv(warped);
-  readBase = warped;
-  // Warp: amount 1 moves a pixel at most half the frame height.
-  if (uBendAmount > 0.) {
-    vec2 move = bendField((warped - .5) * frame) * uBendAmount * .5 / frame;
-    warped += move;
-    warpFringe += move * uBendChroma * .08;
+  vec2 base = uv;
+  if (folded) base = mirrorUv(base);
+  if (uPolarAmount > 0.) base = polarUv(base);
+  readBase = base;
+  reshaped = folded || uPolarAmount > 0.;
+  // Where a 2x2 block straddles a fold, a screen derivative of the later move cancels between the mirrored pixels.
+  // Those pixels step the later warps along their own side of the fold instead.
+  vec2 baseDx = (dFdx(base) - readDx) * uResolution, baseDy = (dFdy(base) - readDy) * uResolution;
+  bool straddles = reshaped && (uBendAmount > 0. || uLiquidAmount > 0. || uLumaAmount > 0.)
+    && (dot(baseDx, baseDx) > .0625 || dot(baseDy, baseDy) > .0625);
+  vec2 stepX = vec2(0.), stepY = vec2(0.), warped = base;
+  // One call in a loop: the later warps are large, and the head read comes last so its fringe and trail are the ones kept.
+  for (int i = straddles ? 0 : 2; i < 3; i++) {
+    vec2 from = i == 0 ? base + readDx : i == 1 ? base + readDy : base;
+    warpFringe = vec2(0.);
+    warped = laterUv(from);
+    if (i == 0) stepX = warped - from;
+    else if (i == 1) stepY = warped - from;
   }
-  if (uLiquidAmount > 0.) warped = liquidUv(warped);
-  if (uLumaAmount > 0.) warped = lumaUv(warped);
+  readHead = warped;
+  vec2 move = warped - base;
+  moveDx = dFdx(move); moveDy = dFdy(move);
+  if (straddles) {
+    vec2 sideX = stepX - move, sideY = stepY - move;
+    if (dot(sideX, sideX) > dot(moveDx, moveDx)) moveDx = sideX;
+    if (dot(sideY, sideY) > dot(moveDy, moveDy)) moveDy = sideY;
+  }
   return warped;
 }
 
@@ -449,10 +482,21 @@ void addTail(vec2 uv, vec2 footprint, float weight, inout Gathered sum, inout fl
   sum.covered += t.covered; sum.light += t.light; sum.alpha += t.alpha;
 }
 
-/** Texels this position covers per screen pixel: the worked-out Mirror and Polar change plus the later warps' move. */
+/** Texels this position covers per screen pixel, along the source's axes. Without Mirror or Polar this is the plain
+ * screen derivative. With them, the turn or reflection they apply is taken out first: it moves pixels without
+ * squeezing them, so a reflected side filters exactly like the kept side at every mirror angle. */
 vec2 footprintOf(vec2 at) {
-  vec2 move = at - readBase;
-  return (abs(readDx + dFdx(move)) + abs(readDy + dFdy(move))) * uResolution;
+  if (!reshaped) return fwidth(at) * uResolution;
+  vec2 tail = at - readHead;
+  vec2 x = (readDx + moveDx + dFdx(tail)) * uResolution, y = (readDy + moveDy + dFdy(tail)) * uResolution;
+  vec2 bx = readDx * uResolution, by = readDy * uResolution;
+  float side = bx.x * by.y - bx.y * by.x < 0. ? -1. : 1.;
+  // The nearest pure turn to the base's change, after undoing any reflection.
+  vec2 turn = vec2(bx.x + side * by.y, bx.y - side * by.x);
+  float size = length(turn);
+  turn = size > 0. ? turn / size : vec2(1., 0.);
+  vec2 alongX = turn.x * x - side * turn.y * y, alongY = turn.y * x + side * turn.x * y;
+  return abs(alongX) + abs(alongY);
 }
 
 /** One complete filtered read of the layer, folded by Mirror or not. */
