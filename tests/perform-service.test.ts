@@ -391,6 +391,109 @@ test('after a partial landing, a newer press on the waiting zone wins on the wal
   assert.equal(r.service.view().launcher.playing[1], 'ca');
 });
 
+/** The real wall rules, fed with everything the service has sent. */
+function wallOf(r: Rig) {
+  let wall = initialWallPerform(), seen = 0;
+  const feed = () => { for (; seen < r.sent.length; seen++) wall = applyPerformMessage(wall, r.sent[seen]); };
+  return {
+    step: (ready: (id: string) => boolean) => { feed(); const out = stepWallPerform(wall, r.now(), ready); wall = out.perform; return out.landed; },
+    zone: (i: number) => { feed(); return wall.zones[i].sourceId; },
+    launches: () => { feed(); return wall.launches.map(l => l.id); },
+  };
+}
+/** Zone 1 is queued to `cf` for 2000 and its source never readies; then a scene pressed later plays `cb` there and fires at once. */
+function olderWaitingThenScene() {
+  const r = rig();
+  r.show.performance.scenes = [scene('x', { 1: 'cf' }), scene('one', { 0: 'ca', 1: 'cb' })];
+  const wall = wallOf(r);
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'next', zone: 1 });
+  const older = lastLaunch(r);
+  r.at(2000);
+  assert.deepEqual(wall.step(id => id === 'a'), [], 'the older launch is waiting on its source');
+  r.at(2010);
+  r.service.action({ type: 'bankNext' }); // row 0
+  r.service.action({ type: 'bankNext' }); // row 1
+  const newer = lastLaunch(r);
+  assert.deepEqual(newer.changes.map(c => c.zone), [0, 1]);
+  r.at(2020);
+  r.service.action({ type: 'launchNow' });
+  return { r, wall, older, newer: lastLaunch(r) };
+}
+
+test('a partial landing keeps the zone for the later press, even when the older launch is still queued', () => {
+  const { r, wall, older, newer } = olderWaitingThenScene();
+  const report = wall.step(id => id === 'a');
+  assert.deepEqual(report, [{ launchId: newer.id, zones: [0] }]);
+  r.at(2030);
+  r.service.wallState({ landed: report });
+  assert.equal(r.service.view().launcher.queue.some(l => l.id === older.id), false, 'the older press gave up the zone');
+  assert.deepEqual(r.service.view().launcher.queue.find(l => l.id === newer.id)?.changes.map(c => c.zone), [1]);
+  r.at(4000);
+  const next = wall.step(() => true);
+  assert.deepEqual(next, [{ launchId: newer.id, zones: [1] }]);
+  r.at(4010);
+  r.service.wallState({ landed: next });
+  assert.equal(wall.zone(1), 'b');
+  assert.equal(r.service.view().launcher.playing[1], 'cb');
+});
+
+test('once a later press has landed on a zone, an older launch cannot come back to it', () => {
+  const { r, wall, older, newer } = olderWaitingThenScene();
+  const report = wall.step(id => id === 'a' || id === 'b');
+  assert.deepEqual(report, [{ launchId: newer.id, zones: [0, 1] }]);
+  r.at(2030);
+  r.service.wallState({ landed: report });
+  assert.equal(r.service.view().launcher.queue.some(l => l.id === older.id), false);
+  assert.equal(wall.launches().includes(older.id), false, 'the wall no longer holds it');
+  r.at(2400); r.frame();
+  r.at(4000);
+  assert.deepEqual(wall.step(() => true), []);
+  assert.equal(wall.zone(1), 'b');
+  assert.equal(r.service.view().launcher.playing[1], 'cb');
+});
+
+test('an older partial remainder yields to a later press, whatever the queue order', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 0: 'ca', 1: 'cb' }), scene('two', { 1: 'ca' })];
+  const wall = wallOf(r);
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const older = lastLaunch(r);
+  r.at(2000);
+  const report = wall.step(id => id === 'a');
+  r.at(2010);
+  r.service.action({ type: 'next', zone: 1 });
+  const later = lastLaunch(r);
+  r.at(2015);
+  r.service.action({ type: 'downbeat' }); // retiming puts the firing launch first and the later press after it
+  r.at(2020);
+  r.service.wallState({ landed: report });
+  assert.equal(r.service.view().launcher.queue.some(l => l.id === older.id), false);
+  const moved = r.service.view().launcher.queue.find(l => l.id === later.id)!;
+  r.at(moved.atMs);
+  const next = wall.step(() => true);
+  assert.deepEqual(next, [{ launchId: later.id, zones: [1] }]);
+  r.service.wallState({ landed: next });
+  assert.equal(wall.zone(1), 'a');
+  assert.equal(r.service.view().launcher.playing[1], 'ca');
+});
+
+test('an older launch that lands after a later press is put right on the next boundary', () => {
+  const { r, wall, older, newer } = olderWaitingThenScene();
+  const first = wall.step(id => id === 'a' || id === 'b');
+  r.at(2030);
+  r.service.wallState({ landed: first });
+  assert.deepEqual(first, [{ launchId: newer.id, zones: [0, 1] }]);
+  // The cancel crossed the older launch landing on the wall.
+  r.at(2040);
+  r.service.wallState({ landed: [{ launchId: older.id, zones: [1] }] });
+  assert.equal(r.service.view().launcher.playing[1], 'cb', 'the studio keeps the later press');
+  const fix = lastLaunch(r);
+  assert.equal(fix.atMs, 4000);
+  assert.deepEqual(fix.changes.map(c => [c.zone, c.sourceId]), [[1, 'b']]);
+});
+
 test('a launch replaced just as it landed still updates what is playing when its report arrives', () => {
   const r = rig();
   r.show.performance.scenes = [scene('one', { 0: 'ca' }), scene('two', { 0: 'cb' })];

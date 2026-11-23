@@ -13,7 +13,7 @@ import { applyControl, holdForReconnect, initialControls, knobOffset, speedFacto
 import { armList, bankBack, bankNext, initialLauncher, landed, launchNow, queueScene, queueZone, retime, returnZone, stopZone, type Launch, type LauncherState } from './launcher';
 import { linkedZones, zoneShapes, type ZonePicture } from './resolve';
 import { dueFollow } from './sequence';
-import { beatAt, LATE_GRACE_MS, launchPhaseOffset, msAtBeat, type ClockSnapshot } from './timing';
+import { beatAt, LATE_GRACE_MS, launchPhaseOffset, msAtBeat, nextBoundary, type ClockSnapshot } from './timing';
 import { BEATS_PER_BAR, ZONE_COUNT, type Clip } from './types';
 import { MAX_WALL_LAUNCHES, type PerformValues, type WallLaunch } from './wall-perform';
 
@@ -54,6 +54,8 @@ const BURST_MS = { room: { on: 10, off: 180 }, ceiling: { on: 2000, off: 4000 } 
 const BURST_BASE = .5, BURST_KICK = .5, SPEED_FOLD = .5;
 const HUE_RANGE = 180;
 const CEILING = ZONE_COUNT - 1;
+/** The launcher names the waiting ceiling part of a launch with this suffix. */
+const CEILING_PART = ':ceiling';
 const AUDIO_KEYS: Record<Clip['audioBand'], string> = { bass: 'audio.bass', mid: 'audio.mids', high: 'audio.highs', level: 'audio.level' };
 const STOPPED: ClockSnapshot = { anchorMs: 0, anchorBeat: 0, bpm: 120, state: 'manual', barOffset: 0 };
 
@@ -83,6 +85,11 @@ export class PerformService {
   private held = new Map<string, { launch: WallLaunch; key: string; source: Launch }>();
   /** Launches cancelled as they came due: the wall may have landed them, so a late report still counts. */
   private replaced = new Map<string, { launch: Launch; wall: WallLaunch; until: number }>();
+  /** When each queued launch was pressed, counted up; never its place in the queue. */
+  private presses = new Map<string, number>();
+  private lastPress = 0;
+  /** The press that last landed on each zone. */
+  private landedPress = zeros();
   /** The bar offset each source on the wall plays with, kept so a reopened wall gets them back. */
   private phases = new Map<string, number>();
   private bursts = Array.from({ length: ZONE_COUNT }, () => false);
@@ -158,30 +165,43 @@ export class PerformService {
   wallState(state: { armed?: string[]; landed?: { launchId: string; zones: number[] }[] }): void {
     if (!this.isRunning) return;
     if (state.armed) this.wallArmed = state.armed;
-    const now = this.deps.now(), partial = new Set<string>();
+    const now = this.deps.now(), partial = new Set<string>(), overruled = new Set<number>();
     let latestMissed = now;
     const reported = (state.landed ?? []).map(r => r.launchId);
     for (const { launchId, zones } of state.landed ?? []) {
       const before = this.launcher.queue.find(l => l.id === launchId);
-      if (!before) {
-        // Replaced as it landed: the picture did change, so what is playing follows it. Nothing of it stays queued.
-        const late = this.replaced.get(launchId);
-        if (!late) continue;
-        this.recordPhases(late.wall, zones);
+      // Replaced as it landed: the picture did change, so what is playing follows it. Nothing of it stays queued.
+      const late = before ? undefined : this.replaced.get(launchId);
+      const launch = before ?? late?.launch;
+      if (!launch) continue;
+      // A zone a later press has already landed on stays with that press. The wall is put right below.
+      const press = this.pressOf(launchId), accepted = zones.filter(z => this.landedPress[z] <= press);
+      for (const z of zones) if (!accepted.includes(z)) overruled.add(z);
+      const wall = late?.wall ?? this.held.get(launchId)?.launch;
+      if (wall) this.recordPhases(wall, accepted);
+      for (const c of launch.changes) if (accepted.includes(c.zone)) this.landedPress[c.zone] = press;
+      if (late) {
         const queue = this.launcher.queue;
-        this.launcher = { ...landed({ ...this.launcher, queue: [late.launch] }, launchId, zones, now, this.deps.random), queue };
+        this.launcher = { ...landed({ ...this.launcher, queue: [late.launch] }, launchId, accepted, now, this.deps.random), queue };
         continue;
       }
-      const wall = this.held.get(launchId)?.launch;
-      if (wall) this.recordPhases(wall, zones);
       const queue = this.launcher.queue;
-      this.launcher = landed(this.launcher, launchId, zones, now, this.deps.random);
-      if (this.launcher.queue !== queue && this.launcher.queue.some(l => l.id === launchId)) { partial.add(launchId); latestMissed = Math.max(latestMissed, before.atMs); }
+      this.launcher = landed(this.launcher, launchId, accepted, now, this.deps.random);
+      if (this.launcher.queue !== queue && this.launcher.queue.some(l => l.id === launchId)) { partial.add(launchId); latestMissed = Math.max(latestMissed, launch.atMs); }
     }
+    const swept = this.dropOverruled(now);
+    // A due launch pressed before a partial landing's remainder gives up the zones they share.
+    const remainders = this.launcher.queue.filter(l => partial.has(l.id));
+    const older = this.launcher.queue.filter(l => !partial.has(l.id) && l.atMs <= now && remainders.some(p => this.pressOf(p.id) > this.pressOf(l.id) && p.changes.some(c => l.changes.some(x => x.zone === c.zone))));
+    const stale = new Set([...partial, ...older.map(l => l.id)]);
+    if (stale.size) this.yieldToNewer(stale);
     // Reported first, then moved: exactly on the missed bar the launch would only retry that same bar.
-    if (partial.size) { this.yieldToNewer(partial); this.retimeQueue(latestMissed + 1, partial); }
+    const moved = new Set([...stale, ...swept]);
+    if (moved.size) this.retimeQueue(latestMissed + 1, moved);
+    for (const zone of overruled) this.restoreZone(zone, now);
     this.syncWall();
     for (const id of reported) this.replaced.delete(id);
+    this.forgetPresses();
     this.publish(true);
   }
 
@@ -214,6 +234,7 @@ export class PerformService {
     this.stepEnvelopes(now);
     this.prune();
     for (const [id, late] of this.replaced) if (now > late.until) this.replaced.delete(id);
+    this.forgetPresses();
     if (this.deps.wall.isOpen()) {
       this.landEmpty(now);
       this.moveWaiting(now);
@@ -357,7 +378,41 @@ export class PerformService {
       after = { ...this.launcher, queue: [...firing, ...moved.queue] };
     }
     // The wall refuses a new launch silently when full, so a change past the limit is not taken.
-    if (after.queue.length < MAX_WALL_LAUNCHES) this.launcher = after;
+    if (after.queue.length < MAX_WALL_LAUNCHES) { this.launcher = after; this.stampPresses(); }
+  }
+
+  // ---- Who owns a zone: the later press, whatever the queue order. ----
+  /** A launch and its `:ceiling` part are one press, and every change in them carries its number. */
+  private pressKey(id: string): string { return id.endsWith(CEILING_PART) ? id.slice(0, -CEILING_PART.length) : id; }
+  private pressOf(id: string): number { return this.presses.get(this.pressKey(id)) ?? 0; }
+  private stampPresses(): void {
+    for (const l of this.launcher.queue) if (!this.presses.has(this.pressKey(l.id))) this.presses.set(this.pressKey(l.id), ++this.lastPress);
+  }
+  private forgetPresses(): void {
+    const live = new Set([...this.launcher.queue.map(l => this.pressKey(l.id)), ...[...this.replaced.keys()].map(id => this.pressKey(id))]);
+    for (const key of [...this.presses.keys()]) if (!live.has(key)) this.presses.delete(key);
+  }
+  /** Removes changes a later press has already landed over. Returns the due launches that still have something left to do. */
+  private dropOverruled(now: number): Set<string> {
+    const changed = new Set<string>();
+    const queue = this.launcher.queue.flatMap((l): Launch[] => {
+      const changes = l.changes.filter(c => this.landedPress[c.zone] <= this.pressOf(l.id));
+      if (changes.length === l.changes.length) return [l];
+      if (changes.length === 0 && l.sceneIndex === null) return [];
+      if (l.atMs <= now) changed.add(l.id);
+      return [{ ...l, changes }];
+    });
+    this.launcher = { ...this.launcher, queue };
+    return changed;
+  }
+  /** An older launch reached the wall after a later press did: the zone goes back to the later press's clip on the next boundary. */
+  private restoreZone(zone: number, now: number): void {
+    const { queue, playing } = this.launcher;
+    if (queue.length >= MAX_WALL_LAUNCHES - 1 || queue.some(l => l.changes.some(c => c.zone === zone))) return;
+    const at = nextBoundary(this.deps.clock.snapshot(now), now, this.deps.show().performance.launchQuantize, 0);
+    const launch: Launch = { id: this.deps.id(), beat: at.beat, atMs: at.atMs, sceneIndex: null, changes: [{ zone, clipId: playing[zone], blend: { kind: 'cut', durationMs: 0 } }] };
+    this.launcher = { ...this.launcher, queue: [...queue, launch] };
+    this.stampPresses();
   }
 
   /**
@@ -371,13 +426,13 @@ export class PerformService {
     this.retimeQueue(now);
   }
 
-  /** Launches left over from an earlier bar give up any zone or scene a newer press owns, so the operator's last choice wins. */
+  /** Launches left over from an earlier bar give up any zone or scene a later press owns, so the operator's last choice wins. */
   private yieldToNewer(stale: ReadonlySet<string>): void {
     const queue = this.launcher.queue;
-    const kept = queue.flatMap((l, index): Launch[] => {
+    const kept = queue.flatMap((l): Launch[] => {
       if (!stale.has(l.id)) return [l];
-      const newer = queue.filter((o, i) => !stale.has(o.id) || i > index);
-      const changes = l.changes.filter(c => !newer.some(o => o.changes.some(x => x.zone === c.zone)));
+      const press = this.pressOf(l.id), newer = queue.filter(o => this.pressOf(o.id) > press);
+      const changes = l.changes.filter(c => this.landedPress[c.zone] <= press && !newer.some(o => o.changes.some(x => x.zone === c.zone)));
       const sceneIndex = newer.some(o => o.sceneIndex !== null && o.sceneIndex !== l.sceneIndex) ? null : l.sceneIndex;
       return changes.length > 0 || sceneIndex !== null ? [{ ...l, changes, sceneIndex }] : [];
     });
@@ -491,6 +546,8 @@ export class PerformService {
     this.requestedAt.clear();
     this.held.clear();
     this.replaced.clear();
+    this.presses.clear();
+    this.landedPress = zeros();
     this.phases.clear();
     this.bursts.fill(false);
     this.burstLevel = zeros();
