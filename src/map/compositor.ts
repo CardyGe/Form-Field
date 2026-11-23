@@ -29,7 +29,7 @@ import type { Link } from '../react/links';
 import type { Signals } from '../react/signals';
 import { StructureHold } from '../meridian/structure-hold';
 import { wallGuardPolicy, type WallGuardPolicy } from '../meridian/wall-guard';
-import { LIMITER, limiterScales } from '../meridian/wall-limiter';
+import { LIMITER, limiterScales, stepLimiterFade } from '../meridian/wall-limiter';
 import { borderPicture, borderRunPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
@@ -216,11 +216,10 @@ export class MapCompositor {
     if (show.guardWall && !this.guardPolicy.on) this.guardPolicy = { ...this.guardPolicy, present: true, on: true, settings: { ...this.guardPolicy.settings, safetyFlashGuard: 1 } };
     this.limiterHolds = limiterScales(this.guardPolicy.settings);
     // Turned off, or the last Meridian source left: the wall is exactly as drawn from the next frame.
-    if (guardWasOn && !this.guardPolicy.on) this.limiterFade = 0;
+    if (guardWasOn && !this.guardPolicy.on) this.limiterFade ??= 0;
     else if (this.guardPolicy.on && !guardWasOn) {
       // Back on while the limit is still easing away: it carries on from where it is. Otherwise it starts from what the wall shows.
       if (this.limiterFade === null) this.primeLimiter();
-      this.limiterFade = null;
     }
     // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
@@ -639,8 +638,9 @@ export class MapCompositor {
     const started = performance.now(), dt = this.limiterAt === null ? 0 : Math.min(LIMITER.longestStep, Math.max(0, (started - this.limiterAt) / 1000));
     this.limiterAt = started;
     if (this.limiterFade !== null) {
-      this.limiterFade = Math.min(1, this.limiterFade + dt / LIMITER.fadeSeconds);
-      if (this.limiterFade >= 1) { this.limiterFade = null; this.limiterAt = null; return; }
+      // Switched back on part-way, the limit returns at the same pace rather than snapping on in one frame.
+      this.limiterFade = stepLimiterFade(this.limiterFade, dt, this.guardPolicy.on);
+      if (this.limiterFade === null && !this.guardPolicy.on) { this.limiterAt = null; return; }
     }
     if (!this.gpu.limitStage(dt, this.limiterFade ?? 0, false, this.limiterHolds)) this.limiterFade = null;
     if (this.gpu.limitedArea >= LIMITER.trigger) this.limitingUntil = started + 1500;

@@ -81,6 +81,8 @@ export default function MapOutput() {
     };
     raf = requestAnimationFrame(tick);
     (window as unknown as { __mapGuardProbe?: () => unknown }).__mapGuardProbe = () => compositor.probeGuardCost();
+    // For the scripted checks only: loaded when asked for, on its own graphics context.
+    (window as unknown as { __mapLimiterLab?: () => Promise<unknown> }).__mapLimiterLab = () => import('../map/limiter-lab').then(lab => lab.runLimiterLab());
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };
     window.addEventListener('keydown', key);
     bridge.ready();

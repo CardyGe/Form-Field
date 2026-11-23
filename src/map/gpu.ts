@@ -129,26 +129,53 @@ const glslRule = (r: ChannelRule) => `vec3(${r.band.toFixed(5)}, ${r.hold.toFixe
 const LIMIT_RULE = `
 const vec3 LIGHT_RULE = ${glslRule(LIGHT_RULE)};
 const vec3 RED_RULE = ${glslRule(RED_RULE)};
-const float MOMENT = ${LIMITER.moment.toFixed(5)};
+const float WINDOW = ${LIMITER.window.toFixed(5)};
+const float AT_LOW = ${LIMITER.atLow.toFixed(5)};
+const float OVER = ${LIMITER.over.toFixed(5)};
 const float TRIGGER = ${LIMITER.trigger.toFixed(5)};
 const float FALL_SHARE = ${FALL_SHARE.toFixed(5)};
 float lightOf(vec3 c) { return dot(c, vec3(.2126, .7152, .0722)); }
 float redOf(vec3 c) { float sum = c.r + c.g + c.b; return sum > 1e-6 && c.r / sum >= .8 ? max(0., c.r - c.g - c.b) : 0.; }
 float capOf(vec4 s, float dt, vec3 rule, float scale) { float first = s.g + rule.x; return s.a >= rule.y * scale ? max(first, s.r + rule.z * min(dt, ${LIMITER.longestClimb.toFixed(5)})) : first; }`;
-/** Which cells are trying to change more than they may, for the area test. */
-const LIMIT_WANT = `#version 300 es
+/** Follows the input's own changes per cell: (anchor, direction, seconds since it last rose, since it last fell). */
+const LIMIT_INPUT = `#version 300 es
 precision highp float;
-out vec4 o;
-uniform sampler2D uCells, uLight, uRed, uMisc;
+layout(location = 0) out vec4 oLight;
+layout(location = 1) out vec4 oRed;
+uniform sampler2D uCells, uInLight, uInRed;
 uniform float uDt;
-uniform vec2 uHold;
+uniform int uInit;
 ${LIMIT_RULE}
+vec4 follow(vec4 s, float x, float size) {
+  float anchor = s.r, way = s.g, up = min(2., s.b + uDt), down = min(2., s.a + uDt);
+  if (way > .5 && x > anchor) anchor = x;
+  else if (way < -.5 && x < anchor) anchor = x;
+  if (way > -.5 && x <= anchor - size) { way = -1.; anchor = x; down = 0.; }
+  else if (way < .5 && x >= anchor + size) { way = 1.; anchor = x; up = 0.; }
+  return vec4(anchor, way, up, down);
+}
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
   vec3 c = texelFetch(uCells, p, 0).rgb;
-  vec4 misc = texelFetch(uMisc, p, 0);
-  o = vec4(lightOf(c) > capOf(texelFetch(uLight, p, 0), uDt, LIGHT_RULE, uHold.x) + 1e-4 || misc.b < MOMENT ? 1. : 0.,
-           redOf(c) > capOf(texelFetch(uRed, p, 0), uDt, RED_RULE, uHold.y) + 1e-4 || misc.a < MOMENT ? 1. : 0., 0., 1.);
+  float x = lightOf(c), r = redOf(c);
+  if (uInit == 1) { oLight = vec4(x, 0., 2., 2.); oRed = vec4(r, 0., 2., 2.); return; }
+  oLight = follow(texelFetch(uInLight, p, 0), x, ${LIMITER.lightStep.toFixed(5)});
+  oRed = follow(texelFetch(uInRed, p, 0), r, ${LIMITER.redStep.toFixed(5)});
+}`;
+/** Which cells are trying to change more than they may, or have changed both ways within the last second. */
+const LIMIT_WANT = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform sampler2D uCells, uLight, uRed, uInLight, uInRed;
+uniform float uDt;
+uniform vec2 uHold;
+${LIMIT_RULE}
+bool flashing(vec4 s) { return s.b < WINDOW && s.a < WINDOW; }
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec3 c = texelFetch(uCells, p, 0).rgb;
+  o = vec4(lightOf(c) > capOf(texelFetch(uLight, p, 0), uDt, LIGHT_RULE, uHold.x) + 1e-4 || flashing(texelFetch(uInLight, p, 0)) ? 1. : 0.,
+           redOf(c) > capOf(texelFetch(uRed, p, 0), uDt, RED_RULE, uHold.y) + 1e-4 || flashing(texelFetch(uInRed, p, 0)) ? 1. : 0., 0., 1.);
 }`;
 /** The exact share of cells wanting to change. A mip chain is not used: at 48 x 27 it can drop whole columns from the average. */
 const LIMIT_AREA = `#version 300 es
@@ -165,17 +192,18 @@ precision highp float;
 layout(location = 0) out vec4 oLight;
 layout(location = 1) out vec4 oRed;
 layout(location = 2) out vec4 oMisc;
-uniform sampler2D uCells, uLight, uRed, uMisc, uWant;
+uniform sampler2D uCells, uLight, uRed, uWant;
 uniform float uDt;
 uniform vec2 uHold;
 uniform int uInit;
 ${LIMIT_RULE}
-vec4 advance(vec4 s, float x, bool engaged, vec3 rule, float scale, float crossedIn, out float crossed) {
+vec4 advance(vec4 s, float x, bool engaged, vec3 rule, float scale) {
   float was = s.r, v = x <= was || !engaged ? x : min(x, max(was, capOf(s, uDt, rule, scale)));
-  crossed = !engaged && was <= s.g + rule.x && v > s.g + rule.x ? 0. : min(1., crossedIn + uDt);
   float low = s.g, high = max(s.b, v), age = s.a;
-  if (high - v >= rule.x * FALL_SHARE) { low = v; high = v; age = 0.; }
-  else if (v < low) { low = v; age = 0.; }
+  // A partial fall can neither raise the low nor restart the hold: only a return to the low, or a fall after a real climb.
+  if (v < low) { low = v; high = v; age = 0.; }
+  else if (was > low + AT_LOW && v <= low + AT_LOW) { high = v; age = 0.; }
+  else if (high > low + rule.x + OVER && high - v >= rule.x * FALL_SHARE) { low = v; high = v; age = 0.; }
   return vec4(v, low, high, min(${MOST_AGE.toFixed(1)}, age + uDt));
 }
 void main() {
@@ -184,11 +212,9 @@ void main() {
   float x = lightOf(c), r = redOf(c);
   if (uInit == 1) { oLight = vec4(x, x, x, 0.); oRed = vec4(r, r, r, 0.); oMisc = vec4(1.); return; }
   vec2 area = texelFetch(uWant, ivec2(0), 0).rg;
-  float crossedLight, crossedRed;
-  vec4 misc = texelFetch(uMisc, p, 0);
-  oLight = advance(texelFetch(uLight, p, 0), x, area.r >= TRIGGER, LIGHT_RULE, uHold.x, misc.b, crossedLight);
-  oRed = advance(texelFetch(uRed, p, 0), r, area.g >= TRIGGER, RED_RULE, uHold.y, misc.a, crossedRed);
-  oMisc = vec4(x > 1e-4 ? clamp(oLight.r / x, 0., 1.) : 1., r > 1e-4 ? clamp(oRed.r / r, 0., 1.) : 1., crossedLight, crossedRed);
+  oLight = advance(texelFetch(uLight, p, 0), x, area.r >= TRIGGER, LIGHT_RULE, uHold.x);
+  oRed = advance(texelFetch(uRed, p, 0), r, area.g >= TRIGGER, RED_RULE, uHold.y);
+  oMisc = vec4(x > 1e-4 ? clamp(oLight.r / x, 0., 1.) : 1., r > 1e-4 ? clamp(oRed.r / r, 0., 1.) : 1., 0., 1.);
 }`;
 /** The limit on the flat stage, as a smooth gain per cell, in linear light. Where nothing is limited the pixel is left exactly as it was. */
 const LIMIT_APPLY = `#version 300 es
@@ -200,7 +226,9 @@ uniform float uFade;
 ${LINEAR_GLSL}
 void main() {
   vec4 c = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0);
-  vec2 g = mix(texture(uGain, gl_FragCoord.xy / uStage).rg, vec2(1.), uFade);
+  // Softened across cell edges, but never above the pixel's own cell: a dark neighbour cannot lend it gain.
+  vec2 own = texelFetch(uGain, ivec2(gl_FragCoord.xy) / ${STAGE_SIZE.width / MEASURE_COLS}, 0).rg;
+  vec2 g = mix(clamp(texture(uGain, gl_FragCoord.xy / uStage).rg, own * ${LIMITER.softEdge.toFixed(3)}, own), vec2(1.), uFade);
   if (g.r >= .9995 && g.g >= .9995) { o = c; return; }
   vec3 l = lin(c.rgb);
   float grey = dot(l, vec3(.2126, .7152, .0722));
@@ -211,7 +239,7 @@ const MEASURE_MIDDLE = { width: 480, height: 270 };
 const MEASURE_SIZE = { width: MEASURE_COLS, height: MEASURE_ROWS };
 /** How often, in drawn frames, the operator's status is read back. It never drives the limiter. */
 const STATUS_EVERY = 12;
-interface LimitState { light: WebGLTexture; red: WebGLTexture; misc: WebGLTexture; fb: WebGLFramebuffer }
+interface LimitState { light: WebGLTexture; red: WebGLTexture; misc: WebGLTexture; fb: WebGLFramebuffer; inLight: WebGLTexture; inRed: WebGLTexture; inFb: WebGLFramebuffer }
 type LimitProgram = { program: WebGLProgram; u: Record<string, WebGLUniformLocation | null> };
 
 export interface Texture { tex: WebGLTexture; width: number; height: number }
@@ -255,6 +283,7 @@ export class Gpu {
   private updateP!: Program;
   private applyP!: Program;
   private areaP!: Program;
+  private inputP!: Program;
   private areaTex!: WebGLTexture;
   private middleTex!: WebGLTexture;
   private middleFb!: WebGLFramebuffer;
@@ -353,8 +382,9 @@ export class Gpu {
     try {
       if (!gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buffer_half_float')) throw new Error('this graphics card cannot draw to floating-point pictures');
       this.measureP = this.compile(MEASURE, ['uRect', 'uStage', 'uTex', 'uCell', 'uEncoded', 'uLinearOut']);
-      this.wantP = this.compile(LIMIT_WANT, ['uRect', 'uStage', 'uCells', 'uLight', 'uRed', 'uMisc', 'uDt', 'uHold']);
-      this.updateP = this.compile(LIMIT_UPDATE, ['uRect', 'uStage', 'uCells', 'uLight', 'uRed', 'uMisc', 'uWant', 'uDt', 'uHold', 'uInit']);
+      this.wantP = this.compile(LIMIT_WANT, ['uRect', 'uStage', 'uCells', 'uLight', 'uRed', 'uInLight', 'uInRed', 'uDt', 'uHold']);
+      this.updateP = this.compile(LIMIT_UPDATE, ['uRect', 'uStage', 'uCells', 'uLight', 'uRed', 'uWant', 'uDt', 'uHold', 'uInit']);
+      this.inputP = this.compile(LIMIT_INPUT, ['uRect', 'uStage', 'uCells', 'uInLight', 'uInRed', 'uDt', 'uInit']);
       this.areaP = this.compile(LIMIT_AREA, ['uRect', 'uStage', 'uWant']);
       this.applyP = this.compile(LIMIT_APPLY, ['uRect', 'uStage', 'uTex', 'uGain', 'uFade']);
       ({ tex: this.middleTex, fb: this.middleFb } = this.target(MEASURE_MIDDLE.width, MEASURE_MIDDLE.height));
@@ -379,7 +409,13 @@ export class Gpu {
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, misc, 0);
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
         if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('the limiter state could not be made');
-        return { light, red, misc, fb };
+        const inLight = float(), inRed = float(), inFb = gl.createFramebuffer()!;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, inFb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, inLight, 0);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, inRed, 0);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('the limiter state could not be made');
+        return { light, red, misc, fb, inLight, inRed, inFb };
       };
       this.limitStates = [state(), state()];
       this.guardState = 'ready';
@@ -506,12 +542,20 @@ export class Gpu {
     rect(p.u, w, h);
     bind(0, p.u.uTex, this.middleTex); gl.uniform1i(p.u.uCell, 10); gl.uniform1i(p.u.uEncoded, 1); gl.uniform1i(p.u.uLinearOut, 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    // The input's own changes, over a rolling second.
+    p = this.inputP;
+    gl.useProgram(p.program);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, to.inFb);
+    rect(p.u, w, h);
+    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uInLight, from.inLight); bind(2, p.u.uInRed, from.inRed);
+    gl.uniform1f(p.u.uDt, dt); gl.uniform1i(p.u.uInit, init ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     // How much of the wall is trying to change more than it may.
     p = this.wantP;
     gl.useProgram(p.program);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.wantFb);
     rect(p.u, w, h);
-    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uLight, from.light); bind(2, p.u.uRed, from.red); bind(3, p.u.uMisc, from.misc);
+    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uLight, from.light); bind(2, p.u.uRed, from.red); bind(3, p.u.uInLight, to.inLight); bind(4, p.u.uInRed, to.inRed);
     gl.uniform1f(p.u.uDt, dt); gl.uniform2f(p.u.uHold, holds.light, holds.red);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     p = this.areaP;
@@ -527,7 +571,7 @@ export class Gpu {
     gl.useProgram(p.program);
     gl.bindFramebuffer(gl.FRAMEBUFFER, to.fb);
     rect(p.u, w, h);
-    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uLight, from.light); bind(2, p.u.uRed, from.red); bind(3, p.u.uMisc, from.misc); bind(4, p.u.uWant, this.areaTex);
+    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uLight, from.light); bind(2, p.u.uRed, from.red); bind(4, p.u.uWant, this.areaTex);
     gl.uniform1f(p.u.uDt, dt); gl.uniform2f(p.u.uHold, holds.light, holds.red); gl.uniform1i(p.u.uInit, init ? 1 : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     this.limitStates = [to, from];

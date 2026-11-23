@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LIMITER, limiterScales, WallLimiter } from '../src/meridian/wall-limiter';
+import { LIMITER, limiterScales, stepLimiterFade, WallLimiter } from '../src/meridian/wall-limiter';
 
 const COLS = 48, ROWS = 27, CELLS = COLS * ROWS, BRIGHT = .8, DARK = .02, SECONDS = 12, LIMIT = 6;
 type Light = (t: number, col: number) => number;
@@ -40,7 +40,7 @@ function run(light: Light, times: number[], phase: number, startFromPicture = fa
   times.forEach((t, f) => {
     for (let r = 0, i = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++, i++) input[i] = light(t + phase, c);
     limiter.step(f ? t - times[f - 1] : 1 / 60, input, red);
-    raw.push(input.slice()); out.push(limiter.light.slice());
+    raw.push(input.slice()); out.push(limiter.shown.slice());
   });
   return { raw, out };
 }
@@ -75,7 +75,7 @@ for (const bpm of [120, 128, 140, 150, 160, 174]) test(`${bpm} BPM with a 0.12 s
 test('a held bright picture arrives in under a second and is then exact', () => {
   const light: Light = t => t < 1 ? DARK : BRIGHT, times = clock(60, false), { out } = run(light, times, 0);
   assert.ok(out[60][0] <= DARK + LIMITER.band + 1e-6);
-  assert.equal(out[120][0], Math.fround(BRIGHT));
+  assert.equal(out[240][0], Math.fround(BRIGHT));
 });
 
 test('calm light and a small flashing area pass exactly', () => {
@@ -105,7 +105,7 @@ test('lower Max flashes and Red limit settings lengthen the holds', () => {
   const limiter = new WallLimiter(CELLS), light = new Float32Array(CELLS), red = new Float32Array(CELLS), times = clock(60, false), out: Float32Array[] = [];
   limiter.setScales(limiterScales({ safetyMaxFlashes: 1, safetyRedLimit: 1 }));
   limiter.step(0, light, red);
-  times.forEach((t, f) => { light.fill(burst(1, 2, .1)(t, 0)); limiter.step(f ? t - times[f - 1] : 1 / 60, light, red); out.push(limiter.light.slice()); });
+  times.forEach((t, f) => { light.fill(burst(1, 2, .1)(t, 0)); limiter.step(f ? t - times[f - 1] : 1 / 60, light, red); out.push(limiter.shown.slice()); });
   assert.ok(worstSecond(out, times) <= 2, `${worstSecond(out, times)} changes with one flash allowed`);
 });
 
@@ -113,13 +113,77 @@ test('a stalled frame cannot arrive as one large jump', () => {
   const limiter = new WallLimiter(CELLS), input = new Float32Array(CELLS).fill(DARK), red = new Float32Array(CELLS);
   limiter.step(0, input, red); limiter.step(1, input, red);
   input.fill(BRIGHT); limiter.step(.5, input, red);
-  assert.ok(limiter.light[0] <= DARK + Math.max(LIMITER.band, LIMITER.climb * LIMITER.longestClimb) + 1e-6, `${limiter.light[0]}`);
+  assert.ok(limiter.shown[0] <= DARK + Math.max(LIMITER.band, LIMITER.climb * LIMITER.longestClimb) + 1e-6, `${limiter.shown[0]}`);
 });
 
 test('strange frame times cannot break it', () => {
   const limiter = new WallLimiter(CELLS), input = new Float32Array(CELLS).fill(DARK), red = new Float32Array(CELLS);
   limiter.step(0, input, red); input.fill(BRIGHT);
-  for (const dt of [Number.NaN, -1, 0]) { limiter.step(dt, input, red); assert.ok(limiter.light[0] <= DARK + LIMITER.band + 1e-6); }
+  for (const dt of [Number.NaN, -1, 0]) { limiter.step(dt, input, red); assert.ok(limiter.shown[0] <= DARK + LIMITER.band + 1e-6); }
+});
+
+// ---- Round 3: patterns that took turns, leaked gain or ratcheted past the rule. Counted per cell on what is shown. ----
+const WALL_COLS = 48, WALL_ROWS = 27;
+/** The worst changes any cell makes in a second, and the largest share of the wall over six at once. */
+function perCell(series: Float32Array[], fps: number): { worst: number; together: number } {
+  const counts: number[][] = Array.from({ length: CELLS }, () => []);
+  for (let i = 0; i < CELLS; i++) {
+    let anchor = series[0][i], way = 0;
+    for (let f = 1; f < series.length; f++) {
+      const v = series[f][i];
+      if (way === 1 && v > anchor) anchor = v; if (way === -1 && v < anchor) anchor = v;
+      if (way >= 0 && v <= anchor - .1 && v < .8) { way = -1; anchor = v; counts[i].push(f); }
+      else if (way <= 0 && v >= anchor + .1 && anchor < .8) { way = 1; anchor = v; counts[i].push(f); }
+    }
+  }
+  let worst = 0, together = 0;
+  for (let start = 0; start + fps <= series.length; start += 3) {
+    let over = 0;
+    for (const list of counts) { let n = 0; for (const f of list) if (f >= start && f < start + fps) n++; worst = Math.max(worst, n); if (n > LIMIT) over++; }
+    together = Math.max(together, over / CELLS);
+  }
+  return { worst, together };
+}
+function frames(light: (f: number, col: number, row: number) => number, count: number, fps = 60) {
+  const limiter = new WallLimiter(CELLS), input = new Float32Array(CELLS), red = new Float32Array(CELLS), out: Float32Array[] = [];
+  limiter.step(0, input, red);
+  for (let f = 0; f < count; f++) {
+    for (let r = 0, i = 0; r < WALL_ROWS; r++) for (let c = 0; c < WALL_COLS; c++, i++) input[i] = light(f, c, r);
+    limiter.step(1 / fps, input, red);
+    out.push(limiter.shown.slice());
+  }
+  return out;
+}
+const on5 = (f: number, shift = 0) => ((((f / 60 + shift) * 5) % 1) + 1) % 1 < .5;
+const TAKING_TURNS: Record<string, (f: number, c: number, r: number) => number> = {
+  'a one-cell checker at 5 Hz': (f, c, r) => on5(f) === ((c + r) % 2 === 0) ? 1 : 0,
+  'a two-cell checker at 5 Hz': (f, c, r) => on5(f) === ((Math.floor(c / 2) + Math.floor(r / 2)) % 2 === 0) ? 1 : 0,
+  'one-cell stripes at 5 Hz': (f, c) => on5(f) === (c % 2 === 0) ? 1 : 0,
+  'two 18.75% bands in antiphase': (f, c) => c < 9 ? (on5(f) ? 1 : 0) : c < 18 ? (on5(f) ? 0 : 1) : 0,
+  'four 18.75% bands 55 ms apart': (f, c) => { const band = Math.floor(c / 9); return band < 4 && on5(f, band * .055) ? 1 : 0; },
+};
+for (const [name, light] of Object.entries(TAKING_TURNS)) test(`no part of the wall over the flash area breaks the limit: ${name}`, () => {
+  const { worst, together } = perCell(frames(light, 480), 60);
+  results.push(`${name}: worst ${worst}, over the limit together ${(together * 100).toFixed(1)}%`);
+  assert.ok(together < .25, `${(together * 100).toFixed(1)}% of the wall over the limit, worst ${worst}`);
+});
+
+test('a ratchet of small falls cannot climb past the threshold', () => {
+  const steps = [0, 1, .009, 1, .018, 1, .027, 1, .036, 1, .045, 1];
+  const out = frames(f => f < 2 ? 0 : steps[f % steps.length], 480), { worst, together } = perCell(out, 60);
+  let peak = 0; for (const o of out) peak = Math.max(peak, o[0]);
+  results.push(`ratchet: worst ${worst}, together ${(together * 100).toFixed(1)}%, peak ${peak.toFixed(3)}`);
+  assert.ok(worst <= LIMIT, `${worst} changes`); assert.equal(together, 0);
+});
+
+test('switching the guard back on during its ease-out returns the limit gradually', () => {
+  let fade: number | null = 0;
+  for (let f = 0; f < 120; f++) fade = stepLimiterFade(fade!, 1 / 60, false);
+  assert.ok(Math.abs(fade! - .5) < 1e-6);
+  let frames = 0, last = fade!;
+  while (fade !== null) { fade = stepLimiterFade(fade, 1 / 60, true); if (fade !== null) { assert.ok(last - fade <= 1 / (60 * LIMITER.fadeSeconds) + 1e-9); last = fade; } frames++; }
+  assert.ok(frames >= 119, `back in ${frames} frames`);
+  assert.equal(stepLimiterFade(.999, 1, false), null, 'and off, it finishes');
 });
 
 test.after(() => console.log(results.join('\n')));

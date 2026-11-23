@@ -1429,6 +1429,17 @@ try {
     }
   });
 
+  await check('checkers, antiphase and staggered bands, a ratchet, red and Blackout stay within the limit on the real limiter shaders', async () => {
+    const lab = await output.evaluate(() => window.__mapLimiterLab());
+    meridianReport.limiterLab = Object.fromEntries(Object.entries(lab).map(([name, r]) => [name, { rawWorst: r.raw.worst, rawTogether: +r.raw.together.toFixed(3), worst: r.limited.worst, together: +r.limited.together.toFixed(3), peak: +r.limited.peak.toFixed(3), redRaw: r.raw.redWorst, red: r.limited.redWorst, litInBlack: r.limited.litInBlack, blackFrames: r.limited.blackFrames }]));
+    for (const [name, r] of Object.entries(lab)) {
+      assert.ok(r.raw.worst > 6 || r.raw.redWorst > 4, `${name}: the control does not flash (${r.raw.worst})`);
+      assert.ok(r.limited.together < .25, `${name}: ${(r.limited.together * 100).toFixed(1)}% of the wall over the limit, worst ${r.limited.worst}`);
+      assert.ok(r.limited.redWorst <= 4, `${name}: ${r.limited.redWorst} saturated-red changes in a second`);
+      assert.equal(r.limited.litInBlack, 0, `${name}: light during Blackout`);
+    }
+  });
+
   await check('Blackout hammered over a bright frozen wall is counted and limited, and still goes black at once', async () => {
     await stopBursts(); await react('midi', [0xb0, 21, 127]);
     await sleep(1600);
