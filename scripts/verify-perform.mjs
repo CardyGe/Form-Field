@@ -464,7 +464,10 @@ try {
     await studio.getByRole('menuitem', { name: 'Edit', exact: true }).click();
     await studio.getByRole('button', { name: 'Apply to show' }).waitFor({ timeout: 5000 });
   };
+  // Armed looks are made ready one at a time: the wall's own count of work only stands still once they are done.
+  const armedSettled = async () => { await until(async () => (await view(studio)).waiting.length === 0, 20000, 'the armed looks to be ready'); await sleep(1100); };
   await check('a draft leaves the wall alone, and the controller keeps working while it is open', async () => {
+    await armedSettled();
     const fades = await crossfades(), work = await wallWork(), setBefore = await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet()));
     await openDraft();
     await toggleLayer();
@@ -499,6 +502,7 @@ try {
     assert.equal(await crossfades(), fades);
   });
   await check('Apply to show crossfades the wall once, and undoing it is refused', async () => {
+    await armedSettled();
     const fades = await crossfades(), before = await zoneColours(wall), work = await wallWork();
     await openDraft();
     await toggleLayer();

@@ -2,6 +2,7 @@ import { EmberSmokeAudio, usesEmberSmokeAudio, type SmokeAudioFrame } from '../r
 import type { Signals } from '../react/signals';
 import {FINISH_PARAMETERS} from '../core/finishing';
 import { InstrumentRenderer } from './InstrumentRenderer';
+import { ProgramGate, ProgramsCompiling, type LinkingProgram } from './program-gate';
 import { isInstrument } from '../core/instruments';
 import * as THREE from 'three';
 import { GraphicRenderer } from './GraphicRenderer';
@@ -203,7 +204,8 @@ export class StudioRenderer {
   private readonly keyLight = new THREE.DirectionalLight(0xffe8d4, 2.8);
   private readonly rimLight = new THREE.DirectionalLight(0xb5caff, 2.4);
   private readonly fillLight = new THREE.DirectionalLight(0xc9d3ed, 1.35);
-  private readonly environment: THREE.WebGLRenderTarget;
+  private environment: THREE.WebGLRenderTarget | null = null;
+  private readonly gate = new ProgramGate();
   private readonly filmThickness: THREE.DataTexture;
   private readonly sculptureUniforms: Uniforms = {
     ...viewUniforms(),
@@ -269,7 +271,7 @@ export class StudioRenderer {
     this.oilFields = material(oilFieldsFragment, oilUniforms);
     this.oilPaint = material(oilPaintFragment, oilUniforms);
     this.oilLens = material(oilLensFragment, oilUniforms);
-    this.oilPattern = new OilPatternBaker(this.renderer);
+    this.oilPattern = new OilPatternBaker(this.renderer, () => this.gate.on);
     this.super8 = material(super8Fragment, {
       ...viewUniforms(),
       uPalette: { value: DEFAULT_PALETTE.map(hex => new THREE.Color(hex)) },
@@ -330,24 +332,6 @@ export class StudioRenderer {
     this.quad.frustumCulled = false;
     this.quadScene.add(this.quad);
 
-    const room = new THREE.Scene();
-    room.background = new THREE.Color('#545361');
-    const cards: [number[], number[], string, number][] = [
-      [[-4, 2, 3], [1.5, 5, .15], '#fff0df', 6],
-      [[4, .5, -2], [1.1, 4, .15], '#c4dcff', 7],
-      [[0, 5, 0], [3, .12, 2.5], '#f5edff', 3],
-      [[1, -3, 2], [2.5, .15, 1.4], '#eac8d9', 1.8],
-    ];
-    for (const [position, size, color, intensity] of cards) {
-      const card = new THREE.Mesh(new THREE.BoxGeometry(...size as [number, number, number]),
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(intensity) }));
-      card.position.fromArray(position); card.lookAt(0, 0, 0); room.add(card);
-    }
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.environment = pmrem.fromScene(room, .025);
-    this.sculptureScene.environment = this.environment.texture;
-    room.traverse(object => { if (object instanceof THREE.Mesh) { object.geometry.dispose(); object.material.dispose(); } });
-    pmrem.dispose();
     this.sculptureMaterial = new THREE.MeshPhysicalMaterial({
       color: 0xf2e8ee, metalness: .49, roughness: .3, clearcoat: .82, clearcoatRoughness: .16,
       iridescence: .85, sheen: .23, sheenRoughness: .45, envMapIntensity: .72,
@@ -404,7 +388,60 @@ export class StudioRenderer {
     this.fillLight.position.set(0, -1, 5);
     this.sculptureScene.add(this.keyLight, this.rimLight, this.fillLight);
     this.renderer.info.reset();
+    // While the gate is on, a draw whose shader is still linking is refused here, before three.js would wait for it.
+    const draw = this.renderer.render.bind(this.renderer);
+    this.renderer.render = (scene, camera) => {
+      if (this.gate.on) {
+        const materials: THREE.Material[] = [];
+        scene.traverse(object => { const m = (object as THREE.Mesh).material; if (m) materials.push(...(Array.isArray(m) ? m : [m])); });
+        if (!this.gate.knows(materials)) {
+          this.gate.awaitTurn();
+          this.gate.before([...this.renderer.compile(scene, camera)].map(m => (this.renderer.properties.get(m) as { currentProgram?: LinkingProgram }).currentProgram));
+          this.gate.remember(materials);
+        }
+      }
+      draw(scene, camera);
+    };
   }
+
+  /** The studio light the sculpture reflects, made the first time a sculpture is drawn: most looks never need it. */
+  private ensureEnvironment(): void {
+    if (this.environment) return;
+    const room = new THREE.Scene();
+    room.background = new THREE.Color('#545361');
+    const cards: [number[], number[], string, number][] = [
+      [[-4, 2, 3], [1.5, 5, .15], '#fff0df', 6],
+      [[4, .5, -2], [1.1, 4, .15], '#c4dcff', 7],
+      [[0, 5, 0], [3, .12, 2.5], '#f5edff', 3],
+      [[1, -3, 2], [2.5, .15, 1.4], '#eac8d9', 1.8],
+    ];
+    for (const [position, size, color, intensity] of cards) {
+      const card = new THREE.Mesh(new THREE.BoxGeometry(...size as [number, number, number]),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(intensity) }));
+      card.position.fromArray(position); card.lookAt(0, 0, 0); room.add(card);
+    }
+    // Its own short passes are not gated: stopping half way would leave the generator's state behind.
+    const gated = this.gate.on;
+    this.gate.on = false;
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.environment = pmrem.fromScene(room, .025);
+    this.sculptureScene.environment = this.environment.texture;
+    room.traverse(object => { if (object instanceof THREE.Mesh) { object.geometry.dispose(); object.material.dispose(); } });
+    pmrem.dispose();
+    this.gate.on = gated;
+  }
+
+  /** From now until a whole frame has been drawn, a shader still linking postpones the draw instead of blocking the page. */
+  holdFirstDraw(): void { this.gate.open(); }
+  /** A postponed draw is waiting on the driver: trying again now would do nothing. */
+  get linking(): boolean { return this.gate.linking; }
+  /** Puts back what an abandoned frame may have left set, so the next attempt starts clean. */
+  private abandon(state: { autoClear: boolean; clear: THREE.Color; alpha: number }): void {
+    this.renderer.autoClear = state.autoClear;
+    this.renderer.setClearColor(state.clear, state.alpha);
+    this.renderer.setRenderTarget(null);
+  }
+  private drawState() { return { autoClear: this.renderer.autoClear, clear: this.renderer.getClearColor(new THREE.Color()), alpha: this.renderer.getClearAlpha() }; }
 
   private assertUsable(): void {
     if (this.disposed) throw new Error('This renderer has been disposed.');
@@ -470,7 +507,18 @@ export class StudioRenderer {
     await Promise.all(pending);
     this.assertUsable();
     if (revision === this.prepareRevision) {
-      this.instruments.prepare(project,(m,t)=>this.draw(m,t),layer=>layer.mask.dataUrl?this.assets.get(this.assetKey(layer.mask.dataUrl,true))?.texture.image as CanvasImageSource|undefined:undefined);
+      for (;;) {
+        const state = this.drawState();
+        try {
+          this.instruments.prepare(project,(m,t)=>this.draw(m,t),layer=>layer.mask.dataUrl?this.assets.get(this.assetKey(layer.mask.dataUrl,true))?.texture.image as CanvasImageSource|undefined:undefined);
+          break;
+        } catch (error) {
+          if (!(error instanceof ProgramsCompiling)) throw error;
+          this.abandon(state);
+          while (this.gate.linking) { await new Promise(resolve => setTimeout(resolve, 8)); this.assertUsable(); }
+          if (revision !== this.prepareRevision) return;
+        }
+      }
       for (const [key, asset] of this.assets) if (!required.has(key)) { asset.texture.dispose(); this.assets.delete(key); }
       if (!project.layers.some(layer => layer.kind === 'oil' && layer.visible)) this.releaseOilTargets();
       if (!project.layers.some(layer => layer.kind === 'graphic' && layer.visible)) {
@@ -756,6 +804,7 @@ export class StudioRenderer {
       const light = number(layer, 'lightAngle', .5) + .65;
       this.sculptureScene.environmentRotation.y = light * .35;
       this.keyLight.position.set(Math.sin(light) * 4.5, 2.8, Math.cos(light) * 4.5);
+      this.ensureEnvironment();
       this.renderer.setRenderTarget(this.source);
       this.renderer.render(this.sculptureScene, this.sculptureCamera);
     }
@@ -1097,14 +1146,22 @@ export class StudioRenderer {
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();
     else this.emberAudio = undefined;
-    const smoke = sound ? this.emberAudio?.advance(sound.signals, sound.now) : undefined;
-    this.renderFrame(project, phase, w, h, smoke);
-    // Resizing a canvas, even to the size it already has, resets it and re-allocates its drawing buffer:
-    // only when the size changes.
-    const canvasSize = this.renderer.getSize(this.canvasSize);
-    if (canvasSize.x !== w || canvasSize.y !== h) this.renderer.setSize(w, h, false);
-    this.display.uniforms.uImage.value = this.linearOutput.texture;
-    this.draw(this.display, null);
+    this.gate.check();
+    const state = this.gate.on ? this.drawState() : null;
+    try {
+      const smoke = sound ? this.emberAudio?.advance(sound.signals, sound.now) : undefined;
+      this.renderFrame(project, phase, w, h, smoke);
+      // Resizing a canvas, even to the size it already has, resets it and re-allocates its drawing buffer:
+      // only when the size changes.
+      const canvasSize = this.renderer.getSize(this.canvasSize);
+      if (canvasSize.x !== w || canvasSize.y !== h) this.renderer.setSize(w, h, false);
+      this.display.uniforms.uImage.value = this.linearOutput.texture;
+      this.draw(this.display, null);
+      this.gate.close();
+    } catch (error) {
+      if (state && error instanceof ProgramsCompiling) this.abandon(state);
+      throw error;
+    }
   }
 
   /**
@@ -1169,9 +1226,11 @@ export class StudioRenderer {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.gate.close();
     for (const asset of this.assets.values()) asset.texture.dispose();
     this.assets.clear();
-    for (const rt of [this.source, this.fractalPreview, this.accumA, this.accumB, this.linearOutput, this.byteOutput, this.resolved, this.environment]) rt.dispose();
+    for (const rt of [this.source, this.fractalPreview, this.accumA, this.accumB, this.linearOutput, this.byteOutput, this.resolved]) rt.dispose();
+    this.environment?.dispose();
     this.releaseOilTargets();
     this.graphicSource?.dispose(); this.graphicSource = null;
     this.super8Source?.dispose(); this.super8Source = null;

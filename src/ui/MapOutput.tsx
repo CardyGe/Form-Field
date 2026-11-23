@@ -9,6 +9,7 @@ import PreviewWorker from '../map/preview-worker?worker&inline';
 
 /** At most five previews a second, and only after the wall has changed. */
 const PREVIEW_EVERY_MS = 200;
+const PREVIEW_HOLD_MS = 1000;
 const REPORT_EVERY_MS = 1000;
 /** Perform starting or ending changes the wall like a short scene switch, never as a jump. */
 const HANDOVER_FADE_MS = 400;
@@ -142,7 +143,9 @@ export default function MapOutput() {
       // The studio hears at once when a launch lands or an armed look becomes ready (or stops being).
       swapResults.push(...compositor.takeSwapResults());
       if (landed.length || swapResults.length || (state.perform.active && compositor.armedIds().join('\n') !== sentArmed)) report();
-      if (reading) {
+      // While armed looks are being made ready the operator's picture waits, for a second at most: reading it back holds up the frame.
+      const holdPreview = compositor.warming && now - sentPicture < PREVIEW_HOLD_MS;
+      if (reading && !holdPreview) {
         const picture = compositor.collectPreview();
         // A readback lost with the graphics context never arrives: start again.
         if (!picture && !compositor.previewPending) { reading = false; busy = false; }
@@ -155,7 +158,7 @@ export default function MapOutput() {
         sentReport = now;
         report();
       }
-      if (busy || !changed || now - sentPicture < PREVIEW_EVERY_MS) return;
+      if (busy || !changed || holdPreview || now - sentPicture < PREVIEW_EVERY_MS) return;
       // Started straight after a drawn frame.
       if (compositor.requestPreview()) { sentPicture = now; busy = true; reading = true; changed = false; }
     };

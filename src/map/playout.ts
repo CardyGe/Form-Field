@@ -81,6 +81,16 @@ export function governorStep(g: Governor, frameMs: number): Governor {
 /** At the last level instruments are drawn every other frame; the shapes keep their last picture in between. */
 export const drawsThisFrame = (level: Governor['level'], frameIndex: number) => level < 3 || frameIndex % 2 === 0;
 
+/** Which renderer gives way to a source of this rank: the lowest rank below it, and among equals the longest unused. */
+export function rendererToEvict<T extends { rank: number; lastUsed: number }>(slots: Iterable<readonly [string, T]>, rank: number): readonly [string, T] | null {
+  let least: readonly [string, T] | null = null;
+  for (const entry of slots) {
+    const s = entry[1];
+    if (s.rank < rank && (!least || s.rank < least[1].rank || (s.rank === least[1].rank && s.lastUsed < least[1].lastUsed))) least = entry;
+  }
+  return least;
+}
+
 /** How far a crossfade has gone, 0 to 1. */
 export function fadeAlpha(startedMs: number, nowMs: number, durationMs = 400): number {
   // A fade of no time is a cut: done at once (never 0 / 0).

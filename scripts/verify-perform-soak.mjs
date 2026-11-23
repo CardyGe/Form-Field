@@ -3,11 +3,13 @@
 // Run: npm run test:perform:soak   or, after a build: node scripts/verify-perform-soak.mjs --minutes 2 --out <folder>
 // Uses a throwaway user-data folder under work/perform-soak/, deleted afterwards. Writes progress.log and results.json.
 //
-// Launch error is measured on the wall, from its own pixels. For every cut, the first animation frame due at or after
-// the launch's atMs is the ideal frame. Each frame around it is read back from the stage at 96 x 54 and the zone is
-// compared with its picture before and after the launch. The error is how many frames after the ideal frame the zone
-// first (and for two frames running) looks like the new picture. Read-back runs only from 250 ms before a launch to
-// 750 ms after it, so it does not weigh on the frame rate of the rest of the show.
+// Launch error is measured on the wall, for every landing. The wall's report of a landing is caught through a setter on
+// __mapStats as it is made, after that frame has been drawn, so its time is the end of the landing frame. The ideal frame
+// is the first whose callbacks began at or after the launch's atMs (when the wall reads the clock). A landing's error is
+// its frame minus the ideal frame, and its time is the end of that frame minus atMs, so a stall counts in full.
+// Pixels confirm it: the stage is read back at 96 x 54 around each launch, for as long as a stall needs, and the error
+// by picture is how many frames after the ideal one the zone first shows the new picture for two frames running.
+// Every zone of every launch ends as landed, deferred, called off, ended by End show, or unresolved.
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,6 +27,8 @@ const userData = path.join(work, 'user-data');
 const SCENES = 8, ZONES = 8, VIDEO_ZONE = 6, CEILING_ZONE = 7, BARS_PER_SCENE = 8;
 // Fixed before the first run. Memory is judged after a warm-up, as a straight-line trend for each process.
 const WARM_UP_MIN = Math.min(5, MINUTES * .25), MAX_TREND_MB_PER_MIN = 2, MAX_MEDIAN_ERROR_FRAMES = 1;
+// A stall is a gap of 250 ms or more between wall frames. None after the first full pass through the set; at most 500 ms in it.
+const STALL_MS = 250, FIRST_PASS_LIMIT_MS = 500;
 const RESTART_AT_MIN = Math.max(MINUTES - 3, MINUTES * .6);
 const BOXES = Array.from({ length: ZONES }, (_, i) => { const c = i % 4, r = i >> 2; return { x0: .02 + c * .245, y0: .05 + r * .47, x1: .02 + c * .245 + .225, y1: .05 + r * .47 + .42 }; });
 
@@ -46,12 +50,12 @@ const logFile = path.join(out, 'progress.log');
 await fs.writeFile(logFile, '');
 const say = async line => { const text = `${new Date().toISOString()} ${line}`; console.log(text); await fs.appendFile(logFile, `${text}\n`); };
 
-/** Runs in the wall page: frame times, the governor, every launch from the wall's own messages, and lost contexts. */
+/** Runs in the wall page: frame times, the governor, every launch from the wall's own messages and reports, and lost contexts. */
 function installProbe({ boxes }) {
-  const W = 96, H = 54, CAPTURE_BEFORE = 250, CAPTURE_AFTER = 750;
+  const W = 96, H = 54, CAPTURE_BEFORE = 250, CAPTURE_AFTER = 750, MIN_FRAMES_AFTER = 4;
   const small = new OffscreenCanvas(W, H), reader = small.getContext('2d', { willReadFrequently: true });
   const stage = document.querySelector('canvas');
-  const soak = window.__soak = { intervals: new Float32Array(600000), probing: new Uint8Array(600000), long: [], stalls: [], skipped: {}, count: 0, minutes: [], levels: [], levelMs: [0, 0, 0, 0], lost: [], failing: {}, samples: [], deferred: [], unlanded: [], launches: 0, offsets: {}, made: 0, released: 0 };
+  const soak = window.__soak = { intervals: new Float32Array(600000), probing: new Uint8Array(600000), long: [], stalls: [], count: 0, minutes: [], levels: [], levelMs: [0, 0, 0, 0], lost: [], failing: {}, landings: [], outcomes: { landed: 0, deferred: 0, cancelled: 0, endedByShow: 0, unresolved: 0 }, deferred: [], unresolved: [], launches: 0, offsets: {}, made: 0, released: 0, reports: 0, showOn: false, firstPassEndsAt: null, sceneLandings: 0 };
   // A context given back on purpose (a look leaving the wall) is told apart from one the system took away.
   const given = new WeakSet(), wrapped = new WeakSet();
   const hook = proto => {
@@ -73,19 +77,45 @@ function installProbe({ boxes }) {
   window.__videos = [];
   document.createElement = (tag, ...rest) => { const made = create(tag, ...rest), t = String(tag).toLowerCase(); if (t === 'canvas') watch(made, `instrument ${++soak.made}`); if (t === 'video') window.__videos.push(made); return made; };
 
+  // Each frame's number and the moment its first callback began, which is when the wall reads the clock to land launches.
+  const clock = () => performance.timeOrigin + performance.now();
+  let frame = 0, frameTs = null;
+  const starts = [];
+  const raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = callback => raf(ts => {
+    if (ts !== frameTs) { frameTs = ts; frame++; starts.push({ n: frame, at: clock() }); if (starts.length > 2400) starts.splice(0, 600); }
+    callback(ts);
+  });
+
   const pending = new Map();
-  let frames = [], frame = 0, last = null, stats = null, level = -1, minuteStart = 0, minuteFrames = 0, wasCapturing = false, prepared = {}, open = [];
-  const recent = [];
+  // Every report the wall makes, through a setter, so that two in one frame cannot hide a landing. The wall reports after it has drawn the frame.
+  let stats = null, level = -1;
+  Object.defineProperty(window, '__mapStats', { configurable: true, get: () => stats, set: s => {
+    stats = s;
+    soak.reports++;
+    if (!s) return;
+    if (s.level !== level) { level = s.level; soak.levels.push({ atS: Math.round(performance.now() / 1000), level }); }
+    for (const f of s.failing ?? []) soak.failing[`${f.id}: ${f.reason}`] = (soak.failing[`${f.id}: ${f.reason}`] ?? 0) + 1;
+    const drawnAt = clock();
+    for (const l of s.landed ?? []) {
+      const r = pending.get(l.launchId);
+      if (!r) continue;
+      for (const z of l.zones) if (!r.landed.has(z)) r.landed.set(z, { at: drawnAt, frame, atMs: r.atMs });
+      if (r.scene && !r.counted) { r.counted = true; if (++soak.sceneLandings === soak.firstPassScenes + 1) soak.firstPassEndsAt = performance.now(); }
+    }
+  } });
+
+  let frames = [], last = null, minuteStart = 0, minuteFrames = 0, wasCapturing = false;
   window.studio.map.onMessage(m => {
-    if (m?.type === 'performEnd') { pending.clear(); return; }
-    // The service also cancels a launch once it has landed, to clear it from the wall: only one that never landed was called off.
-    if (m?.type === 'performCancel') { const r = pending.get(m.launchId); if (r && r.landed.size === 0) r.cancelled = true; return; }
+    if (m?.type === 'performEnd') { for (const r of [...pending.values()]) settle(r, true); return; }
+    // The service also cancels a launch once it has landed, to clear it from the wall. Whatever has not landed by the time it is settled was called off.
+    if (m?.type === 'performCancel') { const r = pending.get(m.launchId); if (r) r.cancelled = true; return; }
     if (m?.type !== 'performLaunch') return;
     const l = m.launch, had = pending.get(l.id);
     for (const c of l.changes) if (c.sourceId) soak.offsets[c.sourceId] = c.phaseOffsetBeats;
     if (had) { had.atMs = l.atMs; had.cancelled = false; return; }
     soak.launches++;
-    pending.set(l.id, { id: l.id, firstAt: l.atMs, atMs: l.atMs, barMs: l.barMs, landed: new Map(), cancelled: false, changes: l.changes.map(c => ({ zone: c.zone, kind: c.blend.kind, sourceId: c.sourceId })) });
+    pending.set(l.id, { id: l.id, firstAt: l.atMs, atMs: l.atMs, barMs: l.barMs, landed: new Map(), cancelled: false, scene: l.changes.length > 1, changes: l.changes.map(c => ({ zone: c.zone, kind: c.blend.kind, sourceId: c.sourceId })) });
   });
   const zonePixels = (px, b) => {
     const out = [];
@@ -95,79 +125,84 @@ function installProbe({ boxes }) {
   };
   const meanOf = lists => { const sum = new Float32Array(lists[0].length); for (const l of lists) for (let i = 0; i < l.length; i++) sum[i] += l[i]; return sum.map(v => v / lists.length); };
   const gap = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
-  /** How many frames after the ideal one the zone first shows the new picture, or null if the two pictures are too alike to tell. */
-  const measure = (r, c, landedAt) => {
-    const ideal = frames.find(f => f.t >= r.atMs);
-    if (!ideal) { soak.skipped['no frame at the launch time'] = (soak.skipped['no frame at the launch time'] ?? 0) + 1; return null; }
-    // The frames just after a scene lands can be slow, so the two reference pictures use the whole captured window.
-    const box = boxes[c.zone], all = frames.filter(f => f.t >= r.atMs - CAPTURE_BEFORE && f.t <= r.atMs + CAPTURE_AFTER).map(f => ({ ...f, z: zonePixels(f.px, box) }));
-    const before = all.filter(f => f.t < r.atMs - 8), after = all.filter(f => f.t >= landedAt + 120), over = all.filter(f => f.n >= ideal.n - 1); // One frame early is possible: a frame's timestamp is its start, and the wall reads the clock a moment later.
-    if (before.length < 2 || after.length < 2) { const why = `too few frames (${before.length} before, ${after.length} after)`; soak.skipped[why] = (soak.skipped[why] ?? 0) + 1; return null; }
-    const pre = meanOf(before.map(f => f.z)), post = meanOf(after.map(f => f.z)), apart = gap(pre, post);
-    if (apart < 10) return { unclear: true };
-    const looksNew = f => gap(f.z, post) < gap(f.z, pre);
-    for (let i = 0; i < over.length - 1; i++) if (looksNew(over[i]) && looksNew(over[i + 1])) return { frames: over[i].n - ideal.n, ms: Math.round(over[i].t - r.atMs), logicFrames: (frames.find(f => f.t >= landedAt)?.n ?? ideal.n) - ideal.n, apart: Math.round(apart) };
-    return { unclear: true };
+  /** The first frame whose picture of the zone is the new one, or a reason it cannot be told. */
+  const firstNewPicture = (r, c, landing, ideal) => {
+    const box = boxes[c.zone], all = frames.filter(f => f.px && f.t >= r.atMs - CAPTURE_BEFORE).map(f => ({ ...f, z: zonePixels(f.px, box) }));
+    const before = all.filter(f => f.n < ideal), after = all.filter(f => f.n > landing.frame).slice(0, 8); // The frames just after: a moving look soon drifts from its first picture.
+    if (before.length < 2 || after.length < 2) return { why: 'too few frames' };
+    const pre = meanOf(before.map(f => f.z)), post = meanOf(after.map(f => f.z));
+    if (gap(pre, post) < 10) return { why: 'pictures too alike' };
+    const over = all.filter(f => f.n >= ideal), looksNew = f => gap(f.z, post) < gap(f.z, pre);
+    for (let i = 0; i < over.length - 1; i++) if (looksNew(over[i]) && looksNew(over[i + 1])) return { frames: over[i].n - ideal };
+    return { why: 'never clearly the new picture' };
   };
+  /** Every zone of every launch ends as landed, deferred, called off, ended by End show, or unresolved. */
+  function settle(r, ended = false) {
+    pending.delete(r.id);
+    for (const c of r.changes) {
+      const landing = r.landed.get(c.zone);
+      if (!landing) {
+        const outcome = ended ? 'endedByShow' : r.cancelled ? 'cancelled' : 'unresolved';
+        soak.outcomes[outcome]++;
+        if (outcome === 'unresolved') soak.unresolved.push({ id: r.id, zone: c.zone });
+        continue;
+      }
+      const late = landing.at - r.firstAt;
+      if (late > r.barMs / 2) { soak.outcomes.deferred++; soak.deferred.push({ id: r.id, zone: c.zone, lateMs: Math.round(late) }); continue; }
+      soak.outcomes.landed++;
+      if (c.kind !== 'cut' || c.sourceId === null) continue;
+      // The time it was due when it landed: what is left of a launch can be moved on afterwards.
+      const ideal = starts.find(s => s.at >= landing.atMs)?.n ?? landing.frame, seen = firstNewPicture({ atMs: landing.atMs }, c, landing, ideal);
+      soak.landings.push({ zone: c.zone, landingFrames: landing.frame - ideal, drawnMs: Math.round(landing.at - landing.atMs), pixelFrames: seen.frames ?? null, why: seen.why ?? null });
+    }
+  }
   const tick = ts => {
-    requestAnimationFrame(tick);
-    const t = performance.timeOrigin + ts;
-    frame++;
+    raf(tick);
+    const t = clock();
     if (last !== null) {
       const d = ts - last;
       if (soak.count < soak.intervals.length) { soak.probing[soak.count] = wasCapturing ? 1 : 0; soak.intervals[soak.count++] = d; }
       if (level >= 0) soak.levelMs[level] += d;
       if (d > 50 && soak.long.length < 2000) soak.long.push({ atS: Math.round(ts / 1000), ms: Math.round(d), nearLaunch: wasCapturing });
-      // A stall, with the looks that started being prepared just before it or in the next report after it.
-      if (d >= 250 && soak.stalls.length < 400) { const stall = { atS: Math.round(ts / 1000), ms: Math.round(d), looks: recent.filter(x => ts - x.ts < 2500).flatMap(x => x.ids), reports: 2 }; soak.stalls.push(stall); open.push(stall); }
+      if (d >= 250 && soak.showOn) soak.stalls.push({ atMs: ts, atS: Math.round(ts / 1000), ms: Math.round(d), firstPass: soak.firstPassEndsAt === null || ts < soak.firstPassEndsAt });
     }
     last = ts;
     if (!minuteStart) minuteStart = ts;
     minuteFrames++;
-    if (ts - minuteStart >= 60000) { soak.minutes.push(round1(minuteFrames * 1000 / (ts - minuteStart))); minuteStart = ts; minuteFrames = 0; }
-    const s = window.__mapStats;
-    if (s && s !== stats) {
-      stats = s;
-      const fresh = Object.entries(s.prepares ?? {}).filter(([id, n]) => n > (prepared[id] ?? 0)).map(([id]) => id);
-      prepared = s.prepares ?? {};
-      if (fresh.length) { recent.push({ ts, ids: fresh }); while (recent.length > 24) recent.shift(); }
-      for (const stall of open) { stall.looks.push(...fresh); stall.reports--; }
-      open = open.filter(x => x.reports > 0);
-      if (s.level !== level) { level = s.level; soak.levels.push({ atS: Math.round(performance.now() / 1000), level }); }
-      for (const f of s.failing ?? []) soak.failing[`${f.id}: ${f.reason}`] = (soak.failing[`${f.id}: ${f.reason}`] ?? 0) + 1;
-      for (const l of s.landed ?? []) { const r = pending.get(l.launchId); if (r) for (const z of l.zones) if (!r.landed.has(z)) r.landed.set(z, t); }
-    }
+    if (ts - minuteStart >= 60000) { soak.minutes.push(Math.round(minuteFrames * 10000 / (ts - minuteStart)) / 10); minuteStart = ts; minuteFrames = 0; }
+    // Kept until enough frames have followed the landing, however long a stall made them.
     let capture = false;
-    for (const r of pending.values()) if (t >= r.atMs - CAPTURE_BEFORE && t <= r.atMs + CAPTURE_AFTER) capture = true;
-    wasCapturing = capture;
-    if (capture) { reader.drawImage(stage, 0, 0, W, H); frames.push({ n: frame, t, px: reader.getImageData(0, 0, W, H).data }); }
-    for (const r of [...pending.values()]) {
-      const allIn = r.changes.every(c => r.landed.has(c.zone));
-      if (!(allIn && t > r.atMs + CAPTURE_AFTER) && t <= r.firstAt + r.barMs * 3) continue;
-      pending.delete(r.id);
-      if (r.cancelled) continue;
-      for (const c of r.changes) {
-        const at = r.landed.get(c.zone);
-        if (at === undefined) { soak.unlanded.push({ id: r.id, zone: c.zone }); continue; }
-        if (at - r.firstAt > r.barMs / 2) { soak.deferred.push({ id: r.id, zone: c.zone, lateMs: Math.round(at - r.firstAt) }); continue; }
-        if (c.kind !== 'cut' || c.sourceId === null) continue;
-        const m = measure(r, c, at);
-        if (m) soak.samples.push({ zone: c.zone, ...m });
-      }
+    for (const r of pending.values()) {
+      const lastIn = Math.max(0, ...[...r.landed.values()].map(l => l.frame));
+      if (t >= r.atMs - CAPTURE_BEFORE && (t <= r.atMs + CAPTURE_AFTER || !r.changes.every(c => r.landed.has(c.zone)) || frame < lastIn + MIN_FRAMES_AFTER)) capture = true;
     }
+    wasCapturing = capture;
+    // Taken without waiting: a synchronous read-back would itself hold the wall up behind the graphics process.
+    if (capture) {
+      const entry = { n: frame, t, px: null };
+      frames.push(entry);
+      createImageBitmap(stage, { resizeWidth: W, resizeHeight: H, resizeQuality: 'low' }).then(bitmap => { reader.drawImage(bitmap, 0, 0); bitmap.close(); entry.px = reader.getImageData(0, 0, W, H).data; }).catch(() => { entry.failed = true; });
+    }
+    for (const r of [...pending.values()]) {
+      const allIn = r.changes.every(c => r.landed.has(c.zone)), lastIn = Math.max(0, ...[...r.landed.values()].map(l => l.frame));
+      const picturesIn = !frames.some(f => !f.px && !f.failed);
+      if ((allIn && picturesIn && t > r.atMs + CAPTURE_AFTER && frame >= lastIn + MIN_FRAMES_AFTER) || t > r.firstAt + r.barMs * 3) settle(r);
+    }
+    soak.pending = pending.size;
     if (frames.length) { const keep = Math.min(t - 1200, ...[...pending.values()].map(r => r.atMs - CAPTURE_BEFORE)); while (frames.length && frames[0].t < keep) frames.shift(); }
   };
-  const round1 = v => Math.round(v * 10) / 10;
-  requestAnimationFrame(tick);
+  raf(tick);
 }
 
 /** Runs in the studio page: presses the next scene's row one beat or so before every eighth bar, as an operator would. */
 function installScheduler({ scenes, barsPerScene }) {
-  const s = window.__schedule = { on: false, row: 0, last: null, presses: 0 };
+  const s = window.__schedule = { on: false, row: 0, last: null, presses: 0, lateAndShownWaiting: 0 };
   setInterval(() => {
     if (!s.on) return;
     const v = window.__studioTest.perform();
     if (!v.running || !v.controls.ready) return;
+    // What the operator's grid is told: a queued look that is not ready shows as Loading on its own cell.
+    if (v.launcher.queue.some(l => l.atMs < performance.timeOrigin + performance.now()) && v.waiting.length) s.lateAndShownWaiting++;
     const c = v.clock, beat = c.anchorBeat + (performance.timeOrigin + performance.now() - c.anchorMs) * c.bpm / 60000;
     const every = barsPerScene * 4, target = c.barOffset + Math.ceil((beat - c.barOffset) / every) * every;
     if (target === s.last || target - beat > 1.5 || target - beat < .25) return;
@@ -183,7 +218,7 @@ const note = (where, text) => { errors.push({ where, text: String(text).slice(0,
 const began = Date.now();
 const mixDir = await fs.mkdtemp(path.join(os.tmpdir(), 'form-field-soak-'));
 // So a window behind another still runs at full speed. Both windows must keep drawing while nobody is looking at them.
-const app = await electron.launch({ args: [root, `--user-data-dir=${userData}`, '--mute-audio', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows'], env });
+const app = await electron.launch({ args: [root, `--user-data-dir=${userData}`, '--mute-audio', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--enable-precise-memory-info'], env });
 let failed = false, closing = false;
 
 try {
@@ -287,6 +322,7 @@ try {
     await control({ kind: 'master', value: 1 });
     await studio.evaluate(() => { const s = window.__schedule; s.row = 0; s.last = null; s.on = true; });
   };
+  await wall.evaluate(n => { window.__soak.showOn = true; window.__soak.firstPassScenes = n; }, SCENES);
   await startShow();
   await until(async () => (await view()).launcher.sceneIndex === 0, 40000, 'the first scene to land');
   await say('first scene landed');
@@ -350,7 +386,7 @@ try {
       await say(`End show at 2x and fresh Start show done: ${JSON.stringify(record.restart)}`);
     }
     if (m >= nextLog) {
-      const s = await wall.evaluate(() => ({ fps: window.__mapStats?.fps, level: window.__mapStats?.level, launches: window.__soak.launches, samples: window.__soak.samples.length, deferred: window.__soak.deferred.length, lost: window.__soak.lost.length }));
+      const s = await wall.evaluate(() => ({ fps: window.__mapStats?.fps, level: window.__mapStats?.level, launches: window.__soak.launches, landings: window.__soak.landings.length, stalls: window.__soak.stalls.length, deferred: window.__soak.deferred.length, lost: window.__soak.lost.length }));
       await say(`${m.toFixed(1)} min ${JSON.stringify(s)} mem ${JSON.stringify(memory.at(-1))} errors ${errors.length}`);
       nextLog += 1;
     }
@@ -358,28 +394,27 @@ try {
   }
   await sampleMemory();
   await studio.evaluate(() => { window.__schedule.on = false; });
+  // The last launch is followed to its end, so that every launch pressed is in the count.
+  await until(() => wall.evaluate(() => window.__soak.pending === 0), 45000, 'the last launches to settle');
 
   // ---- The results ----
-  const raw = await wall.evaluate(() => { const s = window.__soak; return { intervals: Array.from(s.intervals.subarray(0, s.count)), probing: Array.from(s.probing.subarray(0, s.count)), long: s.long, stalls: s.stalls, skipped: s.skipped, minutes: s.minutes, levels: s.levels, levelMs: s.levelMs, lost: s.lost, failing: s.failing, samples: s.samples, deferred: s.deferred, unlanded: s.unlanded, launches: s.launches, made: s.made, released: s.released }; });
+  const raw = await wall.evaluate(() => { const s = window.__soak; return { intervals: Array.from(s.intervals.subarray(0, s.count)), probing: Array.from(s.probing.subarray(0, s.count)), long: s.long, stalls: s.stalls, minutes: s.minutes, levels: s.levels, levelMs: s.levelMs, lost: s.lost, failing: s.failing, landings: s.landings, outcomes: s.outcomes, deferred: s.deferred, unresolved: s.unresolved, launches: s.launches, made: s.made, released: s.released, reports: s.reports, firstPassEndsAt: s.firstPassEndsAt }; });
   const presses = await studio.evaluate(() => window.__schedule.presses);
   const sorted = Float64Array.from(raw.intervals).sort();
   const worst1 = sorted.subarray(Math.floor(sorted.length * .99));
-  const measured = raw.samples.filter(s => !s.unclear), errorsSorted = measured.map(s => Math.abs(s.frames)).sort((a, b) => a - b), msSorted = measured.map(s => s.ms).sort((a, b) => a - b);
-  const histogram = {};
-  for (const s of measured) histogram[s.frames] = (histogram[s.frames] ?? 0) + 1;
-  const warm = memory.filter(p => p.min >= WARM_UP_MIN), trend = key => round(slope(warm.filter(p => p[key] !== null).map(p => [p.min, p[key]])));
-  const first = warm[0], last = memory.at(-1);
   // 1% low: the average rate of the slowest 1% of frames. Also given without the frames the launch probe reads back.
   const onePercentLow = list => { const s = Float64Array.from(list).sort(), w = s.subarray(Math.floor(s.length * .99)); return round(1000 / (w.reduce((a, b) => a + b, 0) / w.length), 1); };
   const unprobed = raw.intervals.filter((_, i) => !raw.probing[i]), unprobedSorted = Float64Array.from(unprobed).sort();
-  const longNear = raw.long.filter(l => l.nearLaunch).length;
-  record.frameRate = { frames: raw.intervals.length, medianFps: round(1000 / quantile(sorted, .5), 1), onePercentLowFps: round(1000 / (worst1.reduce((a, b) => a + b, 0) / worst1.length), 1), longestFrameMs: round(sorted.at(-1), 1), withoutProbeFrames: { frames: unprobed.length, medianFps: round(1000 / quantile(unprobedSorted, .5), 1), onePercentLowFps: onePercentLow(unprobed) }, framesOver50ms: raw.long.length, framesOver50msNearALaunch: longNear, longFrames: raw.long.slice(0, 200), perMinuteFps: raw.minutes };
-  record.launchError = { howMeasured: 'wall pixels at 96 x 54, first frame showing the new picture against the first frame due at or after atMs', cutZoneLandings: raw.samples.length, measured: measured.length, tooAlikeToMeasure: raw.samples.length - measured.length, medianAbsFrames: quantile(errorsSorted, .5), p95AbsFrames: quantile(errorsSorted, .95), maxAbsFrames: errorsSorted.at(-1) ?? null, medianMs: quantile(msSorted, .5), p95Ms: quantile(msSorted, .95), framesHistogram: histogram };
-  record.launchError.skipped = raw.skipped;
-  const names = await studio.evaluate(() => Object.fromEntries(window.__studioTest.performSet().clips.map(c => [c.sourceId, c.name])));
-  record.stalls = raw.stalls.map(s => ({ atS: s.atS, ms: s.ms, looks: [...new Set(s.looks)].map(id => names[id] ?? id) }));
+  record.frameRate = { frames: raw.intervals.length, medianFps: round(1000 / quantile(sorted, .5), 1), onePercentLowFps: round(1000 / (worst1.reduce((a, b) => a + b, 0) / worst1.length), 1), longestFrameMs: round(sorted.at(-1), 1), withoutProbeFrames: { frames: unprobed.length, medianFps: round(1000 / quantile(unprobedSorted, .5), 1), onePercentLowFps: onePercentLow(unprobed) }, framesOver50ms: raw.long.length, framesOver50msNearALaunch: raw.long.filter(l => l.nearLaunch).length, longFrames: raw.long.slice(0, 200), perMinuteFps: raw.minutes };
+  const count = list => { const out = {}; for (const v of list) out[v] = (out[v] ?? 0) + 1; return out; };
+  const abs = list => list.map(Math.abs).sort((a, b) => a - b), landed = raw.landings, frameErrors = abs(landed.map(l => l.pixelFrames ?? l.landingFrames)), drawn = landed.map(l => l.drawnMs).sort((a, b) => a - b), byPicture = landed.filter(l => l.pixelFrames !== null);
+  record.launchError = { howMeasured: 'every landing: frame of the wall report minus the first frame begun at or after atMs, confirmed from wall pixels where the two pictures differ; time is the end of the landing frame minus atMs', cutLandings: landed.length, confirmedByPixels: byPicture.length, notConfirmedByPixels: count(landed.filter(l => l.pixelFrames === null).map(l => l.why)), medianAbsFrames: quantile(frameErrors, .5), p95AbsFrames: quantile(frameErrors, .95), maxAbsFrames: frameErrors.at(-1) ?? null, framesHistogram: count(landed.map(l => l.pixelFrames ?? l.landingFrames)), landingFramesHistogram: count(landed.map(l => l.landingFrames)), medianDrawnMs: quantile(drawn, .5), p95DrawnMs: quantile(drawn, .95), maxDrawnMs: drawn.at(-1) ?? null };
+  const firstPass = raw.stalls.filter(s => s.firstPass), later = raw.stalls.filter(s => !s.firstPass);
+  record.stalls = { limitAfterFirstPassMs: STALL_MS, firstPassLimitMs: FIRST_PASS_LIMIT_MS, firstPassEnded: raw.firstPassEndsAt !== null, firstPass: { count: firstPass.length, maxMs: firstPass.length ? Math.max(...firstPass.map(s => s.ms)) : 0, list: firstPass.map(s => ({ atS: s.atS, ms: s.ms })) }, afterFirstPass: { count: later.length, maxMs: later.length ? Math.max(...later.map(s => s.ms)) : 0, list: later.map(s => ({ atS: s.atS, ms: s.ms })) } };
+  const warm = memory.filter(p => p.min >= WARM_UP_MIN), trend = key => round(slope(warm.filter(p => p[key] !== null).map(p => [p.min, p[key]])));
+  const first = warm[0], last = memory.at(-1);
   record.governor = { changes: raw.levels, secondsAtLevel: raw.levelMs.map(v => Math.round(v / 1000)) };
-  record.launches = { scenePresses: presses, wallLaunches: raw.launches, deferred: raw.deferred.length, deferredDetail: raw.deferred.slice(0, 40), neverLanded: raw.unlanded.length, neverLandedDetail: raw.unlanded.slice(0, 40) };
+  record.launches = { scenePresses: presses, checksWhileADeferredLookShowedAsWaiting: await studio.evaluate(() => window.__schedule.lateAndShownWaiting), wallLaunches: raw.launches, wallReports: raw.reports, zones: raw.outcomes, deferredDetail: raw.deferred.slice(0, 40), unresolvedDetail: raw.unresolved.slice(0, 40) };
   record.contexts = { lost: raw.lost.length, detail: raw.lost.slice(0, 40), instrumentContextsMade: raw.made, givenBackOnPurpose: raw.released };
   record.failingSources = raw.failing;
   record.memoryMB = { warmUpMinutes: WARM_UP_MIN, start: memory[0], afterWarmUp: first, end: last, trendMBPerMinAfterWarmUp: { studio: trend('studio'), wall: trend('wall'), gpu: trend('gpu'), total: trend('total'), studioHeap: trend('studioHeap'), wallHeap: trend('wallHeap') }, samples: memory };
@@ -389,9 +424,11 @@ try {
   record.pass = {
     noErrors: errors.length === 0 && Object.keys(raw.failing).length === 0,
     noLostContexts: raw.lost.length === 0,
-    medianLaunchErrorAtMostOneFrame: measured.length > 0 && quantile(errorsSorted, .5) <= MAX_MEDIAN_ERROR_FRAMES,
+    medianLaunchErrorAtMostOneFrame: landed.length > 0 && quantile(frameErrors, .5) <= MAX_MEDIAN_ERROR_FRAMES,
     memoryStable: ['studio', 'wall', 'gpu'].every(k => t[k] <= MAX_TREND_MB_PER_MIN),
-    everyLaunchLanded: raw.unlanded.length === 0,
+    everyLaunchAccountedFor: raw.outcomes.unresolved === 0,
+    firstPassStallsWithinLimit: raw.firstPassEndsAt !== null && record.stalls.firstPass.maxMs <= FIRST_PASS_LIMIT_MS,
+    noStallsAfterFirstPass: record.stalls.afterFirstPass.count === 0,
   };
   failed = Object.values(record.pass).some(v => !v);
 } catch (error) {

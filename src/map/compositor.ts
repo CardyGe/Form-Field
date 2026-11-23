@@ -7,10 +7,11 @@
  * The rules (sizing, clock, governor, fades, placement) are in playout.ts and placement.ts and tested there.
  */
 import { StudioRenderer } from '../rendering/StudioRenderer';
+import { ProgramsCompiling } from '../rendering/program-gate';
 import type { Project } from '../shared/types';
 import { drawCommands, ringPx, shownOnWall, stageCommands, type DrawOptions } from './draw';
 import { borderColour, fadeKey } from './edge';
-import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, freezeLeaving, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
+import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, freezeLeaving, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, rendererToEvict, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, SPEED_RANGE, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
 import type { BlendKind } from '../perform/types';
@@ -82,6 +83,12 @@ interface Slot {
   shown: Project | null;
   /** Why it has a renderer (RANK), as of the last frame. */
   rank: number;
+  /** Perform: when something last wanted it, so the look unused for longest is the first to give way. */
+  lastUsed: number;
+  /** Perform: nothing wants it now, but it stays ready in case the set comes back to it. */
+  keptWarm: boolean;
+  /** Perform: last wanted by a running show, rather than by Map. */
+  showLook: boolean;
 }
 
 /** A shape's crossfade from what it played before to what it plays now. start is set once the new content is ready. */
@@ -323,6 +330,10 @@ export class MapCompositor {
   }
   /** The armed sources that are ready. */
   armedIds(): string[] { return this.armed.filter(id => this.isReady(id)); }
+  /** A show is running or handing over: looks are made ready without holding up the wall. */
+  private get gentle(): boolean { return this.perform !== null || this.armed.length > 0; }
+  /** Armed looks are still being made ready, so the operator's preview can wait a moment. */
+  get warming(): boolean { return this.armed.some(id => !isVideoId(id) && id !== LIVE_SOURCE_ID && !this.isReady(id) && !this.slots.get(id)?.failed); }
   /** Perform's values for drawing, or null when no show runs. They never change a composition or the show. */
   /** easeMs: when a show ends (null), master, brightness and hue go back to plain over this long, never in one step. */
   setPerformValues(values: PerformDraw | null, easeMs = 0): void {
@@ -609,15 +620,38 @@ export class MapCompositor {
     // Every renderer carries this frame's rank before one can be taken for another: a look that has just landed is
     // already "playing", and one nothing wants any more is the first to go.
     for (const [id, slot] of this.slots) slot.rank = wanted.get(id)?.rank ?? -1;
+    // With no show and nothing armed there is no limit, and Map starts its looks as it always has.
+    let starts = this.gentle ? 1 : Infinity, releasedWarm = false;
     for (const source of this.show.sources) {
       const project = this.projects.get(source.id);
       if (!project) continue;
       const want = wanted.get(source.id);
       // Off the wall before it started: there is no picture left to change, and it starts when it is next launched.
-      if (!want) { this.settleSwap(source.id, 'started'); const idle = this.slots.get(source.id); if (idle) this.release(source.id, idle); continue; }
+      if (!want) {
+        this.settleSwap(source.id, 'started');
+        const idle = this.slots.get(source.id);
+        if (!idle) continue;
+        // During a show a look that has left the wall stays ready, until a look that matters more needs its renderer.
+        // Map's own looks are not kept: a show starts by giving their renderers back.
+        if (this.perform && idle.showLook && idle.project === project && !idle.pending && idle.texture) { idle.keptWarm = true; continue; }
+        // After a show the kept looks go one a frame: giving back a graphics context takes time.
+        if (idle.keptWarm && releasedWarm) continue;
+        releasedWarm ||= idle.keptWarm;
+        this.release(source.id, idle);
+        continue;
+      }
       const { users, fading, waiting } = want;
+      // Armed looks start one at a time, so several arriving together never add up to one long frame.
+      if (waiting && !this.slots.has(source.id) && starts <= 0) continue;
+      const isNew = !this.slots.has(source.id);
       const slot = this.slot(source.id, now, want.rank);
       if (!slot) continue;
+      if (isNew && waiting) starts--;
+      slot.lastUsed = now;
+      // Fading or gliding out does not make it the show's: that is how Map's looks leave the wall as a show starts.
+      if (!this.perform) slot.showLook = false; else if (waiting || users.some(s => shownOnWall(show, s, this.options.solo))) slot.showLook = true;
+      // Back from being kept: it starts again from the top, as a newly made renderer would.
+      if (slot.keptWarm) { slot.keptWarm = false; slot.phase = 0; slot.shown = null; }
       // A setting that can follow sound changed (Map's Effect tab): the playing effect is adjusted in place, never restarted.
       // The old look sent back after a draft could not start: it never stopped playing, so it is not started again.
       if (slot.keptOver && project !== slot.keptOver && slot.project && !slot.pending && !needsPrepare(slot.project, project)) { slot.project = project; slot.keptOver = null; slot.failedProject = null; slot.failed = null; }
@@ -634,6 +668,11 @@ export class MapCompositor {
       }
       if (!slot.project || !slot.renderer) continue;
       if (waiting && slot.shown === slot.project && slot.texture) continue;
+      if (waiting) {
+        // Its shaders are still linking, or another look has had this frame's first draw.
+        if (slot.renderer.linking || starts <= 0) continue;
+        starts--;
+      }
       // Perform's speed for this source (1 without a show), and the beats taken off the count for its bar.
       const pace = this.speedOf(source.id);
       if (!this.frozen) {
@@ -655,7 +694,7 @@ export class MapCompositor {
         // A source drawn only to be ready changes nothing on the stage.
         if (!waiting) rendered = true;
         if (slot.failedProject === null) slot.failed = null;
-      } catch (error) { slot.failed = String((error as Error)?.message ?? error); }
+      } catch (error) { if (!(error instanceof ProgramsCompiling)) slot.failed = String((error as Error)?.message ?? error); }
     }
 
     // Each video's newest frame, once for every shape that plays it.
@@ -775,14 +814,13 @@ export class MapCompositor {
     if (this.slots.size >= MAX_LIVE_INSTRUMENTS) {
       // Perform: a source that matters more takes the renderer of the one that matters least (see RANK). A source
       // kept ready never takes one from a look that is playing, so arming cannot cost the stage a picture.
-      let least: [string, Slot] | null = null;
-      for (const entry of this.slots) if (entry[1].rank < rank && (!least || entry[1].rank < least[1].rank)) least = entry;
+      const least = rendererToEvict(this.slots, rank);
       if (!least) { if (rank === RANK.playing) this.overLimit.add(id); return null; }
       this.release(least[0], least[1]);
     }
     this.restartAt.delete(id);
     const canvas = document.createElement('canvas');
-    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0, shown: null, rank };
+    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0, shown: null, rank, lastUsed: now, keptWarm: false, showLook: false };
     // A lost context (the graphics card reset, or too many contexts) drops the source: its shape plays its own fill
     // rather than freezing on its last picture, and the source starts again after a pause.
     canvas.addEventListener('webglcontextlost', event => {
@@ -802,6 +840,7 @@ export class MapCompositor {
     if (!slot.renderer) return;
     slot.pending = project;
     slot.prepares++;
+    if (this.gentle) slot.renderer.holdFirstDraw();
     slot.renderer.prepare(project).then(() => {
       if (slot.pending !== project) return; // a newer composition arrived meanwhile
       // An evolving composition plays from its start; a looping one carries on where it was.
