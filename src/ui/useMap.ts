@@ -14,6 +14,7 @@ import { MeterStore } from '../react/meter';
 import { usesEmberSmokeAudio } from '../react/ember-smoke';
 import { autoAdvanceDue, nextAutoScene } from '../map/wild';
 import { linkPerformToMap, performService, type PerformService } from '../perform/service';
+import { historyBlock, savedShow, type HistoryBlock } from '../perform/grid-edit';
 import { validateLiveSettings } from '../live/settings';
 
 /** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
@@ -39,19 +40,17 @@ const UNDO_LAYOUT = 'That undo would change the zones or scenes the show is usin
 const OPEN_PAUSED = 'End the Perform show before opening another show file.';
 /** Everything on Map's scene bar: none of it changes while a show runs. */
 const SCENE_BAR_EDITS: ReadonlySet<EditAction['type']> = new Set(['addScene', 'renameScene', 'deleteScene', 'setSceneFade', 'switchScene', 'setAutoAdvance']);
-const sceneBarKey = (s: ShowDocument) => JSON.stringify([s.sceneId, s.sceneFade, s.autoAdvance ?? null, s.scenes.map(sc => [sc.id, sc.name, sc.fadeSeconds])]);
+const HISTORY_NOTES: Record<HistoryBlock, string> = { scenes: SCENES_PAUSED, layout: UNDO_LAYOUT, playing: UNDO_PLAYING, picture: 'That undo would change the running picture. End the show first.' };
+/** The wall holds a show's last looks through its handover (two seconds at most, then a short fade). */
+const AFTER_HANDOVER_MS = 3000;
 /** Why an undo or redo to this show cannot happen during a show, or null. */
 function showBlocksHistory(now: ShowDocument, target: ShowDocument | undefined): string | null {
   const service = performService();
   if (!service.running || !target) return null;
-  if (sceneBarKey(now) !== sceneBarKey(target)) return SCENES_PAUSED;
-  // The launcher counts rows by position and the wall was told each zone's shapes, so neither may move under a running show.
-  const layout = (s: ShowDocument) => JSON.stringify([s.performance.zones, s.performance.scenes.map(sc => sc.id)]);
-  if (layout(now) !== layout(target)) return UNDO_LAYOUT;
   const { playing, queue } = service.view().launcher;
   const inUse = [...playing, ...queue.flatMap(l => l.changes.map(c => c.clipId))].filter((id): id is string => id !== null);
-  const source = (show: ShowDocument, id: string) => show.performance.clips.find(c => c.id === id)?.sourceId;
-  return inUse.some(id => source(target, id) !== source(now, id)) ? UNDO_PLAYING : null;
+  const blocked = historyBlock(now, target, inUse);
+  return blocked && HISTORY_NOTES[blocked];
 }
 const fileName = (file: string) => file.split(/[\\/]/).pop() || file;
 /** How many shapes in a file did not survive validation. */
@@ -97,6 +96,8 @@ interface Session {
   live: LiveSettings | null;
   /** A show ended with the wall open: it stays open, on Map's picture, until the operator closes it. */
   wallHeld: boolean;
+  /** The screen showing the session, told when the session's state is tidied without an edit. */
+  onStateTidied: ((state: MapState) => void) | null;
 }
 let session: Session | null = null;
 function mapSession(): Session {
@@ -105,11 +106,11 @@ function mapSession(): Session {
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
     outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, mounted: 0, wallFrame: null, onStudioWarning: null,
-    solo: { shapes: [], groups: [] }, snap: true, photoShown: true, live: null, wallHeld: false,
+    solo: { shapes: [], groups: [] }, snap: true, photoShown: true, live: null, wallHeld: false, onStateTidied: null,
     saver: autosaveSchedule<ShowDocument>(async show => {
       if (!bridge) return;
       // A failed write is reported, never swallowed: the operator keeps working and can Save As.
-      try { await bridge.saveAutosave(JSON.stringify(show)); created.saveFailed = false; created.onSaveResult?.(false); }
+      try { await bridge.saveAutosave(JSON.stringify(savedShow(show))); created.saveFailed = false; created.onSaveResult?.(false); }
       catch (error) { created.saveFailed = true; created.onSaveResult?.(true); throw error; }
     }, 500),
   };
@@ -160,6 +161,15 @@ export function endPerformShow(): void {
   if (!service.running) return;
   s.wallHeld = s.outputOpen;
   service.endShow();
+  // Clips only the show was still holding go once the wall has finished handing over, so its last picture is not pulled away.
+  setTimeout(() => dropShowOnlyClips(s), s.outputOpen ? AFTER_HANDOVER_MS : 0);
+}
+function dropShowOnlyClips(s: Session): void {
+  if (performService().running) return;
+  const { state } = s, show = savedShow(state.show), past = state.past.map(savedShow), future = state.future.map(savedShow);
+  if (show === state.show && past.every((p, i) => p === state.past[i]) && future.every((f, i) => f === state.future[i])) return;
+  s.state = { ...state, show, past, future };
+  s.onStateTidied?.(s.state);
 }
 /** Whether leaving a section must keep the wall open: a show is running, or one has just ended on it. */
 export function wallStaysOpen(): boolean { return performService().running || mapSession().wallHeld; }
@@ -306,12 +316,13 @@ export function useMap(onError: (message: string) => void) {
     });
     const offState = bridge.onState(setWallState);
     kept.onSaveResult = failed => setSaveError(failed ? SAVE_FAILED : null);
+    kept.onStateTidied = next => { stateRef.current = next; setState(next); };
     kept.mounted++;
     // Leaving Map writes what is waiting. A failure stays recorded in the session and still refuses the close.
     // The wall closes too, unless a shape is being edited in Studio: then it stays open and follows the edits.
     // Decided a moment later: React's development double mount remounts at once, and must not close the wall.
     return () => {
-      offOutput(); offDisplays(); offPreview(); offState(); kept.onSaveResult = null; saver.flush().catch(() => {});
+      offOutput(); offDisplays(); offPreview(); offState(); kept.onSaveResult = null; kept.onStateTidied = null; saver.flush().catch(() => {});
       kept.mounted--;
       setTimeout(() => { if (kept.mounted === 0 && !kept.studioEdit && !wallStaysOpen()) void bridge.closeOutput().catch(() => {}); }, 0);
     };
@@ -607,7 +618,7 @@ export function useMap(onError: (message: string) => void) {
   const saveShowAs = async () => {
     if (!bridge || !canEdit(loadedRef.current)) return;
     try {
-      const file = await bridge.saveShow(JSON.stringify(stateRef.current.show), true);
+      const file = await bridge.saveShow(JSON.stringify(savedShow(stateRef.current.show)), true);
       if (file) setNotice(`Saved as ${fileName(file)}`);
     } catch { setNotice('Could not save the show file. Nothing was changed on disk.'); }
   };

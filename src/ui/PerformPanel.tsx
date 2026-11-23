@@ -58,6 +58,8 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
   const [zoneMenu, setZoneMenu] = useState<{ x: number; y: number; zone: number } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
+  const [launchMenu, setLaunchMenu] = useState<{ x: number; y: number } | null>(null);
+  const closeLaunchMenu = useCallback(() => setLaunchMenu(null), []);
   const [note, setNote] = useState<string | null>(null);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const say = useCallback((text: string) => { setNote(text); if (noteTimer.current) clearTimeout(noteTimer.current); noteTimer.current = setTimeout(() => setNote(null), 6000); }, []);
@@ -139,7 +141,16 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
     renameScene: (row, name) => { edit(changeRow(current(), row, { name })); },
     setIncludeCeiling: (row, includeProtected) => { edit(changeRow(current(), row, { includeProtected })); },
     chooseZone: (zone, x, y) => { if (service.running) say('Zones stay as they are during a show. End the show to change them.'); else setZoneMenu({ x, y, zone }); },
-    selectCell: (row, zone) => { setSelected({ row, zone }); setLooksOpen(true); },
+    clickCell: (row, zone) => {
+      if (!service.running) { setSelected({ row, zone }); setLooksOpen(true); return; }
+      if (!current().scenes[row]?.cells[zone]) return;
+      if (service.view().controls.ready) service.action({ type: 'launchCell', row, zone }); else say('Press Send All first.');
+    },
+    clickScene: row => {
+      if (!service.running) return;
+      if (service.view().controls.ready) service.action({ type: 'launchScene', row }); else say('Press Send All first.');
+    },
+    fillCell: (row, zone) => { setSelected({ row, zone }); setLooksOpen(true); },
   };
   const zoneEntries = (zone: number): MenuEntry[] => {
     const show: ShowDocument = map.show, target = set.zones[zone].target;
@@ -157,6 +168,15 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
     ];
   };
 
+  /** A show never inherits Map's Test grid or Freeze unseen. The look list closes so the whole grid is there to play. */
+  const startShow = () => {
+    const cleared = [map.testGrid ? 'Test grid' : '', map.freeze ? 'Freeze' : ''].filter(Boolean);
+    if (map.testGrid) map.setTestGrid(false);
+    if (map.freeze) map.setFreeze(false);
+    setLooksOpen(false);
+    service.startShow();
+    if (cleared.length) say(`${cleared.join(' and ')} turned off for the show.`);
+  };
   const canStart = map.loaded && set.scenes.some(s => s.cells.some(c => c !== null));
   const line = nextLine(view, set, canStart);
   const shownLooks = useMemo(() => { const q = query.trim().toLowerCase(); return LOOKS.filter(l => !q || `${l.name} ${l.group}`.toLowerCase().includes(q)); }, [query]);
@@ -184,9 +204,13 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
         <span className="pf-beats" aria-hidden>{[0, 1, 2, 3].map(i => <i key={i} className={i === beatInBar ? 'on' : ''} />)}</span>
         <span className={`pf-lock ${view.clock.state}`} title="The clock's best guess. If launches land wrong, press Tap in time, then Follow.">{view.running ? stateWord : 'STOPPED'}</span>
       </div>
-      <label className="pf-launch">Launch<select aria-label="Launch timing" value={set.launchQuantize} onChange={e => { edit({ ...current(), launchQuantize: e.target.value as Quantize }); e.currentTarget.blur(); }}>
-        {QUANTIZE.map(q => <option key={q.value} value={q.value}>{q.label}</option>)}</select></label>
+      {/* Not a native select: one would keep the keyboard after closing, and the controller keys would silently stop. */}
+      <div className="pf-launch">Launch<button type="button" aria-label="Launch timing" aria-haspopup="menu" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setLaunchMenu({ x: r.left, y: r.bottom + 4 }); }}>{QUANTIZE.find(q => q.value === set.launchQuantize)?.label} ▾</button></div>
       <div className={`pf-next ${line.urgent ? 'urgent' : ''}`} role="status">{line.text}</div>
+      {(map.freeze || map.testGrid) && <div className="pf-flags">
+        {map.freeze && <button type="button" aria-label="Frozen: turn off" onClick={() => map.setFreeze(false)}>FROZEN ✕</button>}
+        {map.testGrid && <button type="button" aria-label="Test grid: turn off" onClick={() => map.setTestGrid(false)}>TEST GRID ✕</button>}
+      </div>}
       <div className="pf-clock-keys">
         <button type="button" className="pf-key" disabled={!view.running} title="Space" onClick={() => service.action({ type: 'tap' })}>Tap</button>
         <button type="button" className={`pf-key ${view.running && view.clock.state === 'manual' ? 'attention' : ''}`} disabled={!view.running} title="F · go back to following the music" onClick={() => service.action({ type: 'follow' })}>Follow</button>
@@ -196,19 +220,20 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
         <button type="button" className={`pf-key black ${map.blackout ? 'on' : ''}`} aria-pressed={map.blackout} onClick={() => map.setBlackout(!map.blackout)}>Black</button>
         {view.running
           ? <button type="button" className="pf-key end" onClick={() => setConfirming(true)}>End show</button>
-          : <button type="button" className="pf-key start" disabled={!canStart} title={canStart ? 'Start the show. The room stays black until Send All and Bank ▶.' : 'Add a scene with a clip first'} onClick={() => service.startShow()}>Start show</button>}
+          : <button type="button" className="pf-key start" disabled={!canStart} title={canStart ? 'Start the show. The room stays black until Send All and Bank ▶.' : 'Add a scene with a clip first'} onClick={startShow}>Start show</button>}
       </div>
     </div>
-    {(view.notices.length > 0 || note || view.stuck.length > 0) && <div className="pf-notices" role="status">
+    {/* Always there at one height, so a note appearing never moves the grid during a show. */}
+    <div className="pf-notices" role="status" title={[note, ...view.notices].filter(Boolean).join('\n')}>
       {note && <span>{note}</span>}
       {view.stuck.length > 0 && <span className="bad"><i className="pf-dot-red" />{view.stuck.length === 1 ? 'A look is' : `${view.stuck.length} looks are`} too heavy to get ready. The zone keeps its current look.</span>}
       {view.notices.map(n => <span key={n} className="bad">{n}</span>)}
-    </div>}
+    </div>
     <div className="pf-main">
       {/* The list sits beside the grid, so every cell stays reachable and the controller is never covered during a show. */}
       <div className="pf-grid-area">
         <PerformGrid set={set} show={map.show} view={view} selected={selected} actions={actions} />
-        {looksOpen && <aside className="pf-looks" aria-label="Looks">
+        {looksOpen && <aside className={`pf-looks ${selected && selected.zone >= 4 ? 'left' : ''}`} aria-label="Looks">
           <div className="pf-looks-head"><strong>{selected ? `${set.scenes[selected.row]?.name ?? 'Scene'} · ${set.zones[selected.zone].name}` : 'Looks'}</strong>
             <button type="button" className="pf-head-btn" aria-label="Close looks" onClick={() => setLooksOpen(false)}>Close</button></div>
           <input type="search" aria-label="Search looks" placeholder="Search looks…" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.stopPropagation()} />
@@ -221,7 +246,8 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
       </div>
       <ControllerSurface view={view} set={set} held={perform.held} press={perform.press} release={perform.release} control={e => service.control(e)} sendAll={perform.sendAll} />
     </div>
-    {soundOpen && <aside className="pf-sound" aria-label="Sound input">
+    {launchMenu && <MapMenu x={launchMenu.x} y={launchMenu.y} label="Launch timing" onClose={closeLaunchMenu} entries={QUANTIZE.map((q): MenuEntry => ({ kind: 'item', label: q.label, checked: set.launchQuantize === q.value, onSelect: () => { edit({ ...current(), launchQuantize: q.value }); } }))} />}
+    {soundOpen && <aside className="pf-sound" aria-label="Sound input" onChange={e => (e.target as HTMLElement).blur()}>
       <div className="pf-looks-head"><strong>Sound input</strong><button type="button" className="pf-head-btn" aria-label="Close sound input" onClick={() => setSoundOpen(false)}>Close</button></div>
       <ReactDevices audioOnly engine={map.engine} meter={map.signals} onStart={() => map.startEngine()} />
     </aside>}

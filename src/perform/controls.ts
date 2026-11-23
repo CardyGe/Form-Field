@@ -11,7 +11,9 @@ export type ControlEvent =
 
 export type PerformAction =
   | { type: 'next' | 'previous' | 'stop'; zone: number } | { type: 'burst'; zone: number; on: boolean }
-  | { type: 'bankNext' | 'bankBack' | 'launchNow' | 'downbeat' | 'tap' | 'follow' };
+  | { type: 'bankNext' | 'bankBack' | 'launchNow' | 'downbeat' | 'tap' | 'follow' }
+  /** A click on the grid during a show: that cell, or that whole row, on the next boundary. */
+  | { type: 'launchCell'; row: number; zone: number } | { type: 'launchScene'; row: number };
 
 export interface ControlValues {
   faders: number[];

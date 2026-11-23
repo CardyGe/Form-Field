@@ -9,6 +9,8 @@ import { LIVE_SOURCE_ID } from '../map/show';
 const KNOBS = ['Speed', 'Colour', 'Audio'] as const;
 const CEILING_KNOBS = ['Drift', 'Colour', 'Breath'] as const;
 const SWEEP = 270;
+/** Only the main mouse button plays. On a Mac, Ctrl-click is a right-click. */
+const primary = (e: PointerEvent) => e.button === 0 && !e.ctrlKey;
 
 function Knob({ label, short, value, inactive, onChange }: { label: string; short: string; value: number; inactive: boolean; onChange: (v: number) => void }) {
   const drag = useRef<{ y: number; from: number } | null>(null);
@@ -21,7 +23,7 @@ function Knob({ label, short, value, inactive, onChange }: { label: string; shor
   return <div className={`pf-knob ${inactive ? 'inactive' : ''}`} title={inactive ? `${short} does nothing on a Live look` : `${short} · drag up or down · double-click for centre`}>
     <div className="pf-knob-dial" role="slider" tabIndex={0} aria-label={label} aria-valuemin={0} aria-valuemax={1} aria-valuenow={Number(value.toFixed(2))}
       style={{ ['--turn' as string]: `${(value - .5) * SWEEP}deg` }}
-      onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); drag.current = { y: e.clientY, from: value }; }}
+      onPointerDown={e => { if (!primary(e)) return; e.currentTarget.setPointerCapture(e.pointerId); drag.current = { y: e.clientY, from: value }; }}
       onPointerMove={move} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
       onDoubleClick={() => set(.5)} onKeyDown={key}><i /></div>
     <span>{short}</span>
@@ -30,7 +32,8 @@ function Knob({ label, short, value, inactive, onChange }: { label: string; shor
 
 function Hold({ label, text, className, event, id, press, release }: { label: string; text: string; className: string; event: ControlEvent; id: string; press: (e: ControlEvent) => void; release: (id: string) => void }) {
   return <button type="button" aria-label={label} className={className}
-    onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); press(event); }}
+    onPointerDown={e => { if (!primary(e)) return; e.currentTarget.setPointerCapture(e.pointerId); press(event); }}
+    onContextMenu={e => e.preventDefault()}
     onPointerUp={() => release(id)} onPointerCancel={() => release(id)} onLostPointerCapture={() => release(id)}
     onKeyDown={e => { if ((e.key === 'Enter') && !e.repeat) { e.stopPropagation(); press(event); } }}
     onKeyUp={e => { if (e.key === 'Enter') { e.stopPropagation(); release(id); } }}>{text}</button>;

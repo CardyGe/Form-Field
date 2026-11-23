@@ -74,7 +74,12 @@ export function usePerform() {
     service.control(end);
     showHeld();
   }, [service]);
-  const releaseAll = useCallback(() => { for (const id of [...down.current.keys()]) release(id); }, [release]);
+  /** Focus went away: everything held lets go, but a Send All cut off part-way has not read the controls, so it does not finish. */
+  const releaseAll = useCallback(() => {
+    down.current.delete('sendAll');
+    for (const id of [...down.current.keys()]) release(id);
+    showHeld();
+  }, [release]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

@@ -100,6 +100,13 @@ export function queueZone(s: LauncherState, set: PerformanceSet, zone: number, s
   return queueChange(s, zone, clipId, blendFor(clipById(set, clipId), zone, 'amber', clock.bpm), clock, nowMs, set.launchQuantize, id);
 }
 
+/** One chosen cell, as Amber would launch it. Choosing what the zone already plays takes back anything queued for it. */
+export function queueCell(s: LauncherState, set: PerformanceSet, row: number, zone: number, clock: ClockSnapshot, nowMs: number, id: string): LauncherState {
+  const clipId = set.scenes[row]?.cells[zone];
+  if (clipId === null || clipId === undefined) return s;
+  return queueChange(s, zone, clipId, blendFor(clipById(set, clipId), zone, 'amber', clock.bpm), clock, nowMs, set.launchQuantize, id);
+}
+
 export function returnZone(s: LauncherState, set: PerformanceSet, zone: number, clock: ClockSnapshot, nowMs: number, id: string): LauncherState {
   const clipId = s.previous[zone];
   if (clipId === null) return s;

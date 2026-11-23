@@ -10,7 +10,7 @@ import { reactivity, type AudioStatus, type MidiStatus } from '../react/engine';
 import type { Signals } from '../react/signals';
 import type { TempoClock } from '../react/tempo';
 import { applyControl, holdForReconnect, initialControls, knobOffset, speedFactor, type ControlEvent, type ControlValues, type PerformAction } from './controls';
-import { armList, bankBack, bankNext, initialLauncher, landed, launchNow, queueScene, queueZone, retime, returnZone, stopZone, type Launch, type LauncherState } from './launcher';
+import { armList, bankBack, bankNext, initialLauncher, landed, launchNow, queueCell, queueScene, queueZone, retime, returnZone, stopZone, type Launch, type LauncherState } from './launcher';
 import { linkedZones, zoneShapes, type ZonePicture } from './resolve';
 import { dueFollow } from './sequence';
 import { beatAt, LATE_GRACE_MS, launchPhaseOffset, msAtBeat, nextBoundary, type ClockSnapshot } from './timing';
@@ -153,6 +153,9 @@ export class PerformService {
       case 'bankNext': press((s, at, id) => bankNext(s, set, clock, at, id)); break;
       case 'bankBack': press((s, at, id) => bankBack(s, set, clock, at, id)); break;
       case 'launchNow': this.place(now, s => launchNow(s, now)); break;
+      // Like the hardware's buttons, the grid launches nothing until Send All has finished.
+      case 'launchCell': if (this.controls.ready) press((s, at, id) => queueCell(s, set, a.row, a.zone, clock, at, id), a.zone); break;
+      case 'launchScene': if (this.controls.ready) press((s, at, id) => queueScene(s, set, a.row, clock, at, id)); break;
       case 'downbeat': this.deps.clock.setBarStart(); this.retimeQueue(now); break;
       case 'tap': this.deps.clock.tap(); this.retimeQueue(now); break;
       case 'follow': this.deps.clock.follow(); break;
@@ -264,7 +267,8 @@ export class PerformService {
 
   view(): PerformView {
     const now = this.deps.now(), clock = this.isRunning ? this.deps.clock.snapshot(now) : STOPPED;
-    const waiting = this.requested.filter(id => !this.wallArmed.includes(id));
+    // A closed wall cannot be asked for anything, so nothing is loading or too heavy. The wait starts when it opens.
+    const waiting = this.isRunning && this.deps.wall.isOpen() ? this.requested.filter(id => !this.wallArmed.includes(id)) : [];
     const barMs = BEATS_PER_BAR * 60000 / clock.bpm;
     const stuck = waiting.filter(id => now - (this.requestedAt.get(id) ?? now) >= barMs);
     const notices: string[] = [];

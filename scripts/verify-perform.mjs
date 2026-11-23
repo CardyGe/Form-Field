@@ -50,6 +50,21 @@ const litIn = (wall, boxes = BOXES) => wall.evaluate(list => {
 const LIT = .05;
 const allBlack = async wall => (await litIn(wall)).every(v => v < .005);
 const view = studio => studio.evaluate(() => window.__studioTest.perform());
+/** Each zone's average colour on the wall, over a dozen frames so a moving look averages out. */
+const zoneColours = async wall => {
+  const frames = [];
+  for (let i = 0; i < 12; i++) { frames.push(await wall.evaluate(list => {
+    const c = document.querySelector('canvas'), copy = new OffscreenCanvas(192, 108), x = copy.getContext('2d', { willReadFrequently: true });
+    x.drawImage(c, 0, 0, 192, 108);
+    const d = x.getImageData(0, 0, 192, 108).data;
+    return list.map(b => {
+      const sum = [0, 0, 0]; let n = 0;
+      for (let py = Math.ceil(b.y0 * 108) + 1; py < Math.floor(b.y1 * 108) - 1; py++) for (let px = Math.ceil(b.x0 * 192) + 1; px < Math.floor(b.x1 * 192) - 1; px++) { const i = (py * 192 + px) * 4; sum[0] += d[i]; sum[1] += d[i + 1]; sum[2] += d[i + 2]; n++; }
+      return sum.map(v => v / n);
+    });
+  }, BOXES.slice(0, 3))); await sleep(50); }
+  return [0, 1, 2].map(z => [0, 1, 2].map(ch => frames.reduce((a, f) => a + f[z][ch], 0) / frames.length));
+};
 
 try {
   const studio = await app.firstWindow();
@@ -99,8 +114,12 @@ try {
       await studio.getByRole('menuitem', { name: `Shape ${z + 1}`, exact: true }).click();
     }
     await studio.getByRole('button', { name: 'Add scene' }).click();
-    await studio.getByRole('button', { name: 'Add scene' }).click();
     await place(0, 0, 'preset:salt-mandala');
+    await studio.getByRole('button', { name: 'Close looks' }).click();
+    await studio.screenshot({ path: path.join(shots, 'perform-1-scene.png') });
+    const big = await cell(0, 0).boundingBox();
+    assert.ok(big.height >= 100, `one scene's row is only ${big.height}px tall`);
+    await studio.getByRole('button', { name: 'Add scene' }).click();
     await place(0, 1, 'preset:porcelain-shutters');
     await place(0, 2, 'preset:salt-mandala');
     await place(1, 0, 'preset:porcelain-shutters');
@@ -171,8 +190,17 @@ try {
     return w;
   };
   wall = await openWall();
+  // Left on in Map: neither may carry into a show unseen.
+  await go('Map');
+  await studio.locator('.live-shell').getByRole('button', { name: 'Test grid' }).click();
+  await studio.locator('.live-shell').getByRole('button', { name: 'Freeze' }).click();
+  await go('Perform');
   await studio.getByRole('button', { name: 'Start show' }).click();
   await studio.getByRole('button', { name: 'End show' }).waitFor({ timeout: 5000 });
+  await check('Start show clears Test grid and Freeze, and says so', async () => {
+    await studio.getByText('Test grid and Freeze turned off for the show').waitFor({ timeout: 2000 });
+    assert.equal(await studio.getByRole('button', { name: /turn off$/ }).count(), 0);
+  });
   await studio.evaluate(() => window.__studioTest.react.testBeat(true));
   const setRange = async (label, value) => studio.getByRole('slider', { name: label, exact: true }).fill(String(value));
 
@@ -181,6 +209,13 @@ try {
     for (let z = 1; z <= 3; z++) await setRange(`Fader ${z}`, 1);
     await sleep(900);
     assert.ok(await allBlack(wall), `lit: ${await litIn(wall)}`);
+  });
+  await check('a Send All cut off by losing focus does not count as finished', async () => {
+    await studio.keyboard.down('Backslash');
+    await studio.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await studio.keyboard.up('Backslash');
+    await sleep(100);
+    assert.equal((await view(studio)).controls.ready, false);
   });
   await check('the wall is still black after Send All, until Bank ▶', async () => {
     await studio.getByRole('button', { name: 'Send All' }).click();
@@ -206,6 +241,18 @@ try {
 
   await check('Amber changes one zone only', async () => {
     const before = (await view(studio)).launcher.playing;
+    // No audio reaction, so a zone's brightness does not pulse. How far each look drifts by itself over the same wait is measured first.
+    for (let strip = 1; strip <= 3; strip++) {
+      await studio.getByRole('slider', { name: `Strip ${strip} Audio`, exact: true }).focus();
+      for (let i = 0; i < 11; i++) await studio.keyboard.press('ArrowDown');
+    }
+    await studio.evaluate(() => document.activeElement?.blur());
+    await sleep(600);
+    const distance = (a, b) => a.map((c, i) => Math.hypot(c[0] - b[i][0], c[1] - b[i][1], c[2] - b[i][2]));
+    const drift0 = await zoneColours(wall);
+    await sleep(2600);
+    const drift = distance(drift0, await zoneColours(wall));
+    const colourBefore = await zoneColours(wall);
     await studio.getByRole('button', { name: 'Amber 1', exact: true }).click();
     await studio.locator('[data-state="queued"]').first().waitFor({ timeout: 1500 });
     await studio.screenshot({ path: path.join(shots, 'perform-queued.png') });
@@ -215,6 +262,65 @@ try {
     await until(async () => (await litIn(wall))[0] > LIT, 6000, 'zone 1 to stay lit');
     const lit = await litIn(wall);
     assert.ok(lit[1] > LIT && lit[2] > LIT, `other zones: ${lit}`);
+    // The one-bar fade finishes, then each zone's own pixels are compared: only zone 1 has become a different picture.
+    await sleep(2600);
+    const colourAfter = await zoneColours(wall);
+    const moved = distance(colourBefore, colourAfter);
+    const said = `zone colour change ${moved.map(v => v.toFixed(1))}; drift alone ${drift.map(v => v.toFixed(1))}`;
+    console.log(said);
+    assert.ok(moved[0] > 10 && moved[0] > 2 * drift[0], said);
+    for (const z of [1, 2]) assert.ok(moved[z] < Math.max(10, 2.5 * drift[z]), said);
+  });
+  await check('during a show a click plays: a cell, then a scene, and nothing on screen moves', async () => {
+    const place = async () => JSON.stringify([await cell(0, 0).boundingBox(), await cell(1, 0).boundingBox(), await studio.getByRole('button', { name: 'Amber 1', exact: true }).boundingBox()]);
+    const layout = await place();
+    const a = await cell(0, 0).boundingBox(), amber = await studio.getByRole('button', { name: 'Amber 1', exact: true }).boundingBox();
+    assert.ok(Math.abs(a.x - amber.x) < 8, `the grid is out of line with the strips: ${a.x} against ${amber.x}`);
+    const clipA = await studio.evaluate(() => window.__studioTest.performSet().scenes[0].cells[0]);
+    await cell(0, 0).click();
+    assert.equal(await studio.getByRole('complementary', { name: 'Looks' }).count(), 0, 'a click during a show opened the look list');
+    await until(async () => (await view(studio)).launcher.playing[0] === clipA, 12000, 'the clicked cell to land');
+    assert.equal(await place(), layout, 'the layout moved');
+    await studio.locator('.pf-scene', { hasText: 'Scene 2' }).click();
+    await until(async () => (await view(studio)).launcher.sceneIndex === 1, 12000, 'the clicked scene to land');
+    assert.equal(await place(), layout, 'the layout moved');
+  });
+  await check('an open right-click menu keeps its focus while the show plays', async () => {
+    await cell(0, 1).click({ button: 'right' });
+    await studio.getByRole('menuitemradio', { name: 'Bass', exact: true }).focus();
+    await sleep(600);
+    assert.equal(await studio.evaluate(() => document.activeElement?.textContent), 'Bass');
+    await studio.keyboard.press('Escape');
+  });
+  await check('right mouse on a controller button does nothing', async () => {
+    const queued = (await view(studio)).launcher.queue.length;
+    await studio.getByRole('button', { name: 'Amber 3', exact: true }).click({ button: 'right' });
+    await sleep(150);
+    assert.equal((await view(studio)).launcher.queue.length, queued);
+  });
+  await check('Freeze or Test grid turned on during a show is shown in the status row', async () => {
+    await go('Map');
+    await studio.locator('.live-shell').getByRole('button', { name: 'Freeze' }).click();
+    await go('Perform');
+    const flag = studio.getByRole('button', { name: 'Frozen: turn off' });
+    await flag.waitFor({ timeout: 2000 });
+    await flag.click();
+    await flag.waitFor({ state: 'detached', timeout: 2000 });
+  });
+  await check('the Launch menu gives the keyboard back when it closes, chosen or not', async () => {
+    const shiftWorks = async () => {
+      await studio.keyboard.down('Shift');
+      await until(async () => (await view(studio)).shift, 1000, 'the keyboard to work');
+      await studio.keyboard.up('Shift');
+      await until(async () => !(await view(studio)).shift, 1000, 'Shift to release');
+    };
+    const launch = studio.getByRole('button', { name: 'Launch timing' });
+    await launch.click();
+    await studio.keyboard.press('Escape');
+    await shiftWorks();
+    await launch.click();
+    await studio.getByRole('menuitemcheckbox', { name: '1 bar' }).click();
+    await shiftWorks();
   });
   await check('undo cannot pull a playing clip out from under the show', async () => {
     const before = await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet()));
@@ -304,6 +410,44 @@ try {
     await add.click();
     await studio.getByRole('button', { name: /Scene 1$/ }).click();
     await until(() => studio.getByRole('button', { name: /Scene 1$/ }).getAttribute('aria-pressed').then(v => v === 'true'), 2000, 'scene 1');
+  });
+  await check('4 and 16 scenes fit at 1512 x 982 without overlapping', async () => {
+    await go('Perform');
+    await studio.getByRole('region', { name: 'Perform' }).waitFor();
+    const add = studio.getByRole('button', { name: 'Add scene' });
+    const rowsFit = async n => {
+      await studio.locator(`[data-cell="${n - 1}-0"]`).waitFor({ timeout: 2000 });
+      const fit = await studio.evaluate(() => {
+        const list = document.querySelector('.pf-rows'), box = list.getBoundingClientRect();
+        const rows = [...list.querySelectorAll('[data-row]')].map(r => r.getBoundingClientRect());
+        return { inside: rows.every(r => r.top >= box.top - 1 && r.bottom <= box.bottom + 1), apart: rows.every((r, i) => !i || r.top >= rows[i - 1].bottom), height: rows[0].height, spare: list.clientHeight - list.scrollHeight };
+      });
+      assert.ok(fit.inside && fit.apart && fit.spare >= 0, `${n} scenes: ${JSON.stringify(fit)}`);
+      return fit.height;
+    };
+    while (await studio.locator('[data-row]').count() < 4) await add.click();
+    const four = await rowsFit(4);
+    await studio.screenshot({ path: path.join(shots, 'perform-4-scenes.png') });
+    while (await studio.locator('[data-row]').count() < 16) await add.click();
+    const sixteen = await rowsFit(16);
+    await studio.screenshot({ path: path.join(shots, 'perform-16-scenes.png') });
+    assert.ok(four > sixteen, 'rows do not compact as scenes are added');
+    assert.ok(sixteen >= 26, `16 rows are only ${sixteen}px tall`);
+  });
+  await check('on a short window the queued row is scrolled into view', async () => {
+    await studio.setViewportSize({ width: 1512, height: 640 });
+    await studio.getByRole('button', { name: 'Start show' }).click();
+    await studio.getByRole('button', { name: 'Send All' }).click();
+    await studio.evaluate(() => { document.querySelector('.pf-rows').scrollTop = 0; document.activeElement?.blur(); });
+    for (let i = 0; i < 15; i++) await studio.keyboard.press('BracketRight');
+    await studio.locator('.pf-scene.queued').waitFor({ timeout: 2000 });
+    await until(() => studio.evaluate(() => {
+      const list = document.querySelector('.pf-rows').getBoundingClientRect(), row = document.querySelector('.pf-scene.queued').getBoundingClientRect();
+      return row.top >= list.top - 1 && row.bottom <= list.bottom + 1;
+    }), 1500, 'the queued row to be in view');
+    await studio.getByRole('button', { name: 'End show' }).click();
+    await studio.getByRole('button', { name: 'End show now' }).click();
+    await studio.setViewportSize({ width: 1512, height: 982 });
   });
   await check('no page errors', async () => assert.deepEqual(errors, []));
 } catch (error) {

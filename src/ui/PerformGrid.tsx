@@ -1,5 +1,5 @@
 /** The hero of the Perform screen: one column per zone, one row per scene, with drag-to-place and a right-click menu. */
-import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import type { PerformView } from '../perform/service';
 import { linkedZones } from '../perform/resolve';
 import { ZONE_COUNT, type Blend, type Clip, type PerformanceSet, type Scene } from '../perform/types';
@@ -24,7 +24,11 @@ export interface GridActions {
   renameScene: (row: number, name: string) => void;
   setIncludeCeiling: (row: number, on: boolean) => void;
   chooseZone: (zone: number, x: number, y: number) => void;
-  selectCell: (row: number, zone: number) => void;
+  /** During a show a click plays; with no show it selects the cell to fill. */
+  clickCell: (row: number, zone: number) => void;
+  clickScene: (row: number) => void;
+  /** Right-click on an empty cell: choose a look for it. */
+  fillCell: (row: number, zone: number) => void;
 }
 
 const BLENDS: { label: string; blend: Blend | null; ceiling?: boolean }[] = [
@@ -39,14 +43,17 @@ const sameBlend = (a: Blend | null, b: Blend | null) => a?.kind === b?.kind && a
 function CellMenu({ x, y, clip, zone, set, show, editable, actions, row, onClose }: { x: number; y: number; clip: Clip; zone: number; row: number; set: PerformanceSet; show: ShowDocument; editable: boolean; actions: GridActions; onClose: () => void }) {
   const box = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ left: x, top: y });
+  // Once, when it opens: the show redraws this menu many times a second, and that must never pull focus back.
   useEffect(() => {
     const b = box.current?.getBoundingClientRect();
     if (b) setAt({ left: Math.max(8, Math.min(x, innerWidth - b.width - 8)), top: Math.max(8, Math.min(y, innerHeight - b.height - 8)) });
     box.current?.querySelector('button')?.focus();
+  }, [x, y]);
+  useEffect(() => {
     const outside = (e: Event) => { if (!box.current?.contains(e.target as Node)) onClose(); };
     addEventListener('pointerdown', outside, true); addEventListener('blur', onClose);
     return () => { removeEventListener('pointerdown', outside, true); removeEventListener('blur', onClose); };
-  }, [x, y, onClose]);
+  }, [onClose]);
   const timing = isVideoId(clip.sourceId) ? show.videos.find(v => v.id === clip.sourceId)?.tempoSync : show.sources.find(s => s.id === clip.sourceId)?.tempoSync;
   const isLive = clip.sourceId === LIVE_SOURCE_ID, others = set.clips.filter(c => c.id !== clip.id);
   const act = (fn: () => void) => { fn(); onClose(); };
@@ -68,6 +75,16 @@ export default function PerformGrid({ set, show, view, selected, actions }: { se
   const [sceneMenu, setSceneMenu] = useState<{ x: number; y: number; row: number } | null>(null);
   const [renaming, setRenaming] = useState<number | null>(null);
   const [over, setOver] = useState<string | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []), closeSceneMenu = useCallback(() => setSceneMenu(null), []);
+  const rowsBox = useRef<HTMLDivElement>(null), wheeled = useRef(-Infinity);
+  // The row about to land, or else the one playing, stays in view. A deliberate scroll is left alone for a moment.
+  const pinned = view.running ? view.launcher.queue.find(l => l.sceneIndex !== null)?.sceneIndex ?? (view.launcher.sceneIndex >= 0 ? view.launcher.sceneIndex : null) : null;
+  useEffect(() => {
+    const box = rowsBox.current, row = pinned === null ? null : box?.querySelector<HTMLElement>(`[data-row="${pinned}"]`);
+    if (!box || !row || performance.now() - wheeled.current < 2000) return;
+    const b = box.getBoundingClientRect(), r = row.getBoundingClientRect();
+    if (r.top < b.top) box.scrollTop -= b.top - r.top; else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
+  });
   const { launcher, running } = view;
   const clipOf = (id: string | null) => id === null ? undefined : set.clips.find(c => c.id === id);
   const queued = new Map(launcher.queue.flatMap(l => l.changes.map(c => [c.zone, c.clipId] as const)));
@@ -118,17 +135,17 @@ export default function PerformGrid({ set, show, view, selected, actions }: { se
           <b>{i + 1}</b><span>{z.name}</span>{shared.length > 0 && <em title={`Shares one picture with zone ${shared.map(n => n + 1).join(', ')}`}>⇄ {shared.map(n => n + 1).join(' ')}</em>}
         </button>;
       })}
-      <div className="pf-zone pf-scenes-head">Scenes</div>
+      <div className="pf-zone pf-scenes-head">Scenes<button type="button" className="pf-add" aria-label="Add scene" title="Add a scene" disabled={set.scenes.length >= 16} onClick={actions.addScene}>+ Scene</button></div>
     </div>
-    <div className="pf-rows">
-      {set.scenes.map((scene, row) => <div className={`pf-row ${launcher.sceneIndex === row ? 'current' : ''}`} key={scene.id}>
+    <div className="pf-rows" ref={rowsBox} data-density={set.scenes.length <= 4 ? 'large' : set.scenes.length <= 8 ? 'medium' : 'compact'} onWheel={() => { wheeled.current = performance.now(); }}>
+      {set.scenes.map((scene, row) => <div className={`pf-row ${launcher.sceneIndex === row ? 'current' : ''}`} data-row={row} key={scene.id}>
         {scene.cells.map((clipId, zone) => {
           const clip = clipOf(clipId), state = stateOf(row, zone, clipId), ready = clip ? readiness(clip, state) : null, key = `${row}-${zone}`;
           return <button key={zone} type="button" data-cell={key} data-filled={clip ? 'true' : 'false'} data-state={state} draggable={!!clip}
             aria-label={`${scene.name}, ${set.zones[zone].name}: ${clip ? `${clip.name}${state === 'playing' ? ', playing' : state === 'queued' ? ', queued' : ''}` : 'empty'}`}
             className={`pf-cell ${state} ${selected?.row === row && selected.zone === zone ? 'selected' : ''} ${over === key ? 'over' : ''}`}
-            onClick={() => actions.selectCell(row, zone)}
-            onContextMenu={e => { e.preventDefault(); if (clip) setMenu({ x: e.clientX, y: e.clientY, row, zone }); }}
+            onClick={() => actions.clickCell(row, zone)}
+            onContextMenu={e => { e.preventDefault(); if (clip) setMenu({ x: e.clientX, y: e.clientY, row, zone }); else actions.fillCell(row, zone); }}
             onDragStart={e => { if (clip) { e.dataTransfer.setData(CLIP_DRAG, clip.id); e.dataTransfer.effectAllowed = 'copy'; } }}
             onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(key); }} onDragLeave={() => setOver(o => o === key ? null : o)} onDrop={e => drop(e, row, zone)}>
             {clip ? <>
@@ -142,17 +159,15 @@ export default function PerformGrid({ set, show, view, selected, actions }: { se
           ? <input autoFocus className="pf-scene-name" aria-label="Scene name" defaultValue={scene.name} maxLength={40}
               onBlur={e => { setRenaming(null); const name = e.target.value.trim(); if (name && name !== scene.name) actions.renameScene(row, name); }}
               onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenaming(null); }} />
-          : <button type="button" className={`pf-scene ${launcher.sceneIndex === row ? 'playing' : ''} ${queuedRow === row ? 'queued' : ''}`} title="Right-click to rename, include the ceiling, or delete"
-              onContextMenu={e => { e.preventDefault(); setSceneMenu({ x: e.clientX, y: e.clientY, row }); }} onDoubleClick={() => setRenaming(row)}>
+          : <button type="button" className={`pf-scene ${launcher.sceneIndex === row ? 'playing' : ''} ${queuedRow === row ? 'queued' : ''}`} title={running ? 'Click to launch this scene on the next boundary · right-click for options' : 'Right-click to rename, include the ceiling, or delete'}
+              onClick={() => actions.clickScene(row)}
+              onContextMenu={e => { e.preventDefault(); setSceneMenu({ x: e.clientX, y: e.clientY, row }); }} onDoubleClick={() => { if (!running) setRenaming(row); }}>
               <span className="pf-mark" aria-hidden>{queuedRow === row ? '◆' : launcher.sceneIndex === row ? '▶' : ''}</span>{scene.name}{scene.includeProtected && <small> +ceiling</small>}
             </button>}
       </div>)}
-      <div className="pf-row pf-add-row">
-        {set.scenes.length === 0 && <p className="pf-empty-note">Add a scene, choose a place for each zone along the top, then click a cell and pick a look.</p>}
-        <button type="button" className="pf-add" aria-label="Add scene" disabled={set.scenes.length >= 16} onClick={actions.addScene}>+ Scene</button>
-      </div>
+      {set.scenes.length === 0 && <p className="pf-empty-note">Add a scene, choose a place for each zone along the top, then click a cell and pick a look.</p>}
     </div>
-    {menu && clipOf(set.scenes[menu.row]?.cells[menu.zone] ?? null) && <CellMenu {...menu} clip={clipOf(set.scenes[menu.row].cells[menu.zone])!} set={set} show={show} editable={!running} actions={actions} onClose={() => setMenu(null)} />}
-    {sceneMenu && <MapMenu x={sceneMenu.x} y={sceneMenu.y} label="Scene" entries={sceneEntries(sceneMenu.row)} onClose={() => setSceneMenu(null)} />}
+    {menu && clipOf(set.scenes[menu.row]?.cells[menu.zone] ?? null) && <CellMenu {...menu} clip={clipOf(set.scenes[menu.row].cells[menu.zone])!} set={set} show={show} editable={!running} actions={actions} onClose={closeMenu} />}
+    {sceneMenu && <MapMenu x={sceneMenu.x} y={sceneMenu.y} label="Scene" entries={sceneEntries(sceneMenu.row)} onClose={closeSceneMenu} />}
   </div>;
 }
