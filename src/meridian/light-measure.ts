@@ -6,7 +6,7 @@ export interface LightPlacement { aspect: number; a: number; b: number; c: numbe
 export interface LightMeasure { area: number; light: number }
 export interface ComposedLight { light: number; area: number; red: number }
 
-const TAU = Math.PI * 2, STEPS = 12, UNSEEN = 0.02, FLASH_AREA = 0.25;
+const TAU = Math.PI * 2, STEPS = 12, UNSEEN = 0.02, FLASH_AREA = 0.25, LIT_LIGHT = 0.1; // Below LIT_LIGHT a layer counts as only partly lit.
 const clamp = (value: number, low: number, high: number): number => (value < low ? low : value > high ? high : value);
 
 /** The share of the frame one layer lights, with each line's glow, after its placement and the frame's edges, and how bright that light is. */
@@ -39,8 +39,9 @@ const comesAfter = (areas: ArrayLike<number>, lights: ArrayLike<number>, reds: A
   areas[a] !== areas[b] ? areas[a] > areas[b] : lights[a] !== lights[b] ? lights[a] > lights[b] : reds[a] > reds[b];
 
 /**
- * Every layer's light as one picture. Light is scaled by how much of the flash area is lit, so a strobe made by the lit
- * area itself still counts as a change of light. The result does not depend on layer order.
+ * Every layer's light as one picture, measured against the flash area or the largest lit layer, whichever is bigger, so a
+ * 10% change across a big layer reads as 10%. It is never averaged across unlit coverage: a layer faded to dark adds nothing
+ * and hides nothing. A layer well under the flash area counts for little alone, but several together add up. Independent of layer order.
  */
 export function composeLight(areas: ArrayLike<number>, lights: ArrayLike<number>, reds: ArrayLike<number>, count: number, out: ComposedLight): void {
   const n = Math.min(count, ORDER.length);
@@ -49,9 +50,13 @@ export function composeLight(areas: ArrayLike<number>, lights: ArrayLike<number>
     while (at > 0 && comesAfter(areas, lights, reds, ORDER[at - 1], i)) { ORDER[at] = ORDER[at - 1]; at--; }
     ORDER[at] = i;
   }
-  let area = 0, energy = 0, red = 0;
-  for (let k = 0; k < n; k++) { const i = ORDER[k]; area += areas[i]; energy += areas[i] * lights[i]; red += areas[i] * reds[i]; }
+  let area = 0, energy = 0, red = 0, largest = FLASH_AREA;
+  for (let k = 0; k < n; k++) {
+    const i = ORDER[k], lit = areas[i] * Math.min(1, lights[i] / LIT_LIGHT), share = Math.min(1, areas[i] / FLASH_AREA);
+    area += lit; red += lit * reds[i]; largest = Math.max(largest, lit);
+    energy += areas[i] * lights[i] * share * share;
+  }
   out.area = clamp(area, 0, 1);
-  out.light = area > 0 ? energy / area * Math.min(1, area / FLASH_AREA) : 0;
+  out.light = energy / largest;
   out.red = area > 0 ? clamp(red / area, 0, 1) : 0;
 }
