@@ -28,13 +28,16 @@ import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
 import type { Link } from '../react/links';
 import type { Signals } from '../react/signals';
 import { StructureHold } from '../meridian/structure-hold';
-import { WALL_CELLS, WallFlashGuard, wallGuardPolicy, type WallGuardPolicy } from '../meridian/wall-guard';
+import { wallGuardPolicy, type WallGuardPolicy } from '../meridian/wall-guard';
+import { LIMITER, limiterScales } from '../meridian/wall-limiter';
 import { borderPicture, borderRunPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
 export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null; followOutline?: FollowOutline | null }[]; groups: Group[]; links?: Link[];
   /** Live in Map: the wall is told whether the show uses Live; the operator screen has the scenes to work it out. */
   usesLive?: boolean; scenes?: Scene[];
+  /** The show holds a guarded Meridian layer: told to the wall with the show, before its compositions arrive. */
+  guardWall?: boolean;
   /** Stage 6: the videos shapes play. */
   videos?: VideoSource[] }
 
@@ -108,7 +111,7 @@ export interface CompositorStats {
   /** Wall Flash Guard, for a show with Meridian: what it is doing and what it costs. */
   /** For the scripted checks: each Meridian source's Conductor and moves. */
   meridian?: Record<string, { status: string; beats: number; wave: number; frames: number; drops: number; holds: number; linkedSeed: boolean; phase: number }>;
-  flashGuard?: { failed: string | null; on: boolean; warn: boolean; limiting: boolean; gain: number; saturation: number | null; cpuMs: number; gpuMs: number | null; dims: number } | null;
+  flashGuard?: { failed: string | null; on: boolean; warn: boolean; limiting: boolean; area: number; cpuMs: number } | null;
 }
 
 /** Runs each frame for each source, so it allocates nothing. */
@@ -162,15 +165,13 @@ export class MapCompositor {
   private drawnShapes = new Set<string>();
   private overlayFor: { show: PlayShow; options: string } | null = null;
   private readonly structureHold = new StructureHold();
-  private readonly wallGuard = new WallFlashGuard();
   private guardPolicy: WallGuardPolicy = wallGuardPolicy([]);
-  private readonly guardCells = new Uint8Array(WALL_CELLS * 4);
-  private guardAt: number | null = null;
   private guardCost = 0;
-  private guardDims = 0;
-  /** The guard was switched off while dimming: the dim is easing away. */
-  private guardFading = false;
-  private guardFadeAt: number | null = null;
+  private limiterAt: number | null = null;
+  /** The guard was switched off while limiting: how far the limit has eased away, 0 to 1. Null when it is not easing. */
+  private limiterFade: number | null = null;
+  private limitingUntil = 0;
+  private limiterHolds = { light: 1, red: 1 };
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
@@ -185,7 +186,8 @@ export class MapCompositor {
       for (const slot of this.slots.values()) slot.texture = null;
       // The old pictures were on the lost card: those fades end, and the shapes show what they play now.
       for (const [id, fade] of [...this.fades]) if (typeof fade.from !== 'string') this.fades.delete(id);
-      this.lost = false; this.dirty = true; this.guardAt = null;
+      this.lost = false; this.dirty = true; this.limiterAt = null;
+      if (this.guardPolicy.on) this.primeLimiter();
       this.updateLive();
       this.updateVideos();
     });
@@ -210,11 +212,16 @@ export class MapCompositor {
     this.dirty = true;
     const guardWasOn = this.guardPolicy.on;
     this.guardPolicy = wallGuardPolicy(this.projects.values());
+    // The wall hears the show before its compositions: a guarded show is limited from its very first frame.
+    if (show.guardWall && !this.guardPolicy.on) this.guardPolicy = { ...this.guardPolicy, present: true, on: true, settings: { ...this.guardPolicy.settings, safetyFlashGuard: 1 } };
+    this.limiterHolds = limiterScales(this.guardPolicy.settings);
     // Turned off, or the last Meridian source left: the wall is exactly as drawn from the next frame.
-    if (guardWasOn && !this.guardPolicy.on) {
-      this.guardAt = null; this.guardFadeAt = null;
-      if (this.wallGuard.gain < 1 || this.wallGuard.saturation !== Infinity) this.guardFading = true; else this.wallGuard.reset();
-    } else if (this.guardPolicy.on) this.guardFading = false;
+    if (guardWasOn && !this.guardPolicy.on) this.limiterFade = 0;
+    else if (this.guardPolicy.on && !guardWasOn) {
+      // Back on while the limit is still easing away: it carries on from where it is. Otherwise it starts from what the wall shows.
+      if (this.limiterFade === null) this.primeLimiter();
+      this.limiterFade = null;
+    }
     // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
     for (const shape of show.shapes) {
@@ -383,12 +390,10 @@ export class MapCompositor {
     // A border run moves every frame (it holds with Freeze).
     const running = !this.frozen && this.show.shapes.some(s => s.border.run && s.border.width > 0 && !s.blocker && shownOnWall(this.show, s, this.options.solo));
     const staggering = this.keepHistories(show);
-    // A dim still easing back is drawn until it is gone, even over a still picture.
-    const easing = this.guardFading || (this.guardPolicy.on && (this.wallGuard.gain < 1 || this.wallGuard.saturation !== Infinity));
+    // The limiter may be holding light back from a still picture, under Freeze too, so a guarded wall is drawn every frame.
+    const easing = this.guardPolicy.on || this.limiterFade !== null;
     const drawn = this.dirty || rendered || running || staggering || easing || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
-    // A reading still on its way after the last drawn frame is taken in, so a single changed frame is counted too.
-    else if (this.guardPolicy.on && this.gpu.measurePending) this.collectGuard();
     this.frameIndex++;
     const work = performance.now() - started;
     // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
@@ -418,32 +423,37 @@ export class MapCompositor {
       staggered: this.histories.size, delayed: this.delays.size,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
       meridian: Object.fromEntries([...this.slots].flatMap(([id, s]) => { const report = s.renderer?.meridianReport(); return report ? [[id, { ...report, phase: s.phase }]] : []; })),
-      flashGuard: this.guardPolicy.present ? { failed: this.gpu.guardError, on: this.guardPolicy.on, warn: this.guardPolicy.warn, limiting: this.wallGuard.limiting, gain: this.wallGuard.gain, saturation: Number.isFinite(this.wallGuard.saturation) ? this.wallGuard.saturation : null, cpuMs: this.guardCost, gpuMs: this.gpu.guardGpuMs, dims: this.guardDims } : null,
+      flashGuard: this.guardPolicy.present ? { failed: this.gpu.guardError, on: this.guardPolicy.on, warn: this.guardPolicy.warn, limiting: performance.now() < this.limitingUntil, area: this.gpu.limitedArea, cpuMs: this.guardCost } : null,
     };
   }
 
   /** A show was really loaded (not a scene change): what linked moves changed in the last one ends here. */
   resetPerformance(): void { for (const slot of this.slots.values()) slot.renderer?.resetMeridianPerformance(); }
 
-  /** For the scripted checks: what one wall measurement costs the graphics card, in ms, net of an empty round trip. */
-  probeGuardCost(): { medianMs: number; worstMs: number } | null {
-    if (this.lost) return null;
-    const gl = this.gpu.gl, costs: number[] = [], pixel = new Uint8Array(4);
+  /**
+   * For the scripted checks: what one limiter frame costs the graphics card in ms, net of an empty round trip, and how many
+   * stage bytes it changes on the picture now showing. The limiter then starts afresh from the next picture.
+   */
+  probeGuardCost(): { medianMs: number; worstMs: number; changedBytes: number } | null {
+    if (this.lost || !this.guardPolicy.on) return null;
+    const gl = this.gpu.gl, costs: number[] = [], pixel = new Uint8Array(4), before = new Uint8Array(STAGE_SIZE.width * STAGE_SIZE.height * 4), after = new Uint8Array(before.length);
+    this.gpu.readStage(before);
+    if (!this.gpu.limitStage(0, 0, false)) return null;
+    this.gpu.readStage(after);
+    let changedBytes = 0;
+    for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) changedBytes++;
     for (let i = 0; i < 40; i++) {
-      while (this.gpu.collectMeasure(this.guardCells) !== null) { /* make room */ }
       // Reading a pixel really waits for the graphics card; gl.finish does not in Chromium.
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
       const a = performance.now(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
       const b = performance.now();
-      if (!this.gpu.measureStage(b)) continue;
+      this.gpu.limitStage(0, 0, false);
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
       costs.push(Math.max(0, performance.now() - b - (b - a)));
     }
-    while (this.gpu.collectMeasure(this.guardCells) !== null) { /* leave nothing behind */ }
-    this.guardAt = null;
-    if (!costs.length) return null;
+    this.primeLimiter();
     costs.sort((x, y) => x - y);
-    return { medianMs: costs[costs.length >> 1], worstMs: costs[costs.length - 1] };
+    return { medianMs: costs[costs.length >> 1], worstMs: costs[costs.length - 1], changedBytes };
   }
 
   dispose(): void {
@@ -601,8 +611,7 @@ export class MapCompositor {
       } else this.glides.clear();
     }
     // After the shapes and before the overlays and corners: the guard judges the finished picture, and never the operator's marks.
-    if (this.guardPolicy.on) this.guardWall();
-    else if (this.guardFading) this.fadeGuard();
+    if (this.guardPolicy.on || this.limiterFade !== null) this.limitWall();
     if (!this.options.blackout) {
       const overlay = this.overlayPicture();
       if (overlay) gpu.layer(overlay);
@@ -614,33 +623,28 @@ export class MapCompositor {
   }
 
   /**
-   * One frame of Wall Flash Guard. Every composited frame is measured, under Freeze too, because Blackout and show changes
-   * still change the wall then. A blackout is measured but never dimmed: black is already black, at once.
+   * Starts the limiter from the picture the wall is showing now, still held in the stage (black if nothing was drawn yet), so
+   * the first frame of a newly guarded show is already limited. Changes nothing on the wall.
    */
-  private guardWall(): void {
-    const started = performance.now(), guard = this.wallGuard, gpu = this.gpu;
-    gpu.measureStage(started, this.options.blackout ? 0 : guard.gain);
-    this.collectGuard();
-    if (!this.options.blackout && (guard.gain < 1 || guard.saturation < 1)) { gpu.dimStage(guard.gain, guard.saturation); this.guardDims++; }
-    this.guardCost = this.guardCost * .95 + (performance.now() - started) * .05;
+  private primeLimiter(): void {
+    this.limiterAt = null;
+    if (!this.lost && !this.disposed) this.gpu.limitStage(0, 1, true);
   }
 
-  private collectGuard(): void {
-    const gpu = this.gpu;
-    for (let at = gpu.collectMeasure(this.guardCells); at !== null; at = gpu.collectMeasure(this.guardCells)) {
-      if (this.guardAt !== null) this.wallGuard.step((at - this.guardAt) / 1000, this.guardCells, this.guardPolicy.settings, gpu.measuredGain);
-      this.guardAt = at;
+  /**
+   * One frame of the wall limiter, in the frame it limits. Blackout is black at once, and coming back from it goes through the
+   * limiter, so hammering it cannot strobe. Freeze keeps limiting. Switched off, the limit eases away in real time.
+   */
+  private limitWall(): void {
+    const started = performance.now(), dt = this.limiterAt === null ? 0 : Math.min(LIMITER.longestStep, Math.max(0, (started - this.limiterAt) / 1000));
+    this.limiterAt = started;
+    if (this.limiterFade !== null) {
+      this.limiterFade = Math.min(1, this.limiterFade + dt / LIMITER.fadeSeconds);
+      if (this.limiterFade >= 1) { this.limiterFade = null; this.limiterAt = null; return; }
     }
-  }
-
-  /** The last guarded source has gone while the wall was dimmed: the dim eases out rather than stepping back to full. */
-  private fadeGuard(): void {
-    const now = performance.now(), guard = this.wallGuard, gpu = this.gpu;
-    while (gpu.collectMeasure(this.guardCells) !== null) { /* readings of the guarded show */ }
-    const done = guard.easeOut(this.guardFadeAt === null ? 0 : (now - this.guardFadeAt) / 1000);
-    this.guardFadeAt = now;
-    if (done) { this.guardFading = false; this.guardFadeAt = null; return; }
-    if (!this.options.blackout) gpu.dimStage(guard.gain, guard.saturation);
+    if (!this.gpu.limitStage(dt, this.limiterFade ?? 0, false, this.limiterHolds)) this.limiterFade = null;
+    if (this.gpu.limitedArea >= LIMITER.trigger) this.limitingUntil = started + 1500;
+    this.guardCost = this.guardCost * .95 + (performance.now() - started) * .05;
   }
 
   /** The overlays drawn in 2D, and given to the graphics card only when they change. Null when there are none. */

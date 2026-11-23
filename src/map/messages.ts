@@ -3,6 +3,7 @@ import { usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow
 import { shapeValidity } from './outline';
 import { EMBER_SMOKE_INPUTS } from '../react/ember-smoke';
 import { acceptSignals, type Signals } from '../react/signals';
+import { wallGuardPolicy } from '../meridian/wall-guard';
 import { ownCornersPinnable } from './placement';
 import type { LiveSettings } from '../live/settings';
 
@@ -79,6 +80,8 @@ export function toWire(show: ShowDocument): WireShow {
     // Not rounded: a pinnable quad at the edge of the rules could round to one that is not.
     stageCorners: show.stageCorners,
     usesLive: usesLive(show),
+    // Only when true, so what a show without Meridian sends is unchanged.
+    ...(wallGuardPolicy(show.sources.map(s => s.project)).on ? { guardWall: true } : {}),
     videos: show.videos,
   };
 }

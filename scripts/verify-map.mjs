@@ -1224,20 +1224,23 @@ try {
       if (now - started < ms) requestAnimationFrame(tick); else done();
     }; requestAnimationFrame(tick); });
     const anchor = Float32Array.from(series[0]), way = new Int8Array(cols * rows), events = [];
-    let last = 0, biggest = 0, peak = 0;
+    let last = 0, biggest = 0, rise = 0, riseArea = 0, peak = 0, top = 0, bottom = Infinity;
+    for (const v of series) { let sum = 0; for (let i = 0; i < v.length; i++) sum += v[i]; sum /= v.length; top = Math.max(top, sum); bottom = Math.min(bottom, sum); }
     for (let f = 1; f < series.length; f++) {
-      const v = series[f]; let up = 0, down = 0;
+      const v = series[f]; let up = 0, down = 0, jumped = 0;
       for (let i = 0; i < v.length; i++) {
-        biggest = Math.max(biggest, Math.abs(v[i] - series[f - 1][i])); peak = Math.max(peak, v[i]);
+        if (v[i] - series[f - 1][i] >= .15) jumped++;
+        biggest = Math.max(biggest, Math.abs(v[i] - series[f - 1][i])); rise = Math.max(rise, v[i] - series[f - 1][i]); peak = Math.max(peak, v[i]);
         if (way[i] === 1 && v[i] > anchor[i]) anchor[i] = v[i]; if (way[i] === -1 && v[i] < anchor[i]) anchor[i] = v[i];
         if (way[i] >= 0 && v[i] <= anchor[i] - step && v[i] < .8) { way[i] = -1; anchor[i] = v[i]; down++; }
         else if (way[i] <= 0 && v[i] >= anchor[i] + step && anchor[i] < .8) { way[i] = 1; anchor[i] = v[i]; up++; }
       }
+      riseArea = Math.max(riseArea, jumped / v.length);
       const rose = up / v.length > .25, fell = down / v.length > .25;
       if (rose && fell) { events.push(times[f]); last = 0; } else if (rose && last !== 1) { events.push(times[f]); last = 1; } else if (fell && last !== -1) { events.push(times[f]); last = -1; }
     }
     let worst = 0; for (let i = 0; i < events.length; i++) { let n = 0; for (let k = i; k < events.length && events[k] < events[i] + 1000; k++) n++; worst = Math.max(worst, n); }
-    return { changes: worst, flashes: Math.ceil(worst / 2), frames: series.length, fps: Math.round(series.length / ((times.at(-1) - times[0]) / 1000)), step: +biggest.toFixed(3), peak: +peak.toFixed(3) };
+    return { changes: worst, flashes: Math.ceil(worst / 2), frames: series.length, fps: Math.round(series.length / ((times.at(-1) - times[0]) / 1000)), step: +biggest.toFixed(3), rise: +rise.toFixed(3), riseArea: +riseArea.toFixed(3), peak: +peak.toFixed(3), swing: +(top - bottom).toFixed(3) };
   }, [ms, step]);
   const meridianReport = {};
   // An earlier check closed the projector window with Escape.
@@ -1294,9 +1297,11 @@ try {
     const seen = [];
     for (let i = 0; i < 16; i++) { const s = await output.evaluate(() => window.__mapStats.flashGuard); seen.push(s); await sleep(500); }
     assert.ok(seen.every(s => s?.on), 'the guard is not on');
-    assert.ok(seen.every(s => s.gain === 1 && s.saturation === null && s.dims === seen[0].dims), `dimmed: ${JSON.stringify(seen.at(-1))}`);
+    assert.ok(seen.every(s => !s.limiting && s.area < .2), `limited: ${JSON.stringify(seen.at(-1))}`);
+    const untouched = await output.evaluate(() => window.__mapGuardProbe());
+    assert.equal(untouched?.changedBytes, 0, `the limiter changed a calm picture: ${JSON.stringify(untouched)}`);
     assert.equal(await studio.locator('.map-flash-guard').count(), 0, 'a calm wall says it is limiting');
-    meridianReport.calm = { gain: seen.at(-1).gain, cpuMs: seen.at(-1).cpuMs, gpuMs: seen.at(-1).gpuMs, fps: (await output.evaluate(() => window.__mapStats.fps)) };
+    meridianReport.calm = { changedBytes: untouched.changedBytes, gpuMedianMs: untouched.medianMs, gpuWorstMs: untouched.worstMs, cpuMs: seen.at(-1).cpuMs, fps: (await output.evaluate(() => window.__mapStats.fps)) };
   });
 
   await check('a MIDI note fires Drop once and Hold once through their links', async () => {
@@ -1351,8 +1356,10 @@ try {
     // itself adds a harder step is judged once the strobe is under way, as it is in the unguarded capture.
     const steady = await captureFlashes(4000);
     assert.ok(steady.flashes <= 3, `${steady.flashes} flashes a second once under way: ${JSON.stringify(steady)}`);
+    // Content under the flash area passes by design, so the first frame is judged by how much of the wall jumps at once.
+    assert.ok(on.riseArea < .25, `the first bright frame reached the wall over the flash area: ${JSON.stringify(on)}`);
     assert.ok(steady.step <= off.step + .02, `the guard made a harder step (${off.step} to ${steady.step})`);
-    const stats = await meridianStats(s => s.flashGuard?.limiting && s.flashGuard.gain < 1, 'the guard did not report limiting');
+    const stats = await meridianStats(s => s.flashGuard?.limiting, 'the guard did not report limiting');
     await studio.locator('.map-flash-guard', { hasText: 'Flash guard: limiting' }).waitFor({ timeout: 4000 });
     const edge = await sample(output, [[.01, .5], [.99, .5], [.5, .01], [.5, .99]]);
     assert.ok(edge.colours.every(p => near(p, BLACK, 0)), `the dim touched the bent stage's outside: ${JSON.stringify(edge.colours)}`);
@@ -1361,7 +1368,7 @@ try {
     assert.ok(dark.colours.every(p => near(p, BLACK, 0)), 'Blackout did not win over the guard');
     await studio.getByRole('button', { name: 'Blackout', exact: true }).click();
     meridianReport.measureCost = await output.evaluate(() => window.__mapGuardProbe());
-    meridianReport.strobe = { off, onset: on, steady, gain: stats.flashGuard.gain, cpuMs: stats.flashGuard.cpuMs, gpuMs: stats.flashGuard.gpuMs, wallFps: stats.fps, level: stats.level };
+    meridianReport.strobe = { off, onset: on, steady, area: stats.flashGuard.area, cpuMs: stats.flashGuard.cpuMs, wallFps: stats.fps, level: stats.level };
   });
 
   // Drives the wash shape from the studio window as a real controller would: bursts of pulses, then a gap.
@@ -1374,7 +1381,7 @@ try {
     }, 2);
   }, pattern);
   const stopBursts = async () => { await studio.evaluate(() => clearInterval(window.__burst)); await react('midi', [0xb0, 21, 0]); };
-  const BURSTS = [{ pulses: 5, hz: 15, gap: .5 }, { pulses: 4, hz: 10, gap: .5 }, { pulses: 3, hz: 10, gap: .35 }, { pulses: 3, hz: 5, gap: .35 }];
+  const BURSTS = [{ pulses: 5, hz: 15, gap: .5 }, { pulses: 4, hz: 10, gap: .5 }, { pulses: 3, hz: 10, gap: .35 }, { pulses: 3, hz: 5, gap: .35 }, { pulses: 40, hz: 5, gap: 0 }, { pulses: 80, hz: 10, gap: 0 }, { pulses: 120, hz: 15, gap: 0 }];
 
   await check('repeated bursts stay within the limit in real wall pixels, from their first burst', async () => {
     await openFile('burst-off');
@@ -1395,12 +1402,36 @@ try {
       await stopBursts();
       meridianReport.bursts[`${pattern.pulses}x${pattern.hz}Hz/${pattern.gap}s`] = seen;
       assert.ok(seen.changes <= 6, `${JSON.stringify(pattern)}: ${JSON.stringify(seen)}`);
+      assert.ok(seen.rise <= .18, `the first bright frame got through: ${JSON.stringify(seen)}`);
+    }
+    // Left and right halves in antiphase at 5 Hz, on their own two controls.
+    await openFile('halves');
+    await meridianStats(s => s.meridian?.ev?.frames > 10 && s.flashGuard?.on, 'the halves show is not playing');
+    await studio.evaluate(() => { const start = performance.now(); let last = -1; clearInterval(window.__burst); window.__burst = setInterval(() => { const on = ((performance.now() - start) / 1000 * 5) % 1 < .5 ? 1 : 0; if (on !== last) { last = on; window.__studioTest.react.midi([0xb0, 21, on ? 127 : 0]); window.__studioTest.react.midi([0xb0, 22, on ? 0 : 127]); } }, 2); });
+    await sleep(500);
+    const halves = await captureFlashes(5000);
+    await stopBursts(); await react('midi', [0xb0, 22, 0]);
+    meridianReport.bursts.antiphase = halves;
+    assert.ok(halves.changes <= 6, `antiphase halves: ${JSON.stringify(halves)}`);
+    // Legal fast beats stay visible: never pinned dark.
+    await openFile('burst-on');
+    await meridianStats(s => s.meridian?.ev?.frames > 10 && s.flashGuard?.on, 'the beat show is not playing');
+    meridianReport.beats = {};
+    for (const bpm of [120, 128, 140, 150, 160, 174]) {
+      await sleep(600);
+      await studio.evaluate(bpm => { const start = performance.now(), period = 60 / bpm; let last = -1; clearInterval(window.__burst); window.__burst = setInterval(() => { const on = ((performance.now() - start) / 1000) % period < .12 ? 1 : 0; if (on !== last) { last = on; window.__studioTest.react.midi([0xb0, 21, on ? 127 : 0]); } }, 2); }, bpm);
+      await sleep(800);
+      const beat = await captureFlashes(4000);
+      await stopBursts();
+      meridianReport.beats[bpm] = { changes: beat.changes, peak: beat.peak, swing: beat.swing };
+      assert.ok(beat.changes <= 6, `${bpm} BPM: ${JSON.stringify(beat)}`);
+      assert.ok(beat.swing >= .05, `${bpm} BPM has no visible beat: ${JSON.stringify(beat)}`);
     }
   });
 
   await check('Blackout hammered over a bright frozen wall is counted and limited, and still goes black at once', async () => {
     await stopBursts(); await react('midi', [0xb0, 21, 127]);
-    await meridianStats(s => s.flashGuard?.gain === 1, 'the dim did not clear before the check', 15000);
+    await sleep(1600);
     const freeze = studio.getByRole('button', { name: 'Freeze', exact: true }), blackout = studio.getByRole('button', { name: 'Blackout', exact: true });
     await freeze.click(); await sleep(300);
     const counting = captureFlashes(5000);

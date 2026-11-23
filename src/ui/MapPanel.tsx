@@ -722,7 +722,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const guardPolicy = useMemo(() => wallGuardPolicy(map.show.sources.map(s => s.project)), [map.show.sources]);
   const guardLimiting = guardPolicy.on && (map.outputOpen ? !!wall?.flashGuard?.limiting : localLimiting);
   const guardFailed = guardPolicy.on && !!(map.outputOpen ? wall?.flashGuard?.failed : localFailed);
-  const guardWarning = guardFailed ? 'Flash guard could not start: the wall is not limited' : guardPolicy.warn ? (guardPolicy.on ? 'Flash guard is off on one Meridian layer' : 'Flash guard is off: the wall is not limited') : null;
+  const guardWarning = guardFailed ? 'Flash limiter unavailable: the wall is not limited' : guardPolicy.warn ? (guardPolicy.on ? 'Flash guard is off on one Meridian layer' : 'Flash guard is off: the wall is not limited') : null;
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
   // The browser follows the single selected shape; it closes when there is none, or a Blocker or locked shape is picked.
   // Several shapes playing one instrument count as that one instrument: the browser changes it through the first of them.

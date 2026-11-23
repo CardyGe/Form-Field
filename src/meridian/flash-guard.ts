@@ -19,7 +19,6 @@ const STEP_FADE = 2;            // Seconds over which the picture's remembered l
 const LOOP_PASSES = 8;          // Passes over a loop allowed for its gains to settle into one repeating pattern.
 const GAPS = 4;                 // Gaps between transitions averaged to read the rhythm.
 const LEAD = 0.1;               // Seconds the gain needs to come down, so a very fast rhythm is acted on this far ahead.
-const SAME_FRAME_LEAD = 0.12;   // How far ahead a burst is read when the dim is applied in the frame it is computed.
 const RED_STEP = 0.0625;        // The change in saturated red that counts, from the WCAG red-flash measure (20 of 320).
 const RED_DARKER = 2;           // Saturated red has no "too bright to count" limit.
 /** At this saturation a pure red cell measures about 63% red on rendered pixels, well under the 80% that makes it saturated red. */
@@ -78,30 +77,7 @@ class Turns {
   }
 }
 
-export interface FlashGuardOptions {
-  /** Seconds between a transition happening and the dim having landed: a late reading, plus any slew. */
-  lead?: number;
-  /** Act only on the predicted count, for a caller whose dim lands late and must not fire on a legal beat. */
-  predictiveOnly?: boolean;
-  /** False for a closed loop's table, which is judged whole by its own verdict and must keep its exact gains. */
-  holdThrough?: boolean;
-}
-
 export class FlashGuard {
-  private readonly lead: number;
-  private readonly predictiveOnly: boolean;
-  private readonly holdThrough: boolean;
-  private readonly inTimes = new Float64Array(SLOTS);
-  private inHead = 0; private inHeld = 0;
-  /** The picture went over the limit: the dim stays until a full clear second has passed since its last transition. */
-  private latched = false;
-
-  constructor(options: FlashGuardOptions = {}) {
-    this.lead = options.lead ?? SAME_FRAME_LEAD;
-    this.predictiveOnly = options.predictiveOnly === true;
-    this.holdThrough = options.holdThrough !== false;
-  }
-
   private readonly input = new Turns();
   private readonly output = new Turns();
   private readonly seen = new Float32Array(CAPACITY);
@@ -125,7 +101,7 @@ export class FlashGuard {
   saturationLimit = Infinity;
 
   reset(): void {
-    this.input.reset(); this.output.reset(); this.inHead = this.inHeld = 0; this.latched = false;
+    this.input.reset(); this.output.reset();
     this.head = this.held = 0; this.now = 0; this.gain = 1; this.started = false;
     this.lastIn = -1e9; this.spacing = 0; this.redness = this.largest = this.wideStep = 0; this.wideArea = 0; this.wideUntil = -1; this.peak = 0; this.heardAt = this.heard = 0;
     this.redInput.reset(); this.redHead = this.redHeld = 0; this.redGap = 0; this.redLast = -1e9; this.redUntil = -1; this.saturationLimit = Infinity;
@@ -157,36 +133,8 @@ export class FlashGuard {
     return 0;
   }
 
-  /**
-   * Whether the picture's transitions will break the limit before a dim started now could land. The recent gaps are repeated,
-   * so a burst is read as a burst and a short pulse on a slow beat as a slow beat.
-   */
-  private burstRisk(allowed: number, dt: number): boolean {
-    const { inTimes, inHead, inHeld } = this;
-    if (inHeld > allowed) return true;
-    let period = Math.min(4, inHeld - 1);
-    if (period < 1) return false;
-    if (period > 1) period -= period % 2;
-    const at = (back: number) => inTimes[(inHead - 1 - back + SLOTS * 2) % SLOTS];
-    let ahead = 0;
-    for (let k = 1; k <= SLOTS; k++) {
-      const back = period - 1 - ((k - 1) % period);
-      const gap = at(back) - at(back + 1);
-      ahead += gap;
-      if (ahead > this.lead) return false;
-      let still = 0;
-      for (let i = 0; i < inHeld; i++) if (at(i) > this.now + ahead - WINDOW + dt) still++;
-      // Dimming a picture that has just risen is itself a change, so a rhythm over the limit keeps one in hand for it.
-      if (still + k + (gap * allowed < WINDOW * 0.97 ? 1 : 0) > allowed) return true;
-    }
-    return false;
-  }
-
-  /**
-   * The gain for this frame, from the composition's light grid. `applied` is the gain the measured picture was really shown
-   * with, when that is not the gain just returned, so flashes are counted from what reached the screen.
-   */
-  step(dt: number, cells: GuardCells, params: Readonly<Record<string, number>>, applied?: number): number {
+  /** The gain for this frame, from the composition's light grid. */
+  step(dt: number, cells: GuardCells, params: Readonly<Record<string, number>>): number {
     if (!Number.isFinite(dt) || dt < 0) return this.gain;
     const n = Math.min(cells.count, CAPACITY), { guarded, fixed, red } = cells, { seen, lit, before, beforeGuarded, high, low, bins, stepBins } = this;
     if ((params.safetyFlashGuard ?? 1) < 0.5) { if (this.started || this.gain !== 1) this.reset(); return this.gain = 1; }
@@ -224,21 +172,17 @@ export class FlashGuard {
     }
 
     while (this.held > 0 && this.now - this.events[(this.head - this.held + SLOTS) % SLOTS] >= WINDOW) this.held--;
-    if (turned) { this.inTimes[this.inHead] = this.now; this.inHead = (this.inHead + 1) % SLOTS; this.inHeld = Math.min(SLOTS, this.inHeld + 1); }
-    while (this.inHeld > 0 && this.now - this.inTimes[(this.inHead - this.inHeld + SLOTS) % SLOTS] >= WINDOW) this.inHeld--;
-    if (turned && this.holdThrough && this.burstRisk(allowed, dt)) this.latched = true;
-    if (this.latched && this.now - this.lastIn >= WINDOW) this.latched = false;
 
     // What the rhythm so far says the count will be, k turns from the last one. One frame of slack keeps a steady pulse at exactly the limit from reading as over it.
     const rhythm = this.spacing > 0 && this.spacing < WINDOW && this.now - this.lastIn <= this.spacing * 2.5;
     let deadline = -1;
     // A rhythm clearly over the limit stops one turn sooner, because uneven frames can bring the last one inside the window.
-    const over = !this.predictiveOnly && rhythm && this.spacing * allowed < WINDOW * 0.97, budget = over ? allowed - 1 : allowed;
+    const over = rhythm && this.spacing * allowed < WINDOW * 0.97, budget = over ? allowed - 1 : allowed;
     const reach = over ? Math.min(6, Math.max(2, Math.ceil(LEAD / this.spacing) + 1)) : 0;
     for (let k = 1; k <= reach && deadline < 0; k++) if (this.ahead(k, dt) > budget) deadline = this.lastIn + k * this.spacing;
 
     // A rise with no room left for the fall after it is met in the same frame: lowering the gain as the light climbs adds no step.
-    const refused = this.latched || (!this.predictiveOnly && turned && rhythm && this.spacing * allowed < WINDOW && this.input.direction >= 0 && this.ahead(1, dt) + 1 > budget);
+    const refused = turned && rhythm && this.spacing * allowed < WINDOW && this.input.direction >= 0 && this.ahead(1, dt) + 1 > budget;
     let gain = this.gain;
     if (refused || deadline >= 0) {
       const swing = this.quantile(bins, limit * n), target = swing > FLASH_STEP * HOLD ? FLASH_STEP * HOLD / swing : 1;
@@ -256,8 +200,7 @@ export class FlashGuard {
     }
     this.gain = gain;
 
-    const shownGain = applied ?? gain;
-    for (let i = 0; i < n; i++) { lit[i] = Math.min(1, fixed[i] + shownGain * guarded[i]); before[i] = seen[i]; beforeGuarded[i] = guarded[i]; }
+    for (let i = 0; i < n; i++) { lit[i] = Math.min(1, fixed[i] + gain * guarded[i]); before[i] = seen[i]; beforeGuarded[i] = guarded[i]; }
     if (this.output.see(lit, red, n, this.now, limit)) {
       this.events[this.head] = this.now; this.head = (this.head + 1) % SLOTS; this.held = Math.min(SLOTS, this.held + 1);
     }
@@ -342,7 +285,7 @@ export function guardLoopCells(fill: (frame: number) => GuardCells, frames: numb
   const plain = loopVerdict(count, n, at, guarded, fixed, reds, null, span, limit), allowed = allowedTurns(plain.red, params);
   if (plain.worst <= allowed) return table;
 
-  const guard = new FlashGuard({ holdThrough: false }), replay: GuardCells = { count: n, guarded: new Float32Array(n), fixed: new Float32Array(n), red: new Float32Array(n) };
+  const guard = new FlashGuard(), replay: GuardCells = { count: n, guarded: new Float32Array(n), fixed: new Float32Array(n), red: new Float32Array(n) };
   const load = (f: number) => { replay.guarded.set(guarded.subarray(f * n, (f + 1) * n)); replay.red.set(reds.subarray(f * n, (f + 1) * n)); if (fixed) replay.fixed.set((fixed as Float32Array).subarray(f * n, (f + 1) * n)); };
   const gains = new Float32Array(count);
   for (let f = Math.max(0, count - Math.ceil(rate)); f < count; f++) { load(f); guard.step(dt, replay, params); }
@@ -368,7 +311,7 @@ export function guardLoopCells(fill: (frame: number) => GuardCells, frames: numb
     if (!starts.length) break;
     starts.sort((x, y) => x - y);
     for (let p = 0; p < starts.length; p++) {
-      const from = starts[p], length = ((starts[(p + 1) % starts.length] - from + count - 1) % count) + 1, fresh = new FlashGuard({ holdThrough: false });
+      const from = starts[p], length = ((starts[(p + 1) % starts.length] - from + count - 1) % count) + 1, fresh = new FlashGuard();
       let lowest = 1;
       for (let k = 0; k < length; k++) { const f = (from + k) % count; load(f); gains[f] = Math.fround(fresh.step(dt, replay, params)); lowest = Math.min(lowest, gains[f]); }
       // Once down, it stays down: a gain creeping up inside the strobe would only spend the budget on faint flickers.

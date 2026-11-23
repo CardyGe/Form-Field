@@ -8,7 +8,7 @@ import { createShow, type ShowDocument } from '../src/map/show';
 import { reactable, targetOptions, targetRange } from '../src/map/targets';
 import { EVOLVE_NO_MOTION, motionIgnored, MERIDIAN_PARAMETERS } from '../src/meridian/parameters';
 import { StructureHold } from '../src/meridian/structure-hold';
-import { WALL_CELLS, WallFlashGuard, wallGuardPolicy } from '../src/meridian/wall-guard';
+import { wallGuardPolicy } from '../src/meridian/wall-guard';
 import { showReacts } from '../src/ui/show-reacts';
 import type { Project } from '../src/shared/types';
 
@@ -21,28 +21,6 @@ const meridian = (style = 2, extra: Record<string, number> = {}): Project => {
 };
 const showWith = (project: Project): ShowDocument => ({ ...createShow(), sources: [{ id: 'm', kind: 'instrument', speed: 1, revision: 1, tempoSync: null, followOutline: null, project } as ShowDocument['sources'][number]] });
 const policy = (...projects: Project[]) => wallGuardPolicy(projects);
-const POLICY_ON = () => policy(meridian());
-
-/** A 48 x 27 wall, stored as the square root of linear light, as the graphics card hands it over. */
-const wall = (r: number, g = r, b = r, area = 1) => {
-  const out = new Uint8Array(WALL_CELLS * 4), lit = Math.round(area * WALL_CELLS);
-  for (let i = 0; i < WALL_CELLS; i++) { const on = i < lit; out[i * 4] = Math.round(Math.sqrt(on ? r : 0) * 255); out[i * 4 + 1] = Math.round(Math.sqrt(on ? g : 0) * 255); out[i * 4 + 2] = Math.round(Math.sqrt(on ? b : 0) * 255); out[i * 4 + 3] = 255; }
-  return out;
-};
-/** Counts opposing changes of over 10% light on the shown wall in the worst second. */
-function worstChanges(shown: number[], fps: number): number {
-  const events: number[] = []; let anchor = shown[0], way = 0;
-  for (let f = 1; f < shown.length; f++) {
-    const v = shown[f];
-    if (way === 1 && v > anchor) anchor = v; if (way === -1 && v < anchor) anchor = v;
-    if (way >= 0 && v <= anchor - .1 && v < .8) { way = -1; anchor = v; events.push(f); }
-    else if (way <= 0 && v >= anchor + .1 && anchor < .8) { way = 1; anchor = v; events.push(f); }
-  }
-  let worst = 0;
-  for (let i = 0; i < events.length; i++) { let n = 0; for (let k = i; k < events.length && events[k] < events[i] + fps; k++) n++; worst = Math.max(worst, n); }
-  return worst;
-}
-
 test('moves are link targets; the seed and its slots are not', () => {
   const show = showWith(meridian());
   for (const key of ['moveNext', 'moveHold', 'moveDrop', 'moveCollapse', 'moveBurst', 'moveMutate', 'moveReseed', 'moveRecall']) {
@@ -109,61 +87,6 @@ test('the wall guard follows the show: none without Meridian, the strictest sett
   assert.equal(mixed.on, true, 'one guarded layer guards the wall'); assert.equal(mixed.warn, true, 'and the unguarded one is still warned about');
   const hidden = meridian(2, { safetyFlashGuard: 0 }); hidden.layers[0].visible = false;
   assert.equal(policy(hidden).present, false, 'a hidden layer is not on the wall');
-});
-
-test('a calm wall has a gain of exactly 1, and no saturation limit', () => {
-  const guard = new WallFlashGuard(), { settings } = POLICY_ON();
-  for (let f = 0; f < 600; f++) {
-    guard.step(1 / 60, wall(.2 + .04 * Math.sin(f / 60 * TAU * .25)), settings);
-    assert.equal(guard.gain, 1, `frame ${f}`); assert.equal(guard.saturation, Infinity);
-  }
-  assert.equal(guard.limiting, false);
-});
-
-test('a slow full-wall swell inside the limit is left alone', () => {
-  const guard = new WallFlashGuard(), { settings } = POLICY_ON();
-  for (let f = 0; f < 600; f++) { guard.step(1 / 60, wall(.1 + .4 * (.5 + .5 * Math.sin(f / 60 * TAU))), settings); assert.equal(guard.gain, 1, `frame ${f}`); }
-});
-
-for (const hz of [5, 8, 12]) test(`a ${hz} Hz full-wall strobe is brought within three flashes a second, even read a frame late`, () => {
-  const guard = new WallFlashGuard(), { settings } = POLICY_ON(), bright = wall(.8), dark = wall(.02), shown: number[] = [], raw: number[] = [];
-  const at = (f: number) => (f / 60 * hz) % 1 < .5;
-  for (let f = 0; f < 480; f++) {
-    guard.step(1 / 60, at(Math.max(0, f - 1)) ? bright : dark, settings); // The reading is a frame old.
-    raw.push(at(f) ? .8 : .02); shown.push((at(f) ? .8 : .02) * guard.gain);
-  }
-  assert.ok(worstChanges(raw, 60) > 6, 'the check strobes without the guard');
-  assert.ok(worstChanges(shown.slice(60), 60) <= 6, `shown ${worstChanges(shown.slice(60), 60)} changes in a second`);
-  assert.equal(guard.limiting, true);
-});
-
-test('the dim never steps harder than its slew, in either direction', () => {
-  const guard = new WallFlashGuard(), { settings } = POLICY_ON(), bright = wall(.8), dark = wall(.02);
-  let last = 1, biggest = 0;
-  for (let f = 0; f < 600; f++) { guard.step(1 / 60, f < 400 && (f / 60 * 8) % 1 < .5 ? bright : dark, settings); biggest = Math.max(biggest, Math.abs(guard.gain - last)); last = guard.gain; }
-  assert.ok(biggest <= .25, `largest step ${biggest}`);
-  assert.equal(guard.gain, 1, 'and it comes all the way back');
-});
-
-test('saturated red flashing at constant luminance is met with a saturation limit', () => {
-  const guard = new WallFlashGuard(), { settings } = POLICY_ON(), red = wall(.5, .01, .01), grey = wall(.13, .13, .13);
-  let lowest = Infinity;
-  for (let f = 0; f < 240; f++) { guard.step(1 / 60, (f / 60 * 5) % 1 < .5 ? red : grey, settings); lowest = Math.min(lowest, guard.saturation); }
-  assert.ok(lowest <= .5, `saturation came down only to ${lowest}`);
-});
-
-test('a guard that is off, or reset, is exactly 1', () => {
-  const guard = new WallFlashGuard(), { settings } = POLICY_ON();
-  for (let f = 0; f < 120; f++) guard.step(1 / 60, f % 6 < 3 ? wall(.8) : wall(.02), settings);
-  assert.ok(guard.gain < 1);
-  guard.reset();
-  assert.equal(guard.gain, 1); assert.equal(guard.saturation, Infinity); assert.equal(guard.limiting, false);
-});
-
-test('a dropped or strange frame time cannot move the dim', () => {
-  const guard = new WallFlashGuard(), { settings } = POLICY_ON();
-  guard.step(1 / 60, wall(.2), settings);
-  for (const dt of [Number.NaN, -1, Infinity]) { guard.step(dt, wall(.9), settings); assert.equal(guard.gain, 1); }
 });
 
 test('a structural link on Dense is held until the loop comes round; a saved edit is not', () => {

@@ -68,6 +68,8 @@ export interface WireSource { id: string; kind: 'instrument'; speed: number; rev
 export interface WireShow { format: 'formshow'; version: 8; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[];
   /** The show plays Live somewhere (a shape, or a scene): the wall keeps Live's camera running. */
   usesLive: boolean;
+  /** The show holds a guarded Meridian layer, so the wall is limited before its compositions arrive. */
+  guardWall?: boolean;
   /** Stage 6: the videos shapes play, with their paths (the wall fetches them through the app). */
   videos: VideoSource[] }
 
@@ -441,6 +443,7 @@ export function validateWireShow(value: unknown): WireShow {
   return { format: 'formshow', version: 8, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
     links: isRecord(value) ? readLinks(value.links, { shapes, sources: [...kept, ...videos] }, true).links : [],
     usesLive: (isRecord(value) && value.usesLive === true) || shapes.some(s => s.sourceId === LIVE_SOURCE_ID),
+    ...(isRecord(value) && value.guardWall === true ? { guardWall: true } : {}),
     videos };
 }
 

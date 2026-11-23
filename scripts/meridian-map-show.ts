@@ -57,6 +57,16 @@ function burst(guard: number): ShowDocument {
   };
 }
 
+/** Left and right halves, each on its own control. */
+function halves(): ShowDocument {
+  return {
+    ...createShow(),
+    shapes: [{ ...shape('left', box(0, 0, .5, 1), null), fill: 'colour' }, { ...shape('right', box(.5, 0, 1, 1), null), fill: 'colour' }, shape('e', box(.46, .46, .54, .54), 'ev')],
+    sources: [source('ev', meridian(2, 1729))],
+    links: [{ ...link('l', 'midi.cc.1.21', 'shape.left.brightness'), high: .5 }, { ...link('r', 'midi.cc.1.22', 'shape.right.brightness'), high: .5 }],
+  };
+}
+
 const out = process.argv[2];
 fs.mkdirSync(out, { recursive: true });
-for (const [name, show] of Object.entries({ calm: calm(), 'strobe-on': strobe(1), 'strobe-off': strobe(0), plain: plain(), 'burst-on': burst(1), 'burst-off': burst(0) })) fs.writeFileSync(path.join(out, `meridian-${name}.formshow`), JSON.stringify(show));
+for (const [name, show] of Object.entries({ calm: calm(), 'strobe-on': strobe(1), 'strobe-off': strobe(0), plain: plain(), 'burst-on': burst(1), 'burst-off': burst(0), halves: halves() })) fs.writeFileSync(path.join(out, `meridian-${name}.formshow`), JSON.stringify(show));

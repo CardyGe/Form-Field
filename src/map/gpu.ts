@@ -10,6 +10,7 @@
  */
 import { STAGE_SIZE } from './show';
 import { IDENTITY, type H3 } from './homography';
+import { FALL_SHARE, MOST_AGE, LIGHT_RULE, LIMITER, RED_RULE, type ChannelRule } from '../meridian/wall-limiter';
 
 const VERTEX = `#version 300 es
 in vec2 aUnit;
@@ -100,15 +101,16 @@ void main() {
   o = vec4(c.rgb, 1.);  // premultiplied over the black stage
 }`;
 
-const LINEAR = `vec3 lin(vec3 c) { return mix(c / 12.92, pow((c + .055) / 1.055, vec3(2.4)), step(.04045, c)); }
+const LINEAR_GLSL = `vec3 lin(vec3 c) { return mix(c / 12.92, pow((c + .055) / 1.055, vec3(2.4)), step(.04045, c)); }
 vec3 enc(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }`;
-/** Wall Flash Guard: each output pixel is the true average light of a block of the source, kept as its square root in 8 bits. */
+/** The wall limiter's first step: each output pixel is the true average light of a block of the source. */
 const MEASURE = `#version 300 es
 precision highp float;
 out vec4 o;
 uniform sampler2D uTex;
 uniform int uCell;
 uniform int uEncoded;       // 1: the source holds the square root of light; 0: it is the display-encoded stage
+uniform int uLinearOut;     // 1: write linear light to a float target; 0: its square root, to 8 bits
 // The sRGB curve to within about 1%, without a pow for each of the many texels read here.
 vec3 lin(vec3 c) { return c * (c * (c * .305306011 + .682171111) + .012522878); }
 void main() {
@@ -118,27 +120,99 @@ void main() {
     vec3 c = texelFetch(uTex, p + ivec2(x, y), 0).rgb;
     sum += uEncoded == 1 ? c * c : lin(c);
   }
-  o = vec4(sqrt(sum / float(uCell * uCell)), 1.);
+  sum /= float(uCell * uCell);
+  o = vec4(uLinearOut == 1 ? sum : sqrt(sum), 1.);
 }`;
-/** The wall's master dim, in linear light, on the flat stage: before the corners, so it can never touch geometry. */
-const DIM = `#version 300 es
+const MEASURE_COLS = 48, MEASURE_ROWS = 27;
+const glslRule = (r: ChannelRule) => `vec3(${r.band.toFixed(5)}, ${r.hold.toFixed(5)}, ${r.climb.toFixed(5)})`;
+/** The rule of src/meridian/wall-limiter.ts. A channel's state is (allowed value, low, high, seconds since the low). */
+const LIMIT_RULE = `
+const vec3 LIGHT_RULE = ${glslRule(LIGHT_RULE)};
+const vec3 RED_RULE = ${glslRule(RED_RULE)};
+const float MOMENT = ${LIMITER.moment.toFixed(5)};
+const float TRIGGER = ${LIMITER.trigger.toFixed(5)};
+const float FALL_SHARE = ${FALL_SHARE.toFixed(5)};
+float lightOf(vec3 c) { return dot(c, vec3(.2126, .7152, .0722)); }
+float redOf(vec3 c) { float sum = c.r + c.g + c.b; return sum > 1e-6 && c.r / sum >= .8 ? max(0., c.r - c.g - c.b) : 0.; }
+float capOf(vec4 s, float dt, vec3 rule, float scale) { float first = s.g + rule.x; return s.a >= rule.y * scale ? max(first, s.r + rule.z * min(dt, ${LIMITER.longestClimb.toFixed(5)})) : first; }`;
+/** Which cells are trying to change more than they may, for the area test. */
+const LIMIT_WANT = `#version 300 es
 precision highp float;
 out vec4 o;
-uniform sampler2D uTex;
-uniform float uGain;
-uniform float uSaturation;
-${LINEAR}
+uniform sampler2D uCells, uLight, uRed, uMisc;
+uniform float uDt;
+uniform vec2 uHold;
+${LIMIT_RULE}
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec3 c = texelFetch(uCells, p, 0).rgb;
+  vec4 misc = texelFetch(uMisc, p, 0);
+  o = vec4(lightOf(c) > capOf(texelFetch(uLight, p, 0), uDt, LIGHT_RULE, uHold.x) + 1e-4 || misc.b < MOMENT ? 1. : 0.,
+           redOf(c) > capOf(texelFetch(uRed, p, 0), uDt, RED_RULE, uHold.y) + 1e-4 || misc.a < MOMENT ? 1. : 0., 0., 1.);
+}`;
+/** The exact share of cells wanting to change. A mip chain is not used: at 48 x 27 it can drop whole columns from the average. */
+const LIMIT_AREA = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform sampler2D uWant;
+void main() {
+  vec2 sum = vec2(0.);
+  for (int y = 0; y < ${MEASURE_ROWS}; y++) for (int x = 0; x < ${MEASURE_COLS}; x++) sum += texelFetch(uWant, ivec2(x, y), 0).rg;
+  o = vec4(sum / float(${MEASURE_COLS * MEASURE_ROWS}), 0., 1.);
+}`;
+const LIMIT_UPDATE = `#version 300 es
+precision highp float;
+layout(location = 0) out vec4 oLight;
+layout(location = 1) out vec4 oRed;
+layout(location = 2) out vec4 oMisc;
+uniform sampler2D uCells, uLight, uRed, uMisc, uWant;
+uniform float uDt;
+uniform vec2 uHold;
+uniform int uInit;
+${LIMIT_RULE}
+vec4 advance(vec4 s, float x, bool engaged, vec3 rule, float scale, float crossedIn, out float crossed) {
+  float was = s.r, v = x <= was || !engaged ? x : min(x, max(was, capOf(s, uDt, rule, scale)));
+  crossed = !engaged && was <= s.g + rule.x && v > s.g + rule.x ? 0. : min(1., crossedIn + uDt);
+  float low = s.g, high = max(s.b, v), age = s.a;
+  if (high - v >= rule.x * FALL_SHARE) { low = v; high = v; age = 0.; }
+  else if (v < low) { low = v; age = 0.; }
+  return vec4(v, low, high, min(${MOST_AGE.toFixed(1)}, age + uDt));
+}
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec3 c = texelFetch(uCells, p, 0).rgb;
+  float x = lightOf(c), r = redOf(c);
+  if (uInit == 1) { oLight = vec4(x, x, x, 0.); oRed = vec4(r, r, r, 0.); oMisc = vec4(1.); return; }
+  vec2 area = texelFetch(uWant, ivec2(0), 0).rg;
+  float crossedLight, crossedRed;
+  vec4 misc = texelFetch(uMisc, p, 0);
+  oLight = advance(texelFetch(uLight, p, 0), x, area.r >= TRIGGER, LIGHT_RULE, uHold.x, misc.b, crossedLight);
+  oRed = advance(texelFetch(uRed, p, 0), r, area.g >= TRIGGER, RED_RULE, uHold.y, misc.a, crossedRed);
+  oMisc = vec4(x > 1e-4 ? clamp(oLight.r / x, 0., 1.) : 1., r > 1e-4 ? clamp(oRed.r / r, 0., 1.) : 1., crossedLight, crossedRed);
+}`;
+/** The limit on the flat stage, as a smooth gain per cell, in linear light. Where nothing is limited the pixel is left exactly as it was. */
+const LIMIT_APPLY = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform sampler2D uTex, uGain;
+uniform vec2 uStage;
+uniform float uFade;
+${LINEAR_GLSL}
 void main() {
   vec4 c = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0);
+  vec2 g = mix(texture(uGain, gl_FragCoord.xy / uStage).rg, vec2(1.), uFade);
+  if (g.r >= .9995 && g.g >= .9995) { o = c; return; }
   vec3 l = lin(c.rgb);
   float grey = dot(l, vec3(.2126, .7152, .0722));
-  l = max(vec3(grey) + (l - vec3(grey)) * uSaturation, vec3(0.)) * uGain;
+  l = max(vec3(grey) + (l - vec3(grey)) * g.g, vec3(0.)) * g.r;
   o = vec4(enc(l), c.a);
 }`;
 const MEASURE_MIDDLE = { width: 480, height: 270 };
-const MEASURE_SIZE = { width: 48, height: 27 };
-const MEASURE_SLOTS = 4;
-interface MeasureSlot { buffer: WebGLBuffer; sync: WebGLSync | null; at: number; gain: number }
+const MEASURE_SIZE = { width: MEASURE_COLS, height: MEASURE_ROWS };
+/** How often, in drawn frames, the operator's status is read back. It never drives the limiter. */
+const STATUS_EVERY = 12;
+interface LimitState { light: WebGLTexture; red: WebGLTexture; misc: WebGLTexture; fb: WebGLFramebuffer }
+type LimitProgram = { program: WebGLProgram; u: Record<string, WebGLUniformLocation | null> };
 
 export interface Texture { tex: WebGLTexture; width: number; height: number }
 /** One shape to draw. Matrices are 3 × 3, row major, from stage pixels to the picture's 0..1 square. */
@@ -177,24 +251,29 @@ export class Gpu {
   private drawFb!: WebGLFramebuffer;
   private blank!: Texture;
   private measureP!: Program;
-  private dimP!: Program;
+  private wantP!: Program;
+  private updateP!: Program;
+  private applyP!: Program;
+  private areaP!: Program;
+  private areaTex!: WebGLTexture;
   private middleTex!: WebGLTexture;
   private middleFb!: WebGLFramebuffer;
-  private smallTex!: WebGLTexture;
-  private smallFb!: WebGLFramebuffer;
-  private dimCopy: WebGLTexture | null = null;
+  private cellsTex!: WebGLTexture;
+  private cellsFb!: WebGLFramebuffer;
+  private wantTex!: WebGLTexture;
+  private wantFb!: WebGLFramebuffer;
+  private statusFb!: WebGLFramebuffer;
+  private statusBuffer!: WebGLBuffer;
+  private statusSync: WebGLSync | null = null;
+  private statusCount = 0;
+  private readonly statusBytes = new Uint8Array(4);
+  private limitStates: [LimitState, LimitState] | null = null;
+  private stageCopy: WebGLTexture | null = null;
   private guardState: 'unbuilt' | 'ready' | 'failed' = 'unbuilt';
-  /** Why the wall guard could not be built; null when it is fine or not yet needed. */
+  /** Why the wall limiter could not be built; null when it is fine or not yet needed. */
   guardError: string | null = null;
-  /** The gain the reading last collected was shown with. */
-  measuredGain = 1;
-  get measurePending(): boolean { return this.measureHead !== this.measureTail; }
-  private measures: MeasureSlot[] = [];
-  private measureHead = 0;
-  private measureTail = 0;
-  private timer: { ext: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }; query: WebGLQuery | null; running: boolean } | null = null;
-  /** The graphics card's time for the wall guard's measuring passes, in ms, where the driver can report it. */
-  guardGpuMs: number | null = null;
+  /** The share of the wall last found trying to change, read back a few times a second for the operator only. */
+  limitedArea = 0;
   private readback: { buffer: WebGLBuffer; sync: WebGLSync } | null = null;
   private readbackBuffer: WebGLBuffer | null = null;
   /** Goes up whenever the context is set up again: a readback started before it will never arrive. */
@@ -230,8 +309,7 @@ export class Gpu {
     ({ tex: this.previewTex, fb: this.previewFb } = target(PREVIEW.width, PREVIEW.height));
     // The wall guard's passes are built the first time a show with Meridian needs them.
     this.guardState = 'unbuilt'; this.guardError = null;
-    this.dimCopy = null; this.measures = []; this.measureHead = this.measureTail = 0;
-    this.timer = null; this.guardGpuMs = null;
+    this.stageCopy = null; this.limitStates = null; this.statusSync = null; this.statusCount = 0; this.limitedArea = 0;
     this.copyFb = gl.createFramebuffer()!;
     this.drawFb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -268,24 +346,42 @@ export class Gpu {
     return { tex, fb };
   }
 
-  /** Builds the wall guard's passes once. A failure is reported and never reaches the stage's own drawing. */
+  /** Builds the wall limiter's passes once. A failure is reported and never reaches the stage's own drawing. */
   private ensureGuard(): boolean {
     if (this.guardState !== 'unbuilt') return this.guardState === 'ready';
     const gl = this.gl;
     try {
-      this.measureP = this.compile(MEASURE, ['uRect', 'uStage', 'uTex', 'uCell', 'uEncoded']);
-      this.dimP = this.compile(DIM, ['uRect', 'uStage', 'uTex', 'uGain', 'uSaturation']);
+      if (!gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buffer_half_float')) throw new Error('this graphics card cannot draw to floating-point pictures');
+      this.measureP = this.compile(MEASURE, ['uRect', 'uStage', 'uTex', 'uCell', 'uEncoded', 'uLinearOut']);
+      this.wantP = this.compile(LIMIT_WANT, ['uRect', 'uStage', 'uCells', 'uLight', 'uRed', 'uMisc', 'uDt', 'uHold']);
+      this.updateP = this.compile(LIMIT_UPDATE, ['uRect', 'uStage', 'uCells', 'uLight', 'uRed', 'uMisc', 'uWant', 'uDt', 'uHold', 'uInit']);
+      this.areaP = this.compile(LIMIT_AREA, ['uRect', 'uStage', 'uWant']);
+      this.applyP = this.compile(LIMIT_APPLY, ['uRect', 'uStage', 'uTex', 'uGain', 'uFade']);
       ({ tex: this.middleTex, fb: this.middleFb } = this.target(MEASURE_MIDDLE.width, MEASURE_MIDDLE.height));
-      ({ tex: this.smallTex, fb: this.smallFb } = this.target(MEASURE_SIZE.width, MEASURE_SIZE.height));
-      this.measures = Array.from({ length: MEASURE_SLOTS }, () => {
-        const buffer = gl.createBuffer()!;
-        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
-        gl.bufferData(gl.PIXEL_PACK_BUFFER, MEASURE_SIZE.width * MEASURE_SIZE.height * 4, gl.STREAM_READ);
-        return { buffer, sync: null, at: 0, gain: 1 };
-      });
+      const { width: w, height: h } = MEASURE_SIZE;
+      const float = () => { const t = this.texture(); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null); return t; };
+      this.cellsTex = float();
+      this.cellsFb = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.cellsFb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.cellsTex, 0);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('the limiter picture could not be made');
+      ({ tex: this.wantTex, fb: this.wantFb } = this.target(w, h));
+      ({ tex: this.areaTex, fb: this.statusFb } = this.target(1, 1));
+      this.statusBuffer = gl.createBuffer()!;
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.statusBuffer);
+      gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-      const timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
-      this.timer = timerExt ? { ext: timerExt, query: null, running: false } : null;
+      const state = (): LimitState => {
+        const light = float(), red = float(), misc = float(), fb = gl.createFramebuffer()!;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, light, 0);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, red, 0);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, misc, 0);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('the limiter state could not be made');
+        return { light, red, misc, fb };
+      };
+      this.limitStates = [state(), state()];
       this.guardState = 'ready';
     } catch (error) {
       this.guardState = 'failed'; this.guardError = String((error as Error)?.message ?? error);
@@ -387,88 +483,104 @@ export class Gpu {
   }
 
   /**
-   * Wall Flash Guard: starts reading the stage as drawn so far into 48 x 27 cells, without waiting for the graphics card.
-   * The buffers are made once. Returns false when every reading is still on its way.
+   * The wall limiter, in the frame being drawn, with no readback in its path: measures the stage as drawn so far, updates each
+   * cell's allowed light, and applies it to the flat stage before the overlays and corners. `init` starts from this picture;
+   * `fade` (0 to 1) eases the limit away. Returns false if the limiter is unavailable, leaving the picture as it is.
    */
-  measureStage(at: number, gain = 1): boolean {
-    if (!this.ensureGuard()) return false;
-    const gl = this.gl, slot = this.measures[this.measureHead % MEASURE_SLOTS];
-    if (slot.sync) return false;
-    const { program, u } = this.measureP, timer = this.timer;
-    let timing = false;
-    if (timer && !timer.running) { timer.query ??= gl.createQuery(); if (timer.query) { gl.beginQuery(timer.ext.TIME_ELAPSED_EXT, timer.query); timing = true; } }
+  limitStage(dt: number, fade: number, init: boolean, holds: { light: number; red: number } = { light: 1, red: 1 }): boolean {
+    if (!this.ensureGuard() || !this.limitStates) return false;
+    const gl = this.gl, [from, to] = this.limitStates, { width: w, height: h } = MEASURE_SIZE;
+    const rect = (u: Program['u'], width: number, height: number) => { gl.uniform4f(u.uRect, 0, 0, width, height); gl.uniform2f(u.uStage, width, height); };
+    const bind = (unit: number, location: WebGLUniformLocation | null, texture: WebGLTexture) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, texture); gl.uniform1i(location, unit); };
     gl.disable(gl.BLEND);
-    gl.useProgram(program);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(u.uTex, 0);
+    // The stage to 48 x 27 cells of linear light.
+    let p = this.measureP;
+    gl.useProgram(p.program);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.middleFb);
     gl.viewport(0, 0, MEASURE_MIDDLE.width, MEASURE_MIDDLE.height);
-    gl.uniform4f(u.uRect, 0, 0, MEASURE_MIDDLE.width, MEASURE_MIDDLE.height); gl.uniform2f(u.uStage, MEASURE_MIDDLE.width, MEASURE_MIDDLE.height);
-    gl.bindTexture(gl.TEXTURE_2D, this.stageTex); gl.uniform1i(u.uCell, 4); gl.uniform1i(u.uEncoded, 0);
+    rect(p.u, MEASURE_MIDDLE.width, MEASURE_MIDDLE.height);
+    bind(0, p.u.uTex, this.stageTex); gl.uniform1i(p.u.uCell, 4); gl.uniform1i(p.u.uEncoded, 0); gl.uniform1i(p.u.uLinearOut, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.smallFb);
-    gl.viewport(0, 0, MEASURE_SIZE.width, MEASURE_SIZE.height);
-    gl.uniform4f(u.uRect, 0, 0, MEASURE_SIZE.width, MEASURE_SIZE.height); gl.uniform2f(u.uStage, MEASURE_SIZE.width, MEASURE_SIZE.height);
-    gl.bindTexture(gl.TEXTURE_2D, this.middleTex); gl.uniform1i(u.uCell, 10); gl.uniform1i(u.uEncoded, 1);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.cellsFb);
+    gl.viewport(0, 0, w, h);
+    rect(p.u, w, h);
+    bind(0, p.u.uTex, this.middleTex); gl.uniform1i(p.u.uCell, 10); gl.uniform1i(p.u.uEncoded, 1); gl.uniform1i(p.u.uLinearOut, 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    if (timing && timer) { gl.endQuery(timer.ext.TIME_ELAPSED_EXT); timer.running = true; }
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.buffer);
-    gl.readPixels(0, 0, MEASURE_SIZE.width, MEASURE_SIZE.height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    slot.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-    slot.at = at; slot.gain = gain;
-    if (slot.sync) this.measureHead++;
-    gl.flush();
+    // How much of the wall is trying to change more than it may.
+    p = this.wantP;
+    gl.useProgram(p.program);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.wantFb);
+    rect(p.u, w, h);
+    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uLight, from.light); bind(2, p.u.uRed, from.red); bind(3, p.u.uMisc, from.misc);
+    gl.uniform1f(p.u.uDt, dt); gl.uniform2f(p.u.uHold, holds.light, holds.red);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    p = this.areaP;
+    gl.useProgram(p.program);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.statusFb);
+    gl.viewport(0, 0, 1, 1);
+    rect(p.u, 1, 1);
+    bind(0, p.u.uWant, this.wantTex);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.viewport(0, 0, w, h);
+    // Each cell moves as far as it may.
+    p = this.updateP;
+    gl.useProgram(p.program);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, to.fb);
+    rect(p.u, w, h);
+    bind(0, p.u.uCells, this.cellsTex); bind(1, p.u.uLight, from.light); bind(2, p.u.uRed, from.red); bind(3, p.u.uMisc, from.misc); bind(4, p.u.uWant, this.areaTex);
+    gl.uniform1f(p.u.uDt, dt); gl.uniform2f(p.u.uHold, holds.light, holds.red); gl.uniform1i(p.u.uInit, init ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    this.limitStates = [to, from];
+    this.readStatus();
+    // The result, on the flat stage.
     this.backToStage();
-    return !!slot.sync;
-  }
-
-  /** The oldest finished reading, into `out`; its time, or null when none is ready. Never waits. */
-  collectMeasure(out: Uint8Array): number | null {
-    const gl = this.gl, timer = this.timer;
-    if (this.guardState !== 'ready') return null;
-    if (timer?.running && timer.query && gl.getQueryParameter(timer.query, gl.QUERY_RESULT_AVAILABLE)) {
-      const ns = gl.getQueryParameter(timer.query, gl.QUERY_RESULT) as number;
-      if (!gl.getParameter(timer.ext.GPU_DISJOINT_EXT)) this.guardGpuMs = this.guardGpuMs === null ? ns / 1e6 : this.guardGpuMs * .9 + ns / 1e6 * .1;
-      timer.running = false;
-    }
-    if (this.measureTail === this.measureHead) return null;
-    const slot = this.measures[this.measureTail % MEASURE_SLOTS];
-    if (!slot.sync) return null;
-    const state = gl.clientWaitSync(slot.sync, 0, 0);
-    if (state !== gl.ALREADY_SIGNALED && state !== gl.CONDITION_SATISFIED) return null;
-    gl.deleteSync(slot.sync); slot.sync = null;
-    this.measureTail++;
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.buffer);
-    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, out);
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    this.measuredGain = slot.gain;
-    return slot.at;
-  }
-
-  /** Dims the flat stage, in linear light. Called only while the guard is limiting, so an unguarded stage is never touched. */
-  dimStage(gain: number, saturation: number): void {
-    if (!this.ensureGuard()) return;
-    const gl = this.gl, { program, u } = this.dimP;
+    gl.disable(gl.BLEND);
+    p = this.applyP;
+    gl.useProgram(p.program);
     gl.activeTexture(gl.TEXTURE0);
-    if (!this.dimCopy) {
-      this.dimCopy = this.texture();
+    if (!this.stageCopy) {
+      this.stageCopy = this.texture();
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, STAGE_SIZE.width, STAGE_SIZE.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     }
-    gl.bindTexture(gl.TEXTURE_2D, this.dimCopy);
+    gl.bindTexture(gl.TEXTURE_2D, this.stageCopy);
     gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
-    gl.disable(gl.BLEND);
-    gl.useProgram(program);
-    gl.uniform4f(u.uRect, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
-    gl.uniform2f(u.uStage, STAGE_SIZE.width, STAGE_SIZE.height);
-    gl.uniform1i(u.uTex, 0);
-    gl.uniform1f(u.uGain, gain);
-    gl.uniform1f(u.uSaturation, Math.min(1, saturation));
+    rect(p.u, STAGE_SIZE.width, STAGE_SIZE.height);
+    bind(0, p.u.uTex, this.stageCopy); bind(1, p.u.uGain, to.misc);
+    gl.uniform1f(p.u.uFade, fade);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.enable(gl.BLEND);
+    return true;
   }
 
-  private backToStage(): void {
+  /** For the operator's status only, a few times a second, never waited for. It does not feed the limiter. */
+  private readStatus(): void {
+    const gl = this.gl;
+    if (this.statusSync) {
+      const state = gl.clientWaitSync(this.statusSync, 0, 0);
+      if (state !== gl.ALREADY_SIGNALED && state !== gl.CONDITION_SATISFIED) return;
+      gl.deleteSync(this.statusSync); this.statusSync = null;
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.statusBuffer);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.statusBytes);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      this.limitedArea = Math.max(this.statusBytes[0], this.statusBytes[1]) / 255;
+    }
+    if (++this.statusCount < STATUS_EVERY) return;
+    this.statusCount = 0;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.statusFb);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.statusBuffer);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.statusSync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+  }
+
+  /** For the scripted checks: the flat stage's pixels as they stand. */
+  readStage(out: Uint8Array): void {
+    this.backToStage();
+    this.gl.readPixels(0, 0, STAGE_SIZE.width, STAGE_SIZE.height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, out);
+  }
+
+  backToStage(): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.stageFb);
     gl.viewport(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
