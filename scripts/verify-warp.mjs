@@ -15,6 +15,8 @@ import { _electron as electron } from 'playwright';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const option = name => process.argv.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const baseline = option('baseline');
+// Optional: a checkout of the commit before Mirror and Polar learned the layer's pivot. Adds the default-pose check.
+const previous = option('previous');
 const only = option('only')?.split(',').map(s => s.trim()).filter(Boolean);
 const out = path.join(root, 'work/warp');
 const FIELDS = ['Waves', 'Noise', 'Ripple', 'Magnetic', 'Plasma'];
@@ -67,6 +69,10 @@ const fringeStageVerdict = r => ({
   ok: r.alone < 1e-6 && r.stacked > .001 && r.off < .0005,
   detail: `fringe from the stage alone ${r.alone.toExponential(1)} (must be 0); stacked Warp fringe ${r.stacked.toFixed(4)} (over .001), off Warp's own movement by ${r.off.toFixed(5)} (limit .0005)`,
 });
+// The reported case, then two poses that sit fully inside the frame so every axis can be measured.
+const MOVED_REPORTED = { x: .3, y: 0, scale: .45, rotation: 0 };
+const MOVED_POSES = [{ x: .18, y: -.05, scale: .4, rotation: .5 }, { x: -.2, y: .08, scale: .4, rotation: -1.1 }];
+const MOVED_CASES = [...MIRROR_NAMES.map((name, i) => [name, { mirrorAmount: 1, mirrorMode: i }]), ...POLAR_NAMES.map((name, i) => [name, { polarAmount: 1, polarMode: i }])];
 
 const CHECKS = [
   {
@@ -1421,6 +1427,165 @@ const CHECKS = [
       return { ok: rows.length === COST_CASES.length, detail: `median of 4 rounds of 60 frames at 1280x720 on Surface (report only). Plain ${plain.toFixed(2)} ms (${rows[0].low.toFixed(2)} to ${rows[0].high.toFixed(2)}); ${rows.slice(1).map(r => `${r.name} ${r.ms.toFixed(2)} (${r.ms >= plain ? '+' : ''}${(r.ms - plain).toFixed(2)})`).join(', ')}` };
     },
   },
+  {
+    name: 'moved-visible',
+    // The reported case first: a small Image moved aside went fully dark under Mirror Left-right.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([poses, cases]) => {
+        const q = window.wq, rows = [], at = (params, transform) => { const l = q.smooth(params); l.transform = transform; return q.project([l]); };
+        for (const pose of poses) {
+          const plain = q.litShare(await q.px(at({}, pose)));
+          for (const [name, params] of cases) rows.push({ name, x: pose.x, plain, lit: q.litShare(await q.px(at(params, pose))) });
+        }
+        return rows;
+      }, [[MOVED_REPORTED, ...MOVED_POSES], MOVED_CASES]);
+      const low = rows.reduce((a, r) => r.lit / r.plain < a.lit / a.plain ? r : a);
+      return { ok: rows.every(r => r.lit >= r.plain * .5), detail: `${rows.length} pose and mode pairs; lowest ${low.name} at x ${low.x}: lit ${(low.lit * 100).toFixed(1)}% of frame against ${(low.plain * 100).toFixed(1)}% plain (limit half)` };
+    },
+  },
+  {
+    name: 'moved-symmetry',
+    // Each pixel against its partner across the layer's own axes, inside a disc that stays on the picture.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([poses, cases]) => {
+        const q = window.wq, W = 960, H = 540, rows = [], turn = Math.PI / 3;
+        const partners = { 'Left-right': [[-1, 0, 0, 1]], 'Top-bottom': [[1, 0, 0, -1]], 'Four-way': [[-1, 0, 0, 1], [1, 0, 0, -1]], Kaleidoscope: [[Math.cos(turn), -Math.sin(turn), Math.sin(turn), Math.cos(turn)]], 'To circle': [[-1, 0, 0, 1]] };
+        for (const pose of poses) for (const [name, params] of cases) {
+          if (!partners[name]) continue;
+          const l = q.smooth(params); l.transform = pose;
+          const px = await q.px(q.project([l]), .9, W, H), c = Math.cos(pose.rotation), s = Math.sin(pose.rotation), cx = W / 2 + pose.x * W, cy = H / 2 + pose.y * H, radius = H / 2 * pose.scale * .8;
+          const read = (x, y, ch) => { const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, v = (X, Y) => px[(Y * W + X) * 4 + ch]; return v(x0, y0) * (1 - fx) * (1 - fy) + v(x0 + 1, y0) * fx * (1 - fy) + v(x0, y0 + 1) * (1 - fx) * fy + v(x0 + 1, y0 + 1) * fx * fy; };
+          let sum = 0, n = 0, lit = 0;
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const dx = x + .5 - cx, dy = y + .5 - cy;
+            if (Math.hypot(dx, dy) > radius) continue;
+            const lx = c * dx + s * dy, ly = -s * dx + c * dy;
+            if (px[(y * W + x) * 4 + 1] > 8) lit++;
+            for (const [a, b, d, e] of partners[name]) {
+              const mx = a * lx + b * ly, my = d * lx + e * ly, tx = cx + c * mx - s * my - .5, ty = cy + s * mx + c * my - .5;
+              for (let ch = 0; ch < 3; ch++) { sum += Math.abs(px[(y * W + x) * 4 + ch] - read(tx, ty, ch)); n++; }
+            }
+          }
+          rows.push({ name, rotation: pose.rotation, off: sum / Math.max(n, 1), lit: lit / Math.max(n / (3 * partners[name].length), 1) });
+        }
+        return rows;
+      }, [MOVED_POSES, MOVED_CASES]);
+      const worst = rows.reduce((a, r) => r.off > a.off ? r : a);
+      return { ok: rows.every(r => r.off < 1.5 && r.lit > .9), detail: `${rows.length} pairs; worst ${worst.name} at turn ${worst.rotation}: mean ${worst.off.toFixed(3)} of 255 off its partner (limit 1.5); least lit ${(Math.min(...rows.map(r => r.lit)) * 100).toFixed(0)}% of the disc (over 90%)` };
+    },
+  },
+  {
+    name: 'moved-follows',
+    // A moved layer must show the same look as the unmoved one, carried by its transform. Covers Unroll, which has no symmetry.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([poses, cases]) => {
+        const q = window.wq, W = 960, H = 540, rows = [];
+        for (const [name, params] of cases) {
+          const home = await q.px(q.project([q.smooth(params)]), .9, W, H);
+          const read = (x, y, ch) => { const x0 = Math.max(0, Math.min(W - 2, Math.floor(x))), y0 = Math.max(0, Math.min(H - 2, Math.floor(y))), fx = x - x0, fy = y - y0, v = (X, Y) => home[(Y * W + X) * 4 + ch]; return v(x0, y0) * (1 - fx) * (1 - fy) + v(x0 + 1, y0) * fx * (1 - fy) + v(x0, y0 + 1) * (1 - fx) * fy + v(x0 + 1, y0 + 1) * fx * fy; };
+          for (const pose of poses) {
+            const l = q.smooth(params); l.transform = pose;
+            const px = await q.px(q.project([l]), .9, W, H), c = Math.cos(pose.rotation), s = Math.sin(pose.rotation), cx = W / 2 + pose.x * W, cy = H / 2 + pose.y * H, radius = H / 2 * pose.scale * .8;
+            let sum = 0, n = 0;
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+              const dx = x + .5 - cx, dy = y + .5 - cy;
+              if (Math.hypot(dx, dy) > radius) continue;
+              const lx = (c * dx + s * dy) / pose.scale, ly = (-s * dx + c * dy) / pose.scale;
+              for (let ch = 0; ch < 3; ch++) { sum += Math.abs(px[(y * W + x) * 4 + ch] - read(W / 2 + lx - .5, H / 2 + ly - .5, ch)); n++; }
+            }
+            rows.push({ name, rotation: pose.rotation, off: sum / n });
+          }
+        }
+        return rows;
+      }, [MOVED_POSES, MOVED_CASES]);
+      const worst = rows.reduce((a, r) => r.off > a.off ? r : a);
+      return { ok: rows.every(r => r.off < 2), detail: `${rows.length} pairs; worst ${worst.name} at turn ${worst.rotation}: mean ${worst.off.toFixed(3)} of 255 from the unmoved look (limit 2)` };
+    },
+  },
+  {
+    name: 'moved-filter',
+    // A reflection stays one texel per pixel however the layer is placed, so Mirror alone must not spread its reads or collapse them.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([poses, count]) => {
+        const q = window.wq, W = 962, H = 542, rows = [];
+        for (const pose of poses) for (let mode = 0; mode < count; mode++) for (const mirrorAngle of [0, 17, 45, -33]) {
+          const params = { mirrorAmount: 1, mirrorMode: mode, mirrorAngle };
+          const reach = q.probe('vec4(tapReach(footprint) * uResolution, 0., 1.)', params, W, H, q.smoothFill, pose);
+          const foot = q.probe('vec4(footprint, 0., 1.)', params, W, H, q.smoothFill, pose);
+          const cx = W / 2 + pose.x * W, cy = H / 2 + pose.y * H;
+          let most = 0, collapsed = 0;
+          for (let i = 0; i < reach.length; i += 4) most = Math.max(most, reach[i], reach[i + 1]);
+          for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
+            if (Math.hypot(x + .5 - cx, y + .5 - cy) < 3) continue;
+            if (foot[(y * W + x) * 4] + foot[(y * W + x) * 4 + 1] < 1.95) collapsed++;
+          }
+          rows.push({ mode, mirrorAngle, most, collapsed });
+        }
+        return rows;
+      }, [MOVED_POSES, MIRROR_NAMES.length]);
+      const worst = rows.reduce((a, r) => r.most > a.most ? r : a);
+      return { ok: rows.every(r => r.most < .01 && r.collapsed === 0), detail: `${rows.length} pose, mode and angle sets; widest spread ${worst.most.toFixed(4)} texels at ${MIRROR_NAMES[worst.mode]} ${worst.mirrorAngle}deg (limit .01); collapsed ${rows.reduce((a, r) => a + r.collapsed, 0)}` };
+    },
+  },
+  {
+    name: 'moved-engage',
+    // On a moved layer too, a tiny amount must land on the plain picture with no jump.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([poses, cases]) => {
+        const q = window.wq, rows = [], at = (params, pose) => { const l = q.smooth(params); l.transform = pose; return q.project([l]); };
+        for (const pose of poses) {
+          const plain = await q.px(at({}, pose));
+          for (const [name, params] of cases) {
+            const tiny = { ...params }; if (tiny.mirrorAmount) tiny.mirrorAmount = 1e-4; if (tiny.polarAmount) tiny.polarAmount = 1e-4;
+            rows.push({ name, off: q.difference(plain, await q.px(at(tiny, pose))), moved: q.difference(plain, await q.px(at(params, pose))) });
+          }
+        }
+        return rows;
+      }, [MOVED_POSES, MOVED_CASES]);
+      const worst = rows.reduce((a, r) => r.off > a.off ? r : a);
+      return { ok: rows.every(r => r.off < .05 && r.moved > 1), detail: `${rows.length} pairs; worst ${worst.name} ${worst.off.toFixed(4)} of 255 from plain at amount .0001 (limit .05); every full amount moves the picture` };
+    },
+  },
+  {
+    name: 'moved-no-ghost',
+    // A layer hanging off the frame: a fold that reads past the frame edge must not bring back a stray copy of the picture.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, W = 960, H = 540, l = q.smooth({ mirrorAmount: 1, mirrorMode: 0 });
+        l.transform = { x: -.3, y: 0, scale: 1, rotation: 0 };
+        const px = await q.px(q.project([l]), .9, W, H), start = Math.ceil(W * .72);
+        let stray = 0, n = 0, kept = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+          const lit = Math.max(px[(y * W + x) * 4], px[(y * W + x) * 4 + 1], px[(y * W + x) * 4 + 2]) > 8;
+          if (x >= start) { n++; if (lit) stray++; } else if (x < W * .68 && lit) kept++;
+        }
+        return { stray: stray / n, kept: kept / (H * Math.ceil(W * .68)) };
+      });
+      return { ok: r.stray < .001 && r.kept > .9, detail: `lit beyond the layer's reflected edge ${(r.stray * 100).toFixed(2)}% (limit .1%); the layer itself ${(r.kept * 100).toFixed(1)}% lit (over 90%)` };
+    },
+  },
+  ...(previous ? [{
+    name: 'default-pose-unchanged',
+    // Mirror and Polar at a default transform, byte for byte against the commit before the pivot was added.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.wq, before = new q.prior.StudioRenderer(document.querySelector('#b')), changed = [];
+        const cases = [];
+        for (let mirrorMode = 0; mirrorMode < 4; mirrorMode++) for (const extra of [{}, { mirrorAmount: .5 }, { mirrorAngle: 17 }, { mirrorTurns: 2 }, { bendAmount: .3, bendChroma: .5 }]) cases.push({ mirrorAmount: 1, mirrorMode, ...extra });
+        for (let polarMode = 0; polarMode < 2; polarMode++) for (const extra of [{}, { polarAmount: .5 }, { polarTwist: .4 }, { polarCentreX: .2, polarCentreY: -.1 }, { liquidAmount: .3 }]) cases.push({ polarAmount: 1, polarMode, ...extra });
+        cases.push({ mirrorAmount: 1, mirrorMode: 3, polarAmount: .6, bendAmount: .2, liquidAmount: .25, lumaWarpAmount: .2 });
+        for (const kind of ['image', 'surface', 'fractal', 'liquid']) for (const params of cases) {
+          const make = api => { const l = kind === 'image' ? q.rich(params) : api.applyPreset(api.createLayer(kind), api.PRESETS.find(p => p.kind === kind).id); if (kind !== 'image') { l.id = `${kind}-pose`; Object.assign(l.params, params); } const p = api.createProject(); p.id = 'default-pose'; p.layers = [l]; p.background = '#000000'; return p; };
+          const now = make(q.m), then = make(q.prior);
+          await q.renderer.prepare(now); await before.prepare(then);
+          if (!q.same(await q.renderer.exportPNG(now, .9, 480, 270), await before.exportPNG(then, .9, 480, 270))) changed.push(`${kind} ${JSON.stringify(params)}`);
+        }
+        before.dispose();
+        return { total: cases.length * 4, changed };
+      });
+      return { ok: r.changed.length === 0, detail: r.changed.length ? `${r.changed.length} of ${r.total} changed, first ${r.changed[0]}` : `${r.total} Mirror and Polar renders byte-identical to the previous commit` };
+    },
+  }] : []),
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -1437,6 +1602,7 @@ export {DataTexture,RGBAFormat,FloatType,LinearFilter} from 'three';${extra}`, r
 });
 await bundle(root, 'renderer.js', `\nexport {applyFinish,validateProject,parameterDefinitions} from './src/core/project';`);
 if (baseline) await bundle(path.resolve(baseline), 'baseline.js', `\nexport {applyFinish,validateProject} from './src/core/project';`);
+if (previous) await bundle(path.resolve(previous), 'previous.js');
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
 app.setPath('userData',${JSON.stringify(path.join(out, 'user-data'))});app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -1450,9 +1616,10 @@ try {
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.evaluate(async hasBaseline => {
+  await page.evaluate(async ([hasBaseline, hasPrevious]) => {
     const m = await import('./renderer.js');
     const old = hasBaseline ? await import('./baseline.js') : null;
+    const prior = hasPrevious ? await import('./previous.js') : null;
     const renderer = new m.StudioRenderer(document.querySelector('#a'));
     const urlOf = bytes => { const parts = []; for (let i = 0; i < bytes.length; i += 8192) parts.push(String.fromCharCode(...bytes.subarray(i, i + 8192))); return `data:image/png;base64,${btoa(parts.join(''))}`; };
     const dataUrl = async (w, h, pixel) => {
@@ -1604,8 +1771,9 @@ try {
       texture.minFilter = texture.magFilter = m.LinearFilter; texture.needsUpdate = true;
       return texture;
     };
-    const feed = (params, sourceFill, belowFill = () => [0, 0, 0, 0], W = 960, H = 540) => {
+    const feed = (params, sourceFill, belowFill = () => [0, 0, 0, 0], W = 960, H = 540, transform) => {
       const source = floats(sourceFill, W, H), under = floats(belowFill, W, H), layer = rich(params);
+      if (transform) layer.transform = transform;
       renderer.warpSource(layer, layer, source, under, .9, W, H);
       const result = linear(W, H);
       source.dispose(); under.dispose();
@@ -1621,11 +1789,11 @@ try {
     const smoothFill = (u, v) => [.5 + .3 * Math.sin(3 * u + .4), .5 + .3 * Math.cos(4 * v - .7), .5 + .2 * Math.sin(2 * u + 3 * v), 1];
     const worst = (a, b) => { let most = 0; for (let i = 0; i < a.length; i++) most = Math.max(most, Math.abs(a[i] - b[i])); return most; };
     // Runs the pass with its output replaced by a GLSL expression, to read a value the shader worked out.
-    const probe = (expression, params, W = 960, H = 540, fill = smoothFill) => {
+    const probe = (expression, params, W = 960, H = 540, fill = smoothFill, transform) => {
       const mat = renderer.warp, source = mat.fragmentShader, patched = source.replace('gl_FragColor = vec4(covered + light, g.alpha);', `gl_FragColor = ${expression};`);
       if (patched === source) throw new Error('warp output not found');
       mat.fragmentShader = patched; mat.needsUpdate = true;
-      try { return feed(params, fill, undefined, W, H); } finally { mat.fragmentShader = source; mat.needsUpdate = true; }
+      try { return feed(params, fill, undefined, W, H, transform); } finally { mat.fragmentShader = source; mat.needsUpdate = true; }
     };
     // Bright at the foot of the picture, dark at its top, at the frame's own shape so it fills the frame.
     // These test pictures are written bottom row first.
@@ -1675,8 +1843,8 @@ try {
       if (kind === 'image') return image(posterUrl, params, 'poster');
       const l = m.applyPreset(m.createLayer(kind), m.PRESETS.find(p => p.kind === kind).id); l.id = `${kind}-proof`; Object.assign(l.params, params); return l;
     };
-    window.wq = { litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
-  }, !!baseline);
+    window.wq = { prior, litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
+  }, [!!baseline, !!previous]);
 
   for (const check of selected) {
     errors.length = 0;

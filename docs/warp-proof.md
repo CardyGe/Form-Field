@@ -6,10 +6,11 @@ Proof for Warp, Liquid, Luma Warp, Polar and Mirror on branch `warp-engine`, aga
 
 | Command | Result |
 | --- | --- |
-| `node scripts/verify-warp.mjs --baseline=<baseline>` | 63 passed, 0 failed |
+| `node scripts/verify-warp.mjs --baseline=<baseline>` | 69 passed, 0 failed |
+| `node scripts/verify-warp.mjs --baseline=<baseline> --previous=<checkout of 6c0c205> --only=default-pose` | 1 passed, 0 failed |
 | `npx tsc --noEmit` | clean |
-| `npm test` | 567 unit and 93 Electron tests pass, 0 fail |
-| `npm run test:workspace` | 13 passed, 0 failed. The "Focus preview" step passed on the first run, so no rerun was needed |
+| `npm test` | 570 unit and 93 Electron tests pass, 0 fail |
+| `npm run test:workspace` | 14 passed, 0 failed on the final code, first run. The known "Focus preview" timeout stopped two earlier runs during this fix, on intermediate code |
 | `npm run test:map` | MAP CHECK PASSED |
 | `node scripts/verify-colour-time.mjs --baseline=<baseline>` | 52 passed, 0 failed, with no change to its tests |
 
@@ -30,6 +31,22 @@ Each new gate was shown to fail on an injected defect:
 | A random value reaches the shader on each render | stack | FAIL, seek differs |
 | Per-type gains all set to 1 | warp-strength | FAIL, 3.77x |
 | Chaos ridge feedback back at .35 | liquid-tear | FAIL, 0.064% |
+
+## Moved layers
+
+Mirror and Polar now work in the layer's own space. They pivot on its transformed centre and follow its turn and scale. Polar's centre controls are offsets from that pivot. A moved Image ends at its own edge, so a fold cannot leave a stray copy beyond it.
+
+| Check | Covers | Result | Limit |
+| --- | --- | --- | --- |
+| moved-visible | Every Mirror and Polar mode, 3 poses, including Image at scale .45, x .3 | Left-right lit 19.2%, plain 19.2% (was 0%) | at least half of plain |
+| moved-symmetry | Symmetry about the layer's own axes, 2 turned poses | worst .455 of 255 | 1.5 |
+| moved-follows | The moved look against the unmoved look carried by the transform, including Unroll | worst .696 of 255 | 2 |
+| moved-filter | Mirror reads at 4 mirror angles, 2 poses | spread 0 texels, 0 collapsed | .01 |
+| moved-engage | Amount .0001 on a moved layer | worst .0027 of 255 | .05 |
+| moved-no-ghost | A layer hanging off the frame under Left-right | 0% lit past its reflected edge | .1% |
+| default-pose-unchanged | 124 Mirror and Polar renders at a default transform, against `6c0c205` | all byte-identical | exact |
+
+Each check was shown to fail: the first three and moved-no-ghost on the code before the fix, moved-filter on a draft whose layer edge spread reads by 2188 texels, moved-engage on an injected .01 offset, and default-pose-unchanged on a checkout with its fold line moved (40 of 124 changed).
 
 ## Retunes
 
@@ -77,7 +94,7 @@ Judged on rules 2 (reads on a wall), 3 (changes over the loop) and 6 (clean at p
 
 The Image failures on rule 3 are expected. Luma Warp, Polar and Mirror have no motion of their own at default, and the test image does not move. Mirror turns per loop can animate it.
 
-**Open failure:** Luma Warp on Fractal at amount .4 breaks fine detail into grain. It was not fixed, because the slope gain, minimum reach and nine-read kernel are held by an earlier ruling, and the one default available to change did not help.
+**Open failure, needs the owner's acceptance at merge:** Luma Warp over Fractal stays a **Fail**. At amount .4 it breaks fine detail into grain in Push, Edges and Contours. It was not fixed, because the slope gain, minimum reach and nine-read kernel are held by an earlier ruling, and the one default available to change did not help.
 
 ## Preview cost
 
@@ -115,3 +132,6 @@ Git-ignored, in `work/warp-proof/`:
 - **Preview cost in the full app.** Times measure the renderer alone, on one Surface layer, and not the app's interface or multi-layer projects.
 - **Map and Live with warps on.** Their suites pass, but neither was judged by eye with a warp applied.
 - **Non-default settings.** The sheets use one working amount per effect. Other scales, step counts and detail levels were not judged by eye.
+- **Moved layers by eye.** The moved-layer checks are measured on a smooth Image. No moved layer was judged by eye.
+- **Moved full-frame generators.** Surface, Fractal and Liquid use the same pivot, but the moved-layer checks do not render them.
+- **Reflections of off-frame picture.** The source holds only what is inside the frame. Where a fold needs a part of a moved Image that hangs off the frame, it shows a reflection of the picture at the frame edge, not the hidden part.

@@ -36,7 +36,7 @@ function Section({ keys, layer, definitions, edit, animate, onStart, onEnd, extr
       const d = definitions.find(item => item.key === key);
       if (!d) return null;
       const value = layer.params[key] ?? d.default, options = CHOICES[key];
-      if (options) return <ChoiceParameter key={key} label={d.label} name={d.label} options={options} value={value} onChange={n => set(key, n)} />;
+      if (options) return <ChoiceParameter key={key} label={d.label} name={d.label} options={options} value={value} disabled={readOnly?.(d) ?? false} onChange={n => set(key, n)} />;
       return <Parameter key={key} definition={d} value={value} animated={!!layer.modulations[key]} readOnly={readOnly?.(d) ?? false} onChange={n => set(key, n)} onAnimate={animate && d.step !== 1 ? () => animate(key) : undefined} extra={extra?.(d)} onStart={onStart} onEnd={onEnd} />;
     })}
     {children}

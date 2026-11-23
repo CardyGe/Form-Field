@@ -209,6 +209,28 @@ try {
   }
   await fs.writeFile(fixture,JSON.stringify(original));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===original.id);
  });
+ await check('Luma explains a zero-opacity layer below, and the group filter survives a layer switch honestly',async()=>{
+  const named=(kind,name,extra={})=>({...model.createLayer(kind),name,...extra});
+  const p={...model.createProject(),layers:[named('surface','Under',{opacity:0}),named('surface','Over'),named('graphic','Flat')]};
+  await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===p.id);
+  await page.getByRole('button',{name:'Select Over',exact:true}).click();
+  await page.getByRole('button',{name:'Finish',exact:true}).click();
+  await openFinish(page,'Luma Warp');await saved(x=>x.layers[1].params.lumaWarpAmount>0);
+  await page.getByLabel('Driven by',{exact:true}).selectOption('1');await saved(x=>x.layers[1].params.lumaWarpSource===1);
+  assert.equal(await page.getByText('There is no layer below this one, so nothing moves.',{exact:true}).count(),1,'A zero-opacity layer below counts as nothing below.');
+  await openFinish(page);await page.getByRole('button',{name:'Add effect',exact:true}).click();
+  const groups=page.getByRole('group',{name:'Effect groups',exact:true});
+  await groups.getByRole('button',{name:'Warp',exact:true}).click();
+  assert.equal(await page.locator('.finish-picker-group button').count(),5,'The Warp filter shows five cards.');
+  await page.getByRole('button',{name:'Select Flat',exact:true}).click();
+  await groups.getByRole('button',{name:'All',exact:true}).waitFor();
+  assert.equal(await page.getByText('No effects match that search.',{exact:true}).count(),0,'A filter the new layer lacks shows no false empty state.');
+  assert.ok(await page.locator('.finish-picker-group button').count()>0,'The picker still lists this layer\'s effects.');
+  assert.equal(await groups.getByRole('button',{name:'All',exact:true}).getAttribute('aria-pressed'),'true','The picker falls back to All.');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button',{name:'Shape',exact:true}).click();
+  await fs.writeFile(fixture,JSON.stringify(original));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===original.id);
+ });
  await check('preset browsing preserves the family filter and applies normal saved looks',async()=>{
   await libraryShow();await page.getByLabel('Search library',{exact:true}).fill('');
   await library.getByRole('button',{name:'Presets',exact:true}).click();

@@ -195,8 +195,10 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
     <button type="button" className="finish-row-open" aria-label={label + ' settings'} onClick={() => setOpen(id)}><i aria-hidden="true" /><span>{label}</span><small>{summary}</small><Chevron /></button>{control}</div>;
 
   if (picking) {
-    const found = pickerEffects(available, group, search);
     const groups = FINISH_GROUPS.filter(name => available.some(item => item.group === name));
+    // A group this layer does not have falls back to All, so a layer switch never shows a false empty state.
+    const effectiveGroup = group !== 'All' && groups.includes(group) ? group : 'All';
+    const found = pickerEffects(available, effectiveGroup, search);
     const closePicker = () => { setSearch(''); setOpen(null); };
     const cannotAdd = (item: FinishEffect) => !effects.includes(item) && hasPower(item) && blocked(item, Object.keys(item.power));
     return <div ref={root} className="finish-picker" onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); closePicker(); } }}>
@@ -205,7 +207,7 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
         <div className="finish-detail-title"><h3>Add effect</h3></div>
         <input className="finish-search" type="search" aria-label="Search effects" placeholder="Search effects" autoFocus value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && found[0] && !cannotAdd(found[0])) { e.preventDefault(); pick(found[0]); } }} />
       </div>
-      <div className="finish-parts finish-groups" role="group" aria-label="Effect groups">{['All', ...groups].map(name => <button type="button" key={name} aria-pressed={group === name} onMouseDown={e => e.preventDefault()} onClick={() => setGroup(name as FinishGroup | 'All')}>{name}</button>)}</div>
+      <div className="finish-parts finish-groups" role="group" aria-label="Effect groups">{['All', ...groups].map(name => <button type="button" key={name} aria-pressed={effectiveGroup === name} onMouseDown={e => e.preventDefault()} onClick={() => setGroup(name as FinishGroup | 'All')}>{name}</button>)}</div>
       {FINISH_GROUPS.map(name => { const items = found.filter(item => item.group === name); return items.length > 0 && <section key={name} className="finish-picker-group"><h3>{name}</h3><div>
         {items.map(item => { const inUse = effects.includes(item); return <button type="button" key={item.id} className={inUse ? 'in-use' : ''} aria-label={(inUse ? 'Open ' : 'Add ') + item.label} title={item.description} disabled={cannotAdd(item)} onClick={() => pick(item)}><img src={FINISH_THUMBS[item.id]} alt="" /><span>{item.label}</span>{inUse && <small>Added</small>}</button>; })}
       </div></section>; })}

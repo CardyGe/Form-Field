@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import { LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, WARP_KEYS } from '../src/core/finishing';
 import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { layerTileBlocker } from '../src/core/tile-edges';
-import { foldAngle, loopOffset, lumaDriver, warpActive, warpPoints } from '../src/rendering/warp';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { foldAngle, layerWarpView, loopOffset, lumaDriver, visibleBelow, warpActive, warpPoints } from '../src/rendering/warp';
 import { FINISH_EFFECTS } from '../src/ui/finish-rack';
+import { MirrorSection } from '../src/ui/WarpSections';
 
 const allKeys = [...WARP_KEYS, ...LIQUID_KEYS, ...LUMA_WARP_KEYS, ...POLAR_KEYS, ...MIRROR_KEYS];
 
@@ -71,4 +74,33 @@ test('the luma driver stays in range past full tone', () => {
 test('every warp key belongs to one Finish effect in the Warp group', () => {
   const ids = FINISH_EFFECTS.filter(item => item.group === 'Warp').map(item => item.id);
   assert.deepEqual(ids, ['warp', 'liquid', 'lumaWarp', 'polar', 'mirror']);
+});
+test('a layer counts as below only if it can show', () => {
+  const at = (id: string, visible: boolean, opacity: number, animated = false) => ({ id, visible, opacity, modulations: (animated ? { opacity: {} } : {}) as never });
+  const top = at('top', true, 1);
+  assert.equal(visibleBelow([at('a', true, 1), top], 'top'), true);
+  assert.equal(visibleBelow([at('a', false, 1), top], 'top'), false);
+  assert.equal(visibleBelow([at('a', true, 0), top], 'top'), false, 'a zero-opacity layer shows nothing');
+  assert.equal(visibleBelow([at('a', true, 0, true), top], 'top'), true, 'animated opacity can rise above zero');
+  assert.equal(visibleBelow([at('a', false, 0, true), top], 'top'), false, 'a hidden layer stays hidden');
+  assert.equal(visibleBelow([top, at('a', true, 1)], 'top'), false, 'layers above do not count');
+});
+test('Mirror and Polar pivot on the layer: its centre, turn and scale', () => {
+  const apply = (m: { elements: ArrayLike<number> }, u: number, v: number) => [m.elements[0] * u + m.elements[3] * v + m.elements[6], m.elements[1] * u + m.elements[4] * v + m.elements[7]];
+  const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} vs ${b}`);
+  assert.equal(layerWarpView({ x: 0, y: 0, scale: 1, rotation: 0 }, 16 / 9).moved, false);
+  for (const change of [{ x: .1 }, { y: -.1 }, { scale: .5 }, { rotation: .3 }]) assert.equal(layerWarpView({ x: 0, y: 0, scale: 1, rotation: 0, ...change }, 16 / 9).moved, true);
+  const pose = { x: .3, y: -.1, scale: .45, rotation: .5 }, { view, inverse } = layerWarpView(pose, 16 / 9);
+  const [cu, cv] = apply(view, .5 + pose.x, .5 - pose.y);
+  near(cu, .5); near(cv, .5);
+  const [u, v] = apply(inverse, ...apply(view, .21, .67) as [number, number]);
+  near(u, .21); near(v, .67);
+});
+test('a locked Map choice control is disabled, and an unlocked one is not', () => {
+  const layer = createLayer('surface'); layer.params.mirrorAmount = 1;
+  const definitions = visibleParameterDefinitions(layer);
+  const html = (readOnly?: () => boolean) => renderToStaticMarkup(createElement(MirrorSection, { layer, definitions, edit: () => {}, onStart: () => {}, onEnd: () => {}, readOnly }));
+  assert.match(html(() => true), /<select[^>]*aria-label="[^"]*"[^>]*disabled|<select[^>]*disabled/);
+  assert.doesNotMatch(html(() => false), /<select[^>]*disabled/);
+  assert.doesNotMatch(html(), /<select[^>]*disabled/);
 });

@@ -5,7 +5,9 @@
  * Distances are shares of frame height and motion is in whole cycles per loop, so the look matches at every
  * export size and the loop closes exactly.
  */
+import { Matrix3 } from 'three';
 import { LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, WARP_KEYS } from '../core/finishing';
+import { sourceViewMatrix } from './source-view';
 import type { Layer } from '../shared/types';
 
 export const WARP_FIELDS = ['Waves', 'Noise', 'Ripple', 'Magnetic', 'Plasma'];
@@ -52,10 +54,23 @@ export function warpControlVisible(layer: Pick<Layer, 'params' | 'modulations'>,
   }
 }
 
-/** Whether a visible layer sits under the layer with this id (the first layer is the bottom). */
-export function visibleBelow(layers: readonly Pick<Layer, 'id' | 'visible'>[], id: string): boolean {
+/** Whether a layer that can show sits under the layer with this id (the first layer is the bottom). Zero opacity shows
+ * nothing unless opacity is animated, when it can rise. */
+export function visibleBelow(layers: readonly Pick<Layer, 'id' | 'visible' | 'opacity' | 'modulations'>[], id: string): boolean {
   const index = layers.findIndex(layer => layer.id === id);
-  return index > 0 && layers.slice(0, index).some(layer => layer.visible);
+  return index > 0 && layers.slice(0, index).some(layer => layer.visible && (layer.opacity > 0 || !!layer.modulations.opacity));
+}
+
+/**
+ * Mirror and Polar work in the layer's own space, so they pivot on its transformed centre and follow its turn and scale.
+ * `view` takes a frame position to the layer's and `inverse` takes it back. A layer at its default transform is not
+ * `moved`, and the pass then skips both, so its reads stay exactly what they were.
+ */
+export function layerWarpView(transform: Layer['transform'], aspect: number): { moved: boolean; view: Matrix3; inverse: Matrix3 } {
+  const moved = transform.x !== 0 || transform.y !== 0 || transform.scale !== 1 || transform.rotation !== 0;
+  if (!moved) return { moved, view: new Matrix3(), inverse: new Matrix3() };
+  const view = sourceViewMatrix(transform, aspect);
+  return { moved, view, inverse: view.clone().invert() };
 }
 
 /** Small deterministic generator, so the same seed always places the same points. */
@@ -102,6 +117,7 @@ export function lumaDriver(value: number, threshold: number): number {
  * The shared warp pass. Every warp adds to `warpedUv`, the one place a pixel's read position is decided,
  * so filtering, mirrored edges and colour fringes work the same for all of them.
  * Non-graphic sources are already in frame coordinates, so `vUv` is both the frame and the source position.
+ * Mirror and Polar alone step into the layer's own space, through uLayerView, and back out.
  */
 export const warpFragment = /* glsl */`
 precision highp float;
@@ -120,6 +136,8 @@ uniform int uLumaSource, uLumaChannel, uLumaMode;
 uniform vec2 uPolarCentre;
 uniform float uPolarAmount, uPolarTwist, uMirrorAmount, uMirrorTurn;
 uniform int uPolarMode, uMirrorMode, uMirrorSegments;
+uniform mat3 uLayerView, uLayerInverse;
+uniform int uLayerMoved, uLayerBounded;
 const float TAU = 6.28318530718;
 const float PI = 3.14159265359;
 const int WARP_TAPS = 4;
@@ -131,7 +149,7 @@ const float WAVES_GAIN = .55, NOISE_GAIN = 1.6, RIPPLE_GAIN = 1.8, MAGNETIC_GAIN
 /** A strengthened field never pushes past the amount's own ceiling. */
 vec2 withinReach(vec2 v) { float size = length(v); return size > 1. ? v / size : v; }
 
-/** Waves: two sines along the chosen direction. Length is at most 1. */
+/** Waves: two sines along the chosen direction. Length is at most sqrt(.8 * .8 + .6 * .6) = 1, where both sines peak. */
 vec2 wavesField(vec2 p) {
   vec2 across = vec2(-uBendDirection.y, uBendDirection.x);
   float k = TAU * uBendScale;
@@ -375,8 +393,9 @@ float foldAngle(float angle, float segments) {
   return min(a, wedge - a);
 }
 
-/** Folds about the frame centre, in frame-height units so a wedge is a true angle at any frame shape. The mirror lines
- * turn and the picture stays put. Left-right keeps the left half and Top-bottom the top half. */
+/** Folds about the layer's centre, in height units so a wedge is a true angle at any frame shape. The position is
+ * already in the layer's space. The mirror lines turn and the picture stays put. Left-right keeps the layer's left half
+ * and Top-bottom its top half. */
 vec2 mirrorUv(vec2 uv) {
   vec2 frame = vec2(uAspect, 1.), p = rotated((uv - .5) * frame, -uMirrorTurn);
   vec2 ax = rotated(readDx * frame, -uMirrorTurn), ay = rotated(readDy * frame, -uMirrorTurn);
@@ -397,9 +416,10 @@ vec2 mirrorUv(vec2 uv) {
   return rotated(p, uMirrorTurn) / frame + .5;
 }
 
-/** Moves from the plain position toward a polar one. Radius and angle are in frame-height units around the centre, and
- * the radius reaches 1 at the corner furthest from it. To circle runs across the picture and back as the angle goes
- * round, so the two ends of the turn meet on the same column and there is no seam, at any amount. */
+/** Moves from the plain position toward a polar one, in the layer's space. Radius and angle are in height units around
+ * the centre, which the Polar controls offset from the layer's pivot, and the radius reaches 1 at the corner furthest
+ * from it. To circle runs across the picture and back as the angle goes round, so the two ends of the turn meet on the
+ * same column and there is no seam, at any amount. */
 vec2 polarUv(vec2 uv) {
   vec2 frame = vec2(uAspect, 1.), ax = readDx * frame, ay = readDy * frame, target, tx, ty;
   float reach = length(.5 * frame + abs(uPolarCentre));
@@ -448,10 +468,28 @@ vec2 warpedUv(vec2 uv, bool folded) {
   warpFringe = vec2(0.);
   readDx = dFdx(uv); readDy = dFdy(uv);
   vec2 base = uv;
-  if (folded) base = mirrorUv(base);
-  if (uPolarAmount > 0.) base = polarUv(base);
-  readBase = base;
   reshaped = folded || uPolarAmount > 0.;
+  // Skipped at a default transform, so those reads take exactly the path they always did.
+  bool inLayer = reshaped && uLayerMoved == 1;
+  vec2 own = inLayer ? (uLayerView * vec3(uv, 1.)).xy : uv;
+  // A moved Image ends at its own edge: pixels beyond it take no fold, so no stray copy of the picture appears there.
+  // They stay marked as reshaped, so a 2x2 block on that edge keeps its worked-out footprint and not the jump between them.
+  bool beyond = inLayer && uLayerBounded == 1 && (own.x < 0. || own.x > 1. || own.y < 0. || own.y > 1.);
+  if (reshaped && !beyond) {
+    if (inLayer) {
+      mat2 toLayer = mat2(uLayerView);
+      base = own; readDx = toLayer * readDx; readDy = toLayer * readDy;
+    }
+    if (folded) base = mirrorUv(base);
+    if (uPolarAmount > 0.) base = polarUv(base);
+    if (inLayer) {
+      // Inside a bounded Image, a read past its edge folds back at that edge, as a full-frame layer does at the frame's.
+      if (uLayerBounded == 1) base = mirrored(base);
+      mat2 toFrame = mat2(uLayerInverse);
+      base = (uLayerInverse * vec3(base, 1.)).xy; readDx = toFrame * readDx; readDy = toFrame * readDy;
+    }
+  }
+  readBase = base;
   // Where a 2x2 block straddles a fold, a screen derivative of the later move cancels between the mirrored pixels.
   // Those pixels step the later warps along their own side of the fold instead.
   vec2 baseDx = (dFdx(base) - readDx) * uResolution, baseDy = (dFdy(base) - readDy) * uResolution;
