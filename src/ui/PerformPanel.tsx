@@ -184,7 +184,7 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
         <span className="pf-beats" aria-hidden>{[0, 1, 2, 3].map(i => <i key={i} className={i === beatInBar ? 'on' : ''} />)}</span>
         <span className={`pf-lock ${view.clock.state}`} title="The clock's best guess. If launches land wrong, press Tap in time, then Follow.">{view.running ? stateWord : 'STOPPED'}</span>
       </div>
-      <label className="pf-launch">Launch<select aria-label="Launch timing" value={set.launchQuantize} onChange={e => edit({ ...current(), launchQuantize: e.target.value as Quantize })}>
+      <label className="pf-launch">Launch<select aria-label="Launch timing" value={set.launchQuantize} onChange={e => { edit({ ...current(), launchQuantize: e.target.value as Quantize }); e.currentTarget.blur(); }}>
         {QUANTIZE.map(q => <option key={q.value} value={q.value}>{q.label}</option>)}</select></label>
       <div className={`pf-next ${line.urgent ? 'urgent' : ''}`} role="status">{line.text}</div>
       <div className="pf-clock-keys">
@@ -205,19 +205,22 @@ export default function PerformPanel({ header, onError, onEditClip }: { header: 
       {view.notices.map(n => <span key={n} className="bad">{n}</span>)}
     </div>}
     <div className="pf-main">
-      <PerformGrid set={set} show={map.show} view={view} selected={selected} actions={actions} />
+      {/* The list sits beside the grid, so every cell stays reachable and the controller is never covered during a show. */}
+      <div className="pf-grid-area">
+        <PerformGrid set={set} show={map.show} view={view} selected={selected} actions={actions} />
+        {looksOpen && <aside className="pf-looks" aria-label="Looks">
+          <div className="pf-looks-head"><strong>{selected ? `${set.scenes[selected.row]?.name ?? 'Scene'} · ${set.zones[selected.zone].name}` : 'Looks'}</strong>
+            <button type="button" className="pf-head-btn" aria-label="Close looks" onClick={() => setLooksOpen(false)}>Close</button></div>
+          <input type="search" aria-label="Search looks" placeholder="Search looks…" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.stopPropagation()} />
+          <p>Click to fill the chosen cell, or drag on to any cell.</p>
+          <div className="pf-look-list">{shownLooks.map(l => <button key={l.value} type="button" draggable data-pf-look={l.value} className="pf-look"
+            onDragStart={e => { e.dataTransfer.setData(LOOK_DRAG, l.value); e.dataTransfer.effectAllowed = 'copy'; }}
+            onClick={() => { if (selected) fillCell(selected.row, selected.zone, l.value); else say('Click a cell first.'); }}>
+            <span className="pf-look-art">{l.art && <img src={l.art} alt="" />}</span><span><b>{l.name}</b><small>{l.group}</small></span></button>)}</div>
+        </aside>}
+      </div>
       <ControllerSurface view={view} set={set} held={perform.held} press={perform.press} release={perform.release} control={e => service.control(e)} sendAll={perform.sendAll} />
     </div>
-    {looksOpen && <aside className="pf-looks" aria-label="Looks">
-      <div className="pf-looks-head"><strong>{selected ? `${set.scenes[selected.row]?.name ?? 'Scene'} · ${set.zones[selected.zone].name}` : 'Looks'}</strong>
-        <button type="button" className="pf-head-btn" aria-label="Close looks" onClick={() => setLooksOpen(false)}>Close</button></div>
-      <input type="search" aria-label="Search looks" placeholder="Search looks…" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.stopPropagation()} />
-      <p>Click to fill the chosen cell, or drag on to any cell.</p>
-      <div className="pf-look-list">{shownLooks.map(l => <button key={l.value} type="button" draggable data-pf-look={l.value} className="pf-look"
-        onDragStart={e => { e.dataTransfer.setData(LOOK_DRAG, l.value); e.dataTransfer.effectAllowed = 'copy'; }}
-        onClick={() => { if (selected) fillCell(selected.row, selected.zone, l.value); else say('Click a cell first.'); }}>
-        <span className="pf-look-art">{l.art && <img src={l.art} alt="" />}</span><span><b>{l.name}</b><small>{l.group}</small></span></button>)}</div>
-    </aside>}
     {soundOpen && <aside className="pf-sound" aria-label="Sound input">
       <div className="pf-looks-head"><strong>Sound input</strong><button type="button" className="pf-head-btn" aria-label="Close sound input" onClick={() => setSoundOpen(false)}>Close</button></div>
       <ReactDevices audioOnly engine={map.engine} meter={map.signals} onStart={() => map.startEngine()} />

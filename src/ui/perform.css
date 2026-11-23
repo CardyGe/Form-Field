@@ -126,8 +126,12 @@ button.pf-zone:hover { background: #1b1d1b; }
 .pf-master-fader { flex-shrink: 0; width: 42px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; font-weight: 800; color: var(--muted); }
 .pf-master-fader .pf-fader { flex: 1; }
 
-.pf-looks, .pf-sound { position: absolute; z-index: 60; top: 52px; right: 0; bottom: 0; width: 330px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-left: 1px solid #484a48; background: #141514; box-shadow: -10px 0 30px #0009; }
-.pf-sound { bottom: auto; max-height: calc(100% - 52px); overflow-y: auto; border-bottom: 1px solid #484a48; }
+.pf-grid-area { flex: 1; min-height: 0; display: flex; gap: 8px; }
+.pf-grid-area .pf-grid { min-width: 0; }
+.pf-looks, .pf-sound { width: 300px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid #383b38; border-radius: 8px; background: #141514; }
+.pf-looks { flex-shrink: 0; min-height: 0; }
+/* Over the grid only: it stops above the controller. */
+.pf-sound { position: absolute; z-index: 60; top: 60px; right: 12px; width: 330px; max-height: calc(100% - 320px); overflow-y: auto; box-shadow: 0 10px 30px #0009; }
 .pf-looks-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 15px; }
 .pf-looks-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pf-looks input[type="search"] { min-height: 38px; padding: 5px 10px; border: 1px solid #555; border-radius: 6px; background: #1f211f; color: var(--ink); font-size: 15px; }

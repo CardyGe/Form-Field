@@ -104,6 +104,9 @@ try {
     await place(0, 1, 'preset:porcelain-shutters');
     await place(0, 2, 'preset:salt-mandala');
     await place(1, 0, 'preset:porcelain-shutters');
+    await studio.screenshot({ path: path.join(shots, 'perform-looks.png') });
+    const master = await studio.getByRole('slider', { name: 'Master', exact: true }).boundingBox(), looks = await studio.getByRole('complementary', { name: 'Looks' }).boundingBox();
+    assert.ok(looks.y + looks.height <= master.y, 'the look list covers the controller');
     await studio.getByRole('button', { name: 'Close looks' }).click();
   });
 
