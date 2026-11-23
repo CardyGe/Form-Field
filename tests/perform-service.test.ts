@@ -133,7 +133,7 @@ test('re-pressing the playing clip cancels what was queued on the wall', () => {
   const id = lastLaunch(r).id;
   r.at(2000);
   r.service.wallState({ landed: [{ launchId: id, zones: [0, 1] }] });
-  r.at(2100);
+  r.at(2200); // past the late-press grace, so these wait for the next bar rather than firing at once
   r.service.action({ type: 'next', zone: 2 }); // zone 2 has no clips: nothing queued
   r.service.action({ type: 'next', zone: 1 }); // column of zone 1 is only cb, already playing
   assert.equal(r.service.view().launcher.queue.length, 0);
@@ -266,7 +266,8 @@ test('wallReopened resends the show, zones, armed sources and values', () => {
   r.at(2500);
   r.sent.length = 0; r.log.length = 0;
   r.service.wallReopened();
-  assert.deepEqual(r.log.slice(0, 2), ['performStart', 'wholeShow']);
+  // Values before the show, so a fresh wall never draws a frame at full master.
+  assert.deepEqual(r.log.slice(0, 3), ['performStart', 'performValues', 'wholeShow']);
   const start = r.ofType('performStart')[0];
   assert.equal(start.zones[0].sourceId, 'a');
   assert.equal(start.zones[0].launched, true);
@@ -276,7 +277,94 @@ test('wallReopened resends the show, zones, armed sources and values', () => {
   const again = lastLaunch(r);
   assert.equal(again.id, id);
   assert.equal(again.atMs, 4000, 'a deferred launch is retimed, not resent at its old time');
-  assert.ok(r.log.indexOf('performLaunch') > r.log.indexOf('performValues'));
+  assert.ok(r.log.indexOf('performLaunch') > r.log.indexOf('wholeShow'));
+});
+
+test('a scene pressed again while the last one is landing queues for the next bar', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const first = lastLaunch(r);
+  r.at(2010); // the wall landed it at 2000; its report has not arrived
+  r.service.action({ type: 'bankNext' });
+  assert.equal(r.ofType('performCancel').some(m => m.launchId === first.id), false, 'a landing launch is not cancelled');
+  const second = lastLaunch(r);
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.atMs, 4000, 'no grace on a bar that has already fired');
+  r.at(2020);
+  r.service.wallState({ landed: [{ launchId: first.id, zones: [0, 1] }] });
+  assert.deepEqual(r.service.view().launcher.playing.slice(0, 2), ['ca', 'cb']);
+  assert.equal(r.service.view().launcher.sceneIndex, 0);
+  assert.ok(r.service.view().launcher.queue.some(l => l.id === second.id));
+  r.at(4000);
+  r.service.wallState({ landed: [{ launchId: second.id, zones: [0] }] });
+  assert.deepEqual(r.service.view().launcher.playing.slice(0, 2), ['cb', 'cb']);
+  assert.equal(r.service.view().launcher.sceneIndex, 1);
+});
+
+test('a zone pressed again while its launch is landing steps on from the landing clip', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const first = lastLaunch(r);
+  r.at(2010);
+  r.service.action({ type: 'next', zone: 0 });
+  assert.equal(r.ofType('performCancel').some(m => m.launchId === first.id), false);
+  const second = lastLaunch(r);
+  assert.equal(second.atMs, 4000);
+  assert.deepEqual(second.changes.map(c => [c.zone, c.sourceId]), [[0, 'b']]);
+  r.at(2020);
+  r.service.wallState({ landed: [{ launchId: first.id, zones: [0, 1] }] });
+  assert.deepEqual(r.service.view().launcher.playing.slice(0, 2), ['ca', 'cb']);
+  assert.ok(r.service.view().launcher.queue.some(l => l.id === second.id));
+});
+
+test('a launch replaced just as it landed still updates what is playing when its report arrives', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 0: 'ca' }), scene('two', { 0: 'cb' })];
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0] }] });
+  r.at(2500);
+  r.service.action({ type: 'next', zone: 0 });
+  const late = lastLaunch(r);
+  r.at(3999);
+  r.service.action({ type: 'next', zone: 0 }); // back to the playing clip: the queue clears, but the cancel crosses the landing
+  assert.ok(r.ofType('performCancel').some(m => m.launchId === late.id));
+  r.at(4010);
+  r.service.wallState({ landed: [{ launchId: late.id, zones: [0] }] });
+  const view = r.service.view();
+  assert.equal(view.launcher.playing[0], 'cb');
+  assert.equal(view.launcher.previous[0], 'ca');
+  r.sent.length = 0;
+  r.service.wallReopened();
+  assert.deepEqual(r.ofType('performStart')[0].phaseOffsets, { b: 0 });
+});
+
+test('a launch still waiting past the in-flight window moves to the current grid', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const id = lastLaunch(r).id;
+  r.at(2100);
+  r.frame();
+  assert.equal(lastLaunch(r).atMs, 2000, 'still on its way');
+  r.at(2300);
+  r.frame();
+  assert.equal(lastLaunch(r).id, id);
+  assert.equal(lastLaunch(r).atMs, 4000);
+});
+
+test('a reopened wall shows no false red dot', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.at(1000 + BAR_MS * 2);
+  r.frame();
+  assert.ok(r.service.view().stuck.length > 0);
+  r.service.wallReopened();
+  assert.deepEqual(r.service.view().stuck, []);
+  assert.ok(r.service.view().waiting.length > 0);
 });
 
 test('queued sources are armed first, as source ids, and a source that never readies is shown as stuck', () => {

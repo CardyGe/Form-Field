@@ -6,7 +6,7 @@ import { BEATS_PER_BAR } from './types';
 export interface ClockSnapshot { anchorMs: number; anchorBeat: number; bpm: number; state: FollowState; barOffset: number }
 
 /** Human presses land slightly late: this long after a boundary still counts as that boundary. */
-const LATE_GRACE_MS = 100;
+export const LATE_GRACE_MS = 100;
 const ON_TIME_MS = 1e-6;
 
 export const quantizeBeats: Record<Quantize, number> = { '1/4': 1, '1/2': 2, '1bar': BEATS_PER_BAR, '2bar': BEATS_PER_BAR * 2, '4bar': BEATS_PER_BAR * 4 };

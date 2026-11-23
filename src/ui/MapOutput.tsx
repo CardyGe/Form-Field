@@ -35,6 +35,9 @@ export default function MapOutput() {
     let ending: { zones: ZonePicture[]; looks: string[]; until: number } | null = null;
     let overlay: { show: typeof state.show; zones: ZonePicture[]; made: typeof state.show } | null = null;
     let valuesFrom: Pick<WallPerform, 'zones' | 'values' | 'phaseOffsets'> | null = null;
+    // A show running when this wall opened: its first show comes up through the handover, so a zone waits in black
+    // until its look is ready and never shows its flat fill.
+    let awaitingShow = false;
     const shown = () => {
       const zones = state.perform.active ? state.perform.zones : ending?.zones;
       if (!zones) return state.show;
@@ -68,8 +71,9 @@ export default function MapOutput() {
       if (typeof kind === 'string' && kind.startsWith('perform')) {
         // A refused message, or one for a show that is not running, changes nothing.
         if (state.perform === before) return;
-        if (kind === 'performStart') { ending = null; compositor.setArmed(new Set()); apply(HANDOVER_FADE_MS); }
+        if (kind === 'performStart') { ending = null; awaitingShow = state.show.shapes.length === 0; compositor.setArmed(new Set()); apply(HANDOVER_FADE_MS); }
         else if (kind === 'performEnd') {
+          awaitingShow = false;
           // Map's own looks are made ready behind the show's last picture; the tick hands over when they are.
           const looks = [...new Set(state.show.shapes.filter(s => !s.blocker && s.sourceId !== null && s.sourceId !== LIVE_SOURCE_ID && isShapeShown(state.show, s)).map(s => s.sourceId!))].slice(0, MAX_ARMED);
           ending = { zones: before.zones, looks, until: performance.now() + HANDOVER_WAIT_MS };
@@ -89,6 +93,7 @@ export default function MapOutput() {
       if (kind === 'videoRetry') { compositor.videoRetry(); return; }
       // A show carrying a fade time is a scene switch, crossfading over the scene's time.
       const fadeMs = (message as { fadeMs?: unknown }).fadeMs;
+      if (kind === 'show' && awaitingShow) { awaitingShow = false; apply(HANDOVER_FADE_MS, true); return; }
       if (kind === 'show' && typeof fadeMs === 'number') { apply(fadeMs); return; }
       apply();
     });

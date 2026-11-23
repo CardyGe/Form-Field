@@ -185,7 +185,7 @@ try {
   // The fifth zone's border is drawn inside its outline, 16 pixels wide: a strip along the top edge is all border.
   const BORDER_STRIP = { x: cell(4).x + cell(4).w * .2, y: cell(4).y + 3 / 1080, w: cell(4).w * .6, h: 9 / 1080 };
   const inset = r => ({ x: r.x + r.w * .1, y: r.y + r.h * .1, w: r.w * .8, h: r.h * .8 });
-  await wall.evaluate(zones => {
+  const startSampler = () => wall.evaluate(zones => {
     const c = document.querySelector('canvas');
     const small = new OffscreenCanvas(48, 27), sx = small.getContext('2d', { willReadFrequently: true });
     const thumbs = zones.map(() => new OffscreenCanvas(16, 12).getContext('2d', { willReadFrequently: true }));
@@ -206,6 +206,7 @@ try {
     };
     requestAnimationFrame(tick);
   }, [inset(box), inset(cell(1)), inset(cell(2)), inset(cell(3)), BORDER_STRIP, inset(cell(12))]);
+  await startSampler();
   const sampling = on => wall.evaluate(on => { window.__sampling = on; if (on) window.__frames = []; }, on);
   const frames = () => wall.evaluate(() => window.__frames.splice(0));
   const mean = list => list.length ? list.reduce((a, b) => a + b, 0) / list.length : 0;
@@ -505,6 +506,35 @@ try {
     assert.equal(s.stageLost, false, 'the stage lost its graphics context');
     assert.ok(!s.lost.some(l => l.startsWith('stage')) && !s.dead.includes('stage'), 'the stage context was lost');
     assert.deepEqual(s.failing, [], `the wall reports failing sources: ${JSON.stringify(s.failing).slice(0, 200)}`);
+  });
+
+  // Last, because it reloads the wall. Map's own resend is held back, so the wall gets exactly what the service sends a fresh wall.
+  await check('a wall reopened mid-show waits in black, keeps a lowered master, and fades its zones in', async () => {
+    await app.evaluate(({ BrowserWindow }) => {
+      const contents = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('#map-output')).webContents, send = contents.send.bind(contents);
+      globalThis.__holdWall = true;
+      contents.send = (channel, ...rest) => { if (!(globalThis.__holdWall && channel === 'studio:map:message')) send(channel, ...rest); };
+    });
+    await wall.reload();
+    await wall.waitForSelector('canvas');
+    await sleep(1000);
+    await startSampler();
+    await sampling(true);
+    await sleep(200);
+    await app.evaluate(() => { globalThis.__holdWall = false; });
+    const zones = Array.from({ length: 8 }, (_, i) => i >= 1 && i <= 3 ? { shapeIds: [shapes[i].id], sourceId: src(i), launched: true } : zoneOf(i));
+    await toWall([{ type: 'performStart', zones }, valuesOf(.5), { type: 'source', id: baseSource.id, revision: baseSource.revision ?? 1, project: baseProject }, ...sourceMessages, { type: 'show', show }]);
+    await sleep(6000);
+    const list = await frames();
+    const lit = f => mean([1, 2, 3].map(zone => level(f, zone)));
+    const settled = mean(list.slice(-30).map(lit)), peak = Math.max(...list.map(lit));
+    const flat = Math.max(...[1, 2, 3].map(zone => Math.max(...list.map(f => green(f, zone)))));
+    const first = list.findIndex(f => lit(f) > settled * .05), full = list.findIndex(f => lit(f) > settled * .9);
+    record.perform.reopened = { frames: list.length, flat: +flat.toFixed(1), settled: +settled.toFixed(1), peakOverSettled: +(peak / settled).toFixed(2), riseMs: Math.round(list[full].at - list[first].at) };
+    assert.ok(settled > 4, `the reopened zones settled at only ${settled.toFixed(1)}`);
+    assert.ok(flat < 40, `a zone showed its flat fill on the reopened wall (green ${flat.toFixed(0)} of 255)`);
+    assert.ok(peak < settled * 1.4, `a frame reached ${(peak / settled).toFixed(2)} of the level at master 0.5`);
+    assert.ok(list[full].at - list[first].at > 150, `the zones went from dark to full in ${Math.round(list[full].at - list[first].at)} ms`);
   });
 } catch (error) {
   results.push(`FAIL  the check could not finish\n      ${String(error.stack || error).split('\n').slice(0, 3).join(' | ')}`);
