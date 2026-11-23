@@ -493,6 +493,8 @@ vec2 warpedUv(vec2 uv, bool folded) {
       }
       mat2 toFrame = mat2(uLayerInverse);
       base = (uLayerInverse * vec3(base, 1.)).xy; readDx = toFrame * readDx; readDy = toFrame * readDy;
+      // Source past the frame does not exist, so a pixel whose fold needs it stays unfolded and the picture never vanishes.
+      if (uLayerBounded == 1 && (base.x < 0. || base.x > 1. || base.y < 0. || base.y > 1.)) { base = uv; readDx = dFdx(uv); readDy = dFdy(uv); }
     }
   }
   readBase = base;

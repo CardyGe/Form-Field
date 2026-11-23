@@ -76,8 +76,17 @@ const MOVED_CASES = [...MIRROR_NAMES.map((name, i) => [name, { mirrorAmount: 1, 
 // A square picture on Cover overhangs its layer box: up and down in a wide frame, sideways in a tall one.
 const COVER_POSES = [{ x: .1, y: 0, scale: .4, rotation: 0 }, { x: .08, y: -.04, scale: .35, rotation: .5 }];
 const COVER_FRAMES = [[960, 540], [720, 900]];
-// Moved layers that the Cover fix must leave byte-identical.
+// Full-frame layers that a bounded-Image fix must leave byte-identical, at poses in and past the frame.
 const UNCHANGED_POSES = [{ x: .18, y: -.05, scale: .4, rotation: .5 }, { x: -.3, y: .1, scale: 1, rotation: 0 }, { x: 0, y: 0, scale: 1.4, rotation: -.7 }];
+// Bounded Images held fully inside the 16:9 frame, which the off-frame rule must not touch.
+const IN_FRAME_POSES = [{ x: .18, y: -.05, scale: .4, rotation: .5 }, { x: -.2, y: .08, scale: .4, rotation: -1.1 }];
+// Partly off-frame: the reported 4:1 Cover case first.
+const OFF_FRAME_POSES = [{ x: -.75, y: 0, scale: .6, rotation: 0 }, { x: .6, y: .2, scale: .7, rotation: .4 }, { x: -.4, y: 0, scale: .8, rotation: 0 }, { x: .35, y: -.3, scale: .9, rotation: -.6 }];
+const OFF_FRAME_LIMIT = .8;
+// The one named exception, by owner ruling: Unroll on a Contain Image may read its own transparent bars, which lie inside
+// the frame. It holds this one case to its measured value. Every other case keeps the limit.
+const OFF_FRAME_EXCEPTION = { name: 'Unroll', fit: 'contain', W: 960, H: 540, x: .6, y: .2, scale: .7, rotation: .4, floor: .78 };
+const isOffFrameException = r => ['name', 'fit', 'W', 'H', 'x', 'y', 'scale', 'rotation'].every(key => r[key] === OFF_FRAME_EXCEPTION[key]);
 
 const CHECKS = [
   {
@@ -1605,11 +1614,30 @@ const CHECKS = [
       return { ok: rows.every(r => r.off < 1.5 && r.step < 12 && r.lit > .99 && r.stray < .001), detail: `${rows.length} cases; symmetry ${off.off.toFixed(3)} at ${label(off)} (limit 1.5); box-edge step ${step.step.toFixed(2)} at ${label(step)} (limit 12); least lit ${(lit.lit * 100).toFixed(2)}% at ${label(lit)} (over 99%); stray ${(stray.stray * 100).toFixed(3)}% at ${label(stray)} (limit .1%)` };
     },
   },
+  {
+    name: 'moved-off-frame',
+    // Off-frame source does not exist, so a fold that needs it keeps the pixel unfolded and a visible picture never vanishes.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([poses, frames, cases]) => {
+        const q = window.wq, rows = [];
+        for (const fit of ['cover', 'contain']) for (const [W, H] of frames) for (const pose of poses) {
+          const at = params => { const l = q.wideImage(params, fit); l.transform = pose; return q.project([l]); };
+          const plain = q.litShare(await q.px(at({}), .9, W, H));
+          if (plain < .005) continue;
+          for (const [name, params] of cases) rows.push({ name, fit, W, H, ...pose, plain, ratio: q.litShare(await q.px(at(params), .9, W, H)) / plain });
+        }
+        return rows;
+      }, [OFF_FRAME_POSES, COVER_FRAMES, MOVED_CASES]);
+      const held = rows.filter(isOffFrameException), others = rows.filter(r => !isOffFrameException(r));
+      const low = others.reduce((a, r) => r.ratio < a.ratio ? r : a), repro = rows.filter(r => r.fit === 'cover' && r.W === 960 && r.x === -.75);
+      return { ok: repro.length === MOVED_CASES.length && held.length === 1 && held[0].ratio >= OFF_FRAME_EXCEPTION.floor && others.every(r => r.ratio >= OFF_FRAME_LIMIT), detail: `${rows.length} cases; lowest of ${others.length} under the limit rule: ${low.name} ${low.fit} ${low.W}x${low.H} at x ${low.x}: ${low.ratio.toFixed(3)}x plain (limit ${OFF_FRAME_LIMIT}); named exception Unroll contain 960x540 at x .6: ${held[0]?.ratio.toFixed(4)}x (floor ${OFF_FRAME_EXCEPTION.floor}); reported case ${repro.map(r => `${r.name} ${r.ratio.toFixed(2)}`).join(', ')}` };
+    },
+  },
   ...(previous ? [{
     name: 'moved-contain-unchanged',
-    // Against the commit before the Cover fix: Contain Images and full-frame layers when moved, and Cover at a default transform.
+    // Against the previous commit: in-frame moved Images, full-frame generators at every pose, and Cover at a default transform.
     run: async ({ page }) => {
-      const r = await page.evaluate(async ([poses, cases]) => {
+      const r = await page.evaluate(async ([poses, inFrame, coverPoses, cases]) => {
         const q = window.wq, before = new q.prior.StudioRenderer(document.querySelector('#b')), changed = [];
         let total = 0;
         const compare = async (label, make) => {
@@ -1619,16 +1647,19 @@ const CHECKS = [
         };
         const scene = (api, l) => { const p = api.createProject(); p.id = 'cover-unchanged'; p.layers = [l]; p.background = '#000000'; return p; };
         for (const [name, params] of cases) {
-          for (const pose of poses) {
+          for (const pose of inFrame) {
             await compare(`contain square ${name} ${JSON.stringify(pose)}`, api => { const l = q.coverSquare(params); l.image = { ...l.image, fit: 'contain' }; l.transform = pose; return scene(api, l); });
-            await compare(`full image ${name} ${JSON.stringify(pose)}`, api => { const l = q.rich(params); l.transform = pose; return scene(api, l); });
+            await compare(`16:9 image ${name} ${JSON.stringify(pose)}`, api => { const l = q.rich(params); l.transform = pose; return scene(api, l); });
+          }
+          for (const pose of coverPoses) await compare(`cover square ${name} ${JSON.stringify(pose)}`, api => { const l = q.coverSquare(params); l.transform = pose; return scene(api, l); });
+          for (const pose of poses) {
             for (const kind of ['surface', 'fractal', 'liquid']) await compare(`${kind} ${name} ${JSON.stringify(pose)}`, api => { const l = api.applyPreset(api.createLayer(kind), api.PRESETS.find(p => p.kind === kind).id); l.id = `${kind}-unchanged`; Object.assign(l.params, params); l.transform = pose; return scene(api, l); });
           }
           await compare(`cover at default ${name}`, api => scene(api, q.coverSquare(params)));
         }
         before.dispose();
         return { total, changed };
-      }, [UNCHANGED_POSES, MOVED_CASES]);
+      }, [UNCHANGED_POSES, IN_FRAME_POSES, COVER_POSES, MOVED_CASES]);
       return { ok: r.changed.length === 0, detail: r.changed.length ? `${r.changed.length} of ${r.total} changed, first ${r.changed[0]}` : `${r.total} renders byte-identical to the previous commit` };
     },
   }, {
@@ -1807,6 +1838,8 @@ try {
     const bars = (params = {}) => image(barsUrl, params, 'bars');
     // A smooth square picture on Cover, so it never matches the frame's shape.
     const squareUrl = await dataUrl(512, 512, (x, y) => [Math.round(128 + 90 * Math.sin(3.1 * x + .4)), Math.round(128 + 90 * Math.cos(4.3 * y - .7)), Math.round(128 + 70 * Math.sin(2.2 * x + 3.7 * y)), 255]);
+    const wideUrl = await dataUrl(1024, 256, (x, y) => [Math.round(128 + 90 * Math.sin(3.1 * x + .4)), Math.round(128 + 90 * Math.cos(4.3 * y - .7)), Math.round(128 + 70 * Math.sin(2.2 * x + 3.7 * y)), 255]);
+    const wideImage = (params = {}, fit = 'cover') => { const l = image(wideUrl, params, 'wide', 1024, 256); l.image.fit = fit; return l; };
     const coverSquare = (params = {}) => { const l = image(squareUrl, params, 'square', 512, 512); l.image.fit = 'cover'; return l; };
     // Red marks the right half; green is busy everywhere, so a move shows even where red is flat.
     const halfRedUrl = await dataUrl(960, 540, (x, y) => [x > 0 ? 255 : 0, Math.round(128 + 120 * Math.sin(83 * x + 31 * y)), 0, 255]);
@@ -1913,7 +1946,7 @@ try {
       if (kind === 'image') return image(posterUrl, params, 'poster');
       const l = m.applyPreset(m.createLayer(kind), m.PRESETS.find(p => p.kind === kind).id); l.id = `${kind}-proof`; Object.assign(l.params, params); return l;
     };
-    window.wq = { coverSquare, prior, litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
+    window.wq = { wideImage, coverSquare, prior, litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
   }, [!!baseline, !!previous]);
 
   for (const check of selected) {
