@@ -6,7 +6,6 @@ import { playbackPhase } from '../core/playback';
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import { useCanvasInteraction } from './useCanvasInteraction';
 import { previewSize } from '../rendering/preview-size';
-import { canSkipPreparation } from '../meridian/preparation';
 import type { ReactivityEngine } from '../react/engine';
 
 const TAU = Math.PI * 2;
@@ -94,10 +93,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
     };
   }, [onError, phase, rendererRef]);
   useEffect(() => {
-    invalidate.current = true;
-    // A Mutate, Reseed or Recall changes only values: playback carries straight on.
-    if (canSkipPreparation(prepared.current, project)) { prepared.current = project; return; }
-    prepared.current = null;
+    invalidate.current = true; prepared.current = null;
     let alive = true;
     void rendererRef.current?.prepare(project).then(() => { if (alive) { prepared.current = project; invalidate.current = true; } }).catch(error => { if (alive && !rendererRef.current?.isContextLost()) onError(String(error)); });
     return () => { alive = false; };

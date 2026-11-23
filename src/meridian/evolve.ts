@@ -44,6 +44,7 @@ const ZOOM_SHARE = 0.55; // How much of the on-screen move limit a Scale move in
 const SCALE_SPEED_SMALL = 0.72, SCALE_SPEED_LARGE = 1.2; // Share of the Scale fader per second.
 const FOLD_SPEED = 0.72; // Far forms fold in towards a small Scale at this rate, a little behind the zoom.
 const REACH_SPEED = 1.4; // Share of the frame guard a large Scale may engage per second.
+const MUSIC_GLOW_SPEED = 12; // The fastest music may change a mark's glow: 0.2 a frame at 60 fps.
 const ALPHA_SPEED = 4.2; // The fastest any mark's light may change while a performer is moving it: 0.07 a frame at 60 fps.
 const USER_FOLLOW = 3.6; // Density and Scale follow the fader as a critically damped spring: most of the way in about a second.
 
@@ -114,6 +115,8 @@ export interface EvolveClock {
   /** True while a performer's move is under way. Light then changes at a limited rate, however the moves combine. */
   performing: boolean; guarding: boolean;
   readonly shown: Float32Array;
+  /** Each mark's glow last frame, so music can never make a glow jump. */
+  readonly shownGlow: Float32Array;
   readonly settled: Float32Array;
   /** Which way round each angle is travelling, for the journey's morph and for a Reseed glide. */
   readonly morphTrack: Float64Array; readonly glideTrack: Float64Array;
@@ -543,7 +546,7 @@ export function evolutionRate(params: Readonly<Record<string, number>>): number 
 }
 
 export function createEvolveClock(): EvolveClock {
-  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, music: createMusicLight(), frameReach: 0, zooming: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
+  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, music: createMusicLight(), frameReach: 0, zooming: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), shownGlow: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
 }
 
 export function createEvolveTransport(): EvolveTransport {
@@ -916,8 +919,13 @@ function guardLight(clock: EvolveClock, out: DisplayList): void {
     }
     if (!held && !clock.performing) clock.guarding = false;
   }
-  for (let i = 0; i < count; i++) shown[i] = data[i * STRIDE + 9];
-  for (let i = count; i < shown.length; i++) shown[i] = 0;
+  const glows = clock.shownGlow;
+  if (clock.music.active) {
+    const most = MUSIC_GLOW_SPEED * clock.wall;
+    for (let i = 0; i < count; i++) { const at = i * STRIDE + 7; data[at] = glows[i] + clamp(data[at] - glows[i], -most, most); }
+  }
+  for (let i = 0; i < count; i++) { shown[i] = data[i * STRIDE + 9]; glows[i] = data[i * STRIDE + 7]; }
+  for (let i = count; i < shown.length; i++) { shown[i] = 0; glows[i] = 0; }
 }
 
 export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Readonly<Record<string, number>>, out: DisplayList): void {
@@ -1001,7 +1009,7 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     const heard = music.wave * waveAt(music, Math.abs(radius));
     const ink = pose[at + R_ALPHA] * ringInk * (1 + lightDepth * (beatLight - 0.3) + ripple * 0.75 + swellLight * 0.12 + heard + music.mids * 0.4 + music.lift) * broken;
     const width = -Math.max(0.0001, pose[at + R_WIDTH] * lineGain * (1 + beatLight * 0.08 + ripple * 0.45)) / REFERENCE_HEIGHT;
-    const glow = 0.05 + beatLight * 0.07 + ripple * 0.5 + heat * 0.1 + heard * 0.14;
+    const glow = 0.05 + beatLight * 0.07 + ripple * 0.5 + heat * 0.1 + heard * 0.9; // White lines are near full, so the wave reads mostly as glow.
     const colour = tintAt(clock, heat, voice, speed);
     const slot = TAU / ARC_SLOTS, parting = oscillate(clock, 59 + voice * 4.1, phase * 0.7, speed), opening = life * (parting > 0 ? parting * parting : 0) * 0.74, every = tier === 0 ? 6 : tier === 1 ? 4 : 3;
     for (let k = 0; k < ARC_SLOTS; k++) {
@@ -1023,11 +1031,12 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
     const start = framed(pull(pose[at + S_INNER] + (pose[at + S_OUTER] - pose[at + S_INNER]) * inner * 0.8, tuck) * spokeReach * draw, reach);
     const cos = Math.cos(angle), sin = Math.sin(angle), middle = (start + outer) * 0.5;
     const beatLight = lightAt(clock, middle), ripple = rippleAt(clock, middle);
-    const ink = pose[at + S_ALPHA] * spokeInk * (1 + lightDepth * (beatLight - 0.3) + ripple * 0.7 + music.wave * waveAt(music, middle) + music.mids * 0.4 + music.lift);
+    const heard = music.wave * waveAt(music, middle);
+    const ink = pose[at + S_ALPHA] * spokeInk * (1 + lightDepth * (beatLight - 0.3) + ripple * 0.7 + heard + music.mids * 0.4 + music.lift);
     const width = -Math.max(0.0001, pose[at + S_WIDTH] * spokeLine) / REFERENCE_HEIGHT;
     const colour = tintAt(clock, heat, voice + 20, speed) * 0.8;
-    out.push(PRIMITIVE.segment, centreX + cos * start, centreY + sin * start, centreX + cos * outer, centreY + sin * outer, 0, width, 0.03 + ripple * 0.3, colour, ink, 0, voice * 0.05);
-    out.push(PRIMITIVE.segment, centreX - cos * start, centreY - sin * start, centreX - cos * outer, centreY - sin * outer, 0, width, 0.03 + ripple * 0.3, colour, ink * pose[at + S_MIRROR], 0, voice * 0.09);
+    out.push(PRIMITIVE.segment, centreX + cos * start, centreY + sin * start, centreX + cos * outer, centreY + sin * outer, 0, width, 0.03 + ripple * 0.3 + heard * 0.7, colour, ink, 0, voice * 0.05);
+    out.push(PRIMITIVE.segment, centreX - cos * start, centreY - sin * start, centreX - cos * outer, centreY - sin * outer, 0, width, 0.03 + ripple * 0.3 + heard * 0.7, colour, ink * pose[at + S_MIRROR], 0, voice * 0.09);
   }
 
   const nodeInk = clamp(finite(params.nodeOpacity, 1), 0, 1), nodeSize = clamp(finite(params.nodeSize, 1), 0, 8) * Math.max(0.7, Math.min(weight, 1.45)), nodeGlow = clamp(finite(params.nodeGlow, 0.5), 0, 2);

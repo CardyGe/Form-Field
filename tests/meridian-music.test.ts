@@ -8,7 +8,6 @@ import { MoveRouter } from '../src/meridian/moves';
 import { litShare, MusicLight } from '../src/meridian/music-light';
 import { EVOLVE_INACTIVE, motionParameters } from '../src/meridian/panel';
 import { MACRO_KEYS, MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../src/meridian/parameters';
-import { canSkipPreparation } from '../src/meridian/preparation';
 
 const DT = 1 / 60, LOOP = 60, idle: EvolveMoves = { next: false, hold: false, drop: false, collapse: false, burst: false };
 const phaseAt = (t: number) => t / LOOP * Math.PI * 2;
@@ -54,13 +53,14 @@ test('music moves light and never geometry', () => {
 test('under every reaction setting no mark changes light faster than the existing limit', () => {
   const settings: Record<string, number>[] = [{ reactionBeat: 2, reactionBass: 2, reactionMids: 2, reactionHighs: 2, reactionAttack: 0, reactionRelease: 0 }, { reactionBeat: 2, reactionTempoMultiplier: 4, rhythmAccent: 1, rhythmSwing: 1 }];
   for (const extra of settings) {
-    let last: Float32Array | null = null, worst = 0;
+    let last: Float32Array | null = null, worst = 0, worstGlow = 0;
     play(10, { ...MERIDIAN_DEFAULTS, ...extra }, sound, l => {
       const d = l.data.slice(0, l.count * STRIDE);
-      if (last) for (let k = 9; k < d.length; k += STRIDE) worst = Math.max(worst, Math.abs(d[k] - last[k]));
+      if (last) for (let k = 9; k < d.length; k += STRIDE) { worst = Math.max(worst, Math.abs(d[k] - last[k])); worstGlow = Math.max(worstGlow, Math.abs(d[k - 2] - last[k - 2])); }
       last = d;
     });
     assert.ok(worst <= 0.08, `alpha step ${worst}`);
+    assert.ok(worstGlow <= 0.25, `glow step ${worstGlow}`);
   }
 });
 
@@ -94,16 +94,6 @@ test('macros and moves are not offered on the Motion tab', () => {
   const keys = motionParameters(readParameterDefinitions('meridian')).map(d => d.key);
   for (const key of [...MACRO_KEYS, 'moveNext', 'moveBurst']) assert.ok(!keys.includes(key), key);
   assert.ok(keys.includes('lightExposure'));
-});
-
-test('a Meridian-only edit needs no preparation; anything else still does', () => {
-  const project = createProject(), layer = createLayer('meridian'); project.layers = [layer];
-  assert.equal(canSkipPreparation(project, { ...project, layers: [{ ...layer, params: { ...layer.params, seed: 99 } }] }), true);
-  assert.equal(canSkipPreparation(project, { ...project, layers: [{ ...layer, mask: { ...layer.mask, kind: 'circle' } }] }), false);
-  assert.equal(canSkipPreparation(project, { ...project, width: 1280 }), false);
-  assert.equal(canSkipPreparation(project, { ...project, layers: [] }), false);
-  const other = createLayer('surface'); const two = { ...project, layers: [other] };
-  assert.equal(canSkipPreparation(two, { ...two, layers: [{ ...other, params: { ...other.params, seed: 5 } }] }), false);
 });
 
 test('every control marked inactive in Evolve really does nothing there', () => {
