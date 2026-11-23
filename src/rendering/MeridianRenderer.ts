@@ -3,7 +3,7 @@ import type { Layer } from '../shared/types';
 import { compose } from '../meridian/composer';
 import { DisplayList, STRIDE } from '../meridian/display-list';
 import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate';
-import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveScheme, exactEvolveClock, SCORE_STYLE_EVOLVE, type EvolveTransport } from '../meridian/evolve';
+import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveScheme, exactEvolveClock, SCORE_STYLE_EVOLVE, type EvolveClock, type EvolveTransport } from '../meridian/evolve';
 import { heldMoves } from '../meridian/held-moves';
 import { applyMacros } from '../meridian/macros';
 import { markFromOutput, type MarkPlacement } from '../meridian/mark-placement';
@@ -160,7 +160,7 @@ export class MeridianRenderer {
   private readonly transports = new Map<string, PulseTransport>();
   private readonly pulseClock: PulseClock = { phrase: 0, tick: 0, frac: 0, ticks: 128, tickSeconds: .06 };
   private readonly evolveTransports = new Map<string, EvolveTransport>();
-  private readonly evolveExact = createEvolveClock();
+  private readonly evolveExact = new Map<string, EvolveClock>();
   private readonly evolveMoves = { next: false, hold: false, drop: false, collapse: false, burst: false };
   private readonly evolveView: Record<string, number> = {};
   private readonly evolveWalls = new Map<string, number>();
@@ -269,7 +269,9 @@ export class MeridianRenderer {
       view.scoreEvolution = runtime?.structure?.scoreEvolution ?? live.scoreEvolution;
       view.ringRotationSpeed = runtime?.structure?.ringRotationSpeed ?? live.ringRotationSpeed;
       view.ringCounterRotation = runtime?.structure?.ringCounterRotation ?? live.ringCounterRotation;
-      const clock = exactEvolveClock(phase, duration, view, this.evolveExact);
+      let exact = this.evolveExact.get(layer.id);
+      if (!exact) { exact = createEvolveClock(); this.evolveExact.set(layer.id, exact); }
+      const clock = exactEvolveClock(phase, duration, view, exact);
       if (!list) { list = this.list; evaluateEvolve(seed, clock, view, list); }
     }
     applyEvolveLight(view, live);

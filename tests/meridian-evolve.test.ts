@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createLayer, createProject, PRESETS, validateProject } from '../src/core/project';
 import { DisplayList, STRIDE } from '../src/meridian/display-list';
-import { advanceEvolve, createEvolveClock, createEvolveTransport, evaluateEvolve, EVOLVE_ELEMENTS, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveMoves, type EvolveTransport } from '../src/meridian/evolve';
+import { advanceEvolve, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveCompileCount, EVOLVE_ELEMENTS, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveMoves, type EvolveTransport } from '../src/meridian/evolve';
 import { applyLockedVariation } from '../src/meridian/panel';
 import { MACRO_KEYS, MERIDIAN_DEFAULTS } from '../src/meridian/parameters';
 import { SCORE_STYLE_DENSE, SCORE_STYLE_PULSE } from '../src/meridian/pulse';
@@ -12,7 +12,7 @@ import { PRIMITIVE } from '../src/meridian/types';
 const SEEDS = [1729, 2, 77, 4096, 31337, 900001, 12345, 555];
 const FPS = 60, DT = 1 / FPS, LOOP = 60;
 const MAX_MOVE = 0.012, MAX_ALPHA = 0.08, MAX_COLOUR = 0.08, MAX_GLOW = 0.25, MAX_WIDTH_PX = 1;
-/** A deliberate Density or Scale move is a smooth zoom of the whole structure, so it may travel further per frame, on screen. */
+/** The ruling for a deliberate Density or Scale move: on screen, 4% of frame height per frame, times the visual zoom when above 1. */
 const MAX_USER_MOVE = 0.04;
 const AFTER_TEN_MINUTES = 600;
 const idle: EvolveMoves = { next: false, hold: false, drop: false, collapse: false, burst: false };
@@ -36,8 +36,9 @@ class Watch {
   private readonly a = new Float64Array(4); private readonly b = new Float64Array(4);
   /** With `visibleOnly`, marks wholly outside the frame do not count towards movement: nobody can see them travel. */
   constructor(private readonly visibleOnly = false) {}
-  private inFrame(e: Float64Array): boolean { return (Math.abs(e[0]) < 0.9 && Math.abs(e[1]) < 0.52) || (Math.abs(e[2]) < 0.9 && Math.abs(e[3]) < 0.52); }
-  see(list: DisplayList): void {
+  private inFrame(e: Float64Array, end: number): boolean { return Math.abs(e[end]) < 0.9 && Math.abs(e[end + 1]) < 0.52; }
+  /** `zoom` is the current visual zoom: a deliberate move may travel further on a structure drawn larger. */
+  see(list: DisplayList, zoom = 1): void {
     const d = list.data;
     let drawn = 0, energy = 0;
     for (let i = 0; i < list.count; i++) {
@@ -53,7 +54,11 @@ class Watch {
       this.maxGlow = Math.max(this.maxGlow, Math.abs(d[at + 7] - p[at + 7]));
       this.maxWidth = Math.max(this.maxWidth, Math.abs(d[at + 6] - p[at + 6]) * 1080);
       ends(p, at, this.a); ends(d, at, this.b);
-      if (!this.visibleOnly || this.inFrame(this.a) || this.inFrame(this.b)) this.maxMove = Math.max(this.maxMove, Math.hypot(this.a[0] - this.b[0], this.a[1] - this.b[1]), Math.hypot(this.a[2] - this.b[2], this.a[3] - this.b[3]));
+      for (const end of [0, 2]) {
+        if (this.visibleOnly && !this.inFrame(this.a, end) && !this.inFrame(this.b, end)) continue;
+        const moved = Math.hypot(this.a[end] - this.b[end], this.a[end + 1] - this.b[end + 1]);
+        this.maxMove = Math.max(this.maxMove, this.visibleOnly ? moved / Math.max(1, zoom) : moved);
+      }
     }
     this.minDrawn = Math.min(this.minDrawn, drawn);
     if (this.last) this.maxEnergyStep = Math.max(this.maxEnergyStep, Math.abs(energy - this.energy) / Math.max(this.energy, 1e-6));
@@ -79,7 +84,7 @@ function run(seed: number, seconds: number, p: Record<string, number>, frame: (f
     const clock = advanceEvolve(transport, phaseAt(start + f * DT), LOOP, f === 0 ? 0 : DT, currentSeed, current, step.moves ?? idle);
     Object.assign(view, current, transport.values);
     evaluateEvolve(currentSeed, clock, view, list);
-    watch.see(list);
+    watch.see(list, 2.4 ** (transport.values.macroScale * 2 - 1));
   }
   return transport;
 }
@@ -146,20 +151,57 @@ test('moving any macro across its range in one second causes no jump, after ten 
   }
 });
 
-test('Density and Scale answer within about a second, without overshoot', () => {
-  for (const key of ['macroDensity', 'macroScale']) for (const [from, to] of [[0.5, 1], [0.5, 0], [0, 1]]) {
+test('Density and Scale arrive within a second and a half, without overshoot', () => {
+  for (const key of ['macroDensity', 'macroScale']) for (const [from, to] of [[0.5, 1], [0.5, 0], [0, 1], [1, 0]]) {
     const base = params({ [key]: from }), moved = { ...base, [key]: to }, transport = createEvolveTransport();
     advanceEvolve(transport, 0, LOOP, 0, 1729, base, idle);
-    let at = 0, atOneSecond = 0;
-    for (let f = 1; f <= 240; f++) {
+    let at = 0, arrived = 0;
+    for (let f = 1; f <= 360; f++) {
       advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, 1729, moved, idle);
       const value = transport.values[key], share = (value - from) / (to - from);
       assert.ok(share >= at - 1e-9 && share <= 1 + 1e-9, `${key} overshoots or turns back at frame ${f}`);
       at = share;
-      if (f === FPS) atOneSecond = share;
+      if (f === 90) arrived = share;
     }
-    assert.ok(atOneSecond >= 0.8, `${key} ${from}->${to}: ${atOneSecond} of the way after one second`);
+    assert.ok(arrived >= 0.75, `${key} ${from}->${to}: ${arrived} of the way after 1.5 s`);
     assert.equal(transport.values[key], to);
+  }
+});
+
+test('the structure itself has mostly arrived 1.5 s after a Density move', () => {
+  for (const seed of SEEDS) for (const [from, to] of [[0, 1], [1, 0]]) {
+    const held = params({ scoreHoldShape: 1, macroDensity: from }), moved = { ...held, macroDensity: to }, transport = createEvolveTransport(), list = new DisplayList(2000), view: Record<string, number> = {};
+    const step = (f: number, p: Record<string, number>, wall: number) => { const clock = advanceEvolve(transport, phaseAt(f * DT), LOOP, wall, seed, p, idle); Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); return clock.pose; };
+    let frame = 0;
+    advanceEvolve(transport, 0, LOOP, 0, seed, held, idle);
+    for (let f = 0; f < 240; f++) step(++frame, held, DT);
+    const start = transport.clock.pose.slice();
+    for (let f = 0; f < 90; f++) step(++frame, moved, DT);
+    const middle = transport.clock.pose.slice();
+    for (let f = 0; f < 480; f++) step(++frame, moved, DT);
+    const final = transport.clock.pose, gap = (a: Float32Array, b: Float32Array) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum; };
+    const whole = gap(start, final);
+    if (whole > 1e-3) assert.ok(1 - gap(middle, final) / whole >= 0.75, `seed ${seed} ${from}->${to}: ${1 - gap(middle, final) / whole}`);
+  }
+});
+
+test('deliberate Density and Scale moves stay inside the ruling, by sweep and by instant change', () => {
+  const moves: readonly (readonly [string, number, number, Record<string, number>])[] = [
+    ['macroDensity', 0, 1, {}], ['macroDensity', 1, 0, {}], ['macroDensity', 0, 1, { macroScale: 1 }], ['macroDensity', 1, 0, { macroScale: 1 }],
+    ['macroScale', 0, 1, {}], ['macroScale', 1, 0, {}], ['macroScale', 0, 1, { macroDensity: 1 }], ['macroScale', 1, 0, { macroDensity: 0 }],
+  ];
+  for (const seed of SEEDS) for (const start of [120, 330, AFTER_TEN_MINUTES]) for (const [key, from, to, extra] of moves) for (const seconds of [1, 0]) {
+    const watch = new Watch(true), base = params({ ...extra, [key]: from });
+    run(seed, 5, base, f => ({ params: { ...base, [key]: seconds ? from + (to - from) * Math.min(1, f / FPS) : to } }), watch, start);
+    within(watch, `seed ${seed} at ${start}s ${key} ${from}->${to} ${JSON.stringify(extra)} over ${seconds}s`, MAX_USER_MOVE);
+  }
+});
+
+test('Density and Scale moved together stay inside the ruling', () => {
+  for (const seed of SEEDS) for (const [from, to] of [[0, 1], [1, 0]]) {
+    const watch = new Watch(true), base = params({ macroDensity: from, macroScale: from });
+    run(seed, 5, base, () => ({ params: { ...base, macroDensity: to, macroScale: to } }), watch, AFTER_TEN_MINUTES);
+    within(watch, `seed ${seed} ${from}->${to}`, MAX_USER_MOVE);
   }
 });
 
@@ -190,12 +232,49 @@ test('a glitch keeps its ring and shards for the whole event', () => {
   }
 });
 
-test('repeated Burst never cuts a ripple that is still lit', () => {
-  for (const seed of [1729, 77, 4096]) {
+test('Burst at any cadence stays within the light limit', () => {
+  for (const seed of [1729, 77, 4096]) for (const every of [4, 10, 12, 15, 20, 30]) {
     const watch = new Watch();
-    run(seed, 14, params(), f => ({ moves: { ...idle, burst: f % 20 < 4 } }), watch, AFTER_TEN_MINUTES);
-    within(watch, `seed ${seed}`);
+    run(seed, 14, params(), f => ({ moves: { ...idle, burst: f % every < Math.max(1, every >> 1) } }), watch, AFTER_TEN_MINUTES);
+    within(watch, `seed ${seed}, every ${every} frames`);
   }
+});
+
+test('lowering Glitch to centre during a live event has no step', () => {
+  let events = 0;
+  for (const seed of SEEDS) for (const level of [0.7, 1]) for (const lowered of [0.5, 0.25]) {
+    const high = params({ macroGlitch: level }), low = { ...high, macroGlitch: lowered }, transport = createEvolveTransport(), list = new DisplayList(2000), view: Record<string, number> = {}, watch = new Watch();
+    advanceEvolve(transport, 0, LOOP, 0, seed, high, idle);
+    for (let f = 1; f <= 1200; f++) advanceEvolve(transport, phaseAt(f / 10), LOOP, 0.1, seed, high, idle);
+    let dropped = -1;
+    for (let f = 0; f < 3000 && (dropped < 0 || f < dropped + 150); f++) {
+      const clock = advanceEvolve(transport, phaseAt(120 + f * DT), LOOP, f ? DT : 0, seed, dropped >= 0 ? low : high, idle);
+      Object.assign(view, dropped >= 0 ? low : high, transport.values);
+      evaluateEvolve(seed, clock, view, list);
+      watch.see(list);
+      if (dropped < 0) for (let i = EVOLVE_ELEMENTS; i < list.count; i++) if (list.data[i * STRIDE + 9] > 0.25) { dropped = f; break; }
+    }
+    if (dropped >= 0) events++;
+    assert.equal(list.count, EVOLVE_ELEMENTS, 'no shards remain at or below centre');
+    within(watch, `seed ${seed}, ${level} to ${lowered}`);
+  }
+  assert.ok(events >= 16, `${events} live events were lowered`);
+});
+
+test('24 Meridian layers never rebuild one another\'s forms', () => {
+  const layers = Array.from({ length: 24 }, (_, i) => ({ seed: 1000 + i * 97, transport: createEvolveTransport(), list: new DisplayList(2000), view: {} as Record<string, number> })), p = params();
+  const frame = (f: number, wall: number) => { for (const layer of layers) { const clock = advanceEvolve(layer.transport, phaseAt(f / FPS), LOOP, wall, layer.seed, p, idle); Object.assign(layer.view, p, layer.transport.values); evaluateEvolve(layer.seed, clock, layer.view, layer.list); } };
+  frame(0, 0);
+  for (let f = 1; f <= 240; f++) frame(f, DT);
+  const before = evolveCompileCount();
+  for (let f = 241; f <= 840; f++) frame(f, DT);
+  // Ten seconds: a layer may reach one new form, and builds it once.
+  assert.ok(evolveCompileCount() - before <= 24, `${evolveCompileCount() - before} forms built by 24 layers in 600 frames`);
+  const clocks = layers.map(() => createEvolveClock()), list = new DisplayList(2000);
+  for (let f = 0; f < 2; f++) layers.forEach((layer, i) => evaluateEvolve(layer.seed, exactEvolveClock(1, 60, p, clocks[i]), p, list));
+  const exact = evolveCompileCount();
+  for (let f = 0; f < 300; f++) layers.forEach((layer, i) => evaluateEvolve(layer.seed, exactEvolveClock(1 + f * 1e-4, 60, p, clocks[i]), p, list));
+  assert.equal(evolveCompileCount(), exact, 'exports build nothing per frame either');
 });
 
 test('repeated Reseed never cuts the colour or the structure', () => {
@@ -351,12 +430,12 @@ test('nothing on the per-frame path allocates', () => {
     for (let i = open; i < source.length; i++) { if (source[i] === '{') depth++; else if (source[i] === '}' && --depth === 0) return source.slice(open, i + 1); }
     throw new Error(name);
   };
-  const path = ['advanceEvolve', 'evaluateEvolve', 'exactEvolveClock', 'project', 'blendPose', 'angleBetween', 'easePose', 'easeField', 'formFor', 'segmentAt', 'boundary', 'morphWindow', 'morphRate', 'travel', 'exactStops', 'closedTurn', 'latchGlitch', 'glitchEnvelope', 'ringVoices', 'spokeVoices', 'tierRate', 'growth', 'pull', 'oscillate', 'lightAt', 'rippleAt', 'tintAt', 'hash', 'hashUnit', 'speedRate', 'evolutionRate'];
+  const path = ['compile', 'kindAt', 'fillOrder', 'setArcs', 'setRing', 'setSpoke', 'setHero', 'random', 'guardLight', 'foldFor', 'advanceEvolve', 'evaluateEvolve', 'exactEvolveClock', 'project', 'blendPose', 'angleBetween', 'easePose', 'easeField', 'formFor', 'segmentAt', 'boundary', 'morphWindow', 'morphRate', 'travel', 'exactStops', 'closedTurn', 'latchGlitch', 'glitchEnvelope', 'ringVoices', 'spokeVoices', 'tierRate', 'growth', 'pull', 'oscillate', 'lightAt', 'rippleAt', 'tintAt', 'hash', 'hashUnit', 'speedRate', 'evolutionRate'];
   for (const name of path) {
     const code = body(name).replace(/\/\/.*$/gm, '');
     assert.ok(!/\bnew\s+[A-Z]|\.(map|filter|slice|concat|flatMap|reduce|forEach)\(|\.\.\./.test(code), `${name} allocates`);
     assert.ok(!/(^|[=(,:?&|]\s*|\bof\s+|\breturn\s+)\[/m.test(code), `${name} builds an array`);
-    assert.ok(!/=>|\bfunction\b/.test(name === 'pull' || name === 'oscillate' || name === 'tierRate' || name === 'growth' || name === 'ringVoices' || name === 'speedRate' || name === 'hashUnit' ? code.replace(/^=> /, '') : code), `${name} builds a closure`);
+    assert.ok(!/=>|\bfunction\b/.test(name === 'pull' || name === 'foldFor' || name === 'oscillate' || name === 'tierRate' || name === 'growth' || name === 'ringVoices' || name === 'speedRate' || name === 'hashUnit' ? code.replace(/^=> /, '') : code), `${name} builds a closure`);
   }
   assert.ok(!/from 'three'|from 'react'|document\.|window\./.test(source));
 });
