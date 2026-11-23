@@ -12,7 +12,7 @@ import type { TempoClock } from '../react/tempo';
 import { applyControl, holdForReconnect, initialControls, knobOffset, speedFactor, type ControlEvent, type ControlValues, type PerformAction } from './controls';
 import { armList, bankBack, bankNext, initialLauncher, landed, launchNow, queueCell, queueScene, queueZone, retime, returnZone, stopZone, type Launch, type LauncherState } from './launcher';
 import { linkedZones, zoneShapes, type ZonePicture } from './resolve';
-import { bandSignal, BURST_TIMES, reactionSpeed, stepReaction, zoneBrightness, type ReactionState } from './reaction';
+import { bandSignal, BURST_TIMES, reactionSpeed, stepReaction, unit, zoneBrightness, type ReactionState } from './reaction';
 import { dueFollow } from './sequence';
 import { beatAt, LATE_GRACE_MS, launchPhaseOffset, msAtBeat, nextBoundary, type ClockSnapshot } from './timing';
 import { BEATS_PER_BAR, ZONE_COUNT, type Clip } from './types';
@@ -54,7 +54,6 @@ const CEILING = ZONE_COUNT - 1;
 const CEILING_PART = ':ceiling';
 const STOPPED: ClockSnapshot = { anchorMs: 0, anchorBeat: 0, bpm: 120, state: 'manual', barOffset: 0 };
 
-const unit = (n: number | undefined) => n === undefined || !Number.isFinite(n) ? 0 : Math.min(1, Math.max(0, n));
 const wrapHue = (deg: number) => { const h = ((deg + 180) % 360 + 360) % 360 - 180; return h === -180 ? 180 : h; };
 const mean = (list: number[]) => list.reduce((a, b) => a + b, 0) / list.length;
 const zeros = () => Array.from({ length: ZONE_COUNT }, () => 0);
@@ -516,6 +515,7 @@ export class PerformService {
     return {
       master: ready ? master : 0,
       zones: Array.from({ length: ZONE_COUNT }, (_, i) => ({
+        // The wall multiplies by `master` itself, so brightness here only gates on it.
         brightness: zoneBrightness(faders[i], ready ? master : 0, this.reaction[i]),
         hueDeg: wrapHue((this.clipOf(i)?.hueOffset ?? 0) + knobOffset(knobs[i][1]) * HUE_RANGE),
         speed: speedOf(i),

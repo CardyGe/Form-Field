@@ -658,7 +658,7 @@ test('losing audio keeps the show running and reports it', () => {
   r.at(2200); r.frame({ 'audio.bass': 1 });
   assert.ok(lastValues(r).zones[0].brightness > .5, 'audio lifts the zone');
   r.state.audio = { state: 'lost' };
-  r.at(4000); r.frame({});
+  for (let t = 2300; t <= 3300; t += 50) { r.at(t); r.frame({}); }
   const view = r.service.view();
   assert.equal(view.running, true);
   assert.equal(view.audio.state, 'lost');
@@ -730,10 +730,16 @@ test('values reach the wall at most 30 times a second, and fader 0 stays black i
   r.at(2000);
   r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0] }] });
   r.service.control({ kind: 'knob', strip: 0, knob: 2, value: 1 });
+  r.service.control({ kind: 'fader', strip: 0, value: 1 });
   r.service.control({ kind: 'master', value: 1 });
   r.service.action({ type: 'burst', zone: 0, on: true });
+  r.at(2990); r.frame({ 'audio.bass': 1, 'beat.pulse': 1 });
   const before = r.ofType('performValues').length;
-  for (let i = 0; i < 100; i++) { r.at(3000 + i * 5); r.frame({ 'audio.bass': i % 2 }); }
-  assert.ok(r.ofType('performValues').length - before <= 16, 'half a second sends at most about 15');
-  assert.equal(lastValues(r).zones[0].brightness, 0);
+  for (let i = 0; i < 100; i++) { r.at(3000 + i * 5); r.frame({ 'audio.bass': i % 4 < 2 ? 1 : 0, 'beat.pulse': i % 4 < 2 ? 1 : 0 }); }
+  const sentCount = r.ofType('performValues').length - before;
+  assert.ok(sentCount > 0 && sentCount <= 16, `half a second sends at most about 15, sent ${sentCount}`);
+  assert.ok(lastValues(r).zones[0].brightness > 0, 'the burst is visible with the fader up');
+  r.service.control({ kind: 'fader', strip: 0, value: 0 });
+  r.at(3600); r.frame({ 'audio.bass': 1, 'beat.pulse': 1 });
+  assert.equal(lastValues(r).zones[0].brightness, 0, 'fader 0 is black mid-burst');
 });

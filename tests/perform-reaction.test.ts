@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bandSignal, reactionSpeed, stepReaction, zoneBrightness } from '../src/perform/reaction';
+import { bandSignal, LARGE_SWING, reactionSpeed, stepReaction, zoneBrightness } from '../src/perform/reaction';
 import type { ReactionState } from '../src/perform/reaction';
 
 const rest: ReactionState = { envelope: 0, burst: 0 };
@@ -79,4 +79,69 @@ test('reactionSpeed lifts a free clip and stays finite', () => {
   assert.ok(reactionSpeed(1, { envelope: 1, burst: 0 }) > 1);
   assert.equal(reactionSpeed(2, rest), 2);
   assert.ok(Number.isFinite(reactionSpeed(1, { envelope: NaN, burst: 9 })));
+});
+
+/** Counts rises-and-falls larger than `big`, by zigzag. */
+function countSwings(values: number[], big: number): number {
+  let dir = 0, extreme = values[0], turns = 0;
+  for (const v of values) {
+    if (dir === 0) { if (Math.abs(v - extreme) > big) { dir = v > extreme ? 1 : -1; extreme = v; turns++; } continue; }
+    if (dir > 0 ? v > extreme : v < extreme) extreme = v;
+    else if (Math.abs(v - extreme) > big) { dir = -dir; extreme = v; turns++; }
+  }
+  return turns / 2;
+}
+
+function simulate(bpm: number, held: boolean, seconds: number, seed: number): number[] {
+  let s = rest, rnd = seed, t = 0;
+  const out: number[] = [];
+  const sixteenth = 60 / bpm / 4;
+  while (t < seconds) {
+    rnd = (rnd * 1664525 + 1013904223) % 4294967296;
+    const dt = 1 / 60 + ((rnd / 4294967296) - .5) * .012;
+    const hit = t % sixteenth < .03 ? 1 : 0;
+    s = stepReaction(s, hit, 1, held, hit, dt);
+    out.push(zoneBrightness(1, 1, s));
+    t += dt;
+  }
+  return out;
+}
+
+test('flash guard: no zone swings by more than 10% more than 3 times a second at any tempo', () => {
+  assert.equal(LARGE_SWING, .1);
+  for (const bpm of [85, 100, 120, 140, 160, 175]) {
+    for (const held of [false, true]) {
+      for (const seed of [1, 7, 99]) {
+        const seconds = 8, swings = countSwings(simulate(bpm, held, seconds, seed).slice(60), LARGE_SWING);
+        assert.ok(swings / (seconds - 1) <= 3, `${bpm} bpm held=${held} seed=${seed}: ${swings} swings`);
+      }
+    }
+  }
+});
+
+test('flash guard: every band is limited the same way', () => {
+  const keys = { bass: 'audio.bass', mid: 'audio.mids', high: 'audio.highs', level: 'audio.level' } as const;
+  for (const [band, key] of Object.entries(keys) as [keyof typeof keys, string][]) {
+    let s = rest, t = 0;
+    const out: number[] = [];
+    while (t < 8) {
+      const on = t % (60 / 175 / 4) < .03 ? 1 : 0;
+      s = stepReaction(s, bandSignal({ [key]: on }, band), 1, false, 0, 1 / 60);
+      out.push(zoneBrightness(1, 1, s));
+      t += 1 / 60;
+    }
+    assert.ok(countSwings(out.slice(60), LARGE_SWING) / 7 <= 3, key);
+  }
+});
+
+test('flash guard: slow music still moves the picture, without a pop', () => {
+  let s = rest;
+  const out: number[] = [];
+  for (let i = 0; i < 120; i++) { s = stepReaction(s, i % 60 < 20 ? 1 : 0, 1, false, 0, 1 / 60); out.push(zoneBrightness(1, 1, s)); }
+  assert.ok(Math.max(...out) > 1.5, 'a slow beat reaches nearly full lift');
+  for (let i = 1; i < out.length; i++) assert.ok(Math.abs(out[i] - out[i - 1]) < .2, `step ${i} jumps ${out[i] - out[i - 1]}`);
+});
+
+test('a stalled frame cannot pop the reaction', () => {
+  assert.deepEqual(stepReaction(rest, 1, 1, true, 1, 10), stepReaction(rest, 1, 1, true, 1, .1));
 });
