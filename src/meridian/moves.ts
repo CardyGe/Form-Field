@@ -6,7 +6,9 @@ const MUTATE: LinkedEdit = { kind: 'mutate', slot: -1 };
 const RESEED: LinkedEdit = { kind: 'reseed', slot: -1 };
 const RECALLS: readonly LinkedEdit[] = Array.from({ length: 8 }, (_, slot) => ({ kind: 'recall' as const, slot }));
 const PRESS = 0.6, RELEASE = 0.4;   // A linked control must clearly cross both, so jitter around the middle is one press.
-const RECALL_SETTLE = 3;            // Frames a linked Recall must rest on one slot, because link smoothing passes through others.
+const RECALL_SETTLE = 2;            // Frames a linked Recall must rest before it counts, because link smoothing passes through other slots.
+const RECALL_STILL = 0.0005;        // Slots a resting control may still move per frame.
+const RECALL_NEAR = 0.08;           // How close to a whole slot it must rest.
 const down = (value: number | undefined): boolean => (value ?? 0) >= 0.5;
 
 /**
@@ -14,7 +16,7 @@ const down = (value: number | undefined): boolean => (value ?? 0) >= 0.5;
  * Mutate, Reseed and Recall from a key have already edited the layer, so only a link's press is reported as an edit.
  */
 export class MoveRouter {
-  private mutate = false; private reseed = false; private recallArmed = true; private recallSlot = 0; private recallFrames = 0;
+  private mutate = false; private reseed = false; private recallArmed = true; private recallValue = 0; private recallFrames = 0;
 
   read(held: { get(layerId: string, key: string): number }, layerId: string, params: Readonly<Record<string, number>>, out: EvolveMoves): LinkedEdit {
     out.next = held.get(layerId, 'moveNext') > 0 || down(params.moveNext);
@@ -26,12 +28,14 @@ export class MoveRouter {
     const mutated = !this.mutate && mutateValue >= PRESS, reseeded = !this.reseed && reseedValue >= PRESS;
     if (mutated) this.mutate = true; else if (mutateValue <= RELEASE) this.mutate = false;
     if (reseeded) this.reseed = true; else if (reseedValue <= RELEASE) this.reseed = false;
-    const value = params.moveRecall ?? 0, recall = Number.isFinite(value) ? Math.max(0, Math.min(8, Math.round(value))) : 0;
+    const raw = params.moveRecall ?? 0, value = Number.isFinite(raw) ? Math.max(0, Math.min(8, raw)) : 0, recall = Math.round(value);
+    const resting = Math.abs(value - this.recallValue) <= RECALL_STILL && Math.abs(value - recall) <= RECALL_NEAR;
+    this.recallValue = value;
     let recalled = 0;
-    if (recall === 0) { this.recallArmed = true; this.recallSlot = 0; this.recallFrames = 0; }
+    if (recall === 0) { this.recallArmed = true; this.recallFrames = 0; }
     else if (this.recallArmed) {
-      this.recallFrames = recall === this.recallSlot ? this.recallFrames + 1 : 1;
-      this.recallSlot = recall;
+      // Fires where the control comes to rest, so a pad through link smoothing lands on its own slot and a sweep fires nothing on the way.
+      this.recallFrames = resting ? this.recallFrames + 1 : 0;
       if (this.recallFrames >= RECALL_SETTLE) { recalled = recall; this.recallArmed = false; }
     }
     return recalled > 0 ? RECALLS[recalled - 1] : reseeded ? RESEED : mutated ? MUTATE : NONE;

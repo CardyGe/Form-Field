@@ -43,6 +43,7 @@ const SPOKE_LIST = RING_VOICES * ARC_SLOTS, NODE_LIST = SPOKE_LIST + SPOKE_VOICE
 const ZOOM_SHARE = 0.55; // How much of the on-screen move limit a Scale move in progress keeps for itself.
 const SCALE_SPEED_SMALL = 0.72, SCALE_SPEED_LARGE = 1.2; // Share of the Scale fader per second.
 const FOLD_SPEED = 0.72; // Far forms fold in towards a small Scale at this rate, a little behind the zoom.
+const NARROW_SPEED = 0.4; // A narrow frame draws in unprompted, so it keeps to the autonomous move limit.
 const REACH_SPEED = 1.4; // Share of the frame guard a large Scale may engage per second.
 const MUSIC_GLOW_SPEED = 12; // The fastest music may change a mark's glow: 0.2 a frame at 60 fps.
 const ALPHA_SPEED = 4.2; // The fastest any mark's light may change while a performer is moving it: 0.07 a frame at 60 fps.
@@ -112,6 +113,8 @@ export interface EvolveClock {
   frameReach: number;
   /** The output's width over its height. A frame narrower than 16:9 draws far-flung marks back further. */
   aspect: number;
+  /** How far a narrow frame is drawing marks back because too little of the picture would otherwise be on screen. */
+  narrowReach: number;
   /** How fast Scale is moving, as a share of its top speed. */
   zooming: number;
   /** True while a performer's move is under way. Light then changes at a limited rate, however the moves combine. */
@@ -548,7 +551,7 @@ export function evolutionRate(params: Readonly<Record<string, number>>): number 
 }
 
 export function createEvolveClock(): EvolveClock {
-  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, music: createMusicLight(), frameReach: 0, aspect: 16 / 9, zooming: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), shownGlow: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
+  return { exact: false, turn: 0, duration: 10, evolution: 0, motion: 0, beat: 0, swell: 0, gather: 0, ripples: new Float32Array(3).fill(-1), glide: 1, from: new Float32Array(POSE_SIZE), pose: new Float32Array(POSE_SIZE), forms: Array.from({ length: FORMS_PER_CLOCK }, () => new Form()), schemeSeed: 0, ringTurns: new Float64Array(3), spokeTurn: 0, held: false, tintFade: 1, densityMoving: false, easing: false, wall: 0, fold: 0, music: createMusicLight(), frameReach: 0, aspect: 16 / 9, narrowReach: 0, zooming: 0, performing: false, guarding: false, shown: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), shownGlow: new Float32Array(EVOLVE_ELEMENTS + GLITCH_SHARDS), settled: new Float32Array(POSE_SIZE), morphTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), glideTrack: new Float64Array(SPOKE_VOICES + NODE_VOICES), morphKey: Number.NaN, morphSeed: -1, glideFresh: false, glitchTime: 0, glitchCell: Number.NaN, glitchOn: false, glitchSeed: 0, glitchStart: 0, glitchLength: 1, glitchVoice: 0 };
 }
 
 export function createEvolveTransport(): EvolveTransport {
@@ -676,7 +679,7 @@ export function advanceEvolve(transport: EvolveTransport, phase: number, duratio
   clock.zooming = Math.abs(transport.follow[1]) / SCALE_SPEED_SMALL;
   const foldTo = foldFor(unit(values.macroScale));
   clock.fold = firstFrame ? foldTo : clock.fold + clamp(foldTo - clock.fold, -FOLD_SPEED * wall, FOLD_SPEED * wall);
-  const reachTo = reachFor(unit(values.macroScale), clock.aspect);
+  const reachTo = reachFor(unit(values.macroScale));
   clock.frameReach = firstFrame ? reachTo : clock.frameReach + clamp(reachTo - clock.frameReach, -REACH_SPEED * wall, REACH_SPEED * wall);
   clock.performing = transport.follow[0] !== 0 || transport.follow[1] !== 0 || clock.fold !== foldTo || clock.frameReach !== reachTo || clock.music.active || values.macroGlitch !== finite(params.macroGlitch, 0) || clock.ripples[0] >= 0 || clock.ripples[1] >= 0 || clock.ripples[2] >= 0;
 
@@ -789,8 +792,8 @@ const oscillate = (clock: EvolveClock, period: number, offset: number, speed: nu
  */
 const FRAME_REACH = 0.72, FRAME_KEEP = 0.14, WIDE = 16 / 9;
 /** How much of a 16:9 frame's width this frame has. */
-const frameFit = (aspect: number): number => (aspect >= WIDE - 1e-6 ? 1 : clamp(aspect / WIDE, 0.1, 1));
-const reachFor = (scale: number, aspect: number): number => (frameFit(aspect) < 1 ? 1 : clamp((scale - 0.5) / 0.3, 0, 1));
+const frameFit = (aspect: number): number => (aspect >= WIDE * 0.99 ? 1 : clamp(aspect / WIDE, 0.1, 1)); // Within 1% is 16:9: a preview's size is rounded to whole pixels.
+const reachFor = (scale: number): number => clamp((scale - 0.5) / 0.3, 0, 1);
 const framed = (value: number, reach: number, limit: number, keep: number): number => {
   const size = Math.abs(value);
   if (reach <= 0 || size <= limit) return value;
@@ -928,13 +931,10 @@ function guardLight(clock: EvolveClock, out: DisplayList): void {
 export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Readonly<Record<string, number>>, out: DisplayList): void {
   out.clear();
   const seed = seedValue >>> 0;
-  const density = unit(params.macroDensity), tension = unit(params.macroTension), chaos = unit(params.macroOrder), heat = unit(params.macroHeat), glitch = unit(params.macroGlitch);
-  const speed = speedRate(params.macroSpeed), weight = 4.2 ** (unit(params.macroWeight) * 2 - 1), scale = 2.4 ** (unit(params.macroScale) * 2 - 1);
+  const density = unit(params.macroDensity), scale = 2.4 ** (unit(params.macroScale) * 2 - 1);
   const grow = growth(density);
   const ringGain = clamp(finite(params.ringCount, 7) / 7, 0, 3), spokeGain = clamp(finite(params.spokeCount, 12) / 12, 0, 4);
   const nodeGain = clamp(finite(params.nodeDensity, 0.5) * 2, 0, 2) * grow;
-  const arcShare = clamp(finite(params.ringArcShare, 0.35) / 0.35, 0, 2.2);
-  const arcMoved = Math.max(0, 1 - arcShare); // Away from its designed value, Arc share regrows hidden arcs, which then fade in over more of their length.
 
   // Where the journey is: which two forms, and how far between them.
   let from: Form, to: Form, amount: number, home = 0, key = Number.NaN;
@@ -971,8 +971,52 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
 
   if (!clock.exact) easePose(clock, scale);
 
+  const baseReach = clock.exact ? reachFor(unit(params.macroScale)) : clock.frameReach;
+  writeMarks(seed, clock, params, home, baseReach, out);
+  // A frame narrower than 16:9 changes the picture only when too little of it would be on screen.
+  if (frameFit(clock.aspect) < 1) {
+    const need = narrowNeed(out, clock.aspect);
+    let narrow = need;
+    if (!clock.exact) { narrow = clock.wall > 0 ? clock.narrowReach + clamp(need - clock.narrowReach, -NARROW_SPEED * clock.wall, NARROW_SPEED * clock.wall) : need; clock.narrowReach = narrow; }
+    if (narrow > baseReach) writeMarks(seed, clock, params, home, narrow, out);
+  }
+  if (!clock.exact) guardLight(clock, out);
+}
+
+/** How much a narrow frame must draw in: 0 while at least six marks and a fair length of line are on screen, 1 by five. */
+function narrowNeed(list: DisplayList, aspect: number): number {
+  const d = list.data, halfW = aspect / 2;
+  let marks = 0, length = 0;
+  for (let i = 0; i < list.count; i++) {
+    const at = i * STRIDE, kind = d[at];
+    if (kind === PRIMITIVE.dot || d[at + 9] < 0.05) continue;
+    const segment = kind === PRIMITIVE.segment, radius = Math.abs(d[at + 3]), start = kind === PRIMITIVE.arc ? d[at + 4] : 0, sweep = kind === PRIMITIVE.arc ? d[at + 5] : TAU;
+    const size = segment ? Math.hypot(d[at + 3] - d[at + 1], d[at + 4] - d[at + 2]) : radius * sweep;
+    let inside = 0;
+    for (let s = 0; s < 8; s++) {
+      const t = (s + 0.5) / 8;
+      const x = segment ? d[at + 1] + (d[at + 3] - d[at + 1]) * t : d[at + 1] + Math.cos(start + sweep * t) * radius;
+      const y = segment ? d[at + 2] + (d[at + 4] - d[at + 2]) * t : d[at + 2] + Math.sin(start + sweep * t) * radius;
+      inside += clamp((halfW - Math.abs(x)) / 0.02, 0, 1) * clamp((0.5 - Math.abs(y)) / 0.02, 0, 1);
+    }
+    const seen = size * inside / 8;
+    marks += smooth(seen / 0.016);
+    length += seen;
+  }
+  return Math.max(1 - smooth(marks - 5), 1 - smooth((length - 0.3) / 0.2));
+}
+
+/** Writes every mark of the pose. `reach` is how far anything beyond the frame is drawn back. */
+function writeMarks(seed: number, clock: EvolveClock, params: Readonly<Record<string, number>>, home: number, reach: number, out: DisplayList): void {
+  out.clear();
+  const pose = clock.pose;
+  const tension = unit(params.macroTension), chaos = unit(params.macroOrder), heat = unit(params.macroHeat), glitch = unit(params.macroGlitch);
+  const speed = speedRate(params.macroSpeed), weight = 4.2 ** (unit(params.macroWeight) * 2 - 1), scale = 2.4 ** (unit(params.macroScale) * 2 - 1);
+  const arcShare = clamp(finite(params.ringArcShare, 0.35) / 0.35, 0, 2.2);
+  const arcMoved = Math.max(0, 1 - arcShare);
+
   // Turning, breathing and drift, all continuous in the motion clock.
-  const organic = chaos * chaos * (1 - home), reach = clock.exact ? reachFor(unit(params.macroScale), clock.aspect) : clock.frameReach;
+  const organic = chaos * chaos * (1 - home);
   const fit = frameFit(clock.aspect), reachX = FRAME_REACH * fit, reachY = FRAME_REACH * (0.6 + 0.4 * fit), reachR = FRAME_REACH * fit ** 0.9, keep = FRAME_KEEP * fit;
   const draw = (1.22 - tension * 0.44) * (1 - clock.gather * 0.62) * scale, tuck = clock.exact ? foldFor(unit(params.macroScale)) : clock.fold;
   const breathDepth = 0.008 + tension * 0.012;
@@ -1080,5 +1124,4 @@ export function evaluateEvolve(seedValue: number, clock: EvolveClock, params: Re
       out.push(PRIMITIVE.arc, shardX, shardY, radius * (1 + (b - 0.5) * reachOut), start, sweep, -(1.2 + b * 2) * Math.max(0.7, weight) / REFERENCE_HEIGHT, 0.16 + glitchShape * 0.3, colour, glitchShape * 0.95, 0, a);
     }
   }
-  if (!clock.exact) guardLight(clock, out);
 }

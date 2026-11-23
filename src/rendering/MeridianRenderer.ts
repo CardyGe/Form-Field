@@ -332,12 +332,10 @@ export class MeridianRenderer {
         if (!isEvolveLayer(original)) continue;
         const layer = this.evaluated.get(original.id)!, entry = this.entryFor(original.id);
         runtime.structure = original.params; runtime.live = !slitActive(original); runtime.duration = duration;
-        if (layer.opacity > 0) {
-          this.loadLive(layer, original.params);
-          this.prepareEvolve(layer, phase, width, height, runtime, entry);
-          entry.stamp = this.compositionStamp; entry.phase = phase;
-          this.measureEntry(layer, entry, width, height);
-        } else entry.light = 0;
+        this.loadLive(layer, original.params);
+        this.prepareEvolve(layer, phase, width, height, runtime, entry);
+        entry.stamp = this.compositionStamp; entry.phase = phase;
+        this.measureEntry(layer, entry, width, height);
         this.areas[n] = entry.area; this.lights[n] = entry.light; this.reds[n] = entry.red; n++;
       }
       composeLight(this.areas, this.lights, this.reds, n, this.composed);
@@ -377,8 +375,7 @@ export class MeridianRenderer {
         for (let i = 0; i < evolve.length; i++) {
           const original = evolve[i], layer = evaluateLayer(original, at), runtime = this.sampleRuntime, entry = this.sampleEntry;
           runtime.structure = original.params; runtime.duration = duration;
-          if (layer.opacity > 0) { this.loadLive(layer, original.params); this.prepareEvolve(layer, at, width, height, runtime, entry); this.measureEntry(layer, entry, width, height); }
-          else entry.light = 0;
+          this.loadLive(layer, original.params); this.prepareEvolve(layer, at, width, height, runtime, entry); this.measureEntry(layer, entry, width, height);
           this.areas[i] = entry.area; this.lights[i] = entry.light; this.reds[i] = entry.red;
         }
         composeLight(this.areas, this.lights, this.reds, evolve.length, out);
