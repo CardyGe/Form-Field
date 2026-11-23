@@ -881,6 +881,58 @@ try {
     if (report.flashTone[name].on > 6) failures.push(`a ${name} export shows ${report.flashTone[name].on} changes in a second with the guard on`);
   }
 
+  // The export gap: fast Motion on bloom, line glow and core strobed an Evolve export with the guard on. Those routes are now
+  // ignored on Evolve, so each scene must render exactly as it does with no route, and stay inside the limit.
+  report.flashLight = await page.evaluate(async () => {
+    const { m, studio } = window.meridianQA, w = 160, h = 90, cols = 32, rows = 18, total = 120;
+    const make = (key, routed) => {
+      const project = m.createProject(), layer = m.createLayer('meridian');
+      Object.assign(layer.params, { scoreStyle: 2, seed: 3, macroDensity: 1, macroHeat: 1, ringWeight: 14, spokeWeight: 14, lightExposure: 3, safetyFlashGuard: 1 });
+      if (routed) layer.modulations[key] = { kind: 'pulse', cycles: 10, phase: 0, amount: 1, points: [], range: { min: 0, max: key === 'lightCore' ? 3 : 2 } };
+      project.layers = [layer]; project.background = '#000000'; project.duration = 2; project.fps = { num: 60, den: 1 };
+      return project;
+    };
+    const linear = v => { const c = v / 255; return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; };
+    const frames = async project => {
+      const series = [], raw = [];
+      for (let f = 0; f < total; f++) {
+        const bitmap = await createImageBitmap(new Blob([await studio.exportPNG(project, m.phaseAtFrame(f, total), w, h)], { type: 'image/png' }));
+        const canvas = new OffscreenCanvas(w, h), paint = canvas.getContext('2d', { willReadFrequently: true }); paint.drawImage(bitmap, 0, 0);
+        const px = paint.getImageData(0, 0, w, h).data, cells = new Float32Array(cols * rows), per = (w / cols) * (h / rows);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const at = (y * w + x) * 4; cells[Math.floor(y / h * rows) * cols + Math.floor(x / w * cols)] += (.2126 * linear(px[at]) + .7152 * linear(px[at + 1]) + .0722 * linear(px[at + 2])) / per; }
+        series.push(cells); raw.push(px);
+      }
+      return { series, raw };
+    };
+    const count = loop => {
+      const series = [...loop, ...loop, ...loop], anchor = Float32Array.from(series[0]), way = new Int8Array(cols * rows), events = [];
+      let last = 0;
+      for (let f = 1; f < series.length; f++) {
+        const v = series[f]; let up = 0, down = 0;
+        for (let i = 0; i < v.length; i++) {
+          if (way[i] === 1 && v[i] > anchor[i]) anchor[i] = v[i]; if (way[i] === -1 && v[i] < anchor[i]) anchor[i] = v[i];
+          if (way[i] >= 0 && v[i] <= anchor[i] - .1 && v[i] < .8) { way[i] = -1; anchor[i] = v[i]; down++; }
+          else if (way[i] <= 0 && v[i] >= anchor[i] + .1) { way[i] = 1; anchor[i] = v[i]; up++; }
+        }
+        const rose = up / v.length > .25, fell = down / v.length > .25;
+        if (rose && fell) { events.push(f); last = 0; } else if (rose && last !== 1) { events.push(f); last = 1; } else if (fell && last !== -1) { events.push(f); last = -1; }
+      }
+      let worst = 0; for (let i = 0; i < events.length; i++) { let n = 0; for (let k = i; k < events.length && events[k] < events[i] + 60; k++) n++; worst = Math.max(worst, n); }
+      return worst;
+    };
+    const out = {};
+    for (const key of ['lightBloomAmount', 'lightLineGlow', 'lightCore']) {
+      const routed = await frames(make(key, true)), plain = await frames(make(key, false));
+      out[key] = { changes: count(routed.series), same: routed.raw.every((px, f) => px.every((v, i) => v === plain.raw[f][i])) };
+    }
+    return out;
+  });
+  console.log('flash light controls (changes in the worst second)', JSON.stringify(report.flashLight));
+  for (const [key, r] of Object.entries(report.flashLight)) {
+    if (r.changes > 6) failures.push(`a ${key} Motion route shows ${r.changes} changes in a second on an Evolve export`);
+    if (!r.same) failures.push(`a saved ${key} Motion route still changes an Evolve export`);
+  }
+
   report.ui = await verifyInApp(page, failures);
   console.log(JSON.stringify({ firstFrame: report.firstFrame, mark: report.mark, structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));

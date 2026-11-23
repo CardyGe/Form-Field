@@ -123,6 +123,7 @@ export function targetOptions(show: Pick<ShowDocument, 'shapes' | 'sources'>): {
 
 /** Whether a setting can follow sound: preparation settings, the seed and whole-number choices only change by restarting. */
 export function reactable(d: Pick<ParameterDefinition, 'key' | 'step' | 'preparation'>): { ok: true } | { ok: false; why: 'restarts' } {
+  if (d.key === 'moveRecall') return { ok: true }; // A pad choosing a slot: it never restarts anything.
   return d.preparation || d.key === 'seed' || d.step >= 1 ? { ok: false, why: 'restarts' } : { ok: true };
 }
 

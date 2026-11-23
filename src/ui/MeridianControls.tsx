@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Icon, Parameter } from './LayerControls';
-import { MACRO_KEYS, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
+import { MACRO_KEYS, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS, motionIgnored } from '../meridian/parameters';
 import { musicStatus } from '../meridian/music-status';
 import { EVOLVE_INACTIVE, applyLockedVariation, applyMorph, captureMorph, filterParameters, MAX_STORED_SEED, MERIDIAN_CHOICES, PANEL_PARAMETERS, performanceShortcut, KeyHolds, recallSeed, SEED_SLOTS, storeSeed, toggleGroupLock, type MoveKey, type PerformanceAction } from '../meridian/panel';
 import { heldMoves } from '../meridian/held-moves';
@@ -291,7 +291,7 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
     const unused = evolve && EVOLVE_INACTIVE.includes(d.key);
     const body = d.key === 'safetyFlashGuard' ? <FlashGuardControl value={value} onChange={n => setParam(d.key, n)} /> : d.key === 'seed' ? <SeedField value={value} onChange={n => setParam('seed', n)} />
       : choices ? <ChoiceParameter label={d.label} name={d.label} options={[...choices]} value={value} resetTo={d.default} onChange={n => setParam(d.key, n)} />
-      : <Parameter definition={d} value={value} animated={!!layer.modulations[d.key]} onChange={n => setParam(d.key, n)} onAnimate={!onAnimateKey || d.step === 1 || d.structural ? undefined : () => onAnimateKey(d.key)} onStart={onStart} onEnd={onEnd} />;
+      : <Parameter definition={d} value={value} animated={!!layer.modulations[d.key]} onChange={n => setParam(d.key, n)} onAnimate={!onAnimateKey || d.step === 1 || d.structural || motionIgnored(layer, d.key) ? undefined : () => onAnimateKey(d.key)} onStart={onStart} onEnd={onEnd} />;
     return <div className={`m-param ${unused ? 'is-unused' : ''}`} key={d.key} title={unused ? 'Not used by Evolve' : undefined}>{unused && <span className="m-unused">Not in Evolve</span>}{queued?.has(d.key) && <span className="m-next">Next phrase</span>}{body}</div>;
   };
   return <div className="meridian-controls">

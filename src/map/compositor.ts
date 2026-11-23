@@ -27,6 +27,8 @@ import { FrameHistory } from './frameHistory';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
 import type { Link } from '../react/links';
 import type { Signals } from '../react/signals';
+import { StructureHold } from '../meridian/structure-hold';
+import { WALL_CELLS, WallFlashGuard, wallGuardPolicy, type WallGuardPolicy } from '../meridian/wall-guard';
 import { borderPicture, borderRunPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
@@ -60,6 +62,8 @@ interface Slot {
   /** A composition that could not be prepared is not tried again every frame; a new composition is. */
   failedProject: Project | null;
   prepares: number;
+  /** Show time since this source last drew. It stands still under Freeze, so the Conductor does. */
+  performanceDt: number;
 }
 
 /** A shape's crossfade from what it played before to what it plays now. start is set once the new content is ready. */
@@ -101,8 +105,14 @@ export interface CompositorStats {
   adjusted?: number;
   staggered?: number;
   delayed?: number;
+  /** Wall Flash Guard, for a show with Meridian: what it is doing and what it costs. */
+  /** For the scripted checks: each Meridian source's Conductor and moves. */
+  meridian?: Record<string, { status: string; beats: number; wave: number; frames: number; drops: number; holds: number; phase: number }>;
+  flashGuard?: { on: boolean; warn: boolean; limiting: boolean; gain: number; saturation: number | null; cpuMs: number; gpuMs: number | null; dims: number } | null;
 }
 
+/** Runs each frame for each source, so it allocates nothing. */
+const hasMeridian = (project: Project): boolean => { for (let i = 0; i < project.layers.length; i++) if (project.layers[i].kind === 'meridian') return true; return false; };
 const kindsOf = (project: Project | null | undefined) => project ? project.layers.map(l => l.kind).join(',') : '';
 const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255, parseInt(hex.slice(5, 7), 16) / 255];
 const opaque = (hex: string): [number, number, number, number] => [...rgb(hex), 1];
@@ -151,6 +161,13 @@ export class MapCompositor {
   private fadeClock = 0;
   private drawnShapes = new Set<string>();
   private overlayFor: { show: PlayShow; options: string } | null = null;
+  private readonly structureHold = new StructureHold();
+  private readonly wallGuard = new WallFlashGuard();
+  private guardPolicy: WallGuardPolicy = wallGuardPolicy([]);
+  private readonly guardCells = new Uint8Array(WALL_CELLS * 4);
+  private guardAt: number | null = null;
+  private guardCost = 0;
+  private guardDims = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
@@ -165,7 +182,7 @@ export class MapCompositor {
       for (const slot of this.slots.values()) slot.texture = null;
       // The old pictures were on the lost card: those fades end, and the shapes show what they play now.
       for (const [id, fade] of [...this.fades]) if (typeof fade.from !== 'string') this.fades.delete(id);
-      this.lost = false; this.dirty = true;
+      this.lost = false; this.dirty = true; this.guardAt = null;
       this.updateLive();
       this.updateVideos();
     });
@@ -188,6 +205,10 @@ export class MapCompositor {
     this.show = show;
     this.projects = this.played(show, projects);
     this.dirty = true;
+    const guardWasOn = this.guardPolicy.on;
+    this.guardPolicy = wallGuardPolicy(this.projects.values());
+    // Turned off, or the last Meridian source left: the wall is exactly as drawn from the next frame.
+    if (guardWasOn && !this.guardPolicy.on) { this.wallGuard.reset(); this.guardAt = null; }
     // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
     for (const shape of show.shapes) {
@@ -322,13 +343,15 @@ export class MapCompositor {
         // In tempo sync the loop follows the clock's beats; without a clock it runs at its own speed.
         const synced = source.tempoSync ? tempoPhase(this.signals, source.tempoSync) : null;
         slot.phase = synced ?? advancePhase(slot.phase, seconds, slot.project, this.drawn.speed.get(source.id) ?? source.speed);
+        slot.performanceDt += seconds;
       }
       if (!draw) continue;
       // Drawn once, at the size of the largest place it lands on the stage.
       // Sized from the shapes as set, not as links move them: a zoom on the bass would otherwise resize the instrument many times a second.
       const size = sourceSizeFor(users.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), scale);
       try {
-        slot.renderer.render(withParams(slot.project, this.drawn.params.get(source.id)), slot.phase, size.width, size.height, { signals: this.signals, now });
+        if (hasMeridian(slot.project)) { slot.renderer.setPerformanceSignals(this.signals, slot.performanceDt); slot.performanceDt = 0; }
+        slot.renderer.render(withParams(slot.project, this.structureHold.apply(source.id, slot.project, this.drawn.params.get(source.id), slot.phase)), slot.phase, size.width, size.height, { signals: this.signals, now });
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);
         rendered = true;
         if (slot.failedProject === null) slot.failed = null;
@@ -354,7 +377,9 @@ export class MapCompositor {
     // A border run moves every frame (it holds with Freeze).
     const running = !this.frozen && this.show.shapes.some(s => s.border.run && s.border.width > 0 && !s.blocker && shownOnWall(this.show, s, this.options.solo));
     const staggering = this.keepHistories(show);
-    const drawn = this.dirty || rendered || running || staggering || this.fades.size > 0 || this.glides.size > 0;
+    // A dim still easing back is drawn until it is gone, even over a still picture.
+    const easing = !this.frozen && this.guardPolicy.on && (this.wallGuard.gain < 1 || this.wallGuard.saturation !== Infinity);
+    const drawn = this.dirty || rendered || running || staggering || easing || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
     this.frameIndex++;
     const work = performance.now() - started;
@@ -384,7 +409,30 @@ export class MapCompositor {
       // Stage 7, for the scripted checks: sources keeping a history for Stagger, and shapes shown with a delay.
       staggered: this.histories.size, delayed: this.delays.size,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
+      meridian: Object.fromEntries([...this.slots].flatMap(([id, s]) => { const report = s.renderer?.meridianReport(); return report ? [[id, { ...report, phase: s.phase }]] : []; })),
+      flashGuard: this.guardPolicy.present ? { on: this.guardPolicy.on, warn: this.guardPolicy.warn, limiting: this.wallGuard.limiting, gain: this.wallGuard.gain, saturation: Number.isFinite(this.wallGuard.saturation) ? this.wallGuard.saturation : null, cpuMs: this.guardCost, gpuMs: this.gpu.guardGpuMs, dims: this.guardDims } : null,
     };
+  }
+
+  /** For the scripted checks: what one wall measurement costs the graphics card, in ms, net of an empty round trip. */
+  probeGuardCost(): { medianMs: number; worstMs: number } | null {
+    if (this.lost) return null;
+    const gl = this.gpu.gl, costs: number[] = [], pixel = new Uint8Array(4);
+    for (let i = 0; i < 40; i++) {
+      while (this.gpu.collectMeasure(this.guardCells) !== null) { /* make room */ }
+      // Reading a pixel really waits for the graphics card; gl.finish does not in Chromium.
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      const a = performance.now(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      const b = performance.now();
+      if (!this.gpu.measureStage(b)) continue;
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      costs.push(Math.max(0, performance.now() - b - (b - a)));
+    }
+    while (this.gpu.collectMeasure(this.guardCells) !== null) { /* leave nothing behind */ }
+    this.guardAt = null;
+    if (!costs.length) return null;
+    costs.sort((x, y) => x - y);
+    return { medianMs: costs[costs.length >> 1], worstMs: costs[costs.length - 1] };
   }
 
   dispose(): void {
@@ -410,6 +458,7 @@ export class MapCompositor {
     const gl = slot.canvas.getContext('webgl2') ?? slot.canvas.getContext('webgl');
     gl?.getExtension('WEBGL_lose_context')?.loseContext();
     this.slots.delete(id);
+    this.structureHold.forget(id);
   }
 
   private endFade(id: string): void {
@@ -432,7 +481,7 @@ export class MapCompositor {
     if (this.slots.size >= MAX_LIVE_INSTRUMENTS) { this.overLimit.add(id); return null; }
     this.restartAt.delete(id);
     const canvas = document.createElement('canvas');
-    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0 };
+    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0, performanceDt: 0 };
     // A lost context (the graphics card reset, or too many contexts) drops the source: its shape plays its own fill
     // rather than freezing on its last picture, and the source starts again after a pause.
     canvas.addEventListener('webglcontextlost', event => {
@@ -539,6 +588,10 @@ export class MapCompositor {
           this.drawShape(brightness === shape.brightness ? shape : { ...shape, brightness }, now, alpha);
         }
       } else this.glides.clear();
+    }
+    // After the shapes and before the overlays and corners: the guard judges the finished picture, and never the operator's marks.
+    if (this.guardPolicy.on) this.guardWall();
+    if (!this.options.blackout) {
       const overlay = this.overlayPicture();
       if (overlay) gpu.layer(overlay);
     }
@@ -546,6 +599,24 @@ export class MapCompositor {
     // A fade on a shape that is not being drawn (hidden, a Blocker, test grid, blackout) has nothing to show: it ends,
     // so a still show stops being redrawn.
     for (const id of [...this.fades.keys()]) if (!this.drawnShapes.has(id)) this.endFade(id);
+  }
+
+  /**
+   * One frame of Wall Flash Guard. A blackout is measured too, so a Blackout key hammered in time still counts as flashing,
+   * but it is never dimmed: black is already black. Freeze holds the dim where it is.
+   */
+  private guardWall(): void {
+    const started = performance.now(), guard = this.wallGuard, gpu = this.gpu;
+    if (this.frozen) { while (gpu.collectMeasure(this.guardCells) !== null) { /* readings from before Freeze */ } this.guardAt = null; }
+    else {
+      gpu.measureStage(started);
+      for (let at = gpu.collectMeasure(this.guardCells); at !== null; at = gpu.collectMeasure(this.guardCells)) {
+        if (this.guardAt !== null) guard.step((at - this.guardAt) / 1000, this.guardCells, this.guardPolicy.settings);
+        this.guardAt = at;
+      }
+    }
+    if (!this.options.blackout && (guard.gain < 1 || guard.saturation < 1)) { gpu.dimStage(guard.gain, guard.saturation); this.guardDims++; }
+    this.guardCost = this.guardCost * .95 + (performance.now() - started) * .05;
   }
 
   /** The overlays drawn in 2D, and given to the graphics card only when they change. Null when there are none. */

@@ -1197,6 +1197,195 @@ try {
     await studio.getByRole('region', { name: 'Map' }).waitFor();
   });
 
+  // ---- Meridian on the wall: music, moves and Wall Flash Guard ----
+  execFileSync(path.join(root, 'node_modules/.bin/tsx'), [path.join(root, 'scripts/meridian-map-show.ts'), out]);
+  const openFile = async name => {
+    await clearStage();
+    await nextPick(path.join(out, `meridian-${name}.formshow`));
+    await studio.getByTitle('Open a show file; it replaces the shapes here').click();
+    await studio.waitForFunction(() => document.querySelectorAll('.map-shape-list li:not(.map-group-row)').length > 0, null, { timeout: 8000 });
+  };
+  const meridianStats = async (test, what, ms = 12000) => {
+    const until = Date.now() + ms; let s;
+    while (Date.now() < until) { s = await output.evaluate(() => window.__mapStats); if (s && test(s)) return s; await sleep(150); }
+    throw new Error(`${what}: ${JSON.stringify({ meridian: s?.meridian, flashGuard: s?.flashGuard, failing: s?.failing })}`);
+  };
+  // Real wall pixels, every drawn frame, read as linear light and counted with the same rule as the export checks.
+  const captureFlashes = (ms, step = .1) => output.evaluate(async ([ms, step]) => {
+    const c = document.querySelector('canvas'), w = 160, h = 90, cols = 32, rows = 18, small = new OffscreenCanvas(w, h), x = small.getContext('2d', { willReadFrequently: true });
+    x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+    const linear = v => { const n = v / 255; return n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4; }, table = Float32Array.from({ length: 256 }, (_, i) => linear(i));
+    const series = [], times = [], started = performance.now();
+    await new Promise(done => { const tick = now => {
+      x.drawImage(c, 0, 0, w, h);
+      const d = x.getImageData(0, 0, w, h).data, cells = new Float32Array(cols * rows), per = (w / cols) * (h / rows);
+      for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) { const at = (py * w + px) * 4; cells[Math.floor(py / h * rows) * cols + Math.floor(px / w * cols)] += (.2126 * table[d[at]] + .7152 * table[d[at + 1]] + .0722 * table[d[at + 2]]) / per; }
+      series.push(cells); times.push(now);
+      if (now - started < ms) requestAnimationFrame(tick); else done();
+    }; requestAnimationFrame(tick); });
+    const anchor = Float32Array.from(series[0]), way = new Int8Array(cols * rows), events = [];
+    let last = 0, biggest = 0, peak = 0;
+    for (let f = 1; f < series.length; f++) {
+      const v = series[f]; let up = 0, down = 0;
+      for (let i = 0; i < v.length; i++) {
+        biggest = Math.max(biggest, Math.abs(v[i] - series[f - 1][i])); peak = Math.max(peak, v[i]);
+        if (way[i] === 1 && v[i] > anchor[i]) anchor[i] = v[i]; if (way[i] === -1 && v[i] < anchor[i]) anchor[i] = v[i];
+        if (way[i] >= 0 && v[i] <= anchor[i] - step && v[i] < .8) { way[i] = -1; anchor[i] = v[i]; down++; }
+        else if (way[i] <= 0 && v[i] >= anchor[i] + step && anchor[i] < .8) { way[i] = 1; anchor[i] = v[i]; up++; }
+      }
+      const rose = up / v.length > .25, fell = down / v.length > .25;
+      if (rose && fell) { events.push(times[f]); last = 0; } else if (rose && last !== 1) { events.push(times[f]); last = 1; } else if (fell && last !== -1) { events.push(times[f]); last = -1; }
+    }
+    let worst = 0; for (let i = 0; i < events.length; i++) { let n = 0; for (let k = i; k < events.length && events[k] < events[i] + 1000; k++) n++; worst = Math.max(worst, n); }
+    return { changes: worst, flashes: Math.ceil(worst / 2), frames: series.length, fps: Math.round(series.length / ((times.at(-1) - times[0]) / 1000)), step: +biggest.toFixed(3), peak: +peak.toFixed(3) };
+  }, [ms, step]);
+  const meridianReport = {};
+  // An earlier check closed the projector window with Escape.
+  if (!app.windows().some(w => /#map-output/.test(w.url()))) {
+    const opened = app.waitForEvent('window', { timeout: 15000 });
+    await studio.getByRole('button', { name: 'Open output' }).click();
+    output = await opened;
+    await output.waitForURL(/#map-output/);
+    await output.waitForSelector('canvas');
+    await studio.getByRole('button', { name: 'Close output' }).waitFor({ timeout: 10000 });
+    output.on('pageerror', e => errors.push(String(e)));
+  }
+
+  await check('Meridian plays on the real wall, reacts to the test beat, and the operator window alone holds the sound input', async () => {
+    await openFile('calm');
+    await reactReady();
+    await meridianStats(s => s.meridian?.ev?.frames > 30 && s.meridian?.ev2 && s.meridian?.ev3, 'Evolve is not playing on the wall');
+    const before = await output.evaluate(() => window.__mapStats.prepares);
+    await react('testBeat', true);
+    const heard = await meridianStats(s => s.meridian?.ev?.status === 'locked' && s.meridian.ev.wave > .01, 'the Conductor did not lock to the test beat', 20000);
+    const after = await output.evaluate(() => window.__mapStats.prepares);
+    assert.deepEqual(after, before, 'signals made a source prepare again');
+    const inputs = await output.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput' && d.label).length);
+    assert.equal(inputs, 0, 'the wall window can see a labelled audio input');
+    const refused = await output.evaluate(async () => { try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(t => t.stop()); return false; } catch { return true; } });
+    assert.ok(refused, 'the wall window was given the microphone');
+    meridianReport.heard = heard.meridian.ev;
+  });
+
+  await check('proof picture: Evolve on several mapped shapes, reacting to the test beat', async () => {
+    await sleep(1500);
+    const shot = await sample(output, [[.18, .3]]);
+    await fs.mkdir(path.join(root, 'work/meridian'), { recursive: true });
+    await fs.writeFile(path.join(root, 'work/meridian/map-wall.png'), Buffer.from(shot.png, 'base64'));
+    const lit = await output.evaluate(() => { const c = document.querySelector('canvas'), o = new OffscreenCanvas(480, 270), x = o.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0, 480, 270); const d = x.getImageData(0, 0, 480, 270).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 90) n++; return n / (d.length / 4); });
+    assert.ok(lit > .004, `the wall is nearly empty (${lit})`);
+    meridianReport.proofLit = +lit.toFixed(4);
+  });
+
+  await check('two shapes sharing a source show the same picture', async () => {
+    const same = await output.evaluate(() => {
+      const c = document.querySelector('canvas'), o = new OffscreenCanvas(c.width, c.height), x = o.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0);
+      const box = (fx, fy, fw, fh) => x.getImageData(Math.round(fx * c.width), Math.round(fy * c.height), Math.round(fw * c.width), Math.round(fh * c.height)).data;
+      const a = box(60 / 1920, 60 / 1080, 600 / 1920, 540 / 1080), b = box(720 / 1920, 60 / 1080, 600 / 1920, 540 / 1080); let far = 0, lit = 0;
+      for (let i = 0; i < a.length; i += 4) { if (a[i] + a[i + 1] + a[i + 2] > 30) lit++; if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 36) far++; }
+      return { far: far / (a.length / 4), lit: lit / (a.length / 4) };
+    });
+    assert.ok(same.lit > .005, `nothing is lit (${same.lit})`);
+    assert.ok(same.far < .01, `${(same.far * 100).toFixed(2)} % of the pixels differ`);
+    meridianReport.shared = same;
+  });
+
+  await check('a calm Evolve wall is not dimmed, with the test beat playing', async () => {
+    const seen = [];
+    for (let i = 0; i < 16; i++) { const s = await output.evaluate(() => window.__mapStats.flashGuard); seen.push(s); await sleep(500); }
+    assert.ok(seen.every(s => s?.on), 'the guard is not on');
+    assert.ok(seen.every(s => s.gain === 1 && s.saturation === null && s.dims === seen[0].dims), `dimmed: ${JSON.stringify(seen.at(-1))}`);
+    assert.equal(await studio.locator('.map-flash-guard').count(), 0, 'a calm wall says it is limiting');
+    meridianReport.calm = { gain: seen.at(-1).gain, cpuMs: seen.at(-1).cpuMs, gpuMs: seen.at(-1).gpuMs, fps: (await output.evaluate(() => window.__mapStats.fps)) };
+  });
+
+  await check('a MIDI note fires Drop once and Hold once through their links', async () => {
+    const before = (await output.evaluate(() => window.__mapStats.meridian.ev));
+    await react('midi', [0x90, 60, 127]); await sleep(1300);
+    await react('midi', [0x80, 60, 0]); await sleep(1300);
+    const dropped = await meridianStats(s => s.meridian.ev.drops === before.drops + 1, 'Drop did not fire exactly once', 4000);
+    await react('midi', [0x90, 62, 127]); await sleep(1300);
+    await react('midi', [0x80, 62, 0]); await sleep(1300);
+    const held = await meridianStats(s => s.meridian.ev.holds === before.holds + 1, 'Hold did not fire exactly once', 4000);
+    assert.equal(held.meridian.ev.drops, dropped.meridian.ev.drops);
+  });
+
+  await check('Freeze holds the Conductor and evolution; a scene of the same source does not jump it; Blackout wins', async () => {
+    const freeze = studio.getByRole('button', { name: 'Freeze', exact: true });
+    await freeze.click(); await sleep(1300);
+    const a = (await output.evaluate(() => window.__mapStats.meridian.ev)); await sleep(1500);
+    const b = (await output.evaluate(() => window.__mapStats.meridian.ev));
+    assert.equal(b.beats, a.beats, 'the Conductor moved under Freeze'); assert.equal(b.phase, a.phase, 'evolution moved under Freeze');
+    await freeze.click(); await sleep(1300);
+    const c = (await output.evaluate(() => window.__mapStats.meridian.ev));
+    assert.ok(c.beats > b.beats && c.beats - b.beats < 8, `after Freeze the beat went from ${b.beats} to ${c.beats}`);
+    const prepares = await output.evaluate(() => window.__mapStats.prepares);
+    const add = studio.getByRole('button', { name: '+ Scene' });
+    await add.click(); await add.click(); await sleep(1500);
+    const d = (await output.evaluate(() => window.__mapStats.meridian.ev));
+    assert.deepEqual(await output.evaluate(() => window.__mapStats.prepares), prepares, 'a scene change prepared the source again');
+    assert.ok(d.beats > c.beats && d.frames > c.frames, 'the source stopped at the scene change');
+    const blackout = studio.getByRole('button', { name: 'Blackout', exact: true });
+    await blackout.click(); await sleep(400);
+    const dark = await sample(output, [[.18, .3], [.5, .8]]);
+    assert.ok(dark.grid.every(p => near(p, BLACK, 0)), 'Blackout left light on the wall');
+    await blackout.click(); await sleep(300);
+    await react('testBeat', false);
+  });
+
+  await check('a mixed Dense, Pulse and Evolve strobe is brought within the limit in real wall pixels, inside the stage corners', async () => {
+    await openFile('strobe-off');
+    await meridianStats(s => s.meridian?.dense && s.meridian?.pulse && s.meridian?.evolve?.frames > 10, 'the strobe show is not playing');
+    await sleep(800);
+    const off = await captureFlashes(4000);
+    assert.ok(off.flashes >= 4, `the check is not strobing without the guard: ${JSON.stringify(off)}`);
+    assert.match(await studio.locator('.map-flash-guard').textContent(), /Flash guard is off/);
+    // Counted from before the strobe starts, so the guard's first second, when it has no rhythm to go on, is included.
+    await clearStage(); await sleep(700);
+    const counting = captureFlashes(10000);
+    await openFile('strobe-on');
+    await meridianStats(s => s.meridian?.dense && s.meridian?.pulse && s.meridian?.evolve?.frames > 10 && s.flashGuard?.on, 'the guarded strobe show is not playing');
+    const on = await counting;
+    assert.ok(on.flashes <= 3, `${on.flashes} flashes a second reach the wall with the guard on: ${JSON.stringify(on)}`);
+    // The onset count above holds the show's own first bright frame, which no guard can know is coming. Whether the dim
+    // itself adds a harder step is judged once the strobe is under way, as it is in the unguarded capture.
+    const steady = await captureFlashes(4000);
+    assert.ok(steady.flashes <= 3, `${steady.flashes} flashes a second once under way: ${JSON.stringify(steady)}`);
+    assert.ok(steady.step <= off.step + .02, `the guard made a harder step (${off.step} to ${steady.step})`);
+    const stats = await meridianStats(s => s.flashGuard?.limiting && s.flashGuard.gain < 1, 'the guard did not report limiting');
+    await studio.locator('.map-flash-guard', { hasText: 'Flash guard: limiting' }).waitFor({ timeout: 4000 });
+    const edge = await sample(output, [[.01, .5], [.99, .5], [.5, .01], [.5, .99]]);
+    assert.ok(edge.colours.every(p => near(p, BLACK, 0)), `the dim touched the bent stage's outside: ${JSON.stringify(edge.colours)}`);
+    await studio.getByRole('button', { name: 'Blackout', exact: true }).click(); await sleep(300);
+    const dark = await sample(output, [[.2, .5], [.5, .5], [.8, .5]]);
+    assert.ok(dark.colours.every(p => near(p, BLACK, 0)), 'Blackout did not win over the guard');
+    await studio.getByRole('button', { name: 'Blackout', exact: true }).click();
+    meridianReport.measureCost = await output.evaluate(() => window.__mapGuardProbe());
+    meridianReport.strobe = { off, onset: on, steady, gain: stats.flashGuard.gain, cpuMs: stats.flashGuard.cpuMs, gpuMs: stats.flashGuard.gpuMs, wallFps: stats.fps, level: stats.level };
+  });
+
+  await check('a show with no Meridian has no wall guard and strobes as it always did', async () => {
+    await openFile('plain');
+    await reactReady();
+    await meridianStats(s => s.flashGuard === null, 'the guard is present in a show without Meridian');
+    const timer = await studio.evaluate(() => { let on = false; window.__plainStrobe = setInterval(() => { on = !on; window.__studioTest.react.midi([0xb0, 20, on ? 127 : 0]); }, 100); return true; });
+    assert.ok(timer);
+    await sleep(600);
+    const seen = await captureFlashes(3000);
+    await studio.evaluate(() => clearInterval(window.__plainStrobe));
+    await react('midi', [0xb0, 20, 127]); await sleep(300);
+    const full = await sample(output, [[.5, .5]]);
+    assert.deepEqual(full.colours[0], [255, 255, 255], 'a full-brightness white shape is not exactly white');
+    assert.ok(seen.flashes >= 4, `the plain strobe was limited or did not run: ${JSON.stringify(seen)}`);
+    assert.equal((await output.evaluate(() => window.__mapStats.flashGuard)), null);
+    assert.equal(await studio.locator('.map-flash-guard').count(), 0);
+    meridianReport.plain = seen;
+    await react('midi', [0xb0, 20, 0]);
+    await clearStage();
+  });
+  await fs.writeFile(path.join(out, 'meridian-wall-report.json'), JSON.stringify(meridianReport, null, 2));
+  console.log('meridian wall', JSON.stringify(meridianReport));
+
   await check('no page errors', async () => { assert.deepEqual(errors, []); });
 } catch (error) {
   results.push(`FAIL  setup\n      ${String(error.stack || error).split('\n').slice(0, 3).join(' | ')}`);

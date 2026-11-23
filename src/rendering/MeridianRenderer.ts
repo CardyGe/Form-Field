@@ -205,6 +205,7 @@ export class MeridianRenderer {
   private readonly measureView = new THREE.Matrix3();
   private compositionStamp = 0;
   private lastComposition: number | null = null;
+  private readonly diagnostics = { status: 'free', beats: 0, wave: 0, frames: 0, drops: 0, holds: 0, dropDown: false, holdDown: false };
 
   constructor() {
     for (const [instances, material] of [[this.curves, this.curveMaterial], [this.marks, this.markMaterial]] as const) {
@@ -340,7 +341,7 @@ export class MeridianRenderer {
         this.measureEntry(layer, entry, width, height, read(original.params, 'safetyFlashGuard') >= .5, original.params);
       }
       this.lightGrid.finish();
-      const now = performance.now(), dt = this.lastComposition === null ? 1 / 60 : Math.min(.25, Math.max(0, (now - this.lastComposition) / 1000));
+      const now = performance.now(), dt = runtime.dt ?? (this.lastComposition === null ? 1 / 60 : Math.min(.25, Math.max(0, (now - this.lastComposition) / 1000)));
       this.lastComposition = now;
       gain = this.flashGuard.step(dt, this.lightGrid, settings);
       this.guardSaturation = this.flashGuard.saturationLimit;
@@ -364,6 +365,12 @@ export class MeridianRenderer {
   layerSaturation(original: Layer): number {
     const entry = this.evolveEntries.get(original.id);
     return entry && entry.stamp === this.compositionStamp && isEvolveLayer(original) ? entry.saturation : Infinity;
+  }
+
+  /** For the scripted checks: what the last Evolve layer's Conductor and moves did. */
+  performanceReport(): { status: string; beats: number; wave: number; frames: number; drops: number; holds: number } {
+    const { status, beats, wave, frames, drops, holds } = this.diagnostics;
+    return { status, beats, wave, frames, drops, holds };
   }
 
   /** A project was loaded: what linked moves changed in the last one must not carry over. */
@@ -445,7 +452,7 @@ export class MeridianRenderer {
     if (runtime?.live && performer) {
       let transport = this.evolveTransports.get(layer.id);
       if (!transport) { transport = createEvolveTransport(); this.evolveTransports.set(layer.id, transport); }
-      const now = performance.now(), last = this.evolveWalls.get(layer.id), wall = last === undefined ? 0 : (now - last) / 1000;
+      const now = performance.now(), last = this.evolveWalls.get(layer.id), wall = runtime.dt ?? (last === undefined ? 0 : (now - last) / 1000);
       this.evolveWalls.set(layer.id, now);
       if (wall > .25) transport.lastPhase = null; // Back after a gap, such as another style: carry on from here rather than leaping.
       const moves = this.evolveMoves, edit = performer.router.read(heldMoves, layer.id, layer.params, moves);
@@ -460,6 +467,11 @@ export class MeridianRenderer {
       const frame = performer.conductor.update(input);
       performer.light.update(frame, live, input.dt, transport.clock.music);
       musicStatus.status = frame.status; musicStatus.bpm = frame.bpm;
+      const seen = this.diagnostics;
+      seen.status = frame.status; seen.beats = frame.beats; seen.wave = transport.clock.music.wave; seen.frames++;
+      if (moves.drop && !seen.dropDown) seen.drops++;
+      if (moves.hold && !seen.holdDown) seen.holds++;
+      seen.dropDown = moves.drop; seen.holdDown = moves.hold;
       transport.clock.aspect = width / height;
       const clock = advanceEvolve(transport, phase, duration, wall, seed, live, moves);
       Object.assign(view, transport.values);

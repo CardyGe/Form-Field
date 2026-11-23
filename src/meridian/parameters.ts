@@ -12,6 +12,10 @@ export const MERIDIAN_UNLINKED: readonly string[] = ['seed', ...Array.from({ len
 /** Never varied by the Variation tool: identity, show safety, output flags, the performer's macro positions and one-shot actions. */
 export const MERIDIAN_FIXED: readonly string[] = [...MERIDIAN_UNLINKED, 'scoreStyle', 'scoreEvolution', 'scoreHoldShape', 'scoreBpm', 'scorePulseBars', 'scoreLoopPhrase', 'moveRecall', 'glitchSeed', 'safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField', 'outputMono', 'outputTransparent', ...MACRO_KEYS];
 
+/** On Evolve these are driven by the music through Flash Guard's path. A fast Motion route on them could strobe an export, so saved routes are ignored, not deleted. */
+export const EVOLVE_NO_MOTION: readonly string[] = ['lightBloomAmount', 'lightLineGlow', 'lightCore'];
+export const motionIgnored = (layer: { kind: string; params: Readonly<Record<string, number>> }, key: string): boolean =>
+  layer.kind === 'meridian' && Math.round(layer.params.scoreStyle ?? 2) === 2 && EVOLVE_NO_MOTION.includes(key);
 
 type Section = ParameterDefinition['section'];
 const SECTION: Record<string, Section> = {

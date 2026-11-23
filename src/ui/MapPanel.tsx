@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
+import { wallGuardPolicy } from '../meridian/wall-guard';
 import { useMap, showReacts, type MapTool } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
 import MapShapeList from './MapShapeList';
@@ -166,13 +167,15 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   // This screen's own Live, as the Live card's status line shows it while the output is closed.
   const [localLive, setLocalLive] = useState<{ running: boolean; state: string } | null>(null);
   const [localVideos, setLocalVideos] = useState<Record<string, { state: string; playsAs: number | null }>>({});
+  const [localLimiting, setLocalLimiting] = useState(false);
   useEffect(() => {
-    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); return; }
+    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); setLocalLimiting(false); return; }
     const timer = setInterval(() => {
       const next = compositor.current?.stats().live ?? null;
       setLocalLive(old => old?.running === next?.running && old?.state === next?.state ? old : next);
       const videos = compositor.current?.stats().videos ?? {};
       setLocalVideos(old => JSON.stringify(old) === JSON.stringify(videos) ? old : videos);
+      setLocalLimiting(!!compositor.current?.stats().flashGuard?.limiting);
     }, 500);
     return () => clearInterval(timer);
   }, [map.outputOpen]);
@@ -713,6 +716,10 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const penHint = pen ? `Pen: ${pen.points.length} point${pen.points.length === 1 ? '' : 's'}${pen.hole ? ' (a hole)' : ''} · click the first point or press Enter to close · Backspace takes back a point · Esc abandons` : null;
   const cornersHint = cornersMode ? `Stage corners: drag a numbered corner, or use the arrow keys on corner ${cornerIndex + 1} (Shift for 10 pixels, Tab for the next corner). This screen stays flat; the projector bends.` : null;
   const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? cornersHint ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
+  // Safety stays on screen whatever else the status line is saying.
+  const guardPolicy = useMemo(() => wallGuardPolicy(map.show.sources.map(s => s.project)), [map.show.sources]);
+  const guardLimiting = guardPolicy.on && (map.outputOpen ? !!wall?.flashGuard?.limiting : localLimiting);
+  const guardNote = guardPolicy.warn ? (guardPolicy.on ? 'Flash guard is off on one Meridian layer' : 'Flash guard is off: the wall is not limited') : guardLimiting ? 'Flash guard: limiting' : null;
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
   // The browser follows the single selected shape; it closes when there is none, or a Blocker or locked shape is picked.
   // Several shapes playing one instrument count as that one instrument: the browser changes it through the first of them.
@@ -786,7 +793,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} liveStatus={localLive} videoStatus={map.outputOpen ? map.wallState?.videos ?? {} : localVideos} />
       </aside>
     </div>
-    <footer className="map-status" role="status"><span>{status}</span>{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
+    <footer className="map-status" role="status"><span>{status}</span>{guardNote && <strong className={`map-flash-guard ${guardPolicy.warn ? 'is-off' : ''}`} role="alert">{guardNote}</strong>}{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
     {looksOpen && lookShape && <MapLookBrowser current={currentLook(lookShape)} colour={lookShape.colour} onPick={value => act.play(lookShape.id, value, sharedSelection || linkedChanges)} onClose={() => setLooksOpen(false)} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label={menu.shapeId ? 'Shape' : 'Stage'} entries={menuEntries(menu.shapeId)} onClose={() => setMenu(null)} />}
   </section>;

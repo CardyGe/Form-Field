@@ -122,6 +122,9 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
   }
 }
 
+/** `tempo.external` is set by the operator window when the tempo comes from MIDI, tap or a fixed number. */
+const MERIDIAN_INPUTS = ['audio.bass', 'audio.mids', 'audio.highs', 'audio.level', 'beat.pulse', 'tempo.bpm', 'tempo.external'];
+
 /**
  * The signals the wall needs each frame: what Map's links listen to, the tempo (for tempo sync), and, while the show
  * plays Live, what Live's own links listen to.
@@ -130,5 +133,7 @@ export function wallInputs(show: ShowDocument, live: LiveSettings | null): Set<s
   const inputs = new Set<string>(['tempo.beat', 'tempo.phase', ...show.links.map(l => l.input)]);
   if (live && usesLive(show)) for (const l of live.links) inputs.add(l.input);
   if (show.sources.some(s => s.project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1))) for (const input of EMBER_SMOKE_INPUTS) inputs.add(input);
+  // Meridian follows the music on the wall as it does in Studio, so it needs the sound and the tempo's source.
+  if (show.sources.some(s => s.project.layers.some(l => l.visible && l.kind === 'meridian'))) for (const input of MERIDIAN_INPUTS) inputs.add(input);
   return inputs;
 }

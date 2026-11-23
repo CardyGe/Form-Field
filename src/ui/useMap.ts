@@ -11,13 +11,10 @@ import { reactivity, type ReactivityEngine } from '../react/engine';
 import { fire, type TriggerAction } from '../react/links';
 import type { Signals } from '../react/signals';
 import { MeterStore } from '../react/meter';
-import { usesEmberSmokeAudio } from '../react/ember-smoke';
+import { showReacts } from './show-reacts';
 import { autoAdvanceDue, nextAutoScene } from '../map/wild';
 
-/** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
-export const showReacts = (show: ShowDocument) => show.links.length > 0 || show.triggers.length > 0 || show.sources.some(s => s.tempoSync !== null || s.project.layers.some(usesEmberSmokeAudio))
-  // Stage 7: a border run with the tempo, or auto-advance by bars, follows the beat.
-  || show.shapes.some(s => !!s.border.run?.beats) || show.autoAdvance?.unit === 'bars';
+export { showReacts };
 
 export type MapTool = 'select' | 'rectangle' | 'triangle' | 'ellipse' | 'pen';
 /** The shapes soloed, directly or through their group, that are still in the show. */
@@ -472,11 +469,13 @@ export function useMap(onError: (message: string) => void) {
     const off = engine.subscribe(now => {
       const { panelOpen, outputOpen, reacts } = listening.current;
       // The wall gets only the signals the show uses, so a controller with many knobs never makes the message too large.
+      // Whether the tempo stands on its own (MIDI, tap, a fixed number) travels with the signals, for Meridian's Conductor.
+      const heard = engine.prefs.tempo !== 'beat' ? { ...now, 'tempo.external': 1 } : now;
       if (outputOpen && reacts) {
         const used = wallInputs(stateRef.current.show, liveRef.current);
-        bridge?.send({ type: 'signals', signals: Object.fromEntries(Object.entries(now).filter(([k]) => used.has(k))) });
+        bridge?.send({ type: 'signals', signals: Object.fromEntries(Object.entries(heard).filter(([k]) => used.has(k))) });
       }
-      onSignals.current?.(now);
+      onSignals.current?.(heard);
       for (const action of fire(stateRef.current.show.triggers, prev, now)) triggerAct.current(action);
       prev = now;
       // The panel's meters update a few times a second, not every frame.

@@ -100,6 +100,46 @@ void main() {
   o = vec4(c.rgb, 1.);  // premultiplied over the black stage
 }`;
 
+const LINEAR = `vec3 lin(vec3 c) { return mix(c / 12.92, pow((c + .055) / 1.055, vec3(2.4)), step(.04045, c)); }
+vec3 enc(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }`;
+/** Wall Flash Guard: each output pixel is the true average light of a block of the source, kept as its square root in 8 bits. */
+const MEASURE = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform sampler2D uTex;
+uniform int uCell;
+uniform int uEncoded;       // 1: the source holds the square root of light; 0: it is the display-encoded stage
+// The sRGB curve to within about 1%, without a pow for each of the many texels read here.
+vec3 lin(vec3 c) { return c * (c * (c * .305306011 + .682171111) + .012522878); }
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy) * uCell;
+  vec3 sum = vec3(0.);
+  for (int y = 0; y < uCell; y++) for (int x = 0; x < uCell; x++) {
+    vec3 c = texelFetch(uTex, p + ivec2(x, y), 0).rgb;
+    sum += uEncoded == 1 ? c * c : lin(c);
+  }
+  o = vec4(sqrt(sum / float(uCell * uCell)), 1.);
+}`;
+/** The wall's master dim, in linear light, on the flat stage: before the corners, so it can never touch geometry. */
+const DIM = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform sampler2D uTex;
+uniform float uGain;
+uniform float uSaturation;
+${LINEAR}
+void main() {
+  vec4 c = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0);
+  vec3 l = lin(c.rgb);
+  float grey = dot(l, vec3(.2126, .7152, .0722));
+  l = max(vec3(grey) + (l - vec3(grey)) * uSaturation, vec3(0.)) * uGain;
+  o = vec4(enc(l), c.a);
+}`;
+const MEASURE_MIDDLE = { width: 480, height: 270 };
+const MEASURE_SIZE = { width: 48, height: 27 };
+const MEASURE_SLOTS = 4;
+interface MeasureSlot { buffer: WebGLBuffer; sync: WebGLSync | null; at: number }
+
 export interface Texture { tex: WebGLTexture; width: number; height: number }
 /** One shape to draw. Matrices are 3 × 3, row major, from stage pixels to the picture's 0..1 square. */
 export interface ShapeDraw {
@@ -136,6 +176,19 @@ export class Gpu {
   private copyFb!: WebGLFramebuffer;
   private drawFb!: WebGLFramebuffer;
   private blank!: Texture;
+  private measureP!: Program;
+  private dimP!: Program;
+  private middleTex!: WebGLTexture;
+  private middleFb!: WebGLFramebuffer;
+  private smallTex!: WebGLTexture;
+  private smallFb!: WebGLFramebuffer;
+  private dimCopy: WebGLTexture | null = null;
+  private measures: MeasureSlot[] = [];
+  private measureHead = 0;
+  private measureTail = 0;
+  private timer: { ext: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }; query: WebGLQuery | null; running: boolean } | null = null;
+  /** The graphics card's time for the wall guard's measuring passes, in ms, where the driver can report it. */
+  guardGpuMs: number | null = null;
   private readback: { buffer: WebGLBuffer; sync: WebGLSync } | null = null;
   private readbackBuffer: WebGLBuffer | null = null;
   /** Goes up whenever the context is set up again: a readback started before it will never arrive. */
@@ -173,6 +226,8 @@ export class Gpu {
     this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uLook', 'uAlpha', 'uDecor', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
     this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex']);
+    this.measureP = compile(MEASURE, ['uRect', 'uStage', 'uTex', 'uCell', 'uEncoded']);
+    this.dimP = compile(DIM, ['uRect', 'uStage', 'uTex', 'uGain', 'uSaturation']);
     this.quad = gl.createVertexArray()!;
     gl.bindVertexArray(this.quad);
     const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -187,6 +242,20 @@ export class Gpu {
     };
     ({ tex: this.stageTex, fb: this.stageFb } = target(STAGE_SIZE.width, STAGE_SIZE.height));
     ({ tex: this.previewTex, fb: this.previewFb } = target(PREVIEW.width, PREVIEW.height));
+    ({ tex: this.middleTex, fb: this.middleFb } = target(MEASURE_MIDDLE.width, MEASURE_MIDDLE.height));
+    ({ tex: this.smallTex, fb: this.smallFb } = target(MEASURE_SIZE.width, MEASURE_SIZE.height));
+    this.dimCopy = null;
+    this.measures = Array.from({ length: MEASURE_SLOTS }, () => {
+      const buffer = gl.createBuffer()!;
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+      gl.bufferData(gl.PIXEL_PACK_BUFFER, MEASURE_SIZE.width * MEASURE_SIZE.height * 4, gl.STREAM_READ);
+      return { buffer, sync: null, at: 0 };
+    });
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.measureHead = this.measureTail = 0;
+    const timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
+    this.timer = timerExt ? { ext: timerExt, query: null, running: false } : null;
+    this.guardGpuMs = null;
     this.copyFb = gl.createFramebuffer()!;
     this.drawFb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -290,6 +359,91 @@ export class Gpu {
     gl.uniform1i(u.uRun, d.run && d.decor ? 1 : 0); bind(4, 'uRunTex', d.run?.texture ?? null);
     gl.uniform2f(u.uRunAt, d.run?.head ?? 0, d.run?.length ?? 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  /**
+   * Wall Flash Guard: starts reading the stage as drawn so far into 48 x 27 cells, without waiting for the graphics card.
+   * The buffers are made once. Returns false when every reading is still on its way.
+   */
+  measureStage(at: number): boolean {
+    const gl = this.gl, slot = this.measures[this.measureHead % MEASURE_SLOTS];
+    if (slot.sync) return false;
+    const { program, u } = this.measureP, timer = this.timer;
+    let timing = false;
+    if (timer && !timer.running) { timer.query ??= gl.createQuery(); if (timer.query) { gl.beginQuery(timer.ext.TIME_ELAPSED_EXT, timer.query); timing = true; } }
+    gl.disable(gl.BLEND);
+    gl.useProgram(program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(u.uTex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.middleFb);
+    gl.viewport(0, 0, MEASURE_MIDDLE.width, MEASURE_MIDDLE.height);
+    gl.uniform4f(u.uRect, 0, 0, MEASURE_MIDDLE.width, MEASURE_MIDDLE.height); gl.uniform2f(u.uStage, MEASURE_MIDDLE.width, MEASURE_MIDDLE.height);
+    gl.bindTexture(gl.TEXTURE_2D, this.stageTex); gl.uniform1i(u.uCell, 4); gl.uniform1i(u.uEncoded, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.smallFb);
+    gl.viewport(0, 0, MEASURE_SIZE.width, MEASURE_SIZE.height);
+    gl.uniform4f(u.uRect, 0, 0, MEASURE_SIZE.width, MEASURE_SIZE.height); gl.uniform2f(u.uStage, MEASURE_SIZE.width, MEASURE_SIZE.height);
+    gl.bindTexture(gl.TEXTURE_2D, this.middleTex); gl.uniform1i(u.uCell, 10); gl.uniform1i(u.uEncoded, 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    if (timing && timer) { gl.endQuery(timer.ext.TIME_ELAPSED_EXT); timer.running = true; }
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.buffer);
+    gl.readPixels(0, 0, MEASURE_SIZE.width, MEASURE_SIZE.height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    slot.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    slot.at = at;
+    if (slot.sync) this.measureHead++;
+    gl.flush();
+    this.backToStage();
+    return !!slot.sync;
+  }
+
+  /** The oldest finished reading, into `out`; its time, or null when none is ready. Never waits. */
+  collectMeasure(out: Uint8Array): number | null {
+    const gl = this.gl, timer = this.timer;
+    if (timer?.running && timer.query && gl.getQueryParameter(timer.query, gl.QUERY_RESULT_AVAILABLE)) {
+      const ns = gl.getQueryParameter(timer.query, gl.QUERY_RESULT) as number;
+      if (!gl.getParameter(timer.ext.GPU_DISJOINT_EXT)) this.guardGpuMs = this.guardGpuMs === null ? ns / 1e6 : this.guardGpuMs * .9 + ns / 1e6 * .1;
+      timer.running = false;
+    }
+    if (this.measureTail === this.measureHead) return null;
+    const slot = this.measures[this.measureTail % MEASURE_SLOTS];
+    if (!slot.sync) return null;
+    const state = gl.clientWaitSync(slot.sync, 0, 0);
+    if (state !== gl.ALREADY_SIGNALED && state !== gl.CONDITION_SATISFIED) return null;
+    gl.deleteSync(slot.sync); slot.sync = null;
+    this.measureTail++;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.buffer);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, out);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    return slot.at;
+  }
+
+  /** Dims the flat stage, in linear light. Called only while the guard is limiting, so an unguarded stage is never touched. */
+  dimStage(gain: number, saturation: number): void {
+    const gl = this.gl, { program, u } = this.dimP;
+    gl.activeTexture(gl.TEXTURE0);
+    if (!this.dimCopy) {
+      this.dimCopy = this.texture();
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, STAGE_SIZE.width, STAGE_SIZE.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.dimCopy);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.disable(gl.BLEND);
+    gl.useProgram(program);
+    gl.uniform4f(u.uRect, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.uniform2f(u.uStage, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.uniform1i(u.uTex, 0);
+    gl.uniform1f(u.uGain, gain);
+    gl.uniform1f(u.uSaturation, Math.min(1, saturation));
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.enable(gl.BLEND);
+  }
+
+  private backToStage(): void {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.stageFb);
+    gl.viewport(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.enable(gl.BLEND);
   }
 
   /** A stage-sized picture laid over everything drawn so far. */

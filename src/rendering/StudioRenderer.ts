@@ -173,6 +173,7 @@ export class StudioRenderer {
   private scope: ScopeRenderer | null = null;
   private meridian: MeridianRenderer | null = null;
   private readonly meridianRuntime: MeridianRuntime = {};
+  private performanceSet = false;
   /** One Mark record, rewritten in place, so a Mark costs no allocation per frame. */
   private meridianMark: NonNullable<MeridianRuntime['mark']> | null = null;
   private readonly drawPass = (material: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget) => this.draw(material, output);
@@ -1130,14 +1131,33 @@ export class StudioRenderer {
     }
   }
 
+  /** For the scripted checks: the Conductor and moves of this renderer's Evolve. */
+  meridianReport(): ReturnType<MeridianRenderer['performanceReport']> | null { return this.meridian?.performanceReport() ?? null; }
+
   /** A project was loaded: linked Meridian moves from the last one end here. */
   resetMeridianPerformance(): void { this.meridian?.resetPerformance(); }
+
+  /**
+   * What Meridian hears on the next drawn frame, from Map: the same signals and rule as the Studio preview, with the time since
+   * this source last drew, which stands still under Freeze. Allocates nothing, and is not part of the composition.
+   */
+  setPerformanceSignals(signals: Readonly<Record<string, number>>, dt: number): void {
+    const external = signals['tempo.external'] === 1;
+    this.meridianRuntime.signals = external || signals['audio.level'] !== undefined ? signals : undefined;
+    this.meridianRuntime.externalTempo = external;
+    this.meridianRuntime.dt = dt;
+    this.performanceSet = true;
+  }
 
   render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean }): void {
     if (this.exporting) return;
     // With the tempo source on the detected beat and no sound, the tempo clock is only a default: Meridian stays on its own.
-    this.meridianRuntime.signals = sound && (sound.externalTempo || sound.signals['audio.level'] !== undefined) ? sound.signals : undefined;
-    this.meridianRuntime.externalTempo = sound?.externalTempo === true;
+    if (this.performanceSet) this.performanceSet = false;
+    else {
+      this.meridianRuntime.signals = sound && (sound.externalTempo || sound.signals['audio.level'] !== undefined) ? sound.signals : undefined;
+      this.meridianRuntime.externalTempo = sound?.externalTempo === true;
+      this.meridianRuntime.dt = undefined;
+    }
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();

@@ -79,6 +79,7 @@ export default function MapOutput() {
       if (compositor.requestPreview()) { sentPicture = now; busy = true; reading = true; changed = false; }
     };
     raf = requestAnimationFrame(tick);
+    (window as unknown as { __mapGuardProbe?: () => unknown }).__mapGuardProbe = () => compositor.probeGuardCost();
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };
     window.addEventListener('keydown', key);
     bridge.ready();
