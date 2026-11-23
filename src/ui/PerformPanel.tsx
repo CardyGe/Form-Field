@@ -5,6 +5,8 @@ import { PRESETS } from '../core/project';
 import { KIND_LABELS } from '../core/library';
 import { LIVE_SOURCE_ID, isVideoId, type ShowDocument } from '../map/show';
 import { presetComposition, type EditAction } from '../map/editor';
+import { checkSet } from '../perform/check-set';
+import { importMapScenes } from '../perform/import-scenes';
 import { addRow, assignZone, changeClip, changeRow, clipsInUse, placeClip, removeRow, setCell, zonesFromGroups } from '../perform/grid-edit';
 import type { PerformView } from '../perform/service';
 import { beatAt } from '../perform/timing';
@@ -58,6 +60,7 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
   const [zoneMenu, setZoneMenu] = useState<{ x: number; y: number; zone: number } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
+  const [checkOpen, setCheckOpen] = useState(false);
   const [launchMenu, setLaunchMenu] = useState<{ x: number; y: number } | null>(null);
   const closeLaunchMenu = useCallback(() => setLaunchMenu(null), []);
   const [note, setNote] = useState<string | null>(null);
@@ -183,6 +186,19 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
     startPerformShow();
     if (cleared.length) say(`${cleared.join(' and ')} turned off for the show.`);
   };
+  /** A one-time copy of Map's scenes into new rows. Map stays as it is, and it is one undo step. */
+  const importScenes = () => {
+    if (service.running) { say('End the show to import Map scenes.'); return; }
+    const show = map.currentShow(), before = show.performance, mapScenes = show.scenes.length;
+    if (mapScenes === 0) { say('Map has no scenes to import.'); return; }
+    if (!before.zones.some(z => z.target)) { say('Give a zone a place first, so there is something to copy.'); return; }
+    const next = importMapScenes(show, () => `p${stamp()}`);
+    const added = next.scenes.length - before.scenes.length;
+    if (added <= 0) { say(`The set already has 16 scenes, so none were imported.`); return; }
+    if (!edit(next)) return;
+    const skipped = mapScenes - added;
+    say(`Imported ${added} Map scene${added === 1 ? '' : 's'}${skipped > 0 ? `; ${skipped} skipped because the set holds 16` : ''}.`);
+  };
   const canStart = map.loaded && set.scenes.some(s => s.cells.some(c => c !== null));
   const line = nextLine(view, set, canStart);
   const shownLooks = useMemo(() => { const q = query.trim().toLowerCase(); return LOOKS.filter(l => !q || `${l.name} ${l.group}`.toLowerCase().includes(q)); }, [query]);
@@ -194,6 +210,8 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
   return <section className="live-shell pf-shell" role="region" aria-label="Perform">
     <header className="app-header">{header}
       <div className="pf-health">
+        <button type="button" className="pf-head-btn" aria-expanded={checkOpen} title="List anything likely to go wrong. Changes nothing." onClick={() => setCheckOpen(o => !o)}>Check Set</button>
+        <button type="button" className="pf-head-btn" disabled={view.running} title={view.running ? 'End the show to import Map scenes' : "Copy Map's scenes into new rows. Map stays as it is."} onClick={importScenes}>Import Map scenes</button>
         <button type="button" className="pf-head-btn" disabled={!map.canUndo} title="Undo a grid edit · ⌘Z" onClick={map.undo}>Undo</button>
         <button type="button" className="pf-head-btn" disabled={!map.canRedo} title="Redo · ⇧⌘Z" onClick={map.redo}>Redo</button>
         <span className={`pf-pill ${map.outputOpen ? 'good' : 'quiet'}`}><i />WALL {map.outputOpen ? (fps ? `${fps} fps` : 'open') : 'closed'}</span>
@@ -259,6 +277,10 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
       onKeyUp={e => { if (e.key === 'Escape' && (e.target as HTMLElement).tagName === 'SELECT') (e.target as HTMLElement).blur(); }}>
       <div className="pf-looks-head"><strong>Sound input</strong><button type="button" className="pf-head-btn" aria-label="Close sound input" onClick={() => setSoundOpen(false)}>Close</button></div>
       <ReactDevices audioOnly engine={map.engine} meter={map.signals} onStart={() => map.startEngine()} />
+    </aside>}
+    {checkOpen && <aside className="pf-sound pf-check" aria-label="Check Set" data-controller-keys>
+      <div className="pf-looks-head"><strong>Check Set</strong><button type="button" className="pf-head-btn" aria-label="Close Check Set" onClick={() => setCheckOpen(false)}>Close</button></div>
+      <ul>{checkSet(map.show, { bpm: view.running ? view.clock.bpm : undefined }).map((r, i) => <li key={i} className={r.level}><b>{r.level === 'error' ? 'Problem' : 'Check'}</b> {r.message}</li>)}</ul>
     </aside>}
     {zoneMenu && <MapMenu x={zoneMenu.x} y={zoneMenu.y} label={`Place for zone ${zoneMenu.zone + 1}`} entries={zoneEntries(zoneMenu.zone)} onClose={() => setZoneMenu(null)} />}
     {confirming && <div className="pf-confirm" role="dialog" aria-modal="true" aria-label="End the show?" onKeyDown={e => { if (e.key === 'Escape') setConfirming(false); }}>

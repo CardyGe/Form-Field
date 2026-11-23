@@ -161,3 +161,7 @@ button.pf-zone:hover { background: #1b1d1b; }
 .pf-confirm-keys { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .map-scenes-paused { padding: 2px 8px; border-radius: 4px; background: #3a2c10; color: #ffd98f; font-size: 12px; font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { .pf-cell.queued, .pf-scene.queued, .pf-btn.amber.flash { animation: none; } }
+
+.pf-check ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.pf-check li b { color: #ffd88a; margin-right: 4px; }
+.pf-check li.error b { color: #ffc4bd; }
