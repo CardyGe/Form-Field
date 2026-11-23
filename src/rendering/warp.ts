@@ -467,13 +467,15 @@ vec2 laterUv(vec2 uv) {
  * Not folded is the plain side of Mirror's crossfade. */
 vec2 warpedUv(vec2 uv, bool folded) {
   warpFringe = vec2(0.);
-  readDx = dFdx(uv); readDy = dFdy(uv);
+  // Kept from before any branch, so every pixel of a 2x2 block takes these from the same code path.
+  vec2 plainDx = dFdx(uv), plainDy = dFdy(uv);
+  readDx = plainDx; readDy = plainDy;
   vec2 base = uv;
   reshaped = folded || uPolarAmount > 0.;
   // Skipped at a default transform, so those reads take exactly the path they always did.
   bool inLayer = reshaped && uLayerMoved == 1;
   vec2 own = inLayer ? (uLayerView * vec3(uv, 1.)).xy : uv;
-  // A moved Image ends at its own edge, which Cover puts past the layer box on one axis.
+  // A moved Image ends at its own edge: Cover puts that past the layer box on one axis, and Contain inside it.
   // Pixels beyond it take no fold, so no stray copy of the picture appears there.
   vec2 edgeLow = .5 - .5 * uLayerExtent, edgeHigh = .5 + .5 * uLayerExtent;
   // They stay marked as reshaped, so a 2x2 block on that edge keeps its worked-out footprint and not the jump between them.
@@ -494,7 +496,7 @@ vec2 warpedUv(vec2 uv, bool folded) {
       mat2 toFrame = mat2(uLayerInverse);
       base = (uLayerInverse * vec3(base, 1.)).xy; readDx = toFrame * readDx; readDy = toFrame * readDy;
       // Source past the frame does not exist, so a pixel whose fold needs it stays unfolded and the picture never vanishes.
-      if (uLayerBounded == 1 && (base.x < 0. || base.x > 1. || base.y < 0. || base.y > 1.)) { base = uv; readDx = dFdx(uv); readDy = dFdy(uv); }
+      if (uLayerBounded == 1 && (base.x < 0. || base.x > 1. || base.y < 0. || base.y > 1.)) { base = uv; readDx = plainDx; readDy = plainDy; }
     }
   }
   readBase = base;

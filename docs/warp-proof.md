@@ -6,13 +6,13 @@ Proof for Warp, Liquid, Luma Warp, Polar and Mirror on branch `warp-engine`, aga
 
 | Command | Result |
 | --- | --- |
-| `node scripts/verify-warp.mjs --baseline=<baseline>` | 71 passed, 0 failed, with one named exception in moved-off-frame |
+| `node scripts/verify-warp.mjs --baseline=<baseline>` | 71 passed, 0 failed, with no exceptions |
 | `node scripts/verify-warp.mjs --baseline=<baseline> --previous=<checkout of 6c0c205> --only=default-pose` | 1 passed, 0 failed |
-| `node scripts/verify-warp.mjs --baseline=<baseline> --previous=<checkout of 9f61b6d> --only=moved-contain,default-pose` | 2 passed, 0 failed |
+| `node scripts/verify-warp.mjs --baseline=<baseline> --previous=<checkout of a185fc5> --only=moved-others,moved-contain-change,default-pose` | 3 passed, 0 failed |
 | `npx tsc --noEmit` | clean |
 | `npm test` | 570 unit and 93 Electron tests pass, 0 fail |
-| `npm run test:workspace` | 14 passed, 0 failed on the final code, first run. The known "Focus preview" timeout stopped two earlier runs on intermediate code before `51c257e` |
-| `npm run test:map` | Passed 4 of 4 on the final code and 4 of 4 on baseline. One earlier run on the same source failed; see below |
+| `npm run test:workspace` | 14 passed, 0 failed on the third run of the final code. Runs 1 and 2 stopped at the known "Focus preview" timeout |
+| `npm run test:map` | Passed 3 of 3 on the final code. Across this branch's last fixes, 1 of 9 runs failed, and 0 of 4 on baseline; see below |
 | `node scripts/verify-colour-time.mjs --baseline=<baseline>` | 52 passed, 0 failed, with no change to its tests |
 
 The final checks:
@@ -35,7 +35,7 @@ Each new gate was shown to fail on an injected defect:
 
 ## Moved layers
 
-Mirror and Polar now work in the layer's own space. They pivot on its transformed centre and follow its turn and scale. Polar's centre controls are offsets from that pivot. A moved Image ends at its own edge, so a fold cannot leave a stray copy beyond it. Source past the frame does not exist, so a pixel whose fold needs it stays unfolded. That edge is the picture's real extent: Cover runs past the layer box on one axis, and Contain stays within it.
+Mirror and Polar now work in the layer's own space. They pivot on its transformed centre and follow its turn and scale. Polar's centre controls are offsets from that pivot. A moved Image ends at its own edge, so a fold cannot leave a stray copy beyond it. Source past the frame does not exist, so a pixel whose fold needs it stays unfolded. That edge is the picture's true rectangle: Cover runs past the layer box on one axis, and Contain's transparent bars count as outside the picture, so a mirrored Contain Image folds at its visible edge.
 
 | Check | Covers | Result | Limit |
 | --- | --- | --- | --- |
@@ -45,16 +45,17 @@ Mirror and Polar now work in the layer's own space. They pivot on its transforme
 | moved-filter | Mirror reads at 4 mirror angles, 2 poses | spread 0 texels, 0 collapsed | .01 |
 | moved-engage | Amount .0001 on a moved layer | worst .0027 of 255 | .05 |
 | moved-no-ghost | A layer hanging off the frame under Left-right | 0% lit past its reflected edge | .1% |
-| moved-cover | A square Cover Image, every Mirror and Polar mode, 2 poses, 960x540 and 720x900 | symmetry .416 of 255, box-edge step 2.70, 100% of the picture lit, 0% stray | 1.5, 12, over 99%, .1% |
-| moved-off-frame | 4 partly off-frame poses, Cover and Contain, a 4:1 Image, 960x540 and 720x900, all six modes (96 cases) | lowest .908x plain under the limit; reported case 1.00x in every mode | .8x, one named exception below |
-| moved-contain-unchanged | 96 renders against `9f61b6d`: in-frame Contain, Cover and 16:9 Images, Surface, Fractal and Liquid at 3 poses, and Cover at a default transform | all byte-identical | exact |
-| default-pose-unchanged | 124 Mirror and Polar renders at a default transform, against `6c0c205`, `51c257e` and `9f61b6d` | all byte-identical | exact |
+| moved-cover | One smooth square Cover Image at Mirror angle 0, 2 poses fully in frame, 960x540 and 720x900. Symmetry is measured on the four Mirror modes and To circle. Unroll has no symmetry and is judged by the other three measures | symmetry .416 of 255, box-edge step 2.70, 100% of the picture lit, 0% stray | 1.5, 12, over 99%, .1% |
+| moved-off-frame | Smooth 4:1 and 1:4 Images, Contain and Cover, 480x270 and 360x450, 8 in-frame and partly off-frame poses, every Mirror mode at 0, 45, 160 and -33 degrees, both Polar modes, plus the reported 4:1 Cover pose at 960x540 (1116 cases, after skipping poses with under .5% of the frame lit) | 0 cases under the limit, lowest .963x plain | .8x, no exceptions |
+| moved-others-unchanged | 126 renders against `a185fc5`, neutral and all six modes: Surface, Fractal, Liquid and repeated Image at 3 poses, in-frame 16:9 and Cover Images, and Cover and Contain at a default transform | all byte-identical | exact |
+| moved-contain-change | Report only: in-frame 4:1, 1:4 and square Contain Images against `a185fc5`, 2 poses | see below | none |
+| default-pose-unchanged | 124 Mirror and Polar renders at a default transform, against `6c0c205`, `51c257e`, `9f61b6d` and `a185fc5` | all byte-identical | exact |
 
-Each check was shown to fail: the first three and moved-no-ghost on the code before the fix, moved-filter on a draft whose layer edge spread reads by 2188 texels, moved-engage on an injected .01 offset, default-pose-unchanged on a checkout with its fold line moved (40 of 124 changed), moved-cover on `51c257e` (symmetry 33.623, box-edge step 97.59), and moved-contain-unchanged on a checkout with its edge test moved (29 of 96 changed). moved-off-frame failed on `9f61b6d` at 0.000x (Left-right and Four-way on the reported 4:1 Cover case).
+Each check was shown to fail: the first three and moved-no-ghost on the code before the fix, moved-filter on a draft whose layer edge spread reads by 2188 texels, moved-engage on an injected .01 offset, default-pose-unchanged on a checkout with its fold line moved (40 of 124 changed), moved-cover on `51c257e` (symmetry 33.623, box-edge step 97.59), and moved-others-unchanged on a checkout with its fold line moved (36 of 126 changed). moved-off-frame failed on `9f61b6d` at 0.000x on the reported 4:1 Cover case. Its expanded form failed on `a185fc5`: 100 of 1116 cases under .8x, lowest .039x (Kaleidoscope at 160 degrees, 1:4 Contain, 360x450).
 
-**Named exception, by owner ruling.** Unroll on a Contain 4:1 Image at 960x540, x .6, y .2, scale .7, rotation .4 measures .7802x plain and is held to a floor of .78x. Unroll may read that Image's own transparent bars, which lie inside the frame. Every other case keeps the .8x limit.
+**In-frame Contain changes, by owner ruling.** Mirror and Polar on a moved Contain Image now fold at its visible edge. Across the 6 fixtures per mode, every render changed from `a185fc5`. Mean change out of 255: Left-right .03, Top-bottom .04, Four-way .04, Kaleidoscope 3.01, To circle 8.84, Unroll 7.42. The lowest lit share moved from .23x to 1.00x on Kaleidoscope, 1.38x to 1.00x on To circle and 1.22x to 1.00x on Unroll, because reads no longer land on the bars and the picture no longer spreads over them.
 
-**Fixtures.** moved-visible, moved-symmetry, moved-follows, moved-filter, moved-engage and moved-no-ghost use a smooth 16:9 Image that matches the 960x540 frame (moved-filter uses a smooth float source at 962x542). moved-cover adds one smooth square Image on Cover, which overhangs its box vertically at 960x540 and sideways at 720x900. moved-off-frame adds one smooth 4:1 Image, on both Cover and Contain. Unroll has no symmetry, so on Cover it is judged by the box-edge step, lit share and stray light.
+**Fixtures.** moved-visible, moved-symmetry, moved-follows, moved-engage and moved-no-ghost use one smooth 16:9 Image in a 960x540 frame, at the default Mirror angle. moved-filter feeds a smooth float source at 962x542 and measures the read footprint, not the picture. moved-cover uses one smooth square Cover Image, which overhangs its box vertically at 960x540 and sideways at 720x900. moved-off-frame uses smooth 4:1 and 1:4 Images and measures lit share only, so it proves a picture stays visible, not that its folds are symmetric.
 
 ## Retunes
 
@@ -141,7 +142,7 @@ Git-ignored, in `work/warp-proof/`:
 - **Map and Live with warps on.** Their suites pass, but neither was judged by eye with a warp applied.
 - **Non-default settings.** The sheets use one working amount per effect. Other scales, step counts and detail levels were not judged by eye.
 - **Moved layers by eye.** The moved-layer checks are measured on smooth test Images. No moved layer was judged by eye.
-- **Other Cover shapes.** Cover was measured with one square picture in two frame shapes, with the picture fully inside the frame. Portrait and busy Cover Images were not measured, and a panoramic Cover Image was measured for lit share only, when partly off-frame.
-- **Moved full-frame generators.** Surface, Fractal and Liquid are compared byte for byte with `9f61b6d` when moved, which proves the bounded-Image fixes left them alone. Their moved look itself is not measured for symmetry or judged by eye.
+- **Other Image shapes.** Symmetry on Cover was measured with one square picture, fully in frame. 4:1 and 1:4 Images were measured for lit share only. Busy pictures and symmetry on Contain Images with bars were not measured.
+- **Moved full-frame generators.** Surface, Fractal and Liquid are compared byte for byte with `a185fc5` when moved, which proves the bounded-Image fixes left them alone. Their moved look itself is not measured for symmetry or judged by eye.
 - **Symmetry on partly off-frame Images.** Source past the frame does not exist. A pixel whose Mirror or Polar read needs it stays unfolded, so the picture stays visible but symmetry is incomplete on those pixels. moved-off-frame measures lit share only.
-- **One Map failure, unclassified.** One `npm run test:map` run failed two Live checks: "switching the Live look mid-show" and "Live: Glow on the beat", which showed 1 instead of 2.5. It passed on the immediate rerun and did not recur in 4 further branch runs or 4 baseline runs, including runs straight after the workspace check. It could not be attributed to this branch or to baseline.
+- **One Map failure, unclassified.** One `npm run test:map` run failed two Live checks: "switching the Live look mid-show" and "Live: Glow on the beat", which showed 1 instead of 2.5. It passed on the immediate rerun and did not recur in 7 further branch runs or 4 baseline runs, including runs straight after the workspace check. It could not be attributed to this branch or to baseline.

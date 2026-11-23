@@ -1000,9 +1000,9 @@ export class StudioRenderer {
     (u.uLayerView.value as THREE.Matrix3).copy(pose.view); (u.uLayerInverse.value as THREE.Matrix3).copy(pose.inverse);
     u.uLayerMoved.value = Number(pose.moved);
     u.uLayerBounded.value = Number(pose.moved && layer.kind === 'image' && number(layer, 'repeat', 1) <= 1);
-    // The picture's real span: Cover runs past the layer box on one axis, and Contain stays within it.
+    // The picture's true rectangle: Cover runs past the layer box on one axis, and Contain's bars are not picture.
     const fit = layer.kind === 'image' && layer.image ? imageFit(layer.image, width / height) : [1, 1];
-    (u.uLayerExtent.value as THREE.Vector2).set(Math.max(fit[0], 1), Math.max(fit[1], 1));
+    (u.uLayerExtent.value as THREE.Vector2).set(fit[0], fit[1]);
     this.draw(this.warp, output);
     return output.texture;
   }
