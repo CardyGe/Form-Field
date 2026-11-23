@@ -7,7 +7,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { FIXTURE_MARKER, writeFixture } from './make-perform-fixture.mjs';
+import os from 'node:os';
+import { FIXTURE_MARKER, fixtureAiff, writeFixture, writeLongWav } from './make-perform-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'work/perform');
@@ -669,7 +670,7 @@ try {
     await studio.getByRole('button', { name: 'Start show' }).click();
     await until(async () => (await sound()).label === 'Test beat', 4000, 'the test beat');
     await picker().setInputFiles(notAudio);
-    await studio.getByText('That file could not be played as audio. The sound input is unchanged.').waitFor({ timeout: 5000 });
+    await studio.getByText('That file could not be played. Try WAV, MP3 or similar. The sound input is unchanged.').waitFor({ timeout: 5000 });
     assert.equal((await sound()).label, 'Test beat');
     await endShow();
   });
@@ -705,7 +706,7 @@ try {
   });
   await check('rehearsal: a bad replacement file leaves the mix playing', async () => {
     await picker().setInputFiles(notAudio);
-    await studio.getByText('That file could not be played as audio. The sound input is unchanged.').waitFor({ timeout: 5000 });
+    await studio.getByText('That file could not be played. Try WAV, MP3 or similar. The sound input is unchanged.').waitFor({ timeout: 5000 });
     assert.equal((await sound()).label, 'Rehearsal');
   });
   await check('rehearsal: Stop restores the chosen input and saved preferences never changed', async () => {
@@ -723,6 +724,54 @@ try {
     assert.equal((await view(studio)).running, true);
     await studio.evaluate(() => window.__studioTest.react.testBeat(true));
     await endShow();
+  });
+  await check('rehearsal: an AIFF file gets a plain note, is not offered, and leaves the input alone', async () => {
+    const aiff = path.join(rehearsalDir, 'mix.aiff');
+    await fs.writeFile(aiff, fixtureAiff());
+    const accept = await picker().getAttribute('accept');
+    assert.ok(!/aif|audio\/\*/.test(accept), `the picker still offers AIFF: ${accept}`);
+    const before = await sound();
+    await picker().setInputFiles(aiff);
+    await studio.getByText(/could not be played.*Try WAV, MP3 or similar/).first().waitFor({ timeout: 8000 });
+    assert.deepEqual(await sound(), before);
+  });
+  await check('rehearsal: a read error mid-mix says so, returns to the input, and a show keeps running', async () => {
+    await studio.getByRole('button', { name: 'Start show' }).click();
+    await until(async () => (await sound()).label === 'Test beat', 4000, 'the test beat');
+    await picker().setInputFiles(mixFile);
+    await until(async () => (await sound()).label === 'Rehearsal', 8000, 'the file to play');
+    await studio.evaluate(() => window.__studioTest.react.mixElement().dispatchEvent(new Event('error')));
+    await studio.getByText(/The mix could not be read any more/).first().waitFor({ timeout: 4000 });
+    await until(async () => (await sound()).label === 'Test beat', 4000, 'the input to return');
+    assert.equal((await view(studio)).running, true);
+    await endShow();
+  });
+  await check('rehearsal: a 30-minute WAV streams, seeks and stays well under 500 MB', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'form-field-long-mix-'));
+    try {
+      const long = path.join(dir, 'long-mix.wav'), seconds = await writeLongWav(long, 30);
+      const memory = async () => (await app.evaluate(({ app: a }) => a.getAppMetrics().reduce((sum, m) => sum + m.memory.workingSetSize, 0))) / 1024;
+      const baseline = await memory();
+      let peak = baseline, sampling = true;
+      const sampler = (async () => { while (sampling) { peak = Math.max(peak, await memory()); await sleep(200); } })();
+      try {
+        await picker().setInputFiles(long);
+        await until(async () => (await sound()).label === 'Rehearsal', 30000, 'the long file to play');
+        const duration = await studio.evaluate(() => window.__studioTest.react.mixElement().duration);
+        assert.ok(Math.abs(duration - seconds) < 2, `duration ${duration}, expected ${seconds}`);
+        await studio.evaluate(s => { window.__studioTest.react.mixElement().currentTime = s; }, seconds - 300);
+        await sleep(1000);
+        const a = await studio.evaluate(() => window.__studioTest.react.mixElement().currentTime);
+        await sleep(3000);
+        const b = await studio.evaluate(() => window.__studioTest.react.mixElement().currentTime);
+        assert.ok(a >= seconds - 300 && b > a + 1, `playback did not move after the seek: ${a} then ${b}`);
+        await sleep(3000);
+      } finally { sampling = false; await sampler; }
+      const grew = peak - baseline;
+      console.log(`rehearsal: ${(seconds / 60).toFixed(1)} min WAV, app memory ${baseline.toFixed(0)} MB before, peak ${peak.toFixed(0)} MB, growth ${grew.toFixed(0)} MB`);
+      assert.ok(grew < 500, `memory grew by ${grew.toFixed(0)} MB`);
+      await studio.getByRole('button', { name: 'Stop rehearsal' }).click();
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
   await check('rehearsal: the file name is not in the show', async () => {
     assert.ok(!(await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet()))).includes('private-mix-name'));

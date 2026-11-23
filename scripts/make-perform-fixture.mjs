@@ -34,6 +34,40 @@ export function fixtureWav() {
   return Buffer.concat([head, note, marker, data, pcm]);
 }
 
+const wavHead = (channels, bytes) => {
+  const head = Buffer.alloc(44);
+  head.write('RIFF', 0, 'latin1'); head.writeUInt32LE(36 + bytes, 4); head.write('WAVE', 8, 'latin1');
+  head.write('fmt ', 12, 'latin1'); head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(channels, 22);
+  head.writeUInt32LE(RATE, 24); head.writeUInt32LE(RATE * 2 * channels, 28); head.writeUInt16LE(2 * channels, 32); head.writeUInt16LE(16, 34);
+  head.write('data', 36, 'latin1'); head.writeUInt32LE(bytes, 40);
+  return head;
+};
+const fixturePcm = () => { const wav = fixtureWav(), at = wav.indexOf('data', 36, 'latin1'); return wav.subarray(at + 8); };
+
+/** A long stereo WAV, written a block at a time so making it uses little memory. Returns its length in seconds. */
+export async function writeLongWav(file, minutes) {
+  const mono = fixturePcm(), block = Buffer.alloc(mono.length * 2);
+  for (let i = 0; i < mono.length; i += 2) { const v = mono.readInt16LE(i); block.writeInt16LE(v, i * 2); block.writeInt16LE(v, i * 2 + 2); }
+  const blocks = Math.ceil(minutes * 60 * RATE * 4 / block.length), handle = await fs.open(file, 'w');
+  try {
+    await handle.write(wavHead(2, blocks * block.length));
+    for (let i = 0; i < blocks; i++) await handle.write(block);
+  } finally { await handle.close(); }
+  return blocks * block.length / (RATE * 4);
+}
+
+/** The same beat as an AIFF file, for checking what the app says about that format. */
+export function fixtureAiff() {
+  const mono = fixturePcm(), pcm = Buffer.alloc(mono.length);
+  for (let i = 0; i < mono.length; i += 2) pcm.writeInt16BE(mono.readInt16LE(i), i);
+  const comm = Buffer.alloc(26); comm.write('COMM', 0, 'latin1'); comm.writeUInt32BE(18, 4); comm.writeUInt16BE(1, 8); comm.writeUInt32BE(pcm.length / 2, 10); comm.writeUInt16BE(16, 14);
+  // 44100 as an 80-bit extended float.
+  comm.writeUInt16BE(0x400e, 16); comm.writeUInt32BE(0xac440000, 18);
+  const ssnd = Buffer.alloc(16); ssnd.write('SSND', 0, 'latin1'); ssnd.writeUInt32BE(pcm.length + 8, 4);
+  const form = Buffer.alloc(12); form.write('FORM', 0, 'latin1'); form.writeUInt32BE(4 + comm.length + ssnd.length + pcm.length, 4); form.write('AIFF', 8, 'latin1');
+  return Buffer.concat([form, comm, ssnd, pcm]);
+}
+
 export async function writeFixture(file) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const bytes = fixtureWav();

@@ -76,16 +76,23 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
   const rehearsal = soundEngine?.audio.rehearsal ?? null;
   const shownAudio = rehearsal && soundEngine ? soundEngine.audio.status : view.audio;
   const mixPicker = useRef<HTMLInputElement>(null);
-  /** The file is read into memory here and goes no further than the audio engine. */
-  const playMix = async (file: File) => {
-    try { await map.startEngine().rehearse(await file.arrayBuffer()); }
-    catch { say('That file could not be played as audio. The sound input is unchanged.'); }
+  const loadingMix = soundEngine?.audio.fileLoading ?? false;
+  /** The file stays where it is on disk and is read locally as it plays. It is handed over at once, so a later Stop or pick always wins. */
+  const playMix = (file: File) => {
+    map.startEngine().rehearse(file).catch(() => say('That file could not be played. Try WAV, MP3 or similar. The sound input is unchanged.'));
   };
+  const inputGone = () => !!soundEngine && ['lost', 'missing', 'failed', 'refused'].includes(soundEngine.audio.status.state);
   const stopRehearsal = async () => {
     if (!soundEngine) return;
     await soundEngine.rehearse(null);
-    if (['lost', 'missing', 'failed', 'refused'].includes(soundEngine.audio.status.state)) say(`Your sound input is not available. ${service.running ? 'The show keeps running on the held tempo.' : 'Check it is plugged in, or choose another.'}`);
+    if (inputGone()) say(`Your sound input is not available. ${service.running ? 'The show keeps running on the held tempo.' : 'Check it is plugged in, or choose another.'}`);
   };
+  const mixFault = soundEngine?.rehearsalFault ?? false;
+  useEffect(() => {
+    if (!mixFault || !soundEngine) return;
+    soundEngine.rehearsalFault = false;
+    say(`The mix could not be read any more, so rehearsal stopped.${inputGone() ? ' Your sound input is not available.' : ''}${service.running ? ' The show keeps running.' : ''}`);
+  }, [mixFault, soundEngine]);
   useEffect(() => { window.__studioTest = { ...window.__studioTest, performSet: () => map.currentShow().performance }; }, [map.currentShow]);
   useEffect(() => { map.setReactivityPanel(soundOpen); if (soundOpen) map.startEngine(); return () => map.setReactivityPanel(false); }, [soundOpen]);
   // Grid edits undo here, as Map's do there. A step the running show cannot take says why.
@@ -277,15 +284,15 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
         {view.notices.map(n => <span key={n} className="bad">{n}</span>)}
       </div>
       <div className="pf-rehearse" role="group" aria-label="Rehearsal">
-        <input ref={mixPicker} type="file" hidden accept="audio/*,.wav,.mp3,.m4a,.aac,.flac,.aif,.aiff,.ogg" aria-label="Rehearsal file"
-          onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void playMix(file); }} />
+        <input ref={mixPicker} type="file" hidden accept=".wav,.mp3,.m4a,.aac,.flac,.ogg,.opus" aria-label="Rehearsal file"
+          onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) playMix(file); }} />
         {rehearsal
           ? <>
             <button type="button" className="pf-head-btn" aria-label={rehearsal === 'paused' ? 'Play rehearsal' : 'Pause rehearsal'} onClick={e => { e.currentTarget.blur(); soundEngine?.audio.pauseFile(rehearsal === 'playing'); }}>{rehearsal === 'paused' ? 'Play' : 'Pause'}</button>
             <button type="button" className="pf-head-btn" aria-label="Stop rehearsal" title="Stop and go back to the chosen sound input" onClick={e => { e.currentTarget.blur(); void stopRehearsal(); }}>Stop</button>
-            <button type="button" className="pf-head-btn" title="Play a different recorded mix" onClick={e => { e.currentTarget.blur(); mixPicker.current?.click(); }}>Change mix</button>
+            <button type="button" className="pf-head-btn" disabled={loadingMix} title="Play a different recorded mix" onClick={e => { e.currentTarget.blur(); mixPicker.current?.click(); }}>{loadingMix ? 'Loading mix' : 'Change mix'}</button>
           </>
-          : <button type="button" className="pf-head-btn" title="Practise with a recorded mix. It plays to the speakers and is never saved." onClick={e => { e.currentTarget.blur(); mixPicker.current?.click(); }}>Rehearse</button>}
+          : <button type="button" className="pf-head-btn" disabled={loadingMix} title="Practise with a recorded mix. It plays to the speakers and is never saved." onClick={e => { e.currentTarget.blur(); mixPicker.current?.click(); }}>{loadingMix ? 'Loading mix' : 'Rehearse'}</button>}
       </div>
     </div>
     <div className="pf-main">

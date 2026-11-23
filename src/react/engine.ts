@@ -33,6 +33,8 @@ export class ReactivityEngine {
   readonly midi = new MidiInput(this.tempo);
   prefs: ReactPrefs = loadPrefs();
   signals: Signals = {};
+  /** A rehearsal ended because its file could not be read. Kept until the Perform screen has said so. */
+  rehearsalFault = false;
   private readonly gains = { bass: new AutoGain(), mids: new AutoGain(), highs: new AutoGain(), level: new AutoGain() };
   private beat = new BeatDetector();
   private listeners = new Set<(signals: Signals) => void>();
@@ -45,6 +47,8 @@ export class ReactivityEngine {
     this.tempo.setSource(this.prefs.tempo);
     this.tempo.setBpm(this.prefs.bpm);
     this.audio.onStatus = () => this.changed();
+    this.audio.onFileLost = () => void this.fileLost();
+    this.audio.onFileResumed = () => this.forgetOnsets();
     this.midi.onStatus = () => this.changed();
   }
 
@@ -92,9 +96,18 @@ export class ReactivityEngine {
   }
 
   /** Plays a recorded mix in place of the input, or with null stops it and goes back to the chosen input. Writes no preferences. */
-  async rehearse(data: ArrayBuffer | null): Promise<void> {
-    if (data) { await this.audio.startFile(data); this.forgetOnsets(); return; }
+  async rehearse(file: Blob | null): Promise<void> {
+    if (file) { if (await this.audio.startFile(file)) this.forgetOnsets(); return; }
     this.audio.cancelFile();
+    await this.leaveRehearsal();
+  }
+  /** The mix stopped being readable, such as a drive unplugged. A newer mix still loading is left to take over. */
+  private async fileLost(): Promise<void> {
+    await this.leaveRehearsal();
+    this.rehearsalFault = true;
+    this.changed();
+  }
+  private async leaveRehearsal(): Promise<void> {
     if (!this.audio.rehearsal) return;
     this.audio.stop();
     this.forgetOnsets();
@@ -181,7 +194,7 @@ export function reactivity(): ReactivityEngine {
   void engine.begin(() => window.studio?.live?.microphoneAccess?.() ?? Promise.resolve('granted'));
   // For scripted checks: a test beat in place of a device, and MIDI bytes as if a controller sent them.
   const e = engine;
-  window.__studioTest = { ...window.__studioTest, react: { testBeat: (on: boolean) => e.setPrefs({ audioDevice: on ? TEST_TONE : null }), midi: (bytes: number[]) => e.midi.inject(bytes), signals: () => e.signals, audio: () => e.audio.status, audioDevice: (id: string) => e.setPrefs({ audioDevice: id }) } };
+  window.__studioTest = { ...window.__studioTest, react: { testBeat: (on: boolean) => e.setPrefs({ audioDevice: on ? TEST_TONE : null }), midi: (bytes: number[]) => e.midi.inject(bytes), signals: () => e.signals, audio: () => e.audio.status, mixElement: () => e.audio.fileElement, audioDevice: (id: string) => e.setPrefs({ audioDevice: id }) } };
   return engine;
 }
 export type { AudioStatus, MidiStatus };
