@@ -5,10 +5,11 @@
 import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { TOON_KEYS, FEEDBACK_KEYS, GLOW_KEYS } from '../core/finishing';
 import { SLIT_MODES, SLIT_SHAPES, slitControlVisible } from '../rendering/slitscan';
-import { FINISH_GROUPS, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, hasPower, powerLocked, resetFinishEffect, searchFinishEffects, toggleFinishEffect, type FinishEffect } from './finish-rack';
+import { FINISH_GROUPS, pickerEffects, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, hasPower, powerLocked, resetFinishEffect, toggleFinishEffect, type FinishEffect, type FinishGroup } from './finish-rack';
 import { FINISH_THUMBS } from './finish-thumbs';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Parameter } from './LayerControls';
+import { LiquidSection, LumaWarpSection, MirrorSection, PolarSection, WarpSection } from './WarpSections';
 import { ColourSplitSection, GradientMapSection, ColourBalanceSection, KeySection } from './ColourSections';
 
 const SLIT_MODE_HELP = ['Each part of the frame lags by its own delay, set by the delay map.', 'Every slice is layered on top, the newest strongest, so motion leaves fading echoes.', 'Median keeps the middle value of the slices, so moving things drop out and still things stay.', 'Keeps the darkest value of the slices, so dark shapes leave trails.', 'Keeps the brightest value of the slices, so bright shapes leave trails.'];
@@ -65,6 +66,8 @@ export interface FinishProps {
   onEnd: () => void;
   extra?: (d: ParameterDefinition) => ReactNode;
   readOnly?: (d: ParameterDefinition) => boolean;
+  /** Whether a visible layer sits under this one; Luma Warp says so when it is driven by a layer that is not there. */
+  hasLayerBelow?: boolean;
   /** Studio's layer settings (Transform, Mask, Output, Background), listed under the effects. */
   layerPanels?: FinishPanel[];
   /** The open row, when the parent keeps it across tab changes. */
@@ -89,19 +92,22 @@ const ADD_VIEW = 'add-effect';
 
 const Chevron = ({ back = false }: { back?: boolean }) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={back ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7'} /></svg>;
 
-export function FinishSections({ layer, definitions, edit, animate, onStart, onEnd, extra, readOnly, layerPanels = [], open: openProp, onOpen }: FinishProps) {
+export function FinishSections({ layer, definitions, edit, animate, onStart, onEnd, extra, readOnly, hasLayerBelow, layerPanels = [], open: openProp, onOpen }: FinishProps) {
   const p = layer.params, mod = layer.modulations;
   const [ownOpen, setOwnOpen] = useState<string | null>(null);
   const requested = openProp === undefined ? ownOpen : openProp;
   const setOpen = (id: string | null) => { setOwnOpen(id); onOpen?.(id); };
   const [, refresh] = useReducer((n: number) => n + 1, 0);
   const [search, setSearch] = useState('');
+  const [group, setGroup] = useState<FinishGroup | 'All'>('All');
   const root = useRef<HTMLDivElement>(null);
   const [feedbackPart, setFeedbackPart] = useState('Move');
   const available = finishEffectsFor(layer, definitions);
   const added = addedEffects.get(layer.id) ?? new Set<string>();
   const effects = finishRackEffects(layer, definitions, added);
   const picking = requested === ADD_VIEW;
+  // The group filter starts at All each time the picker opens.
+  useEffect(() => { if (!picking) setGroup('All'); }, [picking]);
   const effect = effects.find(item => item.id === requested);
   const panel = layerPanels.find(item => item.id === requested);
   const openId = effect?.id ?? panel?.id ?? null;
@@ -118,7 +124,7 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
   const choice = (label: string, options: string[], key: string) => <ChoiceParameter label={label} name={label} options={options} value={p[key] ?? 0} onChange={n => set(key, n)} />;
   const opacity: ParameterDefinition = { key: 'opacity', label: 'Opacity', min: 0, max: 1, step: .01, default: 1, section: 'Material' };
   const echoOn = (p.echo ?? 0) > 0 || !!mod.echo;
-  const sectionProps = { layer, definitions, edit, animate, onStart, onEnd, extra, readOnly };
+  const sectionProps = { layer, definitions, edit, animate, onStart, onEnd, extra, readOnly, hasLayerBelow };
   const slitChoice = (key: string, label: string, options: string[]) => slitControlVisible(layer, key) && <ChoiceParameter key={key} label={label} name={label} options={options} value={p[key] ?? 0} onChange={n => set(key, n)} />;
   const slitRows = (keys: string[]) => definitions.filter(d => keys.includes(d.key) && slitControlVisible(layer, d.key)).map(d => row(d, true));
   const slitMode = Math.round(p.slitMode ?? 0);
@@ -156,6 +162,11 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
       case 'gradient': return <GradientMapSection {...sectionProps} />;
       case 'key': return <KeySection {...sectionProps} />;
       case 'split': return <ColourSplitSection {...sectionProps} />;
+      case 'warp': return <WarpSection {...sectionProps} />;
+      case 'liquid': return <LiquidSection {...sectionProps} />;
+      case 'lumaWarp': return <LumaWarpSection {...sectionProps} />;
+      case 'polar': return <PolarSection {...sectionProps} />;
+      case 'mirror': return <MirrorSection {...sectionProps} />;
       case 'print': return <PrintScreenSection {...sectionProps} />;
       case 'glow': return <>{definitions.filter(d => GLOW_KEYS.includes(d.key) && (d.key === 'glowMix' || (p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((d.key !== 'glowStreakAngle' && d.key !== 'glowStreakShape') || (p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && d.key !== 'glowStreakShape').map(d => row(d, true))}
         {((p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && choice('Streak shape', ['Line', 'Cross'], 'glowStreakShape')}</>;
@@ -184,7 +195,8 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
     <button type="button" className="finish-row-open" aria-label={label + ' settings'} onClick={() => setOpen(id)}><i aria-hidden="true" /><span>{label}</span><small>{summary}</small><Chevron /></button>{control}</div>;
 
   if (picking) {
-    const found = searchFinishEffects(available, search);
+    const found = pickerEffects(available, group, search);
+    const groups = FINISH_GROUPS.filter(name => available.some(item => item.group === name));
     const closePicker = () => { setSearch(''); setOpen(null); };
     const cannotAdd = (item: FinishEffect) => !effects.includes(item) && hasPower(item) && blocked(item, Object.keys(item.power));
     return <div ref={root} className="finish-picker" onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); closePicker(); } }}>
@@ -193,7 +205,8 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
         <div className="finish-detail-title"><h3>Add effect</h3></div>
         <input className="finish-search" type="search" aria-label="Search effects" placeholder="Search effects" autoFocus value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && found[0] && !cannotAdd(found[0])) { e.preventDefault(); pick(found[0]); } }} />
       </div>
-      {FINISH_GROUPS.map(group => { const items = found.filter(item => item.group === group); return items.length > 0 && <section key={group} className="finish-picker-group"><h3>{group}</h3><div>
+      <div className="finish-parts finish-groups" role="group" aria-label="Effect groups">{['All', ...groups].map(name => <button type="button" key={name} aria-pressed={group === name} onMouseDown={e => e.preventDefault()} onClick={() => setGroup(name as FinishGroup | 'All')}>{name}</button>)}</div>
+      {FINISH_GROUPS.map(name => { const items = found.filter(item => item.group === name); return items.length > 0 && <section key={name} className="finish-picker-group"><h3>{name}</h3><div>
         {items.map(item => { const inUse = effects.includes(item); return <button type="button" key={item.id} className={inUse ? 'in-use' : ''} aria-label={(inUse ? 'Open ' : 'Add ') + item.label} title={item.description} disabled={cannotAdd(item)} onClick={() => pick(item)}><img src={FINISH_THUMBS[item.id]} alt="" /><span>{item.label}</span>{inUse && <small>Added</small>}</button>; })}
       </div></section>; })}
       {found.length === 0 && <p className="muted-text">No effects match that search.</p>}

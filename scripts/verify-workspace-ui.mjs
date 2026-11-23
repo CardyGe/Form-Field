@@ -162,12 +162,31 @@ try {
    await page.getByRole('button',{name:'Add effect',exact:true}).click();
    for(const title of titles)assert.equal(await page.getByRole('button',{name:'Add '+title,exact:true}).count(),expected?1:0,kind+': '+title);
    if(expected){
-    assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Add effect fits one screen.');
-    assert.ok(await page.locator('.finish-picker img').evaluateAll(all=>all.length===11&&all.every(i=>i.complete&&i.naturalWidth>0)),'Every effect has a thumbnail.');
+    for(const group of ['Colour','Light','Warp','Surface','Time']){
+     await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:group,exact:true}).click();
+     assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'The '+group+' group of Add effect fits one screen.');
+     if(group==='Warp')assert.equal(await page.locator('.finish-picker-group button').count(),5,'The Warp filter shows five cards.');
+    }
+    await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:'All',exact:true}).click();
+    assert.ok(await page.locator('.finish-picker img').evaluateAll(all=>all.length===16&&all.every(i=>i.complete&&i.naturalWidth>0)),'Every effect has a thumbnail.');
     await snapshot('add-effect');
     const search=page.getByLabel('Search effects',{exact:true});await search.fill('halftone');
     assert.equal(await page.locator('.finish-picker-group button').count(),1);await search.fill('');await page.keyboard.press('Escape');
     assert.equal(await page.locator('.finish-picker').count(),0);
+    await page.getByRole('button',{name:'Add effect',exact:true}).click();
+    assert.equal(await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:'All',exact:true}).getAttribute('aria-pressed'),'true','The group filter starts at All again.');
+    await openFinish(page);
+    for(const [title,key] of [['Warp','bendAmount'],['Liquid','liquidAmount'],['Luma Warp','lumaWarpAmount'],['Polar','polarAmount'],['Mirror','mirrorAmount']]){
+     await openFinish(page,title);await saved(x=>x.layers[0].params[key]>0);
+     assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),title+' fits one screen.');
+     if(title==='Luma Warp'){
+      assert.equal(await page.getByText('There is no layer below this one, so nothing moves.',{exact:true}).count(),0);
+      await page.getByLabel('Driven by',{exact:true}).selectOption('1');await saved(x=>x.layers[0].params.lumaWarpSource===1);
+      assert.equal(await page.getByText('There is no layer below this one, so nothing moves.',{exact:true}).count(),1,'The bottom layer says why nothing moves.');
+      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Luma Warp with its message fits one screen.');
+     }
+     await page.getByRole('button',{name:'Remove',exact:true}).click();await saved(x=>x.layers[0].params[key]===0);
+    }
     await openFinish(page,'Colour split');await saved(x=>x.layers[0].params.splitAmount===8);
     assert.equal(await page.getByLabel('Split shape',{exact:true}).count(),1);
     assert.equal(await page.getByLabel('Channel order',{exact:true}).count(),1);

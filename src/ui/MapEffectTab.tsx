@@ -7,6 +7,7 @@ import { useRef, useState } from 'react';
 import type { useMap } from './useMap';
 import { LayerShapeControls } from './LayerControls';
 import { FinishSections } from './FinishControls';
+import { visibleBelow } from '../rendering/warp';
 import { EditGrouper } from '../map/undo-group';
 import { visibleParameterDefinitions } from '../core/project';
 import { ReactTo, linkFor } from './ReactControls';
@@ -80,7 +81,7 @@ export default function MapEffectTab({ map, shape, locked, linked, setNote }: { 
       ? <LayerShapeControls locked={locked} layer={layer} edit={edit} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()}
           seed={source.project.seed} duration={source.project.duration} notify={text => setNote(text)}
           oilFine={oilFine} setOilFine={change => setOilFine(change)} paramExtra={extra} readOnly={d => locked || !!layer.modulations[d.key]} />
-      : <FinishSections layer={layer} definitions={visibleParameterDefinitions(layer)} edit={edit} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()}
+      : <FinishSections hasLayerBelow={visibleBelow(layers, layer.id)} layer={layer} definitions={visibleParameterDefinitions(layer)} edit={edit} onStart={() => grouper.current.begin()} onEnd={() => grouper.current.end()}
           extra={extra} readOnly={d => locked || !!layer.modulations[d.key]} />}
   </div>;
 }

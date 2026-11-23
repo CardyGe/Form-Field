@@ -5,6 +5,7 @@
  * Distances are shares of frame height and motion is in whole cycles per loop, so the look matches at every
  * export size and the loop closes exactly.
  */
+import { LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, WARP_KEYS } from '../core/finishing';
 import type { Layer } from '../shared/types';
 
 export const WARP_FIELDS = ['Waves', 'Noise', 'Ripple', 'Magnetic', 'Plasma'];
@@ -25,6 +26,36 @@ export function supportsWarp(layer: Pick<Layer, 'kind'>): boolean {
 
 export function warpActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>): boolean {
   return supportsWarp(layer) && AMOUNTS.some(key => (layer.params[key] ?? 0) > 0 || !!layer.modulations[key]);
+}
+
+const WARP_AMOUNT_OF: Record<string, string> = {};
+for (const [keys, amount] of [[WARP_KEYS, 'bendAmount'], [LIQUID_KEYS, 'liquidAmount'], [LUMA_WARP_KEYS, 'lumaWarpAmount'], [POLAR_KEYS, 'polarAmount'], [MIRROR_KEYS, 'mirrorAmount']] as const) for (const key of keys) WARP_AMOUNT_OF[key] = amount;
+
+/**
+ * Whether a warp control applies. Every effect shows only its amount until the amount is above 0 or animated, and
+ * then only the controls its current type uses.
+ */
+export function warpControlVisible(layer: Pick<Layer, 'params' | 'modulations'>, key: string): boolean {
+  const amount = WARP_AMOUNT_OF[key];
+  if (!amount) return false;
+  if (key === amount) return true;
+  if (!((layer.params[amount] ?? 0) > 0 || !!layer.modulations[amount])) return false;
+  const p = layer.params;
+  switch (key) {
+    case 'bendDetail': return Math.round(p.bendField ?? 0) === 1;
+    case 'bendPoints': case 'bendFalloff': { const f = Math.round(p.bendField ?? 0); return f === 2 || f === 3; }
+    case 'bendAngle': return Math.round(p.bendField ?? 0) === 0;
+    case 'liquidTrail': return Math.round(p.liquidStyle ?? 0) === 1;
+    case 'lumaWarpAngle': return Math.round(p.lumaWarpMode ?? 0) === 0;
+    case 'mirrorSegments': return Math.round(p.mirrorMode ?? 0) === 3;
+    default: return true;
+  }
+}
+
+/** Whether a visible layer sits under the layer with this id (the first layer is the bottom). */
+export function visibleBelow(layers: readonly Pick<Layer, 'id' | 'visible'>[], id: string): boolean {
+  const index = layers.findIndex(layer => layer.id === id);
+  return index > 0 && layers.slice(0, index).some(layer => layer.visible);
 }
 
 /** Small deterministic generator, so the same seed always places the same points. */

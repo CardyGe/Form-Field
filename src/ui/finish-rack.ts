@@ -125,3 +125,8 @@ export function searchFinishEffects(effects: readonly FinishEffect[], query: str
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   return effects.filter(effect => { const text = `${effect.label} ${effect.group} ${effect.description}`.toLowerCase(); return words.every(word => text.includes(word)); });
 }
+
+/** The picker's cards: the chosen group (or all), narrowed by the search words. */
+export function pickerEffects(effects: readonly FinishEffect[], group: FinishGroup | 'All', query: string): FinishEffect[] {
+  return searchFinishEffects(group === 'All' ? effects : effects.filter(effect => effect.group === group), query);
+}
