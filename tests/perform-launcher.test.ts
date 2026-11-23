@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  armList, bankBack, bankNext, initialLauncher, landed, launchNow, queueScene, queueZone, retime, returnZone, stopZone,
+  armList, bankBack, bankNext, ceilingBlend, initialLauncher, landed, launchNow, queueScene, queueZone, retime, returnZone, stopZone,
   type LauncherState,
 } from '../src/perform/launcher';
+import { applyEdit, presetComposition } from '../src/map/editor';
+import { createShow } from '../src/map/show';
+import { addRow, placeClip, zonesSharingSource } from '../src/perform/grid-edit';
 import { dueFollow, followBeat } from '../src/perform/sequence';
 import { createPerformanceSet } from '../src/perform/set';
 import type { ClockSnapshot } from '../src/perform/timing';
@@ -398,4 +401,56 @@ test('a press inside the late grace counts as the bar just gone', () => {
   const s = queueZone(running(0), SET, 3, 1, clock, 4050, 'a');
   assert.equal(s.queue[0].beat, 8);
   assert.equal(s.queue[0].atMs, 4050);
+});
+
+// ---- Task 12: the protected ceiling ----
+test('the ceiling blend is a 16-bar dissolve, and the launcher uses it', () => {
+  assert.deepEqual(ceilingBlend(), { kind: 'dissolve', bars: 16 });
+  const amber = queueZone(running(0), SET, 7, 1, clock, 2200, 'a');
+  assert.deepEqual(changeFor(amber, 7)[0].blend, { kind: 'dissolve', durationMs: ceilingBlend().bars * 4 * 500 });
+});
+
+test('a room scene leaves a running ceiling dissolve untouched, and includeProtected changes it', () => {
+  const dissolving = running(3);
+  assert.equal(dissolving.playing[7], 'c73');
+  assert.equal(dissolving.ceilingBusyUntilMs, 34000);
+  const room = deepFreeze(queueScene(dissolving, SET, 2, clock, 3000, 'room'));
+  assert.deepEqual(changeFor(room, 7), []);
+  const done = landed(room, 'room', ALL, 4000);
+  assert.equal(done.playing[7], 'c73');
+  assert.equal(done.ceilingBusyUntilMs, 34000);
+  assert.deepEqual(done.queue.filter(l => l.changes.some(c => c.zone === 7)), []);
+  const withCeiling = editedSet(s => { s.scenes[2].includeProtected = true; });
+  const finale = queueScene(running(3, withCeiling), withCeiling, 2, clock, 3000, 'finale');
+  assert.equal(changeFor(finale, 7)[0].clipId, 'c72');
+  // It does not cut in over the running dissolve: it waits for it.
+  assert.ok(finale.queue.find(l => l.changes.some(c => c.zone === 7))!.atMs >= 34000);
+});
+
+test('a new ceiling clip leaves its source Free, and a source already used elsewhere keeps its timing', () => {
+  let show = createShow();
+  const row = addRow(show.performance, 'row');
+  const added = applyEdit(show, { type: 'addClipSource', sourceId: 'src-new', project: presetComposition('salt-mandala', 7)!, performance: placeClip(row, 0, 7, { ...clip('ceil'), sourceId: 'src-new' }) });
+  assert.ok(added.ok);
+  show = added.show;
+  assert.equal(show.performance.scenes[0].cells[7], 'ceil');
+  assert.equal(show.sources.find(s => s.id === 'src-new')!.tempoSync, null, 'a new ceiling source plays Free');
+  // A source a room zone already plays in time is linked to the ceiling without touching its timing.
+  const room = applyEdit(show, { type: 'addClipSource', sourceId: 'src-room', project: presetComposition('salt-mandala', 8)!, tempoSync: 4, performance: placeClip(show.performance, 0, 0, { ...clip('room'), sourceId: 'src-room' }) });
+  assert.ok(room.ok);
+  const shared = applyEdit(room.show, { type: 'setPerformance', performance: placeClip(room.show.performance, 0, 7, { ...clip('ceil2'), sourceId: 'src-room' }) });
+  assert.ok(shared.ok);
+  assert.equal(shared.show.sources.find(s => s.id === 'src-room')!.tempoSync, 4, 'sharing a source never changes its timing');
+  assert.deepEqual(zonesSharingSource(shared.show.performance, 'src-room').sort(), [0, 7]);
+});
+
+test('a tempo change does not alter a running dissolve', () => {
+  const dissolving = running(3);
+  const queued = deepFreeze(queueZone(dissolving, SET, 7, 1, clock, 3000, 'next'));
+  const slower: ClockSnapshot = { ...clock, bpm: 60 };
+  const moved = retime(queued, slower, SET, 4000);
+  assert.equal(moved.ceilingBusyUntilMs, 34000, 'the running dissolve still ends when it was going to');
+  assert.equal(moved.playing[7], 'c73');
+  assert.ok(moved.queue[0].atMs >= 34000, 'the waiting loop still waits for it');
+  assert.equal(moved.queue[0].changes[0].blend.durationMs, 64000, 'only the not-yet-started dissolve takes the new tempo');
 });

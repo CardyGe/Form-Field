@@ -2,7 +2,7 @@ import type { Signals } from '../react/signals';
 import type { Clip } from './types';
 
 /**
- * What one zone's look is doing to the sound right now. Task 12 adds the ceiling's bloom and breath as further fields.
+ * What one zone's look is doing to the sound right now. The ceiling's bloom is its burst; its breath joins in stepReaction.
  * `shown`, `dir`, `extreme` and `since` belong to the flash guard; a state built without them is treated as unguarded.
  */
 export interface ReactionState { envelope: number; burst: number; shown?: number; dir?: 1 | -1; extreme?: number; since?: number }
@@ -13,6 +13,12 @@ const ENVELOPE = { attack: .03, release: .2 };
 export const BURST_TIMES = { room: { on: .01, off: .18 }, ceiling: { on: 2, off: 4 } };
 /** A held burst lifts a zone by this much, and by the kick pulse on top. */
 const BURST_BASE = .5, BURST_KICK = .5;
+/**
+ * The ceiling's breath: a slow swell and fall of the lift, one full breath every BREATH_SECONDS, never more than BREATH_MAX.
+ * Its fastest move is BREATH_MAX * PI / BREATH_SECONDS = 0.13 of lift a second, which is 0.08 of brightness a second:
+ * a 10% swing takes over a second, well inside the flash guard's 3 a second. It still goes through the guard.
+ */
+const BREATH_SECONDS = 12, BREATH_MAX = .5;
 /** The most a zone may exceed its fader, as a share of it. */
 const MAX_LIFT = .6;
 /** Reaction and bursts add up to this share to a free clip's speed. */
@@ -39,15 +45,29 @@ export function bandSignal(signals: Signals, band: Clip['audioBand']): number {
   return unit(signals[BANDS[band]]);
 }
 
-/** One step of a zone's reaction. `amount` is the Audio knob; `held` is the Red button; `pulse` is the kick. */
-export function stepReaction(s: ReactionState, band: number, amount: number, held: boolean, pulse: number, seconds: number, burstTimes = BURST_TIMES.room): ReactionState {
+/** The ceiling's breath for Knob 3 (0 to 1) at `seconds`: a lift of 0 to BREATH_MAX that rises and falls slowly. Zero with the knob down. */
+export function breathValue(knob: number, seconds: number): number {
+  const t = Number.isFinite(seconds) ? seconds : 0;
+  return unit(knob) * BREATH_MAX * (.5 - .5 * Math.cos(2 * Math.PI * t / BREATH_SECONDS));
+}
+
+/** How much of the ceiling's lift is Red 8's bloom: the burst, and never more than the flash guard lets show. */
+export function bloomValue(s: ReactionState): number {
+  return Math.min(unit(s.burst), lift(s));
+}
+
+/**
+ * One step of a zone's reaction. `amount` is the Audio knob; `held` is the Red button; `pulse` is the kick.
+ * `breath` is the ceiling's extra lift, which joins the reaction before the flash guard sees it.
+ */
+export function stepReaction(s: ReactionState, band: number, amount: number, held: boolean, pulse: number, seconds: number, burstTimes = BURST_TIMES.room, breath = 0): ReactionState {
   const dt = Number.isFinite(seconds) ? Math.min(MAX_STEP, Math.max(0, seconds)) : 0;
   const target = unit(amount) * unit(band);
   const envelope = toward(unit(s.envelope), target, dt, target > s.envelope ? ENVELOPE.attack : ENVELOPE.release);
   const burstTarget = held ? BURST_BASE + BURST_KICK * unit(pulse) : 0;
   const burst = toward(unit(s.burst), burstTarget, dt, burstTarget > s.burst ? burstTimes.on : burstTimes.off);
   const next = { envelope: envelope < 1e-4 ? 0 : envelope, burst: burst < 1e-4 ? 0 : burst };
-  return { ...next, ...guard(s, Math.min(1, next.envelope + next.burst), dt) };
+  return { ...next, ...guard(s, Math.min(1, next.envelope + next.burst + unit(breath)), dt) };
 }
 
 /** Follows the raw lift, but holds it at the edge of a large swing until the last large turn is at least MIN_LEG old. */

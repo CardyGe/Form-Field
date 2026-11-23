@@ -1,7 +1,7 @@
 /** The Perform launcher: what is playing, what is queued, and what changes on the next bar. Pure: every function returns a new state. */
 import { followBeat, followChoices, pickFollow, plannedFollow } from './sequence';
 import { nextBoundary, type ClockSnapshot } from './timing';
-import { BEATS_PER_BAR, ZONE_COUNT, type BlendKind, type Clip, type PerformanceSet, type Quantize, type Scene } from './types';
+import { BEATS_PER_BAR, ZONE_COUNT, type Blend, type BlendKind, type Clip, type PerformanceSet, type Quantize, type Scene } from './types';
 
 export interface ZoneChange { zone: number; clipId: string | null; blend: { kind: BlendKind; durationMs: number } }
 /** One queued launch. followAtBeat and followChoices carry a scene's follow rule, because landed() has no set to read it from. */
@@ -12,7 +12,8 @@ export interface LauncherState { playing: (string | null)[]; previous: (string |
 const CEILING_ZONE = ZONE_COUNT - 1;
 const FADE_BARS = [0.5, 1, 2, 4, 8];
 const DISSOLVE_BARS = [8, 16, 32];
-const CEILING_DEFAULT_BARS = 16;
+/** What the ceiling does when its clip names no blend: a slow dissolve. */
+export const ceilingBlend = (): Blend => ({ kind: 'dissolve', bars: 16 });
 const ROOM_FADE_BARS = 1;
 const MAX_ARMED = 8;
 /** A stop lands on the next beat rather than the next bar. */
@@ -40,7 +41,7 @@ function blendFor(clip: Clip | undefined, zone: number, via: 'scene' | 'amber', 
     const bars = own.kind === 'fade' ? snap(own.bars, FADE_BARS) : own.kind === 'dissolve' ? snap(own.bars, DISSOLVE_BARS) : own.bars;
     return { kind: own.kind, durationMs: barsToMs(bars, bpm) };
   }
-  if (zone === CEILING_ZONE) return { kind: 'dissolve', durationMs: barsToMs(CEILING_DEFAULT_BARS, bpm) };
+  if (zone === CEILING_ZONE) return { kind: 'dissolve', durationMs: barsToMs(ceilingBlend().bars, bpm) };
   return via === 'scene' ? { kind: 'cut', durationMs: 0 } : { kind: 'fade', durationMs: barsToMs(ROOM_FADE_BARS, bpm) };
 }
 const stopBlend = (bpm: number): ZoneChange['blend'] => ({ kind: 'fade', durationMs: barsToMs(ROOM_FADE_BARS, bpm) });

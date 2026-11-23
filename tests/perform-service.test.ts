@@ -743,3 +743,76 @@ test('values reach the wall at most 30 times a second, and fader 0 stays black i
   r.at(3600); r.frame({ 'audio.bass': 1, 'beat.pulse': 1 });
   assert.equal(lastValues(r).zones[0].brightness, 0, 'fader 0 is black mid-burst');
 });
+
+// ---- Task 12: the ceiling's own knobs and bloom ----
+/** The ceiling playing `clipId` with its fader and master up and the given knobs, landed at 2000 ms. */
+function ceilingRig(clipId: string, knobs: { drift?: number; breath?: number } = {}) {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 7: clipId })];
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'launchCell', row: 0, zone: 7 });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [7] }] });
+  r.service.control({ kind: 'knob', strip: 7, knob: 0, value: knobs.drift ?? .5 });
+  r.service.control({ kind: 'knob', strip: 7, knob: 2, value: knobs.breath ?? 0 });
+  r.service.control({ kind: 'fader', strip: 7, value: 1 });
+  r.service.control({ kind: 'master', value: 1 });
+  return r;
+}
+const ceilingOf = (r: Rig) => lastValues(r).zones[7];
+
+test('Knob 3 on strip 8 is breath, not audio response: the ceiling ignores loud sound', () => {
+  const quiet = ceilingRig('cf', { breath: 0 });
+  for (let t = 2050; t <= 12000; t += 50) { quiet.at(t); quiet.frame({ 'audio.bass': 1, 'audio.level': 1, 'beat.pulse': t % 500 < 100 ? 1 : 0 }); assert.equal(ceilingOf(quiet).brightness, 1, `at ${t}`); }
+  const breathing = ceilingRig('cf', { breath: 1 });
+  const out: number[] = [];
+  for (let t = 2050; t <= 26000; t += 50) { breathing.at(t); breathing.frame({ 'audio.bass': 1, 'audio.level': 1, 'beat.pulse': t % 500 < 100 ? 1 : 0 }); out.push(ceilingOf(breathing).brightness); }
+  assert.ok(Math.max(...out) > 1.1, 'the ceiling swells and falls with its breath');
+  assert.ok(Math.min(...out.slice(20)) < Math.max(...out) - .1, 'and it settles again');
+  // The first frames take the knob's position in; after that it only ever moves slowly.
+  for (let i = 5; i < out.length; i++) assert.ok(Math.abs(out[i] - out[i - 1]) < .01, `breath jumps ${out[i] - out[i - 1]} in 50 ms at ${i}`);
+});
+
+test('Knob 1 on strip 8 is drift, and a locked ceiling clip only ever sends 0.5, 1 or 2', () => {
+  for (const [knob, want] of [[0, .5], [.5, 1], [1, 2]] as const) {
+    const r = ceilingRig('ca', { drift: knob, breath: 1 });
+    r.service.action({ type: 'burst', zone: 7, on: true });
+    for (let t = 2050; t <= 9000; t += 50) {
+      r.at(t); r.frame({ 'audio.bass': 1, 'beat.pulse': 1 });
+      assert.equal(ceilingOf(r).speed, want, `drift ${knob} at ${t}`);
+    }
+  }
+  const free = ceilingRig('cf', { drift: 1 });
+  free.at(2100); free.frame();
+  assert.equal(ceilingOf(free).speed, 4, 'a free ceiling clip drifts from a quarter to four times');
+});
+
+test('Red 8 blooms the ceiling slowly and it settles after release', () => {
+  const r = ceilingRig('cf');
+  r.service.action({ type: 'burst', zone: 7, on: true });
+  const at = (t: number) => { r.at(t); r.frame({ 'audio.bass': 1, 'beat.pulse': 1 }); return ceilingOf(r).brightness; };
+  let t = 2000, peak = 1, previous = 1, biggest = 0;
+  const seen = new Map<number, number>();
+  for (; t <= 16000; t += 50) { const b = at(t); biggest = Math.max(biggest, Math.abs(b - previous)); previous = b; peak = Math.max(peak, b); seen.set(t, b); }
+  assert.ok(peak > 1.25, `it blooms to ${peak}`);
+  assert.ok(seen.get(3000)! - 1 < (peak - 1) * .5, 'a second in it is under half way');
+  assert.ok(biggest < .02, `no step jumps more than ${biggest}`);
+  r.service.action({ type: 'burst', zone: 7, on: false });
+  assert.ok(at(16050) > peak - .05, 'it does not cut on release');
+  for (t = 16100; t <= 40000; t += 50) at(t);
+  assert.ok(Math.abs(ceilingOf(r).brightness - 1) < .01, 'it has settled');
+});
+
+test('fader 0 and master 0 keep the ceiling black through bloom and breath', () => {
+  const r = ceilingRig('cf', { breath: 1 });
+  r.service.action({ type: 'burst', zone: 7, on: true });
+  for (let t = 2050; t <= 12000; t += 50) { r.at(t); r.frame({ 'audio.bass': 1 }); }
+  assert.ok(ceilingOf(r).brightness > 1);
+  r.service.control({ kind: 'fader', strip: 7, value: 0 });
+  r.at(12050); r.frame();
+  assert.equal(ceilingOf(r).brightness, 0);
+  r.service.control({ kind: 'fader', strip: 7, value: 1 });
+  r.service.control({ kind: 'master', value: 0 });
+  r.at(12100); r.frame();
+  assert.equal(ceilingOf(r).brightness, 0);
+});

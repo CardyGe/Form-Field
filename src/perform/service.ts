@@ -12,7 +12,7 @@ import type { TempoClock } from '../react/tempo';
 import { applyControl, holdForReconnect, initialControls, knobOffset, speedFactor, type ControlEvent, type ControlValues, type PerformAction } from './controls';
 import { armList, bankBack, bankNext, initialLauncher, landed, launchNow, queueCell, queueScene, queueZone, retime, returnZone, stopZone, type Launch, type LauncherState } from './launcher';
 import { linkedZones, zoneShapes, type ZonePicture } from './resolve';
-import { bandSignal, BURST_TIMES, reactionSpeed, stepReaction, unit, zoneBrightness, type ReactionState } from './reaction';
+import { bandSignal, breathValue, BURST_TIMES, reactionSpeed, stepReaction, unit, zoneBrightness, type ReactionState } from './reaction';
 import { dueFollow } from './sequence';
 import { beatAt, LATE_GRACE_MS, launchPhaseOffset, msAtBeat, nextBoundary, type ClockSnapshot } from './timing';
 import { BEATS_PER_BAR, ZONE_COUNT, type Clip } from './types';
@@ -493,8 +493,13 @@ export class PerformService {
     // A lost input counts as silence, so the reaction eases out whatever the last signals were.
     const live = !['lost', 'missing', 'failed', 'refused'].includes(this.audio.state), pulse = live ? unit(this.signals['beat.pulse']) : 0;
     for (let i = 0; i < ZONE_COUNT; i++) {
+      if (i === CEILING) {
+        // The ceiling's Knob 3 is breath, so it never answers the sound, and its bloom ignores the kick. Both go through the flash guard.
+        this.reaction[i] = stepReaction(this.reaction[i], 0, 0, this.bursts[i], 0, dt / 1000, BURST_TIMES.ceiling, breathValue(this.controls.knobs[i][2], now / 1000));
+        continue;
+      }
       const band = live ? bandSignal(this.signals, this.clipOf(i)?.audioBand ?? 'level') : 0;
-      this.reaction[i] = stepReaction(this.reaction[i], band, this.controls.knobs[i][2], this.bursts[i], pulse, dt / 1000, i === CEILING ? BURST_TIMES.ceiling : BURST_TIMES.room);
+      this.reaction[i] = stepReaction(this.reaction[i], band, this.controls.knobs[i][2], this.bursts[i], pulse, dt / 1000, BURST_TIMES.room);
     }
   }
 

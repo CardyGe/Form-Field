@@ -1,6 +1,7 @@
 /** The hero of the Perform screen: one column per zone, one row per scene, with drag-to-place and a right-click menu. */
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import type { PerformView } from '../perform/service';
+import { zonesSharingSource } from '../perform/grid-edit';
 import { linkedZones } from '../perform/resolve';
 import { ZONE_COUNT, type Blend, type Clip, type PerformanceSet, type Scene } from '../perform/types';
 import type { ShowDocument } from '../map/show';
@@ -57,6 +58,7 @@ function CellMenu({ x, y, clip, zone, set, show, actions, row, onClose }: { x: n
     return () => { removeEventListener('pointerdown', outside, true); removeEventListener('blur', onClose); };
   }, [onClose]);
   const timing = isVideoId(clip.sourceId) ? show.videos.find(v => v.id === clip.sourceId)?.tempoSync : show.sources.find(s => s.id === clip.sourceId)?.tempoSync;
+  const sharedWith = zonesSharingSource(set, clip.sourceId).filter(z => z !== zone);
   const isLive = clip.sourceId === LIVE_SOURCE_ID, others = set.clips.filter(c => c.id !== clip.id);
   const act = (fn: () => void) => { fn(); onClose(); };
   const chip = (label: string, on: boolean, fn: () => void) => <button key={label} type="button" role="menuitemradio" aria-checked={on} className={on ? 'on' : ''} onClick={() => act(fn)}>{label}</button>;
@@ -66,7 +68,7 @@ function CellMenu({ x, y, clip, zone, set, show, actions, row, onClose }: { x: n
     {!isLive && !isVideoId(clip.sourceId) && <button type="button" role="menuitem" onClick={() => act(() => actions.editClip(row, zone))}>Edit</button>}
     {!isLive && <button type="button" role="menuitem" onClick={() => act(() => actions.duplicate(row, zone))}>{isVideoId(clip.sourceId) ? 'Duplicate' : 'Duplicate and edit'}</button>}
     <h4>Blend</h4><div className="pf-chips">{BLENDS.filter(b => !b.ceiling || zone === ZONE_COUNT - 1).map(b => chip(b.label, sameBlend(clip.blend, b.blend), () => actions.setBlend(clip.id, b.blend)))}</div>
-    {!isLive && <><h4>Timing</h4><div className="pf-chips">{chip('Free', !timing, () => actions.setTiming(clip.sourceId, null))}{TEMPO_SYNC_BEATS.map(n => chip(`${n} beat${n === 1 ? '' : 's'}`, timing === n, () => actions.setTiming(clip.sourceId, n)))}</div></>}
+    {!isLive && <><h4 title={sharedWith.length ? 'This look is shared, so a change of timing reaches every zone using it.' : undefined}>Timing{sharedWith.length > 0 && ` (also zone ${sharedWith.map(n => n + 1).join(', ')})`}</h4><div className="pf-chips">{chip('Free', !timing, () => actions.setTiming(clip.sourceId, null))}{TEMPO_SYNC_BEATS.map(n => chip(`${n} beat${n === 1 ? '' : 's'}`, timing === n, () => actions.setTiming(clip.sourceId, n)))}</div></>}
     <h4>Audio band</h4><div className="pf-chips">{BANDS.map(b => chip(b.label, clip.audioBand === b.band, () => actions.setBand(clip.id, b.band)))}</div>
     {others.length > 0 && <><h4>Link to</h4><div className="pf-chips">{others.slice(0, 12).map(c => <button key={c.id} type="button" role="menuitem" onClick={() => act(() => actions.linkClip(row, zone, c.id))}>{c.name}</button>)}</div></>}
     <button type="button" role="menuitem" className="danger" onClick={() => act(() => actions.clear(row, zone))}>Clear</button>
