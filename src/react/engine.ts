@@ -34,7 +34,7 @@ export class ReactivityEngine {
   prefs: ReactPrefs = loadPrefs();
   signals: Signals = {};
   private readonly gains = { bass: new AutoGain(), mids: new AutoGain(), highs: new AutoGain(), level: new AutoGain() };
-  private readonly beat = new BeatDetector();
+  private beat = new BeatDetector();
   private listeners = new Set<(signals: Signals) => void>();
   private changes = new Set<() => void>();
   private raf = 0;
@@ -58,7 +58,8 @@ export class ReactivityEngine {
     return () => {
       if (!this.listeners.delete(listener) || this.listeners.size) return;
       cancelAnimationFrame(this.raf);
-      this.stopping = setTimeout(() => { if (!this.listeners.size) this.audio.stop(); }, 1000);
+      // A rehearsal is playing to the speakers, so it carries on between sections.
+      this.stopping = setTimeout(() => { if (!this.listeners.size && !this.audio.rehearsal) this.audio.stop(); }, 1000);
     };
   }
   /** Told when devices, status or preferences change (for the panel). */
@@ -84,8 +85,28 @@ export class ReactivityEngine {
   }
   private allow: () => Promise<'granted' | 'refused'> = async () => 'refused';
   private async applyAudio(): Promise<void> {
+    // A device chosen during a rehearsal is saved as usual and takes over when the rehearsal stops.
+    if (this.audio.rehearsal) return;
     if (this.prefs.audioDevice === null) this.audio.stop();
     else await this.audio.start(this.prefs.audioDevice, this.allow);
+  }
+
+  /** Plays a recorded mix in place of the input, or with null stops it and goes back to the chosen input. Writes no preferences. */
+  async rehearse(data: ArrayBuffer | null): Promise<void> {
+    if (data) { await this.audio.startFile(data); this.forgetOnsets(); return; }
+    this.audio.cancelFile();
+    if (!this.audio.rehearsal) return;
+    this.audio.stop();
+    this.forgetOnsets();
+    // With nothing listening the device stays closed, and the next listener opens it.
+    if (this.listeners.size) await this.applyAudio();
+  }
+
+  /** A different sound: the last one's onsets must not suggest its tempo. The beat count carries on. */
+  private forgetOnsets(): void {
+    const { count } = this.beat;
+    this.beat = new BeatDetector();
+    this.beat.count = count;
   }
 
   tap(): void {
@@ -151,6 +172,8 @@ export class ReactivityEngine {
 }
 
 let engine: ReactivityEngine | null = null;
+/** The engine if something has started it, without starting it: asking must not open the microphone. */
+export const reactivityIfStarted = (): ReactivityEngine | null => engine;
 /** The one engine for this window, started the first time it is asked for. */
 export function reactivity(): ReactivityEngine {
   if (engine) return engine;
@@ -158,7 +181,7 @@ export function reactivity(): ReactivityEngine {
   void engine.begin(() => window.studio?.live?.microphoneAccess?.() ?? Promise.resolve('granted'));
   // For scripted checks: a test beat in place of a device, and MIDI bytes as if a controller sent them.
   const e = engine;
-  window.__studioTest = { ...window.__studioTest, react: { testBeat: (on: boolean) => e.setPrefs({ audioDevice: on ? TEST_TONE : null }), midi: (bytes: number[]) => e.midi.inject(bytes), signals: () => e.signals } };
+  window.__studioTest = { ...window.__studioTest, react: { testBeat: (on: boolean) => e.setPrefs({ audioDevice: on ? TEST_TONE : null }), midi: (bytes: number[]) => e.midi.inject(bytes), signals: () => e.signals, audio: () => e.audio.status, audioDevice: (id: string) => e.setPrefs({ audioDevice: id }) } };
   return engine;
 }
 export type { AudioStatus, MidiStatus };

@@ -38,7 +38,10 @@
 .pf-key.start { color: #10160a; background: var(--accent); border-color: var(--accent); }
 .pf-key.end { color: #ffd2cd; border-color: var(--pf-red); }
 
-.pf-notices { flex-shrink: 0; display: flex; height: 32px; align-items: center; overflow: hidden; white-space: nowrap; gap: 22px; padding: 0 16px; border-bottom: 1px solid var(--pf-edge); font-size: 15px; font-weight: 600; color: #e6e6e2; }
+.pf-notice-row { position: relative; flex-shrink: 0; }
+.pf-rehearse { position: absolute; top: 3px; right: 16px; display: flex; gap: 6px; }
+.pf-rehearse .pf-head-btn { min-height: 25px; padding: 1px 11px; font-size: 12px; white-space: nowrap; }
+.pf-notices { flex-shrink: 0; display: flex; height: 32px; box-sizing: border-box; align-items: center; overflow: hidden; white-space: nowrap; gap: 22px; padding: 0 240px 0 16px; border-bottom: 1px solid var(--pf-edge); font-size: 15px; font-weight: 600; color: #e6e6e2; }
 .pf-notices .bad { color: #ffc4bd; }
 .pf-dot-red { display: inline-block; width: 11px; height: 11px; margin-right: 7px; border-radius: 50%; background: var(--pf-red); }
 

@@ -1,6 +1,8 @@
 /** The Perform screen: status, the clip grid and the on-screen MIDImix. It plays the set; it never changes Map's shapes or scenes. */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import './perform.css';
+import { REHEARSAL, REHEARSAL_PAUSED } from '../react/audio';
+import { reactivityIfStarted } from '../react/engine';
 import { PRESETS } from '../core/project';
 import { KIND_LABELS } from '../core/library';
 import { LIVE_SOURCE_ID, isVideoId, type ShowDocument } from '../map/show';
@@ -46,7 +48,7 @@ function nextLine(view: PerformView, set: PerformanceSet, canStart: boolean): { 
   return { text: up ? `Up next: ${up.name}` : 'Last scene', urgent: false };
 }
 
-const audioWord = (a: PerformView['audio']) => a.state === 'on' ? 'on' : a.state === 'starting' ? 'starting' : a.state === 'off' ? 'off' : a.state === 'refused' ? 'not allowed' : 'lost';
+const audioWord = (a: PerformView['audio']) => a.state === 'on' ? (a.label === REHEARSAL ? 'rehearsal' : a.label === REHEARSAL_PAUSED ? 'paused' : 'on') : a.state === 'starting' ? 'starting' : a.state === 'off' ? 'off' : a.state === 'refused' ? 'not allowed' : 'lost';
 const audioTone = (a: PerformView['audio']) => a.state === 'on' ? 'good' : a.state === 'off' || a.state === 'starting' ? 'quiet' : 'bad';
 
 export default function PerformPanel({ header, onError, onEditClip, onCopyClip, draftName, onOpenDraft }: { header: ReactNode; onError: (message: string) => void; onEditClip: (sourceId: string, name: string) => void; onCopyClip: (copy: ClipCopy) => void; /** A clip draft left open in Studio. */ draftName: string | null; onOpenDraft: () => void }) {
@@ -67,6 +69,23 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const say = useCallback((text: string) => { setNote(text); if (noteTimer.current) clearTimeout(noteTimer.current); noteTimer.current = setTimeout(() => setNote(null), 6000); }, []);
   useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); }, []);
+  // Rehearsal lives in the engine, so it is still there after a trip to another section.
+  const [, soundChanged] = useReducer((n: number) => n + 1, 0);
+  const soundEngine = map.engine ?? reactivityIfStarted();
+  useEffect(() => soundEngine ? soundEngine.onChange(soundChanged) : undefined, [soundEngine]);
+  const rehearsal = soundEngine?.audio.rehearsal ?? null;
+  const shownAudio = rehearsal && soundEngine ? soundEngine.audio.status : view.audio;
+  const mixPicker = useRef<HTMLInputElement>(null);
+  /** The file is read into memory here and goes no further than the audio engine. */
+  const playMix = async (file: File) => {
+    try { await map.startEngine().rehearse(await file.arrayBuffer()); }
+    catch { say('That file could not be played as audio. The sound input is unchanged.'); }
+  };
+  const stopRehearsal = async () => {
+    if (!soundEngine) return;
+    await soundEngine.rehearse(null);
+    if (['lost', 'missing', 'failed', 'refused'].includes(soundEngine.audio.status.state)) say(`Your sound input is not available. ${service.running ? 'The show keeps running on the held tempo.' : 'Check it is plugged in, or choose another.'}`);
+  };
   useEffect(() => { window.__studioTest = { ...window.__studioTest, performSet: () => map.currentShow().performance }; }, [map.currentShow]);
   useEffect(() => { map.setReactivityPanel(soundOpen); if (soundOpen) map.startEngine(); return () => map.setReactivityPanel(false); }, [soundOpen]);
   // Grid edits undo here, as Map's do there. A step the running show cannot take says why.
@@ -218,7 +237,7 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
         <button type="button" className="pf-head-btn" disabled={!map.canRedo} title="Redo · ⇧⌘Z" onClick={map.redo}>Redo</button>
         <span className={`pf-pill ${map.outputOpen ? 'good' : 'quiet'}`}><i />WALL {map.outputOpen ? (fps ? `${fps} fps` : 'open') : 'closed'}</span>
         <span className={`pf-pill ${view.midi === 'lost' ? 'bad' : view.midi === 'connected' ? 'good' : 'quiet'}`}><i />MIDImix {midiWord}</span>
-        <button type="button" className={`pf-pill ${audioTone(view.audio)}`} aria-expanded={soundOpen} title="Choose the sound input" onClick={() => setSoundOpen(o => !o)}><i />AUDIO {audioWord(view.audio)}</button>
+        <button type="button" className={`pf-pill ${audioTone(shownAudio)}`} aria-expanded={soundOpen} title="Choose the sound input" onClick={() => setSoundOpen(o => !o)}><i />AUDIO {audioWord(shownAudio)}</button>
         {map.outputOpen
           ? <button type="button" className="pf-head-btn" onClick={map.closeOutput}>Close projector</button>
           : <button type="button" className="pf-head-btn" disabled={!map.desktop || map.display === null} onClick={() => void map.openOutput()}>Open projector</button>}
@@ -250,11 +269,24 @@ export default function PerformPanel({ header, onError, onEditClip, onCopyClip, 
       </div>
     </div>
     {/* Always there at one height, so a note appearing never moves the grid during a show. */}
-    <div className="pf-notices" role="status" title={[note, ...view.notices].filter(Boolean).join('\n')}>
-      {draftName !== null && <span>Draft of {draftName} is open <button type="button" className="pf-head-btn" onClick={onOpenDraft}>Back to draft</button></span>}
-      {note && <span>{note}</span>}
-      {view.stuck.length > 0 && <span className="bad"><i className="pf-dot-red" />{view.stuck.length === 1 ? 'A look is' : `${view.stuck.length} looks are`} too heavy to get ready. The zone keeps its current look.</span>}
-      {view.notices.map(n => <span key={n} className="bad">{n}</span>)}
+    <div className="pf-notice-row">
+      <div className="pf-notices" role="status" title={[note, ...view.notices].filter(Boolean).join('\n')}>
+        {draftName !== null && <span>Draft of {draftName} is open <button type="button" className="pf-head-btn" onClick={onOpenDraft}>Back to draft</button></span>}
+        {note && <span>{note}</span>}
+        {view.stuck.length > 0 && <span className="bad"><i className="pf-dot-red" />{view.stuck.length === 1 ? 'A look is' : `${view.stuck.length} looks are`} too heavy to get ready. The zone keeps its current look.</span>}
+        {view.notices.map(n => <span key={n} className="bad">{n}</span>)}
+      </div>
+      <div className="pf-rehearse" role="group" aria-label="Rehearsal">
+        <input ref={mixPicker} type="file" hidden accept="audio/*,.wav,.mp3,.m4a,.aac,.flac,.aif,.aiff,.ogg" aria-label="Rehearsal file"
+          onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void playMix(file); }} />
+        {rehearsal
+          ? <>
+            <button type="button" className="pf-head-btn" aria-label={rehearsal === 'paused' ? 'Play rehearsal' : 'Pause rehearsal'} onClick={e => { e.currentTarget.blur(); soundEngine?.audio.pauseFile(rehearsal === 'playing'); }}>{rehearsal === 'paused' ? 'Play' : 'Pause'}</button>
+            <button type="button" className="pf-head-btn" aria-label="Stop rehearsal" title="Stop and go back to the chosen sound input" onClick={e => { e.currentTarget.blur(); void stopRehearsal(); }}>Stop</button>
+            <button type="button" className="pf-head-btn" title="Play a different recorded mix" onClick={e => { e.currentTarget.blur(); mixPicker.current?.click(); }}>Change mix</button>
+          </>
+          : <button type="button" className="pf-head-btn" title="Practise with a recorded mix. It plays to the speakers and is never saved." onClick={e => { e.currentTarget.blur(); mixPicker.current?.click(); }}>Rehearse</button>}
+      </div>
     </div>
     <div className="pf-main">
       {/* The list sits beside the grid, so every cell stays reachable and the controller is never covered during a show. */}

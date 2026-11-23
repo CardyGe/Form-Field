@@ -1,10 +1,12 @@
 /**
  * The sound input: one audio device (or a built-in test beat for checks) through a Web Audio analyser, read once a frame.
- * Nothing is recorded, played or sent anywhere; the samples are only measured.
+ * Nothing is recorded or sent anywhere. A live input is only measured; a rehearsal file is also played to the speakers,
+ * from memory, with the live input closed so the speakers cannot feed back into it.
  */
 import { bandEnergies, rms, type Bands } from './features';
 
 export const TEST_TONE = 'test-tone';
+export const REHEARSAL = 'Rehearsal', REHEARSAL_PAUSED = 'Rehearsal paused';
 export type AudioStatus = { state: 'off' } | { state: 'starting' } | { state: 'on'; label: string } | { state: 'refused' } | { state: 'lost' } | { state: 'missing' } | { state: 'failed'; reason: string };
 
 export async function listAudioInputs(): Promise<{ id: string; label: string }[]> {
@@ -37,8 +39,49 @@ export class AudioInput {
   private freq = new Float32Array(1024);
   private wave = new Float32Array(2048);
   private generation = 0;
+  private file: AudioBufferSourceNode | null = null;
+  private filePaused = false;
+  private fileRequest = 0;
 
   private set(status: AudioStatus) { this.status = status; this.onStatus(status); }
+
+  get rehearsal(): 'playing' | 'paused' | null { return this.file ? (this.filePaused ? 'paused' : 'playing') : null; }
+
+  /**
+   * Plays a recorded mix, looping, to the speakers and the analyser. It is decoded first, so a file that cannot be played
+   * throws and leaves the current input running. A newer file, or cancelFile, wins over one still decoding.
+   */
+  async startFile(data: ArrayBuffer): Promise<void> {
+    const request = ++this.fileRequest, ctx = new AudioContext();
+    let buffer: AudioBuffer;
+    try { buffer = await ctx.decodeAudioData(data); }
+    catch (error) {
+      void ctx.close().catch(() => {});
+      if (request === this.fileRequest) throw error;
+      return;
+    }
+    if (request !== this.fileRequest) { void ctx.close().catch(() => {}); return; }
+    this.stop();
+    const analyser = ctx.createAnalyser(), source = ctx.createBufferSource();
+    analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0.35;
+    source.buffer = buffer; source.loop = true;
+    source.connect(analyser); source.connect(ctx.destination);
+    source.start();
+    this.ctx = ctx; this.analyser = analyser; this.file = source;
+    void ctx.resume();
+    this.set({ state: 'on', label: REHEARSAL });
+  }
+
+  /** Forgets a file still being decoded. */
+  cancelFile(): void { this.fileRequest++; }
+
+  /** Holds the file where it is. While paused the analyser reads as silence, so onsets stop and the reaction eases out. */
+  pauseFile(on: boolean): void {
+    if (!this.file || !this.ctx || this.filePaused === on) return;
+    this.filePaused = on;
+    void (on ? this.ctx.suspend() : this.ctx.resume()).catch(() => {});
+    this.set({ state: 'on', label: on ? REHEARSAL_PAUSED : REHEARSAL });
+  }
 
   /** Starts listening to a device (or the test beat); stops whatever was listening before. */
   async start(deviceId: string, allow: () => Promise<'granted' | 'refused'>): Promise<void> {
@@ -80,9 +123,12 @@ export class AudioInput {
   stop(): void {
     this.generation++;
     try { this.tone?.stop(); } catch { /* already stopped */ }
+    try { this.file?.stop(); } catch { /* already stopped */ }
+    this.file?.disconnect();
     this.stream?.getTracks().forEach(t => t.stop());
+    // Closing the context lets go of the decoded audio.
     void this.ctx?.close().catch(() => {});
-    this.ctx = null; this.analyser = null; this.stream = null; this.tone = null;
+    this.ctx = null; this.analyser = null; this.stream = null; this.tone = null; this.file = null; this.filePaused = false;
     if (this.status.state !== 'off') this.set({ state: 'off' });
   }
 
@@ -90,6 +136,8 @@ export class AudioInput {
   read(): (Bands & { level: number }) | null {
     const a = this.analyser, ctx = this.ctx;
     if (!a || !ctx) return null;
+    // A suspended analyser keeps its last frame, which would hold the reaction up.
+    if (this.filePaused) return { bass: 0, mids: 0, highs: 0, level: 0 };
     if (this.freq.length !== a.frequencyBinCount) this.freq = new Float32Array(a.frequencyBinCount);
     a.getFloatFrequencyData(this.freq);
     a.getFloatTimeDomainData(this.wave);

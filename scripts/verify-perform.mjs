@@ -7,6 +7,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
+import { FIXTURE_MARKER, writeFixture } from './make-perform-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'work/perform');
@@ -18,10 +19,10 @@ await fs.mkdir(shots, { recursive: true });
 
 const env = { ...process.env, STUDIO_LIVE_TEST_WINDOW: '1' };
 delete env.ELECTRON_RUN_AS_NODE; delete env.STUDIO_DEV_URL;
-const app = await electron.launch({ args: [root, `--user-data-dir=${userData}`], env });
+const app = await electron.launch({ args: [root, `--user-data-dir=${userData}`, '--mute-audio'], env });
 const results = [], errors = [];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-let failed = false;
+let failed = false, scanUserData = null;
 const check = async (name, run) => {
   try { await run(); results.push(`ok    ${name}`); }
   catch (error) { failed = true; results.push(`FAIL  ${name}\n      ${String(error.message).split('\n')[0]}`); process.exitCode = 1; }
@@ -653,12 +654,98 @@ try {
     assert.equal(await clips(), held, 'the first End show\'s timer removed a clip during the second handover');
     await until(async () => await clips() === held - 1, secondEnd + 4500 - Date.now(), 'the clip to go after the last handover');
   });
+  // ---- Rehearsal: a recorded mix through the same analyser. Muted by --mute-audio, so a check run is silent. ----
+  const rehearsalDir = await fs.mkdtemp(path.join(out, 'rehearsal-'));
+  const mixFile = path.join(rehearsalDir, 'private-mix-name-7f3a.wav'), notAudio = path.join(rehearsalDir, 'not-audio.wav');
+  const mixBytes = await writeFixture(mixFile);
+  await fs.writeFile(notAudio, 'this is not sound at all');
+  const picker = () => studio.locator('input[aria-label="Rehearsal file"]');
+  const sound = () => studio.evaluate(() => window.__studioTest.react.audio());
+  const savedPrefs = () => studio.evaluate(() => localStorage.getItem('reactivity'));
+  const endShow = async () => { await studio.getByRole('button', { name: 'End show' }).click(); await studio.getByRole('button', { name: 'End show now' }).click(); await until(async () => !(await view(studio)).running, 3000, 'the show to end'); };
+  const prefsBefore = await savedPrefs();
+  await check('rehearsal: a file that is not audio says so and leaves the input running', async () => {
+    // The input only runs while something listens, so a show is started for this and ended again.
+    await studio.getByRole('button', { name: 'Start show' }).click();
+    await until(async () => (await sound()).label === 'Test beat', 4000, 'the test beat');
+    await picker().setInputFiles(notAudio);
+    await studio.getByText('That file could not be played as audio. The sound input is unchanged.').waitFor({ timeout: 5000 });
+    assert.equal((await sound()).label, 'Test beat');
+    await endShow();
+  });
+  await check('rehearsal: the 128 BPM fixture reads 128 ± 1 and LOCKED within 10 seconds', async () => {
+    await picker().setInputFiles(mixFile);
+    await until(async () => (await sound()).label === 'Rehearsal', 8000, 'the file to play');
+    await studio.getByRole('button', { name: 'Start show' }).click();
+    const started = Date.now();
+    await until(async () => { const c = (await view(studio)).clock; return c.state === 'locked' && Math.abs(c.bpm - 128) <= 1; }, 10000, `LOCKED at 128 (now ${JSON.stringify((await view(studio)).clock)})`);
+    console.log(`rehearsal: LOCKED at ${(await view(studio)).clock.bpm.toFixed(2)} BPM after ${((Date.now() - started) / 1000).toFixed(1)} s (synthetic fixture)`);
+  });
+  await check('rehearsal: Pause moves the clock to HOLDING with the sound at zero, and Play locks again', async () => {
+    await studio.getByRole('button', { name: 'Pause rehearsal' }).click();
+    await until(async () => (await studio.evaluate(() => window.__studioTest.react.signals()))['audio.level'] === 0, 1000, 'the level to reach zero');
+    await until(async () => (await view(studio)).clock.state === 'holding', 7000, 'HOLDING');
+    assert.equal((await studio.evaluate(() => window.__studioTest.react.signals()))['audio.level'], 0, 'the level came back while paused');
+    await studio.getByRole('button', { name: 'Play rehearsal' }).click();
+    await until(async () => { const c = (await view(studio)).clock; return c.state === 'locked' && Math.abs(c.bpm - 128) <= 1; }, 12000, 'LOCKED again');
+  });
+  await check('rehearsal: it keeps playing across Map, Studio and Perform', async () => {
+    await go('Map'); await go('Studio'); await sleep(1500);
+    assert.equal((await sound()).label, 'Rehearsal');
+    await go('Perform');
+    await studio.getByRole('button', { name: 'Stop rehearsal' }).waitFor({ timeout: 3000 });
+    await studio.screenshot({ path: path.join(shots, 'perform-rehearsing.png') });
+    const clipped = await studio.evaluate(() => {
+      const items = [...document.querySelectorAll('.pf-shell .app-header button, .pf-rehearse button')].filter(b => b.offsetParent).map(b => ({ name: b.getAttribute('aria-label') || b.textContent, r: b.getBoundingClientRect() }));
+      const off = items.filter(i => i.r.left < 0 || i.r.top < 0 || i.r.right > innerWidth).map(i => i.name);
+      const over = items.filter((a, i) => items.some((b, j) => j > i && a.r.left < b.r.right - 1 && b.r.left < a.r.right - 1 && a.r.top < b.r.bottom - 1 && b.r.top < a.r.bottom - 1)).map(i => i.name);
+      return [...off, ...over];
+    });
+    assert.deepEqual(clipped, [], 'header controls are cut off or overlap while rehearsing');
+  });
+  await check('rehearsal: a bad replacement file leaves the mix playing', async () => {
+    await picker().setInputFiles(notAudio);
+    await studio.getByText('That file could not be played as audio. The sound input is unchanged.').waitFor({ timeout: 5000 });
+    assert.equal((await sound()).label, 'Rehearsal');
+  });
+  await check('rehearsal: Stop restores the chosen input and saved preferences never changed', async () => {
+    await studio.getByRole('button', { name: 'Stop rehearsal' }).click();
+    await until(async () => (await sound()).label === 'Test beat', 4000, 'the test beat to return');
+    assert.equal(await savedPrefs(), prefsBefore);
+  });
+  await check('rehearsal: if the chosen input has gone, Stop says so and the show keeps running', async () => {
+    await picker().setInputFiles(mixFile);
+    await until(async () => (await sound()).label === 'Rehearsal', 8000, 'the file to play');
+    await studio.evaluate(() => window.__studioTest.react.audioDevice('no-such-device'));
+    assert.equal((await sound()).label, 'Rehearsal', 'choosing an input interrupted the rehearsal');
+    await studio.getByRole('button', { name: 'Stop rehearsal' }).click();
+    await studio.getByText(/Your sound input is not available/).first().waitFor({ timeout: 5000 });
+    assert.equal((await view(studio)).running, true);
+    await studio.evaluate(() => window.__studioTest.react.testBeat(true));
+    await endShow();
+  });
+  await check('rehearsal: the file name is not in the show', async () => {
+    assert.ok(!(await studio.evaluate(() => JSON.stringify(window.__studioTest.performSet()))).includes('private-mix-name'));
+  });
+  // Run after the app has closed, when everything it was going to write has been flushed to disk.
+  scanUserData = async () => {
+    const needles = [Buffer.from(FIXTURE_MARKER, 'latin1'), Buffer.from('private-mix-name-7f3a', 'latin1'), mixBytes.subarray(mixBytes.length - 4096, mixBytes.length - 4032)];
+    const files = (await fs.readdir(userData, { recursive: true, withFileTypes: true })).filter(f => f.isFile()).map(f => path.join(f.parentPath, f.name));
+    assert.ok(files.length > 0, 'nothing to scan');
+    for (const file of files) {
+      const bytes = await fs.readFile(file).catch(() => null);
+      if (bytes) for (const needle of needles) assert.equal(bytes.includes(needle), false, `${path.relative(userData, file)} holds part of the file`);
+    }
+    console.log(`rehearsal: scanned ${files.length} user-data files after closing, none hold the file's name or bytes`);
+  };
+  await fs.rm(rehearsalDir, { recursive: true, force: true });
   await check('no page errors', async () => assert.deepEqual(errors, []));
 } catch (error) {
   failed = true; process.exitCode = 1;
   results.push(`FAIL  the check stopped early\n      ${String(error.message).split('\n')[0]}`);
 } finally {
+  await app.close().catch(() => {});
+  if (scanUserData) await check('rehearsal: nothing of the file reaches the user-data folder', scanUserData);
   console.log(results.join('\n'));
   console.log(failed ? 'PERFORM CHECK FAILED' : 'PERFORM CHECK PASSED');
-  await app.close().catch(() => {});
 }
