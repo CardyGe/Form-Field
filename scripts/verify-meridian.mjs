@@ -825,6 +825,62 @@ try {
     if (on.step > off.step + .02) failures.push(`the guard made a harder step in the multi-layer ${path} (${off.step} to ${on.step})`);
   }
 
+  // Flash Guard on rendered export pixels for Motion on the resolve pass: saturated red with no change of luminance, contrast, and the ground.
+  report.flashTone = await page.evaluate(async () => {
+    const { m, studio } = window.meridianQA, w = 160, h = 90, cols = 32, rows = 18, total = 120;
+    const make = (key, min, max, ink, guard) => {
+      const project = m.createProject(), layer = m.createLayer('meridian');
+      Object.assign(layer.params, { scoreStyle: 2, seed: 3, colourPalette: 0, macroDensity: 1, macroHeat: .5, ringWeight: 14, spokeWeight: 14, lightVignette: 0, colourFringe: 0, safetyFlashGuard: guard });
+      layer.palette = [ink, ink, ink, ink, ink, '#000000'];
+      layer.modulations[key] = { kind: 'pulse', cycles: 10, phase: 0, amount: 1, points: [], range: { min, max } };
+      project.layers = [layer]; project.background = '#000000'; project.duration = 2; project.fps = { num: 60, den: 1 };
+      return project;
+    };
+    const linear = v => { const c = v / 255; return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; };
+    const frames = async project => {
+      const luma = [], red = [];
+      for (let f = 0; f < total; f++) {
+        const bitmap = await createImageBitmap(new Blob([await studio.exportPNG(project, m.phaseAtFrame(f, total), w, h)], { type: 'image/png' }));
+        const canvas = new OffscreenCanvas(w, h), paint = canvas.getContext('2d', { willReadFrequently: true }); paint.drawImage(bitmap, 0, 0);
+        const px = paint.getImageData(0, 0, w, h).data, r = new Float32Array(cols * rows), g = new Float32Array(cols * rows), b = new Float32Array(cols * rows), per = (w / cols) * (h / rows);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const at = (y * w + x) * 4, i = Math.floor(y / h * rows) * cols + Math.floor(x / w * cols); r[i] += linear(px[at]) / per; g[i] += linear(px[at + 1]) / per; b[i] += linear(px[at + 2]) / per; }
+        luma.push(r.map((v, i) => .2126 * v + .7152 * g[i] + .0722 * b[i])); red.push(r.map((v, i) => { const sum = v + g[i] + b[i]; return sum > 1e-4 && v / sum >= .8 ? v - g[i] - b[i] : 0; }));
+      }
+      return { luma, red };
+    };
+    const count = (loop, step, darker) => {
+      const series = [...loop, ...loop, ...loop], anchor = Float32Array.from(series[0]), way = new Int8Array(cols * rows), events = [];
+      let last = 0;
+      for (let f = 1; f < series.length; f++) {
+        const v = series[f]; let up = 0, down = 0;
+        for (let i = 0; i < v.length; i++) {
+          if (way[i] === 1 && v[i] > anchor[i]) anchor[i] = v[i]; if (way[i] === -1 && v[i] < anchor[i]) anchor[i] = v[i];
+          if (way[i] >= 0 && v[i] <= anchor[i] - step && v[i] < darker) { way[i] = -1; anchor[i] = v[i]; down++; }
+          else if (way[i] <= 0 && v[i] >= anchor[i] + step) { way[i] = 1; anchor[i] = v[i]; up++; }
+        }
+        const rose = up / v.length > .25, fell = down / v.length > .25;
+        if (rose && fell) { events.push(f); last = 0; } else if (rose && last !== 1) { events.push(f); last = 1; } else if (fell && last !== -1) { events.push(f); last = -1; }
+      }
+      let worst = 0; for (let i = 0; i < events.length; i++) { let n = 0; for (let k = i; k < events.length && events[k] < events[i] + 60; k++) n++; worst = Math.max(worst, n); }
+      return worst;
+    };
+    const out = {};
+    const off = await frames(make('colourSaturation', 0, 1, '#ff0000', 0)), on = await frames(make('colourSaturation', 0, 1, '#ff0000', 1));
+    out.saturatedRed = { off: count(off.red, .0625, 2), on: count(on.red, .0625, 2) };
+    for (const [name, key, min, max] of [['contrast', 'lightContrast', .5, 2], ['ground', 'lightBackgroundLift', 0, 1], ['black', 'outputBlackLevel', 0, .2]]) {
+      const a = await frames(make(key, min, max, '#ffffff', 0)), b = await frames(make(key, min, max, '#ffffff', 1));
+      out[name] = { off: count(a.luma, .1, .8), on: count(b.luma, .1, .8) };
+    }
+    return out;
+  });
+  console.log('flash tone (changes in the worst second)', JSON.stringify(report.flashTone));
+  if (report.flashTone.saturatedRed.off < 4) failures.push(`the saturated-red export check is not flashing without the guard (${report.flashTone.saturatedRed.off})`);
+  if (report.flashTone.saturatedRed.on > 2) failures.push(`a saturated-red export shows ${report.flashTone.saturatedRed.on} changes in a second with the guard on`);
+  for (const name of ['contrast', 'ground', 'black']) {
+    if (report.flashTone[name].off < 8) failures.push(`the ${name} export check is not strobing without the guard (${report.flashTone[name].off})`);
+    if (report.flashTone[name].on > 6) failures.push(`a ${name} export shows ${report.flashTone[name].on} changes in a second with the guard on`);
+  }
+
   report.ui = await verifyInApp(page, failures);
   console.log(JSON.stringify({ firstFrame: report.firstFrame, mark: report.mark, structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));

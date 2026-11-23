@@ -18,10 +18,17 @@ const SWING_FADE = 0.5;         // Light per second a cell's remembered swing fa
 const STEP_FADE = 2;            // Seconds over which the picture's remembered largest step fades.
 const LOOP_PASSES = 8;          // Passes over a loop allowed for its gains to settle into one repeating pattern.
 const GAPS = 4;                 // Gaps between transitions averaged to read the rhythm.
+const LEAD = 0.1;               // Seconds the gain needs to come down, so a very fast rhythm is acted on this far ahead.
+const RED_STEP = 0.0625;        // The change in saturated red that counts, from the WCAG red-flash measure (20 of 320).
+const RED_DARKER = 2;           // Saturated red has no "too bright to count" limit.
+/** At this saturation a pure red cell measures about 63% red on rendered pixels, well under the 80% that makes it saturated red. */
+export const SAFE_SATURATION = 0.2;
+const CHROMA_RELEASE = 1;       // Saturation per second on the way back.
+const FREE_SATURATION = 2;      // The control's maximum: above this the limit no longer applies.
 const BINS = 64, CAPACITY = 1600;
 
 /** The composition's light, cell by cell: what the guard may dim, what it may not, and how red each cell is. */
-export interface GuardCells { count: number; readonly guarded: Float32Array; readonly fixed: Float32Array; readonly red: Float32Array }
+export interface GuardCells { count: number; readonly guarded: Float32Array; readonly fixed: Float32Array; readonly red: Float32Array; readonly redLight?: Float32Array }
 
 const areaLimit = (params: Readonly<Record<string, number>>): number => Math.min(MAX_AREA, 0.05 + 0.4 * (Number.isFinite(params.safetyFullField) ? params.safetyFullField : 0.5));
 function allowedTurns(red: number, params: Readonly<Record<string, number>>): number {
@@ -41,24 +48,27 @@ class Turns {
   /** How red the cells that just turned are. */
   redness = 0;
 
+  constructor(private readonly size = FLASH_STEP, private readonly darker = DARKER_LIMIT) {}
+
   reset(): void { this.way.fill(0); this.at.fill(-1e9); this.last = 0; this.quietUntil = -1; this.started = false; this.redness = 0; }
 
   see(values: Float32Array, red: Float32Array, n: number, now: number, limit: number): boolean {
     const { anchor, way, at } = this;
     if (!this.started) { anchor.set(values.subarray(0, n)); way.fill(0, 0, n); at.fill(-1e9, 0, n); this.started = true; return false; }
-    let up = 0, down = 0, redSum = 0;
+    let up = 0, down = 0, redSum = 0, freshUp = 0, freshDown = 0;
+    const size = this.size, darker = this.darker;
     const since = now - MOMENT;
     for (let i = 0; i < n; i++) {
       const v = values[i];
       if (way[i] === 1 && v > anchor[i]) anchor[i] = v;
       else if (way[i] === -1 && v < anchor[i]) anchor[i] = v;
-      if (way[i] >= 0 && v <= anchor[i] - FLASH_STEP && v < DARKER_LIMIT) { way[i] = -1; anchor[i] = v; at[i] = now; }
-      else if (way[i] <= 0 && v >= anchor[i] + FLASH_STEP && anchor[i] < DARKER_LIMIT) { way[i] = 1; anchor[i] = v; at[i] = now; }
+      if (way[i] >= 0 && v <= anchor[i] - size && v < darker) { way[i] = -1; anchor[i] = v; at[i] = now; freshDown++; }
+      else if (way[i] <= 0 && v >= anchor[i] + size && anchor[i] < darker) { way[i] = 1; anchor[i] = v; at[i] = now; freshUp++; }
       if (at[i] > since) { if (way[i] > 0) up++; else down++; redSum += red[i]; }
     }
     const turned = up + down;
     this.redness = turned ? redSum / turned : 0;
-    if (this.last === 0 && now < this.quietUntil) return false; // Both directions at once are one transition; a true reversal is never swallowed.
+    if (this.last === 0 && now < this.quietUntil && freshUp <= limit * n && freshDown <= limit * n) return false; // Both directions at once are one transition, but a fresh swing of the frame is always a new one.
     const rose = up > limit * n, fell = down > limit * n;
     if (rose && fell) { this.last = 0; this.quietUntil = now + MOMENT; return true; }
     if (rose && this.last !== 1) { this.last = 1; this.quietUntil = now + MOMENT; return true; }
@@ -84,11 +94,17 @@ export class FlashGuard {
   private lastIn = -1e9; private spacing = 0; private redness = 0; private largest = 0; private wideStep = 0;
   private wideArea = 0; private wideUntil = -1; private peak = 0;
   private readonly heardTimes = new Float64Array(GAPS + 1); private heardAt = 0; private heard = 0;
+  private readonly redInput = new Turns(RED_STEP, RED_DARKER);
+  private readonly redEvents = new Float64Array(SLOTS);
+  private redHead = 0; private redHeld = 0; private redGap = 0; private redLast = -1e9; private redUntil = -1;
+  /** The highest saturation this frame may show. Above the control's range it limits nothing. */
+  saturationLimit = Infinity;
 
   reset(): void {
     this.input.reset(); this.output.reset();
     this.head = this.held = 0; this.now = 0; this.gain = 1; this.started = false;
     this.lastIn = -1e9; this.spacing = 0; this.redness = this.largest = this.wideStep = 0; this.wideArea = 0; this.wideUntil = -1; this.peak = 0; this.heardAt = this.heard = 0;
+    this.redInput.reset(); this.redHead = this.redHeld = 0; this.redGap = 0; this.redLast = -1e9; this.redUntil = -1; this.saturationLimit = Infinity;
   }
 
   /** One uniform patch of light, for a caller without a grid: `area` of the frame at `light`, the rest dark. */
@@ -162,7 +178,8 @@ export class FlashGuard {
     let deadline = -1;
     // A rhythm clearly over the limit stops one turn sooner, because uneven frames can bring the last one inside the window.
     const over = rhythm && this.spacing * allowed < WINDOW * 0.97, budget = over ? allowed - 1 : allowed;
-    if (over) for (let k = 1; k <= 2 && deadline < 0; k++) if (this.ahead(k, dt) > budget) deadline = this.lastIn + k * this.spacing;
+    const reach = over ? Math.min(6, Math.max(2, Math.ceil(LEAD / this.spacing) + 1)) : 0;
+    for (let k = 1; k <= reach && deadline < 0; k++) if (this.ahead(k, dt) > budget) deadline = this.lastIn + k * this.spacing;
 
     // A rise with no room left for the fall after it is met in the same frame: lowering the gain as the light climbs adds no step.
     const refused = turned && rhythm && this.spacing * allowed < WINDOW && this.input.direction >= 0 && this.ahead(1, dt) + 1 > budget;
@@ -187,7 +204,30 @@ export class FlashGuard {
     if (this.output.see(lit, red, n, this.now, limit)) {
       this.events[this.head] = this.now; this.head = (this.head + 1) % SLOTS; this.held = Math.min(SLOTS, this.held + 1);
     }
+    if (cells.redLight) this.limitRed(dt, cells.redLight, red, n, limit, params);
     return gain;
+  }
+
+  /**
+   * Saturated red can flash with no change of luminance, so a gain is the wrong tool. When its rhythm would break the stricter
+   * limit, saturation is held where no pixel counts as saturated red, on the frame the red would have come back.
+   */
+  private limitRed(dt: number, redLight: Float32Array, red: Float32Array, n: number, limit: number, params: Readonly<Record<string, number>>): void {
+    const allowed = allowedTurns(1, params), turned = this.redInput.see(redLight, red, n, this.now, limit);
+    while (this.redHeld > 0 && this.now - this.redEvents[(this.redHead - this.redHeld + SLOTS) % SLOTS] >= WINDOW) this.redHeld--;
+    if (turned) {
+      if (this.redLast > -1e8) this.redGap = this.now - this.redLast;
+      if (this.redInput.direction >= 0 && this.redGap > 0 && this.redGap < WINDOW) {
+        let room = 0;
+        for (let k = 1; k <= this.redHeld; k++) { if (this.redEvents[(this.redHead - k + SLOTS) % SLOTS] > this.now + this.redGap - WINDOW + dt) room++; else break; }
+        if (room + 2 > allowed) this.saturationLimit = SAFE_SATURATION;
+      }
+      this.redEvents[this.redHead] = this.now; this.redHead = (this.redHead + 1) % SLOTS; this.redHeld = Math.min(SLOTS, this.redHeld + 1); this.redLast = this.now;
+      if (this.saturationLimit < FREE_SATURATION) this.redUntil = this.now + WINDOW;
+    } else if (this.saturationLimit < FREE_SATURATION && this.now >= this.redUntil) {
+      const next = this.saturationLimit + CHROMA_RELEASE * dt;
+      this.saturationLimit = next >= FREE_SATURATION ? Infinity : next;
+    }
   }
 }
 
@@ -211,16 +251,28 @@ function loopVerdict(frames: number, n: number, read: (frame: number) => number,
   return { worst, step, red };
 }
 
+/** The most saturated-red transitions in any second of a loop played round three times. */
+function redTurnsInLoop(shown: Float32Array, frames: number, n: number, reds: Float32Array, span: number, limit: number): number {
+  const turns = new Turns(RED_STEP, RED_DARKER), times: number[] = [];
+  turns.reset();
+  // The first lap only warms the counter: its first turn is measured from wherever the loop happens to start.
+  for (let lap = 0, i = 0; lap < 3; lap++) for (let f = 0; f < frames; f++, i++) if (turns.see(shown.subarray(f * n, (f + 1) * n), reds.subarray(f * n, (f + 1) * n), n, i / span, limit) && lap > 0) times.push(i);
+  let worst = 0;
+  for (let i = 0, k = 0; i < times.length; i++) { while (times[i] - times[k] >= span) k++; worst = Math.max(worst, i - k + 1); }
+  return worst;
+}
+
 /**
  * The gain of every frame of a closed loop, from each frame's light grid, so the limit holds across the loop point and a
  * frame's gain never depends on which frames were rendered before it. A loop already inside the limit is left at exactly 1.
  */
-export function guardLoopCells(fill: (frame: number) => GuardCells, frames: number, fps: number, params: Readonly<Record<string, number>>): Float32Array {
+export function guardLoopCells(fill: (frame: number) => GuardCells, frames: number, fps: number, params: Readonly<Record<string, number>>, result?: { saturation: number }): Float32Array {
   const count = Math.max(1, Math.round(frames)), rate = fps > 0 ? fps : 30, dt = 1 / rate, table = new Float32Array(count).fill(1);
   if ((params.safetyFlashGuard ?? 1) < 0.5) return table;
   const firstCells = fill(0), n = Math.min(firstCells.count, CAPACITY), guarded = new Float32Array(count * n), reds = new Float32Array(count * n);
-  let fixed: Float32Array | null = null;
+  let fixed: Float32Array | null = null, shownRed: Float32Array | null = null;
   const store = (f: number, cells: GuardCells) => {
+    if (cells.redLight) { for (let c = 0; c < n && !shownRed; c++) if (cells.redLight[c] !== 0) shownRed = new Float32Array(count * n); if (shownRed) shownRed.set(cells.redLight.subarray(0, n), f * n); }
     guarded.set(cells.guarded.subarray(0, n), f * n); reds.set(cells.red.subarray(0, n), f * n);
     for (let c = 0; c < n && !fixed; c++) if (cells.fixed[c] !== 0) fixed = new Float32Array(count * n);
     if (fixed) fixed.set(cells.fixed.subarray(0, n), f * n);
@@ -228,6 +280,8 @@ export function guardLoopCells(fill: (frame: number) => GuardCells, frames: numb
   store(0, firstCells);
   for (let f = 1; f < count; f++) store(f, fill(f));
   const limit = areaLimit(params), span = Math.max(1, Math.round(WINDOW * rate)), at = (f: number) => f * n;
+  // A loop whose saturated red would break its limit holds saturation below it throughout, which is closed by construction.
+  if (result) result.saturation = shownRed && redTurnsInLoop(shownRed, count, n, reds, span, limit) > allowedTurns(1, params) ? SAFE_SATURATION : Infinity;
   const plain = loopVerdict(count, n, at, guarded, fixed, reds, null, span, limit), allowed = allowedTurns(plain.red, params);
   if (plain.worst <= allowed) return table;
 
