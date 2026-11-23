@@ -14,7 +14,7 @@ export default function LiveOutput() {
     const bridge = window.studio?.live;
     if (!canvas.current || !bridge) return;
     let stage: Stage;
-    try { stage = new Stage(canvas.current); } catch (error) { setFailure((error as Error).message); return; }
+    try { stage = new Stage(canvas.current, { limitFlashes: true }); } catch (error) { setFailure((error as Error).message); return; }
     let latest = validateLiveSettings(null);
     // The camera and person finding, reported to the operator: on every camera change and once a second.
     let source: import('../live/source').SourceState = { status: 'idle' };

@@ -19,7 +19,9 @@
     "test:packaged": "node scripts/verify-packaged.mjs",
     "test:map": "npm run build && node scripts/verify-map.mjs",
     "test:live": "npm run build && node scripts/verify-live.mjs && node scripts/verify-live-ui.mjs",
-    "test:projection": "npm run build && node scripts/verify-projection-media.mjs --performance --native && node scripts/verify-projection-media-ui.mjs"
+    "test:projection": "npm run build && node scripts/verify-projection-media.mjs --performance --native && node scripts/verify-projection-media-ui.mjs",
+    "test:morphogen": "npm run build && node scripts/verify-morphogen.mjs",
+    "test:morphogen:show": "npm run build && node scripts/verify-morphogen-show.mjs"
   },
   "devDependencies": {
     "@mediapipe/tasks-vision": "1.2.0",

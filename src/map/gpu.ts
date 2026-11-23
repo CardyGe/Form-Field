@@ -91,13 +91,20 @@ uniform vec2 uOut;          // the target's size in pixels
 uniform vec2 uStage;
 uniform mat3 uInv;          // target pixels (origin top-left) to stage pixels
 uniform sampler2D uTex;
+uniform float uGain, uRedScale;  // the flash limiter: 1 and 1 leave the picture exactly as it is
 void main() {
   vec2 p = vec2(gl_FragCoord.x, uOut.y - gl_FragCoord.y) * (uStage / uOut);
   vec3 q = uInv * vec3(p, 1.);
   vec2 s = q.xy / q.z;
   if (q.z <= 0. || s.x < 0. || s.y < 0. || s.x > uStage.x || s.y > uStage.y) { o = vec4(0., 0., 0., 1.); return; }
   vec4 c = texture(uTex, vec2(s.x / uStage.x, 1. - s.y / uStage.y));
-  o = vec4(c.rgb, 1.);  // premultiplied over the black stage
+  vec3 v = c.rgb;
+  if (uGain < 1. || uRedScale < 1.) {
+    v = pow(max(v, vec3(0.)), vec3(2.2));
+    v = (vec3(dot(v, vec3(.2126, .7152, .0722))) * (1. - uRedScale) + v * uRedScale) * uGain;
+    v = pow(v, vec3(1. / 2.2));
+  }
+  o = vec4(v, 1.);  // premultiplied over the black stage
 }`;
 
 export interface Texture { tex: WebGLTexture; width: number; height: number }
@@ -119,6 +126,9 @@ export interface ShapeDraw {
 type Program = { program: WebGLProgram; u: Record<string, WebGLUniformLocation | null> };
 /** Read back at twice the preview's size, so the worker can shrink it smoothly and thin lines do not drop out. */
 const PREVIEW = { width: 960, height: 540 };
+/** The small uncorrected copy of the wall that the flash limiter reads each frame. */
+export const FLASH_PROBE = { width: 64, height: 36 };
+const FLASH_PROBES = 6;
 
 /** Row major to the column-major order WebGL reads. */
 const columns = (m: H3) => new Float32Array([m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]);
@@ -137,6 +147,10 @@ export class Gpu {
   private drawFb!: WebGLFramebuffer;
   private blank!: Texture;
   private readback: { buffer: WebGLBuffer; sync: WebGLSync } | null = null;
+  private flashReads: { sync: WebGLSync; buffer: WebGLBuffer; time: number }[] = [];
+  private flashBuffers: WebGLBuffer[] = [];
+  private flashFb!: WebGLFramebuffer;
+  private correction = { gain: 1, redScale: 1 };
   private readbackBuffer: WebGLBuffer | null = null;
   /** Goes up whenever the context is set up again: a readback started before it will never arrive. */
   generation = 0;
@@ -172,7 +186,7 @@ export class Gpu {
     };
     this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uLook', 'uAlpha', 'uDecor', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
-    this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex']);
+    this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex', 'uGain', 'uRedScale']);
     this.quad = gl.createVertexArray()!;
     gl.bindVertexArray(this.quad);
     const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -187,6 +201,7 @@ export class Gpu {
     };
     ({ tex: this.stageTex, fb: this.stageFb } = target(STAGE_SIZE.width, STAGE_SIZE.height));
     ({ tex: this.previewTex, fb: this.previewFb } = target(PREVIEW.width, PREVIEW.height));
+    this.flashFb = target(FLASH_PROBE.width, FLASH_PROBE.height).fb;
     this.copyFb = gl.createFramebuffer()!;
     this.drawFb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -197,6 +212,7 @@ export class Gpu {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
     this.blank = { tex: blank, width: 1, height: 1 };
     this.readback = null; this.readbackBuffer = null;
+    this.flashReads = []; this.flashBuffers = [];
     this.generation++;
   }
 
@@ -310,13 +326,55 @@ export class Gpu {
     this.flat(inv, this.canvas.width, this.canvas.height);
   }
 
-  private flat(inv: H3, w: number, h: number): void {
+  /** The flash limiter's correction, applied to everything that leaves the stage. */
+  setOutputCorrection(gain: number, redScale: number): void { this.correction = { gain, redScale }; }
+
+  /** Starts reading a tiny uncorrected copy of the stage. Several can be on their way, so a slow fence never skips frames. */
+  requestFlashProbe(time = 0): boolean {
+    if (this.flashReads.length >= FLASH_PROBES) return false;
+    const gl = this.gl, { width, height } = FLASH_PROBE;
+    const buffer = this.flashBuffers.pop() ?? gl.createBuffer();
+    if (!buffer) return false;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.flashFb);
+    gl.viewport(0, 0, width, height);
+    this.flat(IDENTITY, width, height, false);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, width * height * 4, gl.STREAM_READ);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    if (!sync) { this.flashBuffers.push(buffer); return false; }
+    this.flashReads.push({ sync, buffer, time });
+    gl.flush();
+    return true;
+  }
+
+  /** The oldest finished probe and when it was taken; null while none is ready. Never waits. */
+  collectFlashProbe(): { pixels: Uint8Array; time: number } | null {
+    const read = this.flashReads[0];
+    if (!read) return null;
+    const gl = this.gl, state = gl.clientWaitSync(read.sync, 0, 0);
+    if (state !== gl.ALREADY_SIGNALED && state !== gl.CONDITION_SATISFIED) return null;
+    gl.deleteSync(read.sync);
+    this.flashReads.shift();
+    const pixels = new Uint8Array(FLASH_PROBE.width * FLASH_PROBE.height * 4);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, read.buffer);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixels);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.flashBuffers.push(read.buffer);
+    return { pixels, time: read.time };
+  }
+
+  private flat(inv: H3, w: number, h: number, corrected = true): void {
     const gl = this.gl, { program, u } = this.finalP;
     gl.disable(gl.BLEND);
     gl.useProgram(program);
     gl.uniform4f(u.uRect, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
     gl.uniform2f(u.uStage, STAGE_SIZE.width, STAGE_SIZE.height);
     gl.uniform2f(u.uOut, w, h);
+    gl.uniform1f(u.uGain, corrected ? this.correction.gain : 1);
+    gl.uniform1f(u.uRedScale, corrected ? this.correction.redScale : 1);
     gl.uniformMatrix3fv(u.uInv, false, columns(inv));
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.stageTex); gl.uniform1i(u.uTex, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

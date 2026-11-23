@@ -23,7 +23,7 @@ export class Stage {
   /** Gaps between display frames since the last mark, for the performance check. */
   private gaps: number[] = [];
 
-  constructor(canvas: HTMLCanvasElement, options: { preserveDrawingBuffer?: boolean } = {}) {
+  constructor(canvas: HTMLCanvasElement, options: { preserveDrawingBuffer?: boolean; limitFlashes?: boolean } = {}) {
     const stage = this;
     this.renderer = new LiveRenderer(canvas, { get element() { return stage.active?.element ?? null; }, get frameId() { return stage.active?.frameId ?? 0; } }, () => {
       const pattern = stage.pattern;

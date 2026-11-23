@@ -4,6 +4,7 @@ import { chooseDisplay, defaultLiveSettings, validateLiveSettings, type LiveSett
 import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { reactivity, type ReactivityEngine } from '../react/engine';
+import { MIDIMIX_MAP, midimixInputs } from '../morphogen/midimix-map';
 import { MeterStore } from '../react/meter';
 
 export interface Display { id: number; label: string; primary: boolean }
@@ -117,12 +118,14 @@ export function useLive(onError: (message: string) => void) {
 
   // Sound, the beat, tempo and MIDI: heard only while a link needs them or the operator has the sound panel open.
   const links = settings?.links ?? [];
-  const reacts = links.some(l => l.on);
+  // Morphogen is played from the MIDImix, so it listens even with no links set up.
+  const morphogen = settings?.look === 'morphogen';
+  const reacts = links.some(l => l.on) || morphogen;
   const [panelOpen, setPanelOpen] = useState(false);
   const [engine, setEngine] = useState<ReactivityEngine | null>(null);
   const meter = useMemo(() => new MeterStore(), []);
   useEffect(() => { if ((reacts || panelOpen) && !engine) setEngine(reactivity()); }, [reacts, panelOpen, engine]);
-  const usedInputs = [...new Set(links.map(l => l.input))].sort().join(' ');
+  const usedInputs = [...new Set([...links.map(l => l.input), ...(morphogen ? midimixInputs(MIDIMIX_MAP) : [])])].sort().join(' ');
   // Read as they are now, so opening the panel or the output, or a new link, never interrupts the links on screen.
   const listening = useRef({ panelOpen, outputOpen, reacts, usedInputs });
   listening.current = { panelOpen, outputOpen, reacts, usedInputs };
