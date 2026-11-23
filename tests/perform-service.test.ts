@@ -4,6 +4,7 @@ import type { MapMessage } from '../src/map/messages';
 import { createShow, type ShowDocument } from '../src/map/show';
 import { clockSnapshot, PerformService, type ClockLink, type WallLink } from '../src/perform/service';
 import type { ClockSnapshot } from '../src/perform/timing';
+import { applyPerformMessage, initialWallPerform, stepWallPerform } from '../src/perform/wall-perform';
 import type { Clip, Scene } from '../src/perform/types';
 import { TempoClock } from '../src/react/tempo';
 import type { AudioStatus, MidiStatus } from '../src/react/engine';
@@ -48,7 +49,7 @@ function rig(show = makeShow(), open = true) {
   const service = new PerformService({ wall, clock, show: () => show, now: () => now, id: () => `L${++next}`, random: () => 0 });
   const ofType = <T extends MapMessage['type']>(type: T) => sent.filter((m): m is Extract<MapMessage, { type: T }> => m.type === type);
   const ready = () => { service.control({ kind: 'sendAllStart' }); service.control({ kind: 'sendAllEnd' }); };
-  return { service, sent, log, show, state, ofType, ready, at: (ms: number) => { now = ms; }, frame: (s: Signals = {}) => frame?.(s), hasFrame: () => frame !== null };
+  return { service, sent, log, show, state, ofType, ready, now: () => now, at: (ms: number) => { now = ms; }, frame: (s: Signals = {}) => frame?.(s), hasFrame: () => frame !== null };
 }
 type Rig = ReturnType<typeof rig>;
 const lastLaunch = (r: Rig) => r.ofType('performLaunch').at(-1)!.launch;
@@ -317,6 +318,77 @@ test('a zone pressed again while its launch is landing steps on from the landing
   r.service.wallState({ landed: [{ launchId: first.id, zones: [0, 1] }] });
   assert.deepEqual(r.service.view().launcher.playing.slice(0, 2), ['ca', 'cb']);
   assert.ok(r.service.view().launcher.queue.some(l => l.id === second.id));
+});
+
+test('two zones pressed just after the bar both keep the late-press grace', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 0: 'ca', 1: 'cb', 2: 'cf' })];
+  r.service.startShow(); r.ready();
+  r.at(2030);
+  r.service.action({ type: 'next', zone: 0 });
+  assert.equal(lastLaunch(r).atMs, 2030);
+  r.at(2060);
+  r.service.action({ type: 'next', zone: 2 });
+  assert.equal(lastLaunch(r).atMs, 2060, 'a two-handed press stays on one bar');
+  assert.deepEqual(lastLaunch(r).changes.map(c => c.zone), [2]);
+});
+
+test('a zone the landing scene does not touch keeps the late-press grace', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 0: 'ca', 1: 'cb' }), scene('x', { 3: 'cf' })];
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const first = lastLaunch(r);
+  r.at(2050);
+  r.service.action({ type: 'next', zone: 3 });
+  assert.equal(lastLaunch(r).atMs, 2050);
+  assert.equal(r.ofType('performCancel').some(m => m.launchId === first.id), false, 'the landing scene is left alone');
+});
+
+test('a Stop on a zone the landing launch does not touch keeps the late-press grace', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0, 1] }] });
+  r.at(3000);
+  r.service.action({ type: 'bankNext' }); // scene two changes zone 0 only
+  r.at(4050);
+  r.service.action({ type: 'stop', zone: 1 });
+  assert.equal(lastLaunch(r).atMs, 4050);
+  assert.deepEqual(lastLaunch(r).changes.map(c => [c.zone, c.sourceId]), [[1, null]]);
+});
+
+test('after a partial landing, a newer press on the waiting zone wins on the wall and in the studio', () => {
+  const r = rig();
+  r.show.performance.scenes = [scene('one', { 0: 'ca', 1: 'cb' }), scene('two', { 1: 'ca' })];
+  let wall = initialWallPerform(), seen = 0;
+  const step = (ready: (id: string) => boolean) => {
+    for (; seen < r.sent.length; seen++) wall = applyPerformMessage(wall, r.sent[seen]);
+    const result = stepWallPerform(wall, r.now(), ready);
+    wall = result.perform;
+    return result.landed;
+  };
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'bankNext' });
+  const first = lastLaunch(r);
+  r.at(2000);
+  const partial = step(id => id === 'a'); // zone 0 lands, zone 1's source is not ready
+  assert.deepEqual(partial, [{ launchId: first.id, zones: [0] }]);
+  r.at(2010);
+  r.service.action({ type: 'next', zone: 1 }); // the operator moves zone 1 on, before the report
+  const newer = lastLaunch(r);
+  assert.equal(newer.atMs, 4000);
+  r.at(2020);
+  r.service.wallState({ landed: partial });
+  assert.equal(r.service.view().launcher.queue.some(l => l.id === first.id), false, 'the stale remainder is gone');
+  r.at(4000);
+  const next = step(() => true);
+  assert.deepEqual(next, [{ launchId: newer.id, zones: [1] }]);
+  r.at(4010);
+  r.service.wallState({ landed: next });
+  assert.equal(wall.zones[1].sourceId, 'a');
+  assert.equal(r.service.view().launcher.playing[1], 'ca');
 });
 
 test('a launch replaced just as it landed still updates what is playing when its report arrives', () => {

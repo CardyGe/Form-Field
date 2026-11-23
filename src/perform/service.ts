@@ -137,11 +137,11 @@ export class PerformService {
   action(a: PerformAction): void {
     if (!this.isRunning) return;
     const now = this.deps.now(), set = this.deps.show().performance, clock = this.deps.clock.snapshot(now);
-    const press = (next: (s: LauncherState, at: number, id: string) => LauncherState) => this.place(now, (s, at) => next(s, at, this.deps.id()));
+    const press = (next: (s: LauncherState, at: number, id: string) => LauncherState, zone?: number) => this.place(now, (s, at) => next(s, at, this.deps.id()), zone);
     switch (a.type) {
-      case 'next': press((s, at, id) => queueZone(s, set, a.zone, 1, clock, at, id)); break;
-      case 'previous': press((s, at, id) => returnZone(s, set, a.zone, clock, at, id)); break;
-      case 'stop': press((s, at, id) => stopZone(s, a.zone, clock, at, id)); break;
+      case 'next': press((s, at, id) => queueZone(s, set, a.zone, 1, clock, at, id), a.zone); break;
+      case 'previous': press((s, at, id) => returnZone(s, set, a.zone, clock, at, id), a.zone); break;
+      case 'stop': press((s, at, id) => stopZone(s, a.zone, clock, at, id), a.zone); break;
       case 'burst': this.bursts[a.zone] = a.on; break;
       case 'bankNext': press((s, at, id) => bankNext(s, set, clock, at, id)); break;
       case 'bankBack': press((s, at, id) => bankBack(s, set, clock, at, id)); break;
@@ -179,7 +179,7 @@ export class PerformService {
       if (this.launcher.queue !== queue && this.launcher.queue.some(l => l.id === launchId)) { partial.add(launchId); latestMissed = Math.max(latestMissed, before.atMs); }
     }
     // Reported first, then moved: exactly on the missed bar the launch would only retry that same bar.
-    if (partial.size) this.retimeQueue(latestMissed + 1, partial);
+    if (partial.size) { this.yieldToNewer(partial); this.retimeQueue(latestMissed + 1, partial); }
     this.syncWall();
     for (const id of reported) this.replaced.delete(id);
     this.publish(true);
@@ -343,9 +343,11 @@ export class PerformService {
   /**
    * Makes a queue change as if the launches now firing had landed, and keeps them queued until their reports say so.
    * The press cannot replace them, and it goes to the next boundary: the bar they fired on has been used.
+   * `zone`: a press on one zone. It only waits if a firing launch changes that zone; otherwise it keeps the late-press grace.
    */
-  private place(now: number, next: (s: LauncherState, at: number) => LauncherState): void {
-    const firing = this.launcher.queue.filter(l => this.isFiring(l, now));
+  private place(now: number, next: (s: LauncherState, at: number) => LauncherState, zone?: number): void {
+    const due = this.launcher.queue.filter(l => this.isFiring(l, now));
+    const firing = zone === undefined || due.some(l => l.changes.some(c => c.zone === zone)) ? due : [];
     let after: LauncherState;
     if (firing.length === 0) after = next(this.launcher, now);
     else {
@@ -363,17 +365,23 @@ export class PerformService {
    * now, and gives up any zone or scene that a newer press has since queued.
    */
   private moveWaiting(now: number): void {
-    const queue = this.launcher.queue, waiting = queue.filter(l => l.changes.length > 0 && now - l.atMs >= IN_FLIGHT_MS);
+    const waiting = this.launcher.queue.filter(l => l.changes.length > 0 && now - l.atMs >= IN_FLIGHT_MS);
     if (!waiting.length) return;
-    const newer = queue.filter(l => !waiting.includes(l));
-    const kept = queue.flatMap((l): Launch[] => {
-      if (!waiting.includes(l)) return [l];
+    this.yieldToNewer(new Set(waiting.map(l => l.id)));
+    this.retimeQueue(now);
+  }
+
+  /** Launches left over from an earlier bar give up any zone or scene a newer press owns, so the operator's last choice wins. */
+  private yieldToNewer(stale: ReadonlySet<string>): void {
+    const queue = this.launcher.queue;
+    const kept = queue.flatMap((l, index): Launch[] => {
+      if (!stale.has(l.id)) return [l];
+      const newer = queue.filter((o, i) => !stale.has(o.id) || i > index);
       const changes = l.changes.filter(c => !newer.some(o => o.changes.some(x => x.zone === c.zone)));
       const sceneIndex = newer.some(o => o.sceneIndex !== null && o.sceneIndex !== l.sceneIndex) ? null : l.sceneIndex;
       return changes.length > 0 || sceneIndex !== null ? [{ ...l, changes, sceneIndex }] : [];
     });
     this.launcher = { ...this.launcher, queue: kept };
-    this.retimeQueue(now);
   }
 
   /** Moves the queue to the clock as it is now. A launch already firing stays where it is, unless named in `force`. */
