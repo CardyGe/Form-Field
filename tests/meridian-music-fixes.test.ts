@@ -35,13 +35,17 @@ test('C1: a strobe whose lit area rises with it, read one frame late, is still l
 });
 
 test('C2: layers are judged together, whatever their order', async () => {
-  const { composeLight } = await import('../src/meridian/light-measure');
+  const { LightGrid } = await import('../src/meridian/light-measure');
+  const strip = (i: number) => { const list = new DisplayList(2), x = -0.6 + i * 0.6; list.push(PRIMITIVE.segment, x - 0.2, 0, x + 0.2, 0, 1, -1, 0, 0, 1, 0, 0); return list; };
+  const lists = [strip(0), strip(1)], place = (level: number) => ({ aspect: 16 / 9, a: 1, b: 0, c: 0, d: 1, x: 0, y: 0, level, pixel: 1 / 360, minWidth: 1.5 });
   const play = (order: number[]) => {
-    const guard = new FlashGuard(), out: number[] = [], result = { light: 0, area: 0, red: 0 };
+    const guard = new FlashGuard(), grid = new LightGrid(), out: number[] = [];
     for (let f = 0; f < 600; f++) {
-      const level = strobe(f) ? 0.9 : 0.2, areas = order.map(() => 0.2), lights = order.map(() => level), reds = order.map(i => i * 0.5);
-      composeLight(areas, lights, reds, order.length, result);
-      out.push(result.light * guard.update(DT, result.light, result.area, result.red, on));
+      const level = strobe(f) ? 0.9 : 0.2;
+      grid.reset(16 / 9);
+      for (const i of order) grid.addLayer(lists[i], place(level), i * 0.5, true);
+      grid.finish();
+      out.push(level * guard.step(DT, grid, on));
     }
     return out;
   };
@@ -50,13 +54,12 @@ test('C2: layers are judged together, whatever their order', async () => {
 });
 
 test('C2: lit area follows the layer placement and is clipped by the frame', async () => {
-  const { measureList } = await import('../src/meridian/light-measure');
-  const list = new DisplayList(8); list.push(PRIMITIVE.segment, -0.4, 0, 0.4, 0, 0, -0.05, 0, 0, 1, 0, 0);
-  const place = (scale: number, x: number) => ({ aspect: 16 / 9, a: scale, b: 0, c: 0, d: scale, x, y: 0, level: 1 }), out = { area: 0, light: 0 };
-  measureList(list, place(1, 0), out); const whole = out.area;
-  measureList(list, place(0.5, 0), out); const half = out.area;
-  measureList(list, place(1, 4), out); const gone = out.area;
-  assert.ok(whole > 0 && Math.abs(half / whole - 0.25) < 0.05, `${whole} ${half}`); assert.equal(gone, 0);
+  const { LightGrid } = await import('../src/meridian/light-measure');
+  const list = new DisplayList(8); list.push(PRIMITIVE.segment, -0.4, 0, 0.4, 0, 1, -0.2, 0, 0, 1, 0, 0);
+  const place = (scale: number, x: number) => ({ aspect: 16 / 9, a: scale, b: 0, c: 0, d: scale, x, y: 0, level: 1, pixel: 1 / 360, minWidth: 1.5 }), grid = new LightGrid();
+  const area = (scale: number, x: number) => { grid.reset(16 / 9); return grid.addLayer(list, place(scale, x), 0, true); };
+  const whole = area(1, 0), half = area(0.5, 0), gone = area(1, 4);
+  assert.ok(whole > 0 && Math.abs(half / whole - 0.25) < 0.08, `${whole} ${half}`); assert.equal(gone, 0);
 });
 
 test('I2: a linked Mutate lets go when its slider is moved, and clears on load', async () => {
@@ -140,6 +143,6 @@ test('I8: the export table limits a strobe across the loop point, in any read or
 
 test('I8: the renderer guards exports and Motion-driven light from a composition budget', () => {
   const renderer = readFileSync('src/rendering/MeridianRenderer.ts', 'utf8'), studio = readFileSync('src/rendering/StudioRenderer.ts', 'utf8');
-  assert.ok(/guardLoopTable\(/.test(renderer)); assert.ok(/beginComposition\(/.test(studio)); assert.ok(/layerGain\(/.test(studio));
+  assert.ok(/guardLoopCells\(/.test(renderer)); assert.ok(/beginComposition\(/.test(studio)); assert.ok(/layerGain\(/.test(studio));
   assert.equal((renderer.match(/new FlashGuard\(/g) ?? []).length, 1, 'one budget for the composition');
 });

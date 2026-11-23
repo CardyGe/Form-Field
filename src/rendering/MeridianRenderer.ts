@@ -6,11 +6,11 @@ import { DisplayList, STRIDE } from '../meridian/display-list';
 import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate';
 import { Conductor } from '../meridian/conductor';
 import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, EVOLVE_ELEMENTS, evolveScheme, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveClock, type EvolveTransport } from '../meridian/evolve';
-import { FlashGuard, guardLoopTable, type FlashSample } from '../meridian/flash-guard';
+import { FlashGuard, guardLoopCells } from '../meridian/flash-guard';
 import { heldMoves } from '../meridian/held-moves';
 import { applyMacros } from '../meridian/macros';
 import { markFromOutput, type MarkPlacement } from '../meridian/mark-placement';
-import { composeLight, measureList, type LightMeasure, type LightPlacement } from '../meridian/light-measure';
+import { LightGrid, type LightPlacement } from '../meridian/light-measure';
 import { LinkedOverrides, MoveRouter, type LinkedEdit } from '../meridian/moves';
 import { MusicLight } from '../meridian/music-light';
 import { musicStatus } from '../meridian/music-status';
@@ -66,7 +66,7 @@ interface EvolveLive {
   readonly input: { dt: number; signals: Readonly<Record<string, number>>; params: Readonly<Record<string, number>>; externalTempo: boolean };
 }
 /** One Evolve layer's picture for this composition frame, drawn once and measured before anything reaches the screen. */
-interface EvolveEntry { readonly list: DisplayList; stamp: number; phase: number; seed: number; scheme: number; area: number; light: number; red: number; gain: number }
+interface EvolveEntry { readonly list: DisplayList; stamp: number; phase: number; seed: number; scheme: number; area: number; red: number; gain: number }
 const EXPORT_TABLES = 8;
 const isEvolveLayer = (layer: Layer): boolean => layer.visible && layer.kind === 'meridian' && Math.round(layer.params.scoreStyle ?? SCORE_STYLE_EVOLVE) === SCORE_STYLE_EVOLVE;
 const NO_SIGNALS: Readonly<Record<string, number>> = Object.freeze({});
@@ -195,12 +195,8 @@ export class MeridianRenderer {
   private readonly flashGuard = new FlashGuard();
   private readonly guardSettings: Record<string, number> = { safetyFlashGuard: 0, safetyMaxFlashes: 3, safetyRedLimit: 1, safetyFullField: 1 };
   private readonly exportTables = new Map<string, Float32Array>();
-  private readonly areas = new Float64Array(4);
-  private readonly lights = new Float64Array(4);
-  private readonly reds = new Float64Array(4);
-  private readonly composed = { light: 0, area: 0, red: 0 };
-  private readonly placement: LightPlacement = { aspect: 1, a: 1, b: 0, c: 0, d: 1, x: 0, y: 0, level: 1 };
-  private readonly measured: LightMeasure = { area: 0, light: 0 };
+  private readonly lightGrid = new LightGrid();
+  private readonly placement: LightPlacement = { aspect: 1, a: 1, b: 0, c: 0, d: 1, x: 0, y: 0, level: 1, pixel: 1 / 1080, minWidth: 1.5 };
   private readonly measureView = new THREE.Matrix3();
   private compositionStamp = 0;
   private lastComposition: number | null = null;
@@ -290,7 +286,7 @@ export class MeridianRenderer {
   }
 
   private createEntry(): EvolveEntry {
-    return { list: new DisplayList(EVOLVE_ELEMENTS + GLITCH_SHARDS), stamp: -1, phase: 0, seed: 0, scheme: 0, area: 0, light: 0, red: 0, gain: 1 };
+    return { list: new DisplayList(EVOLVE_ELEMENTS + GLITCH_SHARDS), stamp: -1, phase: 0, seed: 0, scheme: 0, area: 0, red: 0, gain: 1 };
   }
 
   private entryFor(id: string): EvolveEntry {
@@ -326,7 +322,7 @@ export class MeridianRenderer {
     let gain = 1;
     if (exporting) gain = settings.safetyFlashGuard ? this.exportGain(project, phase, width, height, duration) : 1;
     else {
-      let n = 0;
+      this.lightGrid.reset(width / height);
       for (let i = 0; i < project.layers.length; i++) {
         const original = project.layers[i];
         if (!isEvolveLayer(original)) continue;
@@ -335,13 +331,12 @@ export class MeridianRenderer {
         this.loadLive(layer, original.params);
         this.prepareEvolve(layer, phase, width, height, runtime, entry);
         entry.stamp = this.compositionStamp; entry.phase = phase;
-        this.measureEntry(layer, entry, width, height);
-        this.areas[n] = entry.area; this.lights[n] = entry.light; this.reds[n] = entry.red; n++;
+        this.measureEntry(layer, entry, width, height, read(original.params, 'safetyFlashGuard') >= .5);
       }
-      composeLight(this.areas, this.lights, this.reds, n, this.composed);
+      this.lightGrid.finish();
       const now = performance.now(), dt = this.lastComposition === null ? 1 / 60 : Math.min(.25, Math.max(0, (now - this.lastComposition) / 1000));
       this.lastComposition = now;
-      gain = this.flashGuard.update(dt, this.composed.light, this.composed.area, this.composed.red, settings);
+      gain = this.flashGuard.step(dt, this.lightGrid, settings);
     }
     for (let i = 0; i < project.layers.length; i++) {
       const original = project.layers[i];
@@ -370,17 +365,18 @@ export class MeridianRenderer {
     const key = JSON.stringify([total, project.fps, width / height, duration, this.guardSettings, evolve.map(l => [l.params, l.modulations, l.transform, l.opacity, l.palette])]);
     let table = this.exportTables.get(key);
     if (!table) {
-      const fps = project.fps.num / project.fps.den, sample = (frame: number, out: FlashSample) => {
+      const fps = project.fps.num / project.fps.den, grid = this.lightGrid, sample = (frame: number) => {
         const at = phaseAtFrame(frame, total);
+        grid.reset(width / height);
         for (let i = 0; i < evolve.length; i++) {
           const original = evolve[i], layer = evaluateLayer(original, at), runtime = this.sampleRuntime, entry = this.sampleEntry;
           runtime.structure = original.params; runtime.duration = duration;
-          this.loadLive(layer, original.params); this.prepareEvolve(layer, at, width, height, runtime, entry); this.measureEntry(layer, entry, width, height);
-          this.areas[i] = entry.area; this.lights[i] = entry.light; this.reds[i] = entry.red;
+          this.loadLive(layer, original.params); this.prepareEvolve(layer, at, width, height, runtime, entry); this.measureEntry(layer, entry, width, height, read(original.params, 'safetyFlashGuard') >= .5);
         }
-        composeLight(this.areas, this.lights, this.reds, evolve.length, out);
+        grid.finish();
+        return grid;
       };
-      table = guardLoopTable(sample, total, fps, this.guardSettings);
+      table = guardLoopCells(sample, total, fps, this.guardSettings);
       if (this.exportTables.size >= EXPORT_TABLES) this.exportTables.delete(this.exportTables.keys().next().value as string);
       this.exportTables.set(key, table);
     }
@@ -388,8 +384,8 @@ export class MeridianRenderer {
     return table[frameAtPhase(wrapped, total) % total];
   }
 
-  /** The layer's own lit area, light and red, from its own list, placement and colours. */
-  private measureEntry(layer: Layer, entry: EvolveEntry, width: number, height: number): void {
+  /** Adds the layer's own marks to the light grid, through its own placement, opacity and colours. */
+  private measureEntry(layer: Layer, entry: EvolveEntry, width: number, height: number, guarded: boolean): void {
     const p = this.evolveView, aspect = width / height, place = this.placement;
     const zoom = read(p, 'structureZoom') * (1 - 2 * read(p, 'outputSafeMargin')), angle = read(p, 'structureRotation') * Math.PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
     const squash = (1 - read(p, 'structureEllipse') * .6) * (1 - read(p, 'structureTilt') * .62);
@@ -401,12 +397,13 @@ export class MeridianRenderer {
     place.c = m[1] * s00 / aspect + m[4] * s10; place.d = m[1] * s01 / aspect + m[4] * s11;
     place.x = (u0 - .5) * aspect; place.y = v0 - .5;
     place.level = read(p, 'lightExposure') * Math.max(0, layer.opacity);
-    measureList(entry.list, place, this.measured);
-    entry.area = this.measured.area; entry.light = this.measured.light;
+    place.pixel = 1 / (height * Math.max(layer.transform.scale, .05) * Math.max(zoom * Math.min(1, squash), .05));
+    place.minWidth = read(p, 'outputMinLineWidth');
     this.form = undefined;
     this.pulseSeededScheme = evolveScheme(entry.scheme);
     this.setColours(this.live, layer.palette, 0, 0);
     entry.red = this.redShare(p);
+    entry.area = this.lightGrid.addLayer(entry.list, place, entry.red, guarded);
   }
 
   /** Moves this layer's clock on and draws its list. Runs once per composition frame. */

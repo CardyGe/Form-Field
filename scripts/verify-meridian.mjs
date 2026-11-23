@@ -754,6 +754,77 @@ try {
   if (report.flashExport.on > 3) failures.push(`an export shows ${report.flashExport.on} large flashes in a second with the guard on`);
   if (!report.flashExport.sameInAnyOrder) failures.push('a guarded export frame depends on render order');
 
+  // Flash Guard on rendered pixels with several layers: three side-by-side layers strobing together at 5 Hz, each under the
+  // flash area alone. Flashes are counted from the frames themselves, in export and in the live preview, guard on and off.
+  report.flashLayers = await page.evaluate(async () => {
+    const { m, studio } = window.meridianQA, w = 160, h = 90, cols = 32, rows = 18, total = 120, gl = studio.renderer.getContext();
+    const make = guard => {
+      const project = m.createProject();
+      project.layers = [-0.34, 0, 0.34].map((x, i) => {
+        const layer = m.createLayer('meridian'); layer.id = `strobe-${i}`; layer.blend = 'add'; layer.transform.x = x; layer.transform.scale = 0.62;
+        Object.assign(layer.params, { scoreStyle: 2, seed: 5 + i, macroDensity: 1, macroHeat: 1, ringWeight: 14, spokeWeight: 14, lightExposure: 3, safetyFlashGuard: guard });
+        layer.modulations.opacity = { kind: 'pulse', cycles: 10, phase: 0, amount: 1, points: [], range: { min: 0, max: 1 } };
+        return layer;
+      });
+      project.background = '#000000'; project.duration = 2; project.fps = { num: 60, den: 1 };
+      return project;
+    };
+    const linear = v => { const c = v / 255; return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; };
+    const toCells = px => {
+      const out = new Float32Array(cols * rows), per = (w / cols) * (h / rows);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const at = (y * w + x) * 4; out[Math.floor(y / h * rows) * cols + Math.floor(x / w * cols)] += (.2126 * linear(px[at]) + .7152 * linear(px[at + 1]) + .0722 * linear(px[at + 2])) / per; }
+      return out;
+    };
+    const exported = async project => {
+      const series = [];
+      for (let f = 0; f < total; f++) {
+        const bitmap = await createImageBitmap(new Blob([await studio.exportPNG(project, m.phaseAtFrame(f, total), w, h)], { type: 'image/png' }));
+        const canvas = new OffscreenCanvas(w, h), paint = canvas.getContext('2d', { willReadFrequently: true }); paint.drawImage(bitmap, 0, 0);
+        series.push(toCells(paint.getImageData(0, 0, w, h).data));
+      }
+      return [...series, ...series, ...series];
+    };
+    const live = async project => {
+      await studio.prepare(project);
+      const series = [], px = new Uint8Array(w * h * 4), clock = performance.now;
+      let now = clock.call(performance) + 1e6; performance.now = () => now;
+      try {
+        for (let f = 0; f < total * 3; f++) {
+          now += 1000 / 60;
+          studio.render(project, (f % total) / total * Math.PI * 2, w, h);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+          series.push(toCells(px));
+        }
+      } finally { performance.now = clock; }
+      return series;
+    };
+    const count = series => {
+      const anchor = Float32Array.from(series[0]), way = new Int8Array(cols * rows), events = [];
+      let last = 0, biggest = 0;
+      for (let f = 1; f < series.length; f++) {
+        const v = series[f]; let up = 0, down = 0;
+        for (let i = 0; i < v.length; i++) {
+          biggest = Math.max(biggest, Math.abs(v[i] - series[f - 1][i]));
+          if (way[i] === 1 && v[i] > anchor[i]) anchor[i] = v[i]; if (way[i] === -1 && v[i] < anchor[i]) anchor[i] = v[i];
+          if (way[i] >= 0 && v[i] <= anchor[i] - .1 && v[i] < .8) { way[i] = -1; anchor[i] = v[i]; down++; }
+          else if (way[i] <= 0 && v[i] >= anchor[i] + .1) { way[i] = 1; anchor[i] = v[i]; up++; }
+        }
+        const rose = up / v.length > .25, fell = down / v.length > .25;
+        if (rose && fell) { events.push(f); last = 0; } else if (rose && last !== 1) { events.push(f); last = 1; } else if (fell && last !== -1) { events.push(f); last = -1; }
+      }
+      let worst = 0; for (let i = 0; i < events.length; i++) { let n = 0; for (let k = i; k < events.length && events[k] < events[i] + 60; k++) n++; worst = Math.max(worst, n); }
+      return { flashes: Math.ceil(worst / 2), step: +biggest.toFixed(3) };
+    };
+    return { exportOff: count(await exported(make(0))), exportOn: count(await exported(make(1))), liveOff: count(await live(make(0))), liveOn: count(await live(make(1))) };
+  });
+  console.log('flash layers', JSON.stringify(report.flashLayers));
+  for (const path of ['export', 'live']) {
+    const off = report.flashLayers[`${path}Off`], on = report.flashLayers[`${path}On`];
+    if (off.flashes < 4) failures.push(`the multi-layer ${path} check is not strobing without the guard (${off.flashes} a second)`);
+    if (on.flashes > 3) failures.push(`a multi-layer ${path} shows ${on.flashes} large flashes in a second with the guard on`);
+    if (on.step > off.step + .02) failures.push(`the guard made a harder step in the multi-layer ${path} (${off.step} to ${on.step})`);
+  }
+
   report.ui = await verifyInApp(page, failures);
   console.log(JSON.stringify({ firstFrame: report.firstFrame, mark: report.mark, structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));

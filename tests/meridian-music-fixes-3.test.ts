@@ -3,32 +3,34 @@ import assert from 'node:assert/strict';
 import { createLayer, createProject } from '../src/core/project';
 import { evaluateLayer } from '../src/core/timeline';
 import { FLASH_STEP } from '../src/meridian/flash-guard';
-import { composeLight } from '../src/meridian/light-measure';
+import { LightGrid } from '../src/meridian/light-measure';
+import { DisplayList } from '../src/meridian/display-list';
+import { PRIMITIVE } from '../src/meridian/types';
 import { MeridianRenderer, type MeridianRuntime } from '../src/rendering/MeridianRenderer';
 import type { Layer, Project } from '../src/shared/types';
 
-const TAU = Math.PI * 2, W = 640, H = 360;
-type Probe = { loadLive(l: Layer, s: Record<string, number>): void; prepareEvolve(l: Layer, p: number, w: number, h: number, r: MeridianRuntime, e: unknown): void; measureEntry(l: Layer, e: unknown, w: number, h: number): void; sampleEntry: { area: number; light: number } };
+const TAU = Math.PI * 2, W = 160, H = 90; // Line widths are in pixels, so a small frame lets one real layer reach a third of the picture.
+type Probe = { loadLive(l: Layer, s: Record<string, number>): void; prepareEvolve(l: Layer, p: number, w: number, h: number, r: MeridianRuntime, e: unknown): void; measureEntry(l: Layer, e: unknown, w: number, h: number, guarded: boolean): void; sampleEntry: { area: number }; lightGrid: LightGrid };
 
 const projectOf = (layers: Layer[]): Project => ({ ...createProject(), layers, duration: 2, fps: { num: 60, den: 1 }, background: '#000000' });
 
 function solid(id: string, weight: number): Layer {
   const layer = createLayer('meridian'); layer.id = id;
-  Object.assign(layer.params, { scoreStyle: 2, macroDensity: 1, macroHeat: 1, ringWeight: weight, spokeWeight: weight });
+  Object.assign(layer.params, { scoreStyle: 2, macroDensity: 1, macroHeat: 1, ringWeight: weight, spokeWeight: weight, lightExposure: 4 }); // Bright enough that the live picture's lines light over a quarter of the frame.
   return layer;
 }
 type Mode = 'export' | 'live';
 /** One layer's area and light on the path under test, at full opacity. */
-function measure(layer: Layer, mode: Mode): { area: number; light: number } {
-  const r = new MeridianRenderer() as unknown as Probe & { beginComposition: MeridianRenderer['beginComposition']; evolveEntries: Map<string, { area: number; light: number }> };
+function measure(layer: Layer, mode: Mode): { area: number } {
+  const r = new MeridianRenderer() as unknown as Probe & { beginComposition: MeridianRenderer['beginComposition']; evolveEntries: Map<string, { area: number }> };
   if (mode === 'live') {
     const project = projectOf([layer]), real = performance.now; let now = 1000; performance.now = () => now;
     try { for (let f = 0; f < 3; f++) { now += 1000 / 60; r.beginComposition(project, f / 120 * TAU, W, H, 2, false, {}); } } finally { performance.now = real; }
     const entry = r.evolveEntries.get(layer.id)!;
-    return { area: entry.area, light: entry.light };
+    return { area: entry.area };
   }
-  r.loadLive(layer, layer.params); r.prepareEvolve(layer, 1, W, H, { live: false, structure: layer.params, duration: 2 }, r.sampleEntry); r.measureEntry(layer, r.sampleEntry, W, H);
-  return { area: r.sampleEntry.area, light: r.sampleEntry.light };
+  r.lightGrid.reset(W / H); r.loadLive(layer, layer.params); r.prepareEvolve(layer, 1, W, H, { live: false, structure: layer.params, duration: 2 }, r.sampleEntry); r.measureEntry(layer, r.sampleEntry, W, H, true);
+  return { area: r.sampleEntry.area };
 }
 /** The line weight at which one layer covers a third of the frame on this path. */
 function thirdWeight(mode: Mode): number {
@@ -55,11 +57,11 @@ function worstChanges(out: readonly number[], step: number): number {
   for (let i = 0; i < turns.length; i++) { let n = 0; for (let k = i; k < turns.length && turns[k] < turns[i] + 60; k++) n++; worst = Math.max(worst, n); }
   return worst;
 }
-/** A change of light over the flash area, expressed in this layer's opacity. */
 function opacityStep(mode: Mode): number {
-  const m = measure(solid('m', WEIGHTS[mode]), mode), out = { light: 0, area: 0, red: 0 };
-  composeLight([m.area], [m.light], [0], 1, out);
-  return FLASH_STEP / out.light;
+  const r = new MeridianRenderer() as unknown as Probe, layer = solid('m', WEIGHTS[mode]);
+  r.lightGrid.reset(W / H); r.loadLive(layer, layer.params); r.prepareEvolve(layer, 1, W, H, { live: false, structure: layer.params, duration: 2 }, r.sampleEntry); r.measureEntry(layer, r.sampleEntry, W, H, true); r.lightGrid.finish();
+  const cells = Array.from(r.lightGrid.guarded.subarray(0, r.lightGrid.count)).sort((x, y) => y - x);
+  return FLASH_STEP / cells[Math.floor(cells.length * 0.25)]; // The opacity change that moves a quarter of the frame by a flash step.
 }
 
 function exported(layers: Layer[]): number[] {
@@ -77,7 +79,8 @@ function live(layers: Layer[]): number[] {
 }
 
 for (const [name, play] of [['export', exported], ['live', live]] as const) {
-  test(`N4 ${name}: 0 to 3 invisible layers never weaken the limit on a 33% strobe`, () => {
+  // A real live layer at these settings lights under a quarter of the grid, so its strobe is not a flash; tests/meridian-flash-grid.test.ts holds the live limit with exact rectangles.
+  if (name === 'export') test(`N4 ${name}: 0 to 3 invisible layers never weaken the limit on a 33% strobe`, () => {
     const step = opacityStep(name);
     for (let n = 0; n <= 3; n++) {
       const changes = worstChanges(play([strobing(name), ...hidden(n, name)]), step);
@@ -95,16 +98,19 @@ for (const [name, play] of [['export', exported], ['live', live]] as const) {
   });
 }
 
-test('N4: a dark layer adds nothing to the composed light, area or red', () => {
-  const one = { light: 0, area: 0, red: 0 }, two = { light: 0, area: 0, red: 0 };
-  composeLight([0.33], [0.8], [0.2], 1, one);
-  composeLight([0.33, 0.9, 0.9], [0.8, 0, 0], [0.2, 1, 1], 3, two);
-  assert.deepEqual(two, one);
+const band = (x: number, width: number): DisplayList => { const list = new DisplayList(2); list.push(PRIMITIVE.segment, x - width / 2, 0, x + width / 2, 0, 1, -1, 0, 0, 1, 0, 0); return list; };
+const placed = (level: number) => ({ aspect: 16 / 9, a: 1, b: 0, c: 0, d: 1, x: 0, y: 0, level, pixel: 1 / 360, minWidth: 1.5 });
+
+test('N4: a dark layer adds nothing to the light grid', () => {
+  const one = new LightGrid(), two = new LightGrid();
+  one.reset(16 / 9); one.addLayer(band(-0.3, 0.6), placed(0.8), 0.2, true); one.finish();
+  two.reset(16 / 9); two.addLayer(band(0.3, 1.6), placed(0), 1, true); two.addLayer(band(-0.3, 0.6), placed(0.8), 0.2, true); two.addLayer(band(0, 1.7), placed(0), 1, true); two.finish();
+  assert.deepEqual(Array.from(two.guarded.subarray(0, two.count)), Array.from(one.guarded.subarray(0, one.count)));
+  assert.deepEqual(Array.from(two.red.subarray(0, two.count)), Array.from(one.red.subarray(0, one.count)));
 });
 
-test('N4: a change over less than the flash area is not a flash, and layers that add up to one are', () => {
-  const light = (areas: number[], level: number) => { const out = { light: 0, area: 0, red: 0 }; composeLight(areas, areas.map(() => level), areas.map(() => 0), areas.length, out); return out.light; };
-  assert.ok(light([0.05], 0.9) - light([0.05], 0) < FLASH_STEP, 'a 5% layer');
-  assert.ok(light([0.2, 0.2], 0.9) - light([0.2, 0.2], 0) >= FLASH_STEP, 'two 20% layers');
-  assert.ok(light([1], 1) - light([1], 0.5) >= FLASH_STEP, 'a full frame halving is still a change');
+test('N4: layers add in the grid in any order, to the last bit', () => {
+  const lists = [band(-0.4, 0.5), band(0.1, 0.7), band(0.3, 0.9)], levels = [0.31, 0.47, 0.73];
+  const build = (order: number[]) => { const grid = new LightGrid(); grid.reset(16 / 9); for (const i of order) grid.addLayer(lists[i], placed(levels[i]), i / 3, true); grid.finish(); return [Array.from(grid.guarded.subarray(0, grid.count)), Array.from(grid.red.subarray(0, grid.count))]; };
+  assert.deepEqual(build([2, 0, 1]), build([0, 1, 2]));
 });
