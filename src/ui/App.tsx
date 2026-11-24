@@ -20,6 +20,7 @@ import sculptureThumb from './assets/sculpture.png';
 import fractalThumb from './assets/fractal.png';
 import oilThumb from './assets/oil.png';
 import liquidThumb from './assets/liquid.png';
+import smokeCloudThumb from './assets/smokecloud.png';
 import scopeThumb from './assets/scope.png';
 import super8Thumb from './assets/super8.png';
 import { StudioRenderer } from '../rendering/StudioRenderer';
@@ -52,6 +53,7 @@ function lookCaption(preset: typeof PRESETS[number]): string {
   if (preset.kind === 'graphic') return `${GRAPHIC_FAMILIES[style]} · ${GRAPHIC_VARIANTS[style][variant] ?? 'Custom'}`;
   if (preset.kind === 'oil') return 'Paint · glass · cellular ink';
   if (preset.kind === 'liquid') return 'Oil droplets · dye · projector';
+  if (preset.kind === 'smokecloud') return 'Fluid smoke · fine points · ring';
   if (preset.kind === 'scope') return preset.params.scopeMode === 1 ? 'Filaments · rolling smoke' : 'Glowing line · signal · beam';
   if (preset.kind === 'fractal') return FRACTAL_PROJECTION_LOOK_IDS.includes(preset.id)
     ? preset.description : `${FRACTAL_FAMILIES[style]} · ${FRACTAL_VARIANTS[style][variant]}`;
@@ -131,6 +133,7 @@ const instrumentCatalogue = [
   { kind: 'oil', name: 'Oil Slides', caption: 'Paint · glass · cellular ink', image: oilThumb, label: 'Add oil slides' },
   { kind: 'liquid', name: 'Liquid Light', caption: 'Oil droplets · dye · projector', image: liquidThumb, label: 'Add liquid light' },
   { kind: 'scope', name: 'Oscilloscope', caption: 'Glowing line · signal · beam', image: scopeThumb, label: 'Add oscilloscope' },
+  { kind: 'smokecloud', name: 'Smoke Cloud', caption: 'Fluid smoke · fine points · ring', image: smokeCloudThumb, label: 'Add smoke cloud' },
   { kind: 'graphic', name: 'Graphic Patterns', caption: 'Waves · circles · tiles · paths', image: graphicThumb, label: 'Add graphic patterns' },
   ...INSTRUMENTS.map(info => ({ kind: info.kind, name: info.name, caption: info.description, image: projectionThumbnails[`./assets/projection/${startingLooks[info.kind]}.png`]??instrumentThumbnails[`./assets/instruments/${info.kind}.png`], label: `Add ${info.name}` })),
 ] satisfies {kind: LayerKind; name: string; caption: string; image: string; label: string}[];

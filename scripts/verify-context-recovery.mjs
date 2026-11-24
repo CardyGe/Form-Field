@@ -94,7 +94,7 @@ try {
 
   const chosen = new Map();
   for (const preset of model.PRESETS) if (preset.kind !== 'image' && !chosen.has(preset.kind)) chosen.set(preset.kind, preset.id);
-  const targets = [...chosen.entries(), ['scope', 'ember-pulse']];
+  const targets = [...chosen.entries(), ['scope', 'ember-pulse'], ['smokecloud', 'cloud-ultraviolet']];
   const failures = [];
   for (const [kind, id] of targets) {
     const layer = model.applyPreset(model.createLayer(kind), id);

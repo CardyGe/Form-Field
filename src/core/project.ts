@@ -11,6 +11,7 @@ import { supportsWarp } from '../rendering/warp';
 import { SCOPE_FIGURES } from '../rendering/scope-curve';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import type { Layer, LayerKind, ParameterDefinition, Preset, Project } from '../shared/types';
+import { SMOKE_CLOUD_SCHEMES } from '../rendering/smoke-cloud-model';
 import { GRAPHIC_LOOKS, GRAPHIC_PARAMETERS, GRAPHIC_VARIANTS, graphicVisibleKeys } from './graphics';
 
 const TAU = Math.PI * 2;
@@ -88,7 +89,30 @@ export const EMBER_PALETTES = [
   { id: 'ember-silver', name: 'Silver Ash', palette: ['#d4e5f3', '#626f83', '#8393ad', '#fbfdff', '#a5c2df', '#8594a9'] },
 ];
 
+const SMOKE_CLOUD_PARAMETERS: ParameterDefinition[] = [
+  { ...parameter('cloudSize', 'Form size', .15, .5, .005, .315, 'Shape'), description: 'Sets the size of the whole form.' },
+  { ...parameter('cloudCore', 'Dark centre', 0, 1, .01, .5, 'Shape'), description: 'Opens or closes the black heart of the form.' },
+  { ...parameter('cloudRing', 'Ring', 0, 1, .01, .5, 'Shape'), description: 'Sets the strength of the thin torn ring of light.' },
+  { ...parameter('cloudChannels', 'Dark channels', 0, 1, .01, .5, 'Shape'), description: 'Sets how clearly dark gaps separate the ring from the smoke.' },
+  { ...parameter('cloudOuter', 'Outer smoke', 0, 1, .01, .5, 'Shape'), description: 'Sets how much smoke forms the ragged outer border.' },
+  { ...parameter('cloudTurbulence', 'Turbulence', 0, 1, .01, .5, 'Motion'), description: 'Sets how hard the smoke is stirred.' },
+  { ...parameter('cloudShear', 'Shear', 0, 1, .01, .5, 'Motion'), description: 'Slides rings of smoke past each other, stretching it into strands.' },
+  { ...parameter('cloudPlumes', 'Plumes', 0, 1, .01, .5, 'Motion'), description: 'Sets how strongly smoke streams outward.' },
+  { ...parameter('cloudPunch', 'Beat punch', 0, 1, .01, .5, 'Motion'), description: 'Sets how much each beat pushes the smoke and lifts the light.' },
+  { ...parameter('cloudBeats', 'Beats per loop', 1, 64, 1, 20, 'Motion'), description: 'Sets how many beats play in one loop. The light never pulses faster than 2.5 times a second.' },
+  { ...parameter('cloudResponse', 'Audio response', 0, 1, .01, .6, 'Motion'), description: 'Lets detected beats push the smoke during live playback. It does not flash the light.' },
+  { ...parameter('cloudSmoke', 'Smoke', 0, 1, .01, .5, 'Material'), description: 'Sets how much smoke is released.' },
+  { ...parameter('cloudLife', 'Persistence', 0, 1, .01, .5, 'Material'), description: 'Sets how long smoke hangs before it thins.' },
+  { ...parameter('cloudSoftness', 'Softness', 0, 1, .01, .5, 'Material'), description: 'Moves the smoke from crisp folds to soft haze.' },
+  { ...parameter('cloudLighting', 'Lighting', 0, 1, .01, .5, 'Material'), description: 'Sets how strongly light models the folds of smoke.' },
+  { ...parameter('cloudSparkle', 'Sparkle', 0, 1, .01, .5, 'Material'), description: 'Sets the brightness of the fine points.' },
+  parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
+  parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
+  parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
+];
+
 const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
+  smokecloud: SMOKE_CLOUD_PARAMETERS,
   ...INSTRUMENT_PARAMETERS,
   surface: [
     parameter('style', 'Pattern', 0, 3, 1, 0, 'Shape'),
@@ -494,6 +518,7 @@ export const PRESETS: Preset[] = [
   preset('cyan-tangle', 'Cyan Tangle', 'A dense weave of cyan line that never stops folding, with a white-hot core and a blue glow.', 'scope', ['#2ad8ff', '#1a90ff', '#1228ff', '#ffffff', '#40ffb4', '#000000'], { figure: 7, ring: 0, radius: 0.36, tilt: 0.4, drift: 1, tumbleY: 1, overtones: 0.3, wiggle: 0.1, wiggleFrequency: 64, wiggleBursts: 0.5, afterglow: 0.35, intensity: 1.5, halo: 0.9, bloom: 1.3, bloomSize: 0.45, fringe: 0.7, hueDrift: 0.35, depthFade: 0.75 }),
   preset('signal-burst', 'Signal Burst', 'A calm trace that breaks into bursts of signal, trailing light.', 'scope', ['#ff2aa8', '#b020ff', '#5a10e0', '#ffffff', '#ffb040', '#000000'], { figure: 0, figureB: 1, morph: 0.35, hold: 0.4, ring: 0.6, radius: 0.36, tilt: 0.3, drift: 1, sway: 0.3, wiggle: 0.7, wiggleFrequency: 30, wiggleBursts: 0.85, afterglow: 0.6, intensity: 2.4, halo: 1.1, bloom: 1.2, bloomSize: 0.55, fringe: 0.5, hueDrift: 0.5 }),
   preset('morse-sphere', 'Morse Weave', 'Bright dashes race round a knot that unfolds into a star and back.', 'scope', ['#7dff5a', '#18c060', '#087048', '#ffffff', '#e8ff40', '#000000'], { figure: 4, figureB: 6, morph: 1, hold: 0.5, ring: 0, radius: 0.36, tilt: 0.5, drift: 1, dash: 1, dashCount: 28, dashLength: 0.35, dashSpeed: 3, afterglow: 0.45, intensity: 1.7, halo: 1, bloom: 1.1, bloomSize: 0.4, fringe: 0.35, hueDrift: 0.4, depthFade: 0.7 }),
+  ...SMOKE_CLOUD_SCHEMES.map(look => preset(look.id, look.name, 'Fluid smoke and a million fine points around a dark heart and a torn ring.', 'smokecloud', look.palette, {})),
   ...EMBER_PALETTES.map(look => preset(look.id, look.name, 'Rolling smoke and outward-travelling filaments.', 'scope', look.palette, EMBER_BASE)),
   preset('acid-slide', 'Acid Slide', 'Fluorescent yellow paint, cellular black ink and a glossy lens over cyan.', 'oil', OIL_PALETTE, {}),
   preset('cobalt-tide', 'Cobalt Tide', 'Electric blue paint and coral ink flowing over luminous turquoise.', 'oil', ['#234dff', '#05bdf5', '#2b0927', '#42f2b4', '#111044', '#e7b4ff'], { layout: 1, travel: 0.38, relativeRotation: 0.65, drag: 0.78, coverage: 0.64, lensSize: 0.24, deformation: 0.85, cellComplexity: 0.85, dispersion: 0.35 }),
@@ -625,12 +650,12 @@ export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
     id: crypto.randomUUID(),
-    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'scope' ? 'Oscilloscope' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
+    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'smokecloud' ? 'Smoke Cloud' : kind === 'scope' ? 'Oscilloscope' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
     kind, visible: true, opacity: 1, blend: 'normal',
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     mask: { kind: 'none', softness: 0.15, invert: false, size: 0.8 },
     params: { ...defaultParams(kind), ...(isInstrument(kind) ? INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].params : kind === 'graphic' ? GRAPHIC_LOOKS[0].params : kind === 'super8' ? SUPER8_PROJECTOR_LOOK : kind === 'fractal' ? { evolution: FRACTAL_EVOLUTION } : {}), seed: 1729 },
-    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
+    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'smokecloud' ? SMOKE_CLOUD_SCHEMES[0].palette : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
   };
 }
 
@@ -909,7 +934,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
     if(!isSimplePolygon(surface.points as {x:number;y:number}[]))fail(`${path}.surface.points`,'must form a simple polygon with a useful area.');
     if(surface.source==='mask'&&(layer.mask as Record<string,unknown>)?.kind!=='image')fail(`${path}.surface.source`,'requires an imported image mask.');
   }
-  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
+  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', 'smokecloud', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
   text(layer.id, `${path}.id`, 100); text(layer.name, `${path}.name`);
   boolean(layer.visible, `${path}.visible`); number(layer.opacity, `${path}.opacity`, 0, 1);
   choice(layer.blend, ['normal', 'screen', 'multiply', 'add', 'source'] as const, `${path}.blend`);

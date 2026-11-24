@@ -21,6 +21,8 @@ import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
+import { SmokeCloudRenderer } from './SmokeCloud';
+import { compositesPlainly, plainOverFragment } from './smoke-cloud-composite';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
@@ -173,6 +175,11 @@ export class StudioRenderer {
   private readonly liquid: THREE.ShaderMaterial;
   private readonly liquidLayouts = new Map<string, THREE.DataTexture>();
   private scope: ScopeRenderer | null = null;
+  private smokeClouds: SmokeCloudRenderer | null = null;
+  private plainOver: THREE.ShaderMaterial | null = null;
+  /** For checks: draws every layer through the full compositor. */
+  fullCompositorOnly = false;
+  private previewPlaying = true;
   /** Reduced-size stand-ins for `source` while the preview draws time slices. */
   private sliceSource: THREE.WebGLRenderTarget | null = null;
   private sliceSourceSmooth: THREE.WebGLRenderTarget | null = null;
@@ -283,6 +290,7 @@ export class StudioRenderer {
     this.feedbackStates.clear();
     this.releaseOilTargets();
     this.instruments.resetGpuHistory();
+    this.smokeClouds?.resetGpuHistory();
   };
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -568,6 +576,7 @@ export class StudioRenderer {
       this.instruments.prepare(project,(m,t)=>this.draw(m,t),layer=>layer.mask.dataUrl?this.assets.get(this.assetKey(layer.mask.dataUrl,true))?.texture.image as CanvasImageSource|undefined:undefined);
       for (const [key, asset] of this.assets) if (!required.has(key)) { asset.texture.dispose(); this.assets.delete(key); }
       if (!project.layers.some(layer => layer.kind === 'oil' && layer.visible)) this.releaseOilTargets();
+      this.smokeClouds?.keep(new Set(project.layers.filter(layer => layer.kind === 'smokecloud' && layer.visible).map(layer => layer.id)));
       if (!project.layers.some(layer => layer.kind === 'graphic' && layer.visible)) {
         this.graphicSource?.dispose(); this.graphicSource = null;
       }
@@ -750,6 +759,9 @@ export class StudioRenderer {
     } else if (layer.kind === 'scope') {
       this.scope ??= new ScopeRenderer();
       this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t), smokeAudio);
+    } else if (layer.kind === 'smokecloud') {
+      this.smokeClouds ??= new SmokeCloudRenderer();
+      this.smokeClouds.draw(this.renderer, layer, original, localPhase, this.width, this.height, this.source, smokeAudio, { exact: this.exactFeedback, playing: this.previewPlaying, duration });
     } else if (layer.kind === 'liquid') {
       const u = this.liquid.uniforms;
       u.uAspect.value = aspect; u.uPhase.value = localPhase;
@@ -870,6 +882,7 @@ export class StudioRenderer {
     this.renderer.setClearColor(0, 0);
     this.renderer.setRenderTarget(this.accumA); this.renderer.clear();
     let below = this.accumA, next = this.accumB;
+    let soleSource: THREE.Texture | null = null;
     const wrapped = ((phase % TAU) + TAU) % TAU;
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
@@ -890,6 +903,16 @@ export class StudioRenderer {
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
       const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
       const finished = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
+      // Exports always use the full compositor; a live untouched Smoke Cloud does not need its cost at 4K.
+      if (!this.exporting && !this.fullCompositorOnly && compositesPlainly(layer, this.tiling)) {
+        // Alone in the frame, it is already the finished composite: drawing it over nothing changes no pixel.
+        if (project.layers.filter(item => item.visible).length === 1) { soleSource = finished; continue; }
+        this.plainOver ??= new THREE.ShaderMaterial({ vertexShader: fullscreenVertex, fragmentShader: plainOverFragment, uniforms: { uBelow: { value: null }, uSource: { value: null } }, depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false });
+        this.plainOver.uniforms.uBelow.value = below.texture; this.plainOver.uniforms.uSource.value = finished;
+        this.draw(this.plainOver, next);
+        [below, next] = [next, below];
+        continue;
+      }
       const u = this.composite.uniforms;
       u.uBelow.value = below.texture; u.uSource.value = finished;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
@@ -935,7 +958,7 @@ export class StudioRenderer {
       this.draw(this.composite, next);
       [below, next] = [next, below];
     }
-    this.finish.uniforms.uImage.value = below.texture;
+    this.finish.uniforms.uImage.value = soleSource ?? below.texture;
     (this.finish.uniforms.uBackground.value as THREE.Color).set(project.background);
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
     this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
@@ -1412,7 +1435,7 @@ export class StudioRenderer {
   /** True while a paused preview is still refining a feedback history. */
   needsRefresh(): boolean {
     for (const state of this.feedbackStates.values()) if (state.settle) return true;
-    return false;
+    return this.smokeClouds?.needsRefresh() ?? false;
   }
 
   private disposeFeedback(state: FeedbackState): void {
@@ -1443,8 +1466,9 @@ export class StudioRenderer {
     if (this.warpTarget && !project.layers.some(layer => layer.visible && warpActive(layer))) { this.warpTarget.dispose(); this.warpTarget = null; }
   }
 
-  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }): void {
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }, playing = true): void {
     if (this.exporting) return;
+    this.previewPlaying = playing;
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();
@@ -1545,6 +1569,8 @@ export class StudioRenderer {
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;
+    this.smokeClouds?.dispose(); this.smokeClouds = null;
+    this.plainOver?.dispose(); this.plainOver = null;
     this.sliceSource?.dispose(); this.sliceSource = null;
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();

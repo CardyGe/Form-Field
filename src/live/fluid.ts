@@ -73,6 +73,9 @@ const zero = /* glsl */`void main() { gl_FragColor = vec4(0.); }`;
 /** What is left after `seconds` of something that keeps 5% after `life` seconds. */
 const keep = (seconds: number, life: number) => Math.exp(-3 * seconds / Math.max(1e-3, life));
 
+/** A saved copy of the simulation, for returning to a moment without replaying from the start. */
+export interface FluidState { velocity: THREE.WebGLRenderTarget; dye: THREE.WebGLRenderTarget; pressure: THREE.WebGLRenderTarget; dispose(): void }
+
 export class Fluid {
   private readonly velocityPair: Pair;
   private readonly dyePair: Pair;
@@ -147,6 +150,29 @@ export class Fluid {
     beforeDye?.();
     a.uVelocity.value = this.velocity; a.uSource.value = this.dye; a.uKeep.value = keep(seconds, dyeLife);
     passes.draw(m.advect, this.dyePair.write); this.dyePair.swap();
+  }
+
+  private copy(from: THREE.Texture, to: THREE.WebGLRenderTarget): void {
+    this.m.scale.uniforms.uSource.value = from; this.m.scale.uniforms.uAmount.value = 1;
+    this.passes.draw(this.m.scale, to);
+  }
+
+  saveState(): FluidState {
+    const like = (t: THREE.WebGLRenderTarget, nearest: boolean) => this.passes.target(t.width, t.height, { nearest });
+    const state: FluidState = {
+      velocity: like(this.velocityPair.read, false), dye: like(this.dyePair.read, false), pressure: like(this.pressurePair.read, true),
+      dispose() { this.velocity.dispose(); this.dye.dispose(); this.pressure.dispose(); },
+    };
+    this.copy(this.velocityPair.read.texture, state.velocity);
+    this.copy(this.dyePair.read.texture, state.dye);
+    this.copy(this.pressurePair.read.texture, state.pressure);
+    return state;
+  }
+
+  restoreState(state: FluidState): void {
+    this.copy(state.velocity.texture, this.velocityPair.read);
+    this.copy(state.dye.texture, this.dyePair.read);
+    this.copy(state.pressure.texture, this.pressurePair.read);
   }
 
   resizeDye(width: number, height: number): void { this.dyePair.setSize(width, height); this.clear(); }
