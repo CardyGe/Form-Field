@@ -5,6 +5,7 @@ import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { reactivity, type ReactivityEngine } from '../react/engine';
 import { MeterStore } from '../react/meter';
+import { heardSignals, onlySignals } from '../live/heard';
 import { installationMessage, logFault, saveInstallation, useInstallation } from './installation';
 import { installationDisplay } from './installation-display';
 
@@ -168,7 +169,8 @@ export function useLive(onError: (message: string) => void) {
     const off = engine.subscribe(now => {
       const { panelOpen, outputOpen, reacts, usedInputs } = listening.current;
       if (usedInputs !== usedKey) { usedKey = usedInputs; used = new Set(usedInputs.split(' ').filter(Boolean)); }
-      const only = Object.fromEntries(Object.entries(now).filter(([k]) => used.has(k)));
+      // Whether the tempo stands on its own (MIDI, tap, a fixed number) travels with the signals, as in Map.
+      const only = onlySignals(heardSignals(now, engine.prefs.tempo), used);
       if (stage.current) stage.current.renderer.signals = only;
       if (outputOpen && reacts) bridge?.send({ type: 'signals', signals: only });
       const t = performance.now();

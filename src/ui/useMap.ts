@@ -13,6 +13,7 @@ import { reactivity, type ReactivityEngine } from '../react/engine';
 import { fire, type TriggerAction } from '../react/links';
 import type { Signals } from '../react/signals';
 import { MeterStore } from '../react/meter';
+import { heardSignals, onlySignals } from '../live/heard';
 import { showReacts } from './show-reacts';
 import { autoAdvanceDue, nextAutoScene } from '../map/wild';
 
@@ -496,10 +497,10 @@ export function useMap(onError: (message: string) => void) {
       const { panelOpen, outputOpen, reacts } = listening.current;
       // The wall gets only the signals the show uses, so a controller with many knobs never makes the message too large.
       // Whether the tempo stands on its own (MIDI, tap, a fixed number) travels with the signals, for Meridian's Conductor.
-      const heard = engine.prefs.tempo !== 'beat' ? { ...now, 'tempo.external': 1 } : now;
+      const heard = heardSignals(now, engine.prefs.tempo);
       if (outputOpen && reacts) {
         const used = wallInputs(stateRef.current.show, liveRef.current);
-        bridge?.send({ type: 'signals', signals: Object.fromEntries(Object.entries(heard).filter(([k]) => used.has(k))) });
+        bridge?.send({ type: 'signals', signals: onlySignals(heard, used) });
       }
       onSignals.current?.(heard);
       for (const action of fire(stateRef.current.show.triggers, prev, now)) triggerAct.current(action);

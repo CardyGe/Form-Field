@@ -189,3 +189,16 @@ test('src/meridian stays free of three, the DOM and React', () => {
     assert.ok(!/from 'three'|from 'react'|document\.|window\./.test(text), file);
   }
 });
+
+test('Meridian Live hears a steady tempo from MIDI clock, tap or a fixed BPM, as Map does', async () => {
+  const { heardSignals, onlySignals } = await import('../src/live/heard');
+  const now = { 'tempo.beat': 0, 'tempo.phase': 0.25, 'tempo.bpm': 128, 'midi.cc.1': 0.5 };
+  for (const tempo of ['midi', 'tap', 'fixed'] as const) assert.equal(heardSignals(now, tempo)['tempo.external'], 1, tempo);
+  assert.equal(heardSignals(now, 'beat')['tempo.external'], undefined, 'the beat follower is not an outside tempo');
+  assert.equal(now['tempo.external' as keyof typeof now], undefined, 'the engine signals are never changed');
+  // The Live filter keeps tempo.external when Meridian follows the music, so the look sees it with no audio at all.
+  const used = new Set(['tempo.beat', 'tempo.phase', 'tempo.bpm', 'tempo.external']);
+  assert.deepEqual(onlySignals(heardSignals(now, 'midi'), used), { 'tempo.beat': 0, 'tempo.phase': 0.25, 'tempo.bpm': 128, 'tempo.external': 1 });
+  // Both screens use the same rule.
+  for (const file of ['src/ui/useLive.ts', 'src/ui/useMap.ts']) assert.ok(/heardSignals\(now, engine\.prefs\.tempo\)/.test(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')), file);
+});
