@@ -304,3 +304,19 @@ test('the output may report what is armed and what landed, and only in a well-fo
   relay(h.fromOutput(), full);
   assert.equal(reports().length, 2);
 });
+
+test('the output may report what each zone draws, eight sources or nulls and nothing else', async () => {
+  const h = harness();
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  const reports = () => h.sent.filter(([channel]) => channel === 'studio:map:state');
+  const relay = h.listeners.get('studio:map:state');
+  const base = { fps: 60, level: 0, failing: [] };
+  for (const bad of [
+    { drawing: 'x' }, { drawing: Array(7).fill(null) }, { drawing: Array(9).fill(null) }, { drawing: [3, null, null, null, null, null, null, null] },
+    { drawing: ['', null, null, null, null, null, null, null] }, { drawing: ['x'.repeat(200), null, null, null, null, null, null, null] }, { drawing: [, null, null, null, null, null, null, null] },
+  ]) relay(h.fromOutput(), { ...base, ...bad });
+  assert.equal(reports().length, 0);
+  const good = { ...base, drawing: ['a', null, '__proto__', null, null, null, null, 'video-1'] };
+  relay(h.fromOutput(), good);
+  assert.deepEqual(reports(), [['studio:map:state', good]]);
+});

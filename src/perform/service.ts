@@ -90,6 +90,8 @@ export class PerformService {
   private lastPress = 0;
   /** The press that last landed on each zone. */
   private landedPress = zeros();
+  /** The clip last sent to each zone for each source, so the wall's report of a source names the clip it came from. */
+  private sentClips = Array.from({ length: ZONE_COUNT }, () => new Map<string, string>());
   /** The bar offset each source on the wall plays with, kept so a reopened wall gets them back. */
   private phases = new Map<string, number>();
   private bursts = Array.from({ length: ZONE_COUNT }, () => false);
@@ -163,8 +165,8 @@ export class PerformService {
     this.publish(true);
   }
 
-  /** What the wall reports: which armed sources are ready, and what has landed. */
-  wallState(state: { armed?: string[]; landed?: { launchId: string; zones: number[] }[] }): void {
+  /** What the wall reports: which armed sources are ready, what has landed, and what each zone draws now. */
+  wallState(state: { armed?: string[]; landed?: { launchId: string; zones: number[] }[]; drawing?: (string | null)[] }): void {
     if (!this.isRunning) return;
     const now = this.deps.now();
     if (state.armed) {
@@ -205,10 +207,35 @@ export class PerformService {
     const moved = new Set([...stale, ...swept]);
     if (moved.size) this.retimeQueue(latestMissed + 1, moved);
     for (const zone of overruled) this.restoreZone(zone, now);
+    // After the restores, which go back to the later press's clip: the wall may show the older one until they land.
+    if (state.drawing) this.believeWall(state.drawing);
     this.syncWall();
     for (const id of reported) this.replaced.delete(id);
     this.forgetPresses();
     this.publish(true);
+  }
+
+  /**
+   * The wall's report of what each zone draws is the truth. A landing reported after its launch was given up (a wall
+   * stalled past IN_FLIGHT_MS) would otherwise leave the grid showing the wrong clip, and Amber stepping from it.
+   * A source no clip in the set plays tells nothing, and is left alone.
+   */
+  private believeWall(drawing: readonly (string | null)[]): void {
+    if (drawing.length !== ZONE_COUNT) return;
+    const { playing, launched } = this.launcher, clips = this.deps.show().performance.clips;
+    let next: LauncherState | null = null;
+    for (let zone = 0; zone < ZONE_COUNT; zone++) {
+      const wall = drawing[zone] ?? null, ours = launched[zone] ? this.sourceOf(playing[zone]) : null;
+      if (wall === ours) continue;
+      const sent = wall === null ? null : this.sentClips[zone].get(wall);
+      const clipId = wall === null ? null : sent !== undefined && this.sourceOf(sent) === wall ? sent : clips.find(c => c.sourceId === wall)?.id;
+      if (clipId === undefined) continue;
+      next ??= { ...this.launcher, playing: [...playing], previous: [...this.launcher.previous], launched: [...launched] };
+      if (next.playing[zone] !== clipId) next.previous[zone] = next.playing[zone];
+      next.playing[zone] = clipId;
+      next.launched[zone] = next.launched[zone] || clipId !== null;
+    }
+    if (next) this.launcher = next;
   }
 
   /** The wall window came back, or reloaded: it knows nothing, so it is told everything, Perform first. */
@@ -322,6 +349,7 @@ export class PerformService {
       const launch: WallLaunch = { id: l.id, atMs: l.atMs, barMs: BEATS_PER_BAR * 60000 / clock.bpm, changes };
       if (had && had.launch.atMs !== l.atMs) this.send({ type: 'performCancel', launchId: l.id });
       this.send({ type: 'performLaunch', launch });
+      for (const c of l.changes) { const source = this.sourceOf(c.clipId); if (source !== null && c.clipId !== null) this.sentClips[c.zone].set(source, c.clipId); }
       this.held.set(l.id, { launch, key, source: l });
     }
   }
@@ -571,6 +599,7 @@ export class PerformService {
     this.replaced.clear();
     this.presses.clear();
     this.landedPress = zeros();
+    for (const sent of this.sentClips) sent.clear();
     this.phases.clear();
     this.bursts.fill(false);
     this.reaction = calm();

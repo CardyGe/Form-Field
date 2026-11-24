@@ -78,12 +78,13 @@ const acceptValues = v => plain(v) && finite(v.master) && everyZone(v.zones, acc
 const acceptOffsets = o => o === undefined || (plain(o) && Object.keys(o).length <= ZONE_COUNT && Object.entries(o).every(([id, beats]) => performId(id) && finite(beats)));
 const acceptLanded = l => plain(l) && sized(l.launchId, LAUNCH_ID_LIMIT) && listOf(l.zones, ZONE_COUNT, zoneIndex);
 
-/** What the output may report to the studio: its frame rate, the governor level, failing sources, prepare counts, and Perform's armed sources and landings. */
+/** What the output may report to the studio: its frame rate, the governor level, failing sources, prepare counts, and Perform's armed sources, landings and what each zone draws. */
 function acceptState(value) {
   if (!plain(value) || !within(value, 16 * 1024)) return false;
   return finite(value.fps) && Number.isInteger(value.level) && value.level >= 0 && value.level <= 3 && Array.isArray(value.failing) && (value.prepares === undefined || plain(value.prepares))
     && (value.armed === undefined || listOf(value.armed, PERFORM_ARMED_LIMIT, performId))
     && (value.landed === undefined || listOf(value.landed, LANDED_LIMIT, acceptLanded))
+    && (value.drawing === undefined || everyZone(value.drawing, performIdOrNull))
     && (value.swapResults === undefined || listOf(value.swapResults, PERFORM_ARMED_LIMIT, r => plain(r) && performId(r.id) && Number.isInteger(r.revision) && r.revision >= 0 && ['started', 'failed', 'lost'].includes(r.result)));
 }
 

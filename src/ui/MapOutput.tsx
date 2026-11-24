@@ -114,7 +114,8 @@ export default function MapOutput() {
     let landed: { launchId: string; zones: number[] }[] = [], sentArmed = '';
     const report = () => {
       // While a show runs every report says which armed looks are ready; a landing or a look that failed is reported once.
-      const stats = { ...compositor.stats(), ...(state.perform.active ? { armed: compositor.armedIds() } : {}), ...(landed.length ? { landed } : {}), ...(swapResults.length ? { swapResults: swapResults.slice(0, 8) } : {}) };
+      // During a show every report also says what each zone draws, so a report held up by a stall still puts the studio right.
+      const stats = { ...compositor.stats(), ...(state.perform.active ? { armed: compositor.armedIds(), drawing: state.perform.zones.map(z => z.launched ? z.sourceId : null) } : {}), ...(landed.length ? { landed } : {}), ...(swapResults.length ? { swapResults: swapResults.slice(0, 8) } : {}) };
       landed = [];
       swapResults = swapResults.slice(8);
       sentArmed = (stats.armed ?? []).join('\n');

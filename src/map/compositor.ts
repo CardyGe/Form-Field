@@ -153,6 +153,8 @@ export interface CompositorStats {
   /** Perform: the armed sources that are ready to land, and (once, as they happen) the launches that landed. */
   armed?: string[];
   landed?: { launchId: string; zones: number[] }[];
+  /** Perform: the source each zone draws now, or null where it draws black. The studio believes it over its own bookkeeping. */
+  drawing?: (string | null)[];
 }
 
 const kindsOf = (project: Project | null | undefined) => project ? project.layers.map(l => l.kind).join(',') : '';

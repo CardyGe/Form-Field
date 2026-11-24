@@ -398,6 +398,8 @@ function wallOf(r: Rig) {
   return {
     step: (ready: (id: string) => boolean) => { feed(); const out = stepWallPerform(wall, r.now(), ready); wall = out.perform; return out.landed; },
     zone: (i: number) => { feed(); return wall.zones[i].sourceId; },
+    /** What the wall reports it draws in each zone: its source, or null when it draws black. */
+    drawing: () => { feed(); return wall.zones.map(z => z.launched ? z.sourceId : null); },
     launches: () => { feed(); return wall.launches.map(l => l.id); },
     /** The compositor's rule: a source nothing plays and nothing arms is released, so it is not ready. */
     kept: (id: string) => { feed(); return wall.armed.includes(id) || wall.zones.some(z => z.launched && z.sourceId === id); },
@@ -781,6 +783,52 @@ test('values reach the wall at most 30 times a second, and fader 0 stays black i
   r.service.control({ kind: 'fader', strip: 0, value: 0 });
   r.at(3600); r.frame({ 'audio.bass': 1, 'beat.pulse': 1 });
   assert.equal(lastValues(r).zones[0].brightness, 0, 'fader 0 is black mid-burst');
+});
+
+// ---- Review I5: the wall's report of what it draws is the truth ----
+test('a wall report stalled past the in-flight time still leaves the grid showing what the wall plays', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  const wall = wallOf(r);
+  r.at(1500);
+  r.service.action({ type: 'launchCell', row: 0, zone: 0 });
+  const first = lastLaunch(r);
+  assert.equal(first.atMs, 2000);
+  r.at(2000);
+  // The wall lands it on the bar, then stalls before its report gets out.
+  const stalled = wall.step(() => true);
+  assert.deepEqual(stalled, [{ launchId: first.id, zones: [0] }]);
+  const drawing = wall.drawing();
+  r.at(2100);
+  r.service.action({ type: 'launchCell', row: 1, zone: 0 });
+  // The studio gives up waiting, hands zone 0 to the newer press, and forgets the cancelled launch.
+  for (let t = 2150; t <= 2900; t += 50) { r.at(t); r.frame(); }
+  r.service.wallState({ landed: stalled, drawing });
+  assert.equal(wall.zone(0), 'a');
+  assert.equal(r.service.view().launcher.playing[0], 'ca', 'the grid shows what the wall draws');
+  // A later report that agrees changes nothing, and the newer press still lands.
+  r.service.wallState({ drawing: wall.drawing() });
+  assert.equal(r.service.view().launcher.playing[0], 'ca');
+  r.at(4000);
+  const next = wall.step(() => true);
+  r.at(4010);
+  r.service.wallState({ landed: next, drawing: wall.drawing() });
+  assert.equal(wall.zone(0), 'b');
+  assert.equal(r.service.view().launcher.playing[0], 'cb');
+});
+
+test('the wall drawing black where the studio thinks a clip plays is believed; an unknown source is left alone', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.action({ type: 'launchCell', row: 0, zone: 0 });
+  r.at(2000);
+  r.service.wallState({ landed: [{ launchId: lastLaunch(r).id, zones: [0] }] });
+  assert.equal(r.service.view().launcher.playing[0], 'ca');
+  r.at(2100);
+  r.service.wallState({ drawing: ['gone', null, null, null, null, null, null, null] });
+  assert.equal(r.service.view().launcher.playing[0], 'ca', 'a source no clip plays tells nothing');
+  r.service.wallState({ drawing: [null, null, null, null, null, null, null, null] });
+  assert.equal(r.service.view().launcher.playing[0], null);
 });
 
 // ---- Task 12: the ceiling's own knobs and bloom ----
