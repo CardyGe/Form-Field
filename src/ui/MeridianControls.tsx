@@ -244,6 +244,7 @@ function PulseStrip({ layer, setParam, onStart, onEnd }: { layer: Layer; setPara
     </> : <>
       {number('scorePulseBars', 'Bars', style === 0)}
       <button className={`m-pulse-loop ${looping ? 'is-on' : ''}`} aria-pressed={looping} disabled={style !== 0} title={definition('scoreLoopPhrase').description} onClick={() => setParam('scoreLoopPhrase', looping ? 0 : 1)}>Loop phrase</button>
+      <p className="m-style-note" role="note">{style === 0 ? 'Pulse' : 'Dense'} is not checked for flashing in this preview or in exports. On a Map wall or the Live output, the wall's flash limiter covers it.</p>
     </>}
   </section>;
 }
