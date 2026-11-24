@@ -103,6 +103,15 @@ const SOLID_CASES = [
   ['To circle at .5', { polarAmount: .5, polarMode: 0 }], ['Unroll twisted', { polarAmount: 1, polarMode: 1, polarTwist: .4 }],
   ['Kaleidoscope + To circle', { mirrorAmount: 1, mirrorMode: 3, polarAmount: 1, polarMode: 0 }],
 ];
+// Mirror or Polar with a later warp on top: the later move must not carry a read off the picture.
+const LATER_POSES = [DEFAULT_POSE, IN_FRAME_POSES[0], { x: .05, y: 0, scale: .85, rotation: .35 }];
+const LATER_WARPS = [
+  ['Warp Noise .15', { bendAmount: .15, bendField: 1 }], ['Warp Waves .3 with fringe', { bendAmount: .3, bendField: 0, bendChroma: .5 }], ['Warp Plasma .3', { bendAmount: .3, bendField: 4 }],
+  ['Liquid Swirl .4', { liquidAmount: .4, liquidStyle: 0 }], ['Liquid Flow .4 with trail', { liquidAmount: .4, liquidStyle: 1, liquidTrail: .6 }], ['Liquid Chaos .5', { liquidAmount: .5, liquidStyle: 4 }],
+  ['Luma .3', { lumaWarpAmount: .3 }],
+];
+// A hard step: two neighbouring pixels inside the picture more than this far apart, of 255.
+const LATER_STEP = 64;
 // Every pixel the plain picture lights must stay at or above this share of the plain peak.
 const SOLID_FLOOR = .9;
 
@@ -1690,12 +1699,58 @@ const CHECKS = [
       return { ok: rows.length > 0 && bad.length === 0, detail: `${rows.length} cases, ${bad.length} with a pixel under ${SOLID_FLOOR}x the plain peak (limit 0); most dim pixels ${(worst.share * 100).toFixed(2)}% at ${label(worst)}; lowest value ${Math.min(...rows.map(r => r.lowest))} of peak ${worst.peak}${bad.length ? `; first ${label(bad[0])}: ${bad[0].dim} pixels, lowest ${bad[0].lowest}; failing cases by mode: ${[...new Set(bad.map(r => r.name.replace(/ -?\d+deg$/, '')))].map(n => `${n} ${bad.filter(r => r.name.replace(/ -?\d+deg$/, '') === n).length}`).join(', ')}` : ''}` };
     },
   },
+  {
+    name: 'picture-later',
+    // Mirror or Polar on a bounded Image with Warp, Liquid or Luma on top. A smooth picture must stay lit, and a solid
+    // one must show no more hard steps inside it than with Mirror or Polar alone.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([images, poses, folds, laters, step, reported]) => {
+        const q = window.wq, rows = [];
+        const run = async (shape, width, height, fit, W, H, pose) => {
+          const smooth = params => { const l = q.thinImage(shape, width, height, params, fit); l.transform = pose; return q.project([l]); };
+          const solid = params => { const l = q.solidImage(shape, width, height, params, fit); l.transform = pose; return q.project([l]); };
+          const plain = q.litShare(await q.px(smooth({}), .9, W, H));
+          if (plain < .005) return;
+          const flat = await q.px(solid({}), .9, W, H), inside = new Uint8Array(W * H);
+          let count = 0;
+          for (let i = 0; i < W * H; i++) if (flat[i * 4 + 1] > 200) { inside[i] = 1; count++; }
+          // The share of inside pixels that sit on a hard step to an inside neighbour.
+          const steps = px => {
+            let n = 0;
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+              const i = y * W + x;
+              if (!inside[i]) continue;
+              const v = px[i * 4 + 1];
+              if ((x + 1 < W && inside[i + 1] && Math.abs(v - px[(i + 1) * 4 + 1]) > step) || (y + 1 < H && inside[i + W] && Math.abs(v - px[(i + W) * 4 + 1]) > step)
+                || (x > 0 && inside[i - 1] && Math.abs(v - px[(i - 1) * 4 + 1]) > step) || (y > 0 && inside[i - W] && Math.abs(v - px[(i - W) * 4 + 1]) > step)) n++;
+            }
+            return n / count;
+          };
+          for (const [fold, foldParams] of folds) {
+            const alone = steps(await q.px(solid(foldParams), .9, W, H));
+            for (const [later, laterParams] of laters) {
+              const params = { ...foldParams, ...laterParams };
+              rows.push({ name: `${fold} + ${later}`, shape, fit, W, H, x: pose.x, ratio: q.litShare(await q.px(smooth(params), .9, W, H)) / plain, alone, steps: steps(await q.px(solid(params), .9, W, H)) });
+            }
+          }
+        };
+        for (const [shape, width, height] of images) for (const fit of ['contain', 'cover']) for (const pose of poses) await run(shape, width, height, fit, 480, 270, pose);
+        await run('1:4', 256, 1024, 'contain', 960, 540, reported);
+        return rows;
+      }, [LIT_IMAGES, LATER_POSES, MOVED_CASES, LATER_WARPS, LATER_STEP, DEFAULT_POSE]);
+      const label = r => `${r.name}, ${r.shape} ${r.fit}, ${r.W}x${r.H} at x ${r.x}`;
+      const low = rows.reduce((a, r) => r.ratio < a.ratio ? r : a), under = rows.filter(r => r.ratio < OFF_FRAME_LIMIT);
+      const stepped = rows.filter(r => r.steps > r.alone), most = rows.reduce((a, r) => r.steps - r.alone > a.steps - a.alone ? r : a);
+      return { ok: rows.length >= 288 && under.length === 0 && stepped.length === 0, detail: `${rows.length} cases; ${under.length} under ${OFF_FRAME_LIMIT}x plain, lowest ${low.ratio.toFixed(3)}x at ${label(low)}; ${stepped.length} with more hard steps than the fold alone (limit 0), most ${(most.steps * 100).toFixed(2)}% of the picture against ${(most.alone * 100).toFixed(2)}% alone at ${label(most)}` };
+    },
+  },
   ...(previous ? [{
     name: 'others-unchanged',
-    // Against the previous commit, byte for byte: everything the picture rule must leave alone. Full-frame Images, other
-    // layer kinds and repeated Images under every fold, and bounded Images with no Mirror or Polar on.
+    // Against the previous commit, byte for byte: everything a change to the picture rule must leave alone. Full-frame
+    // Images, other layer kinds and repeated Images under every fold, bounded Images with no Mirror or Polar on, and
+    // (valid from 08061de on, where the rule first applied) bounded Images under Mirror or Polar with no later warp.
     run: async ({ page }) => {
-      const r = await page.evaluate(async ([poses, inFrame, coverPoses, cases, home]) => {
+      const r = await page.evaluate(async ([poses, inFrame, coverPoses, cases, home, folds]) => {
         const q = window.wq, before = new q.prior.StudioRenderer(document.querySelector('#b')), changed = [];
         let total = 0;
         const compare = async (label, make) => {
@@ -1720,9 +1775,14 @@ const CHECKS = [
           for (const pose of coverPoses) await compare(`moved cover ${name} ${JSON.stringify(pose)}`, api => { const l = q.coverSquare(params); l.transform = pose; return scene(api, l); });
           for (const pose of [home, ...inFrame]) await compare(`contain ${name} ${JSON.stringify(pose)}`, api => { const l = contain(params); l.transform = pose; return scene(api, l); });
         }
+        // Bounded Images under Mirror or Polar alone: the later-warp hold must leave these as the commit before it did.
+        for (const [name, params] of folds) for (const [shape, width, height] of [['4:1', 1024, 256], ['1:4', 256, 1024]]) for (const fit of ['contain', 'cover']) for (const pose of [home, inFrame[0], poses[1]]) {
+          if (fit === 'cover' && pose === home) continue;
+          await compare(`${shape} ${fit} ${name} alone ${JSON.stringify(pose)}`, api => { const l = q.thinImage(shape, width, height, params, fit); l.transform = pose; return scene(api, l); });
+        }
         before.dispose();
         return { total, changed };
-      }, [UNCHANGED_POSES, IN_FRAME_POSES, COVER_POSES, MOVED_CASES, DEFAULT_POSE]);
+      }, [UNCHANGED_POSES, IN_FRAME_POSES, COVER_POSES, MOVED_CASES, DEFAULT_POSE, [...MOVED_CASES, ...SOLID_CASES.slice(LIT_CASES.length), ['Kaleidoscope 160deg', { mirrorAmount: 1, mirrorMode: 3, mirrorAngle: 160 }], ['Left-right at .5', { mirrorAmount: .5, mirrorMode: 0 }]]]);
       return { ok: r.changed.length === 0, detail: r.changed.length ? `${r.changed.length} of ${r.total} changed, first ${r.changed[0]}` : `${r.total} renders byte-identical to the previous commit` };
     },
   }, {

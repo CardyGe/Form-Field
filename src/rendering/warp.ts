@@ -406,6 +406,8 @@ vec2 moveDx, moveDy;
 bool reshaped;
 // Set while this pixel's Mirror and Polar read is held inside a bounded Image's picture.
 bool pictureRead;
+// Set for a pixel inside a bounded Image's picture under Mirror or Polar, while Warp, Liquid or Luma moves its read on.
+bool pictureHold;
 
 vec2 rotated(vec2 p, float angle) {
   float c = cos(angle), s = sin(angle);
@@ -498,6 +500,17 @@ vec2 tapUv(vec2 at, vec2 offset) {
   return (offFrame(tap) ? readBase : tap) + (at - readBase);
 }
 
+/** The picture rule after a later warp. Mirror and Polar leave a pixel inside the picture with a safe read, or with
+ * its own position: the last safe position. Warp, Liquid and Luma then move that read, and a colour fringe, a trail
+ * sample or a filter tap moves it again, perhaps past the edge onto nothing. So with a later warp on, every position
+ * the pixel reads is folded and held inside the picture once more, or falls back to the last safe position when it
+ * would leave the frame. */
+vec2 heldUv(vec2 at) {
+  if (!pictureHold) return at;
+  vec2 held = (uLayerInverse * vec3(safePicture(foldPicture((uLayerView * vec3(at, 1.)).xy)), 1.)).xy;
+  return offFrame(held) ? readBase : held;
+}
+
 /** Warp, Liquid and Luma, from a position Mirror and Polar have already set. */
 vec2 laterUv(vec2 uv) {
   vec2 frame = vec2(uAspect, 1.), moved = uv;
@@ -521,7 +534,7 @@ vec2 warpedUv(vec2 uv, bool folded) {
   readDx = plainDx; readDy = plainDy;
   vec2 base = uv;
   reshaped = folded || uPolarAmount > 0.;
-  pictureRead = false;
+  pictureRead = false; pictureHold = false;
   // Skipped at a default transform unless the layer is a bounded Image, so a full-frame read takes exactly the path it always did.
   bool inLayer = reshaped && uLayerMoved == 1;
   vec2 own = inLayer ? (uLayerView * vec3(uv, 1.)).xy : uv;
@@ -551,6 +564,7 @@ vec2 warpedUv(vec2 uv, bool folded) {
         bool onOwn = atEdge != safePicture(atEdge) && away.x < .5 && away.y < .5;
         if (onOwn || offFrame(base)) { base = uv; readDx = plainDx; readDy = plainDy; }
         else pictureRead = true;
+        pictureHold = uBendAmount > 0. || uLiquidAmount > 0. || uLumaAmount > 0.;
       }
     }
   }
@@ -589,7 +603,7 @@ vec2 mirrored(vec2 uv) {
 struct Gathered { vec3 covered; vec3 light; float alpha; };
 
 void gather(vec2 uv, float weight, inout Gathered g, inout float peak) {
-  vec4 s = texture2D(uSource, mirrored(uv));
+  vec4 s = texture2D(uSource, mirrored(heldUv(uv)));
   g.alpha += s.a * weight;
   // Light with no coverage has no straight colour to bound, so it passes as it is.
   if (s.a > .001) { g.covered += s.rgb * weight; peak = max(peak, max(s.r, max(s.g, s.b)) / s.a); }
