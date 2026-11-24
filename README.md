@@ -8,7 +8,7 @@ A local visual instrument studio for Apple Silicon Macs. Create looping liquid f
 - **Play it:** 8 macros (Density, Tension, Chaos, Speed, Weight, Glitch, Heat, Scale), Evolution, Hold shape, moves on keys N, H, D, C, M, R and 1-8, seed slots, A/B morph, searchable lockable groups and 10 Evolve presets.
 - **Music and Map:** the light follows audio bands and a smoothed beat, and the test beat is available. Meridian plays on mapped shapes, and moves work through Map links and MIDI learn.
 - **Meridian Live:** reacts to people (orbit, constellation, merge, throw, conduct and more). The camera picture never reaches the output.
-- **Wall flash limiter:** on by default whenever a show contains Meridian, and it covers other instruments on that wall. Turning it off needs confirmation. It is not a certified photosensitivity test.
+- **Flash guard:** on by default whenever a show contains Meridian, and it covers other instruments on that wall. The Meridian panel shows "Flash guard on"; turning it off needs confirmation, and the Map footer warns while it is off. It is not a certified photosensitivity test.
 - **Hardening:** a quality governor, recovery after graphics resets, an installation mode with autopilot, a text-only fault log, and a soak tool. See `docs/meridian-show-checklist.md` and `reports/Meridian soak.md`.
 - **Not yet tested:** no real projector, camera, room lighting, DJ audio or MIDI hardware, and no 12-hour run on the show Mac. A crashed wall is not reopened automatically.
 
