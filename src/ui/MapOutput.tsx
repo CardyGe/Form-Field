@@ -86,7 +86,7 @@ export default function MapOutput() {
     if (bridge.checks) {
       (window as unknown as { __mapGuardProbe?: () => unknown }).__mapGuardProbe = () => compositor.probeGuardCost();
       (window as unknown as { __mapLimiterLab?: (only?: string) => Promise<unknown> }).__mapLimiterLab = only => import('../map/limiter-lab').then(lab => lab.runLimiterLab(only));
-      (window as unknown as { __mapLoseAll?: (ms: number) => Promise<void> }).__mapLoseAll = ms => compositor.loseAllForCheck(ms);
+      (window as unknown as { __mapLoseAll?: (ms: number, instrumentsOnly?: boolean) => Promise<void> }).__mapLoseAll = (ms, instrumentsOnly) => compositor.loseAllForCheck(ms, instrumentsOnly);
       (window as unknown as { __mapProbeFrame?: () => unknown }).__mapProbeFrame = () => compositor.probeFrameCost();
     }
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };

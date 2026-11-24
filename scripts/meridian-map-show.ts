@@ -47,6 +47,17 @@ function plain(): ShowDocument {
   return { ...createShow(), shapes: [{ ...shape('p', box(.1, .1, .9, .9), null), fill: 'colour' }], links: [{ ...link('flash', 'midi.cc.1.20', 'shape.p.brightness'), high: .5 }] };
 }
 
+/** No Meridian: Oil and Liquid Light side by side, for the context-loss check on a show without Meridian. */
+function oilLiquid(): ShowDocument {
+  const instrument = (kind: 'oil' | 'liquid'): Project => {
+    const project = createProject(), layer = createLayer(kind);
+    layer.id = `${kind}-check`;
+    project.schemaVersion = 2; project.layers = [layer]; project.background = '#000000'; project.duration = 8; project.fps = { num: 60, den: 1 };
+    return project;
+  };
+  return { ...createShow(), shapes: [shape('oil', box(.04, .1, .48, .9), 'oil'), shape('liquid', box(.52, .1, .96, .9), 'liquid')], sources: [source('oil', instrument('oil')), source('liquid', instrument('liquid'))] };
+}
+
 /** A white wall a MIDI control flashes, with a small Evolve so the wall guard is on (or, with guard 0, warned about). */
 function burst(guard: number): ShowDocument {
   return {
@@ -69,4 +80,4 @@ function halves(): ShowDocument {
 
 const out = process.argv[2];
 fs.mkdirSync(out, { recursive: true });
-for (const [name, show] of Object.entries({ calm: calm(), 'strobe-on': strobe(1), 'strobe-off': strobe(0), plain: plain(), 'burst-on': burst(1), 'burst-off': burst(0), halves: halves() })) fs.writeFileSync(path.join(out, `meridian-${name}.formshow`), JSON.stringify(show));
+for (const [name, show] of Object.entries({ calm: calm(), 'strobe-on': strobe(1), 'strobe-off': strobe(0), plain: plain(), 'oil-liquid': oilLiquid(), 'burst-on': burst(1), 'burst-off': burst(0), halves: halves() })) fs.writeFileSync(path.join(out, `meridian-${name}.formshow`), JSON.stringify(show));

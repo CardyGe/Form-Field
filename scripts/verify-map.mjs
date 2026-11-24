@@ -1552,6 +1552,54 @@ try {
     await react('midi', [0xb0, 20, 0]);
     await clearStage();
   });
+  await check('a show with no Meridian (Oil and Liquid) comes back from lost graphics contexts: never black, never frozen, no guard', async () => {
+    await openFile('oil-liquid');
+    await meridianStats(s => s.flashGuard === null && s.failing.length === 0 && s.prepares?.oil >= 1 && s.prepares?.liquid >= 1, 'Oil and Liquid are not playing');
+    // Mean light and a small picture of each half, so a frozen half shows up even while the other moves.
+    const picture = () => output.evaluate(() => {
+      const c = document.querySelector('canvas'), o = new OffscreenCanvas(160, 90), x = o.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0, 160, 90);
+      const d = x.getImageData(0, 0, 160, 90).data, halves = [[], []], mean = [0, 0];
+      for (let py = 9; py < 81; py++) for (let px = 0; px < 160; px++) { if (px > 74 && px < 86) continue; const side = px < 80 ? 0 : 1, at = (py * 160 + px) * 4, v = (d[at] + d[at + 1] + d[at + 2]) / 765; halves[side].push(v); mean[side] += v; }
+      return { halves, mean: mean.map((m, i) => m / halves[i].length) };
+    });
+    const differ = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
+    await sleep(2500);
+    const moving = async label => {
+      const a = await picture(); await sleep(1000); const b = await picture();
+      const moved = [differ(a.halves[0], b.halves[0]), differ(a.halves[1], b.halves[1])];
+      assert.ok(moved.every(m => m > 1e-4), `${label}: a half is frozen (${moved.map(m => m.toFixed(5)).join(', ')})`);
+      return { moved, mean: b.mean };
+    };
+    const before = await moving('before');
+    assert.ok(before.mean.every(m => m > .01), `Oil and Liquid are dark before the reset: ${before.mean}`);
+    const statsBefore = await output.evaluate(() => window.__mapStats);
+    // Each instrument loses its graphics context; the wall's own stays. Their shapes hold the last picture meanwhile.
+    const lost = output.evaluate(() => window.__mapLoseAll(400, true));
+    const started = Date.now(); let darkest = [1, 1];
+    while (Date.now() - started < 3000) { const p = await picture(); darkest = darkest.map((d, i) => Math.min(d, p.mean[i] / before.mean[i])); await sleep(80); }
+    await lost;
+    await sleep(1200);
+    const afterInstruments = await moving('after the instruments came back');
+    const statsInstruments = await output.evaluate(() => window.__mapStats);
+    assert.ok(darkest.every(d => d > .4), `a half went dark while its instrument was lost (darkest ${darkest.map(d => d.toFixed(3)).join(', ')} of its light)`);
+    assert.ok(statsInstruments.contextLosses >= statsBefore.contextLosses + 2, `the instruments did not lose their contexts: ${statsBefore.contextLosses} → ${statsInstruments.contextLosses}`);
+    assert.deepEqual(statsInstruments.failing, [], 'an instrument failed after the reset');
+    assert.equal(statsInstruments.flashGuard, null, 'a guard appeared in a show without Meridian');
+    // A whole graphics card reset, the stage too: back and moving within 3 s.
+    const whole = output.evaluate(() => window.__mapLoseAll(400));
+    const wholeStart = Date.now(); let back = null;
+    await whole;
+    while (Date.now() - wholeStart < 8000) { const p = await picture(); if (p.mean.every((m, i) => m > before.mean[i] * .5)) { back = Date.now() - wholeStart; break; } await sleep(100); }
+    assert.ok(back !== null && back <= 3000, `the wall was not back within 3 s of a whole reset (${back} ms)`);
+    await sleep(1200);
+    const afterWhole = await moving('after a whole reset');
+    const statsWhole = await output.evaluate(() => window.__mapStats);
+    assert.deepEqual(statsWhole.failing, [], 'an instrument failed after the whole reset');
+    assert.equal(statsWhole.flashGuard, null);
+    assert.equal(await studio.locator('.map-flash-guard').count(), 0);
+    meridianReport.nonMeridianReset = { darkestShare: darkest.map(d => +d.toFixed(3)), before, afterInstruments, wholeBackMs: back, afterWhole, contextLosses: statsWhole.contextLosses, restarts: statsWhole.restarts };
+    await clearStage();
+  });
   await fs.writeFile(path.join(out, 'meridian-wall-report.json'), JSON.stringify(meridianReport, null, 2));
   console.log('meridian wall', JSON.stringify(meridianReport));
 

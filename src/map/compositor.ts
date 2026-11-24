@@ -509,10 +509,11 @@ export class MapCompositor {
 
   /**
    * For the scripted checks: a whole graphics card reset, as macOS gives one. Every context this wall uses is lost (the stage and
-   * each instrument), and each is given back after `ms`.
+   * each instrument), and each is given back after `ms`. With `instrumentsOnly`, the stage keeps its context and only the
+   * instruments lose theirs, so their shapes hold the last picture.
    */
-  loseAllForCheck(ms: number): Promise<void> {
-    const contexts = [this.gpu.gl, ...[...this.slots.values()].map(s => s.canvas.getContext('webgl2'))].map(gl => gl?.getExtension('WEBGL_lose_context')).filter((e): e is WEBGL_lose_context => !!e);
+  loseAllForCheck(ms: number, instrumentsOnly = false): Promise<void> {
+    const contexts = [...(instrumentsOnly ? [] : [this.gpu.gl]), ...[...this.slots.values()].map(s => s.canvas.getContext('webgl2'))].map(gl => gl?.getExtension('WEBGL_lose_context')).filter((e): e is WEBGL_lose_context => !!e);
     for (const e of contexts) e.loseContext();
     return new Promise(done => window.setTimeout(() => { for (const e of contexts) e.restoreContext(); done(); }, ms));
   }
