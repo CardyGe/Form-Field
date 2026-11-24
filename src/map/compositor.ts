@@ -28,7 +28,7 @@ import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
 import type { Link } from '../react/links';
 import type { Signals } from '../react/signals';
 import { StructureHold } from '../meridian/structure-hold';
-import { wallGuardPolicy, type WallGuardPolicy } from '../meridian/wall-guard';
+import { guardBeforeCompositions, wallGuardPolicy, type WallGuardPolicy } from '../meridian/wall-guard';
 import { LIMITER, limiterScales, stepLimiterFade } from '../meridian/wall-limiter';
 import { borderPicture, borderRunPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
@@ -108,7 +108,7 @@ export interface CompositorStats {
   /** The stage's own graphics context was lost and is waiting to come back: the wall is black meanwhile. */
   contextLost: boolean;
   /** Live in Map: whether the show's Live runs (null: none, camera off). */
-  live?: { running: boolean; state: string } | null;
+  live?: { running: boolean; state: string; limiter?: { limiting: boolean; error: string | null } | null } | null;
   /** Stage 6: each video playing, by id: its state, and the beats a tempo loop plays as. */
   videos?: Record<string, { state: string; playsAs: number | null }>;
   linked?: Record<string, number>;
@@ -237,7 +237,7 @@ export class MapCompositor {
     const guardWasOn = this.guardPolicy.on;
     this.guardPolicy = wallGuardPolicy(this.projects.values());
     // The wall hears the show before its compositions: a guarded show is limited from its very first frame.
-    if (show.guardWall && !this.guardPolicy.on) this.guardPolicy = { ...this.guardPolicy, present: true, on: true, settings: { ...this.guardPolicy.settings, safetyFlashGuard: 1 } };
+    if (show.guardWall) this.guardPolicy = guardBeforeCompositions(this.guardPolicy);
     this.limiterHolds = limiterScales(this.guardPolicy.settings);
     // Turned off, or the last Meridian source left: the wall is exactly as drawn from the next frame.
     if (guardWasOn && !this.guardPolicy.on) this.limiterFade ??= 0;
@@ -448,7 +448,7 @@ export class MapCompositor {
       prepares: Object.fromEntries([...this.slots].map(([id, s]) => [id, s.prepares])),
       edgeBuilds: this.edgeBuilds,
       contextLost: this.lost,
-      live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status } : null,
+      live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status, limiter: this.live.limiter } : null,
       videos: Object.fromEntries([...this.videoSlots].map(([id, v]) => [id, { state: v.state, playsAs: v.playsAs }])),
       // For the scripted checks: the effect settings links are moving now, as drawn (source:layer:key → value).
       adjusted: this.adjusted,

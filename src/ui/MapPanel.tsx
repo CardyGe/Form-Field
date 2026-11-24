@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
-import { wallGuardPolicy } from '../meridian/wall-guard';
+import { mapGuardStatus, wallGuardPolicy } from '../meridian/wall-guard';
 import { useMap, showReacts, type MapTool } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
 import MapShapeList from './MapShapeList';
@@ -170,8 +170,9 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const [localLimiting, setLocalLimiting] = useState(false);
   const [localFailed, setLocalFailed] = useState(false);
   const [localReduced, setLocalReduced] = useState(false);
+  const [localLiveLimiter, setLocalLiveLimiter] = useState<{ limiting: boolean; error: string | null } | null>(null);
   useEffect(() => {
-    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); setLocalLimiting(false); setLocalFailed(false); setLocalReduced(false); return; }
+    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); setLocalLimiting(false); setLocalFailed(false); setLocalReduced(false); setLocalLiveLimiter(null); return; }
     const timer = setInterval(() => {
       const next = compositor.current?.stats().live ?? null;
       setLocalLive(old => old?.running === next?.running && old?.state === next?.state ? old : next);
@@ -180,6 +181,8 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       setLocalLimiting(!!compositor.current?.stats().flashGuard?.limiting);
       setLocalFailed(!!compositor.current?.stats().flashGuard?.failed);
       setLocalReduced(!!compositor.current?.stats().meridianQuality?.reduced);
+      const liveLimiter = compositor.current?.stats().live?.limiter ?? null;
+      setLocalLiveLimiter(old => old?.limiting === liveLimiter?.limiting && old?.error === liveLimiter?.error ? old : liveLimiter);
     }, 500);
     return () => clearInterval(timer);
   }, [map.outputOpen]);
@@ -722,10 +725,12 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? cornersHint ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
   // Safety stays on screen whatever else the status line is saying.
   const guardPolicy = useMemo(() => wallGuardPolicy(map.show.sources.map(s => s.project)), [map.show.sources]);
-  const guardLimiting = guardPolicy.on && (map.outputOpen ? !!wall?.flashGuard?.limiting : localLimiting);
+  // A Live playing Meridian runs its own flash limiter; its state and any error show here too.
+  const liveMeridian = usesLive(map.show) && map.live?.look === 'meridian';
+  const { warning: guardWarning, limiting: guardLimiting } = mapGuardStatus(guardPolicy, liveMeridian,
+    { limiting: map.outputOpen ? !!wall?.flashGuard?.limiting : localLimiting, failed: !!(map.outputOpen ? wall?.flashGuard?.failed : localFailed) },
+    map.outputOpen ? wall?.live?.limiter ?? null : localLiveLimiter);
   const qualityReduced = map.outputOpen ? !!wall?.meridianQuality?.reduced : localReduced;
-  const guardFailed = guardPolicy.on && !!(map.outputOpen ? wall?.flashGuard?.failed : localFailed);
-  const guardWarning = guardFailed ? 'Flash limiter unavailable: the wall is not limited' : guardPolicy.warn ? (guardPolicy.on ? 'Flash guard is off on one Meridian layer' : 'Flash guard is off: the wall is not limited') : null;
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
   // The browser follows the single selected shape; it closes when there is none, or a Blocker or locked shape is picked.
   // Several shapes playing one instrument count as that one instrument: the browser changes it through the first of them.

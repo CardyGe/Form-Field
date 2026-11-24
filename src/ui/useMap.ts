@@ -273,6 +273,7 @@ export function useMap(onError: (message: string) => void) {
     if (!wallState) return;
     for (const failing of wallState.failing) logFault(`Map ${failing.id}: ${failing.reason}`);
     if (wallState.flashGuard?.failed) logFault(`Map: flash limiter unavailable: ${wallState.flashGuard.failed}`);
+    if (wallState.live?.limiter?.error) logFault(`Map: Live flash limiter unavailable: ${wallState.live.limiter.error}`);
   }, [wallState]);
 
   // Sends to the wall. During a drag, show and crosshair go at most once per animation frame (the latest wins);

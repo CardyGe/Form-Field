@@ -96,6 +96,8 @@ export class LiveRenderer {
   limiterError: string | null = null;
   /** Whether the last frame went through the limiter. */
   limited = false;
+  /** The share of the picture the limiter is holding back now; 0 when it is not running. */
+  get limitedArea(): number { return this.limited ? this.limiter?.limitedArea ?? 0 : 0; }
   /** Meridian's quality governor for this output: bloom, then tearing, then small marks, when frames stay slow. */
   private readonly governor = new MeridianGovernor();
   /**

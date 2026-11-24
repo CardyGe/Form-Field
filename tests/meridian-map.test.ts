@@ -109,3 +109,36 @@ test('structural links on Evolve and Pulse pass straight through, and no links s
   }
   assert.equal(hold.apply('none', meridian(1), undefined, 1), undefined);
 });
+
+test('Map shows the guard state and any limiter error of a Live playing Meridian', async () => {
+  const { mapGuardStatus } = await import('../src/meridian/wall-guard');
+  const none = policy(createProject());
+  const calm = { limiting: false, failed: false };
+  // A show with no Meridian anywhere: nothing to say, whatever Live reports for another look.
+  assert.deepEqual(mapGuardStatus(none, false, calm, { limiting: true, error: 'x' }), { warning: null, limiting: false });
+  // Live plays Meridian: its own limiter's state reaches the footer.
+  assert.deepEqual(mapGuardStatus(none, true, calm, { limiting: true, error: null }), { warning: null, limiting: true });
+  assert.match(mapGuardStatus(none, true, calm, { limiting: false, error: 'the flash limiter could not start' }).warning ?? '', /Flash limiter unavailable.*Live/);
+  assert.deepEqual(mapGuardStatus(none, true, calm, null), { warning: null, limiting: false }, 'Live not drawing yet');
+  // The wall's own guard is unchanged.
+  const guarded = policy(meridian()), off = policy(meridian(2, { safetyFlashGuard: 0 }));
+  assert.deepEqual(mapGuardStatus(guarded, false, { limiting: true, failed: false }, null), { warning: null, limiting: true });
+  assert.equal(mapGuardStatus(guarded, false, { limiting: false, failed: true }, null).warning, 'Flash limiter unavailable: the wall is not limited');
+  assert.equal(mapGuardStatus(off, false, calm, null).warning, 'Flash guard is off: the wall is not limited');
+  const { readFileSync } = await import('node:fs');
+  assert.ok(/mapGuardStatus\(/.test(readFileSync(new URL('../src/ui/MapPanel.tsx', import.meta.url), 'utf8')), 'the footer uses the rule');
+});
+
+test('a wall told to guard before its compositions arrive starts from the default red limit, not 1', async () => {
+  const { guardBeforeCompositions } = await import('../src/meridian/wall-guard');
+  const { MERIDIAN_DEFAULTS } = await import('../src/meridian/parameters');
+  const early = guardBeforeCompositions(policy());
+  assert.equal(early.on, true); assert.equal(early.present, true);
+  assert.equal(early.settings.safetyFlashGuard, 1);
+  assert.equal(early.settings.safetyRedLimit, MERIDIAN_DEFAULTS.safetyRedLimit);
+  assert.equal(early.settings.safetyRedLimit, 0.5);
+  assert.equal(early.settings.safetyFullField, MERIDIAN_DEFAULTS.safetyFullField);
+  assert.equal(early.settings.safetyMaxFlashes, MERIDIAN_DEFAULTS.safetyMaxFlashes);
+  const { readFileSync } = await import('node:fs');
+  assert.ok(/guardBeforeCompositions\(/.test(readFileSync(new URL('../src/map/compositor.ts', import.meta.url), 'utf8')));
+});

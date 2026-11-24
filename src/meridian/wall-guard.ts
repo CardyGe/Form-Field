@@ -1,3 +1,5 @@
+import { MERIDIAN_DEFAULTS } from './parameters';
+
 /** What a show asks of the wall's flash limiter (src/meridian/wall-limiter.ts). Not a certified photosensitivity test. */
 export interface WallGuardSettings { safetyFlashGuard: number; safetyMaxFlashes: number; safetyRedLimit: number; safetyFullField: number }
 export interface WallGuardPolicy {
@@ -28,4 +30,26 @@ export function wallGuardPolicy(projects: Iterable<{ layers: readonly GuardLayer
   }
   settings.safetyFlashGuard = on ? 1 : 0;
   return { present, on, warn, settings };
+}
+
+/**
+ * The wall heard that the show is guarded before its compositions arrived: it limits from its first frame, at the
+ * settings a new Meridian layer starts with (a red limit of 0.5, not the unguarded 1).
+ */
+export function guardBeforeCompositions(policy: WallGuardPolicy): WallGuardPolicy {
+  if (policy.on) return policy;
+  return { ...policy, present: true, on: true, settings: { safetyFlashGuard: 1,
+    safetyMaxFlashes: Math.min(policy.settings.safetyMaxFlashes, MERIDIAN_DEFAULTS.safetyMaxFlashes),
+    safetyRedLimit: Math.min(policy.settings.safetyRedLimit, MERIDIAN_DEFAULTS.safetyRedLimit),
+    safetyFullField: Math.min(policy.settings.safetyFullField, MERIDIAN_DEFAULTS.safetyFullField) } };
+}
+
+/** What Map's footer says about flash limiting: the wall's own guard, and the limiter of a Live that plays Meridian. */
+export function mapGuardStatus(policy: WallGuardPolicy, liveMeridian: boolean, wall: { limiting: boolean; failed: boolean },
+  live: { limiting: boolean; error: string | null } | null): { warning: string | null; limiting: boolean } {
+  const liveFailed = liveMeridian && !!live?.error;
+  const warning = policy.on && wall.failed ? 'Flash limiter unavailable: the wall is not limited'
+    : liveFailed ? 'Flash limiter unavailable on Live: Meridian Live is not limited'
+    : policy.warn ? (policy.on ? 'Flash guard is off on one Meridian layer' : 'Flash guard is off: the wall is not limited') : null;
+  return { warning, limiting: (policy.on && wall.limiting) || (liveMeridian && !!live?.limiting) };
 }
