@@ -84,3 +84,28 @@ test('linkedZones reports zones sharing a source', () => {
   const links = linkedZones([pic([], 'x'), pic([], 'x'), pic([], 'y'), pic([], null), pic([], null), pic([], 'z', false)]);
   assert.deepEqual([...links], [['x', [0, 1]]]);
 });
+
+test('a launched zone whose look cannot play falls back to black, never its Map colour or test grid', () => {
+  const show = { shapes: [shape('grid', { fill: 'grid' }), shape('flat', { fill: 'colour', colour: '#ff8800' })], groups: [] };
+  const out = overlayShow(show, [pic(['grid', 'flat'], 'inst-1')]);
+  for (const s of out.shapes) {
+    assert.equal(s.sourceId, 'inst-1');
+    assert.equal(s.fill, 'colour', `${s.id} falls back to a flat fill`);
+    assert.equal(s.colour, '#000000', `${s.id} falls back to black`);
+  }
+});
+
+test('a launched zone keeps the border colour it had in Map', () => {
+  const show = { shapes: [
+    shape('own', { colour: '#ff8800', border: { width: 4, colour: 'shape', glow: 1, run: null } }),
+    shape('video', { colour: '#ff8800', border: { width: 4, colour: 'palette', glow: 1, run: null } }),
+    shape('look', { colour: '#ff8800', border: { width: 4, colour: 'palette', glow: 1, run: null } }),
+    shape('fixed', { colour: '#ff8800', border: { width: 4, colour: '#00ff00', glow: 1, run: null } }),
+  ], groups: [] };
+  const out = overlayShow(show, [pic(['own'], 'inst-1'), pic(['video'], 'video-1'), pic(['look'], 'inst-2'), pic(['fixed'], 'inst-3')]);
+  assert.equal(byId(out.shapes, 'own').border.colour, '#ff8800');
+  // A video has no palette, so its palette border was always the shape's colour.
+  assert.equal(byId(out.shapes, 'video').border.colour, '#ff8800');
+  assert.equal(byId(out.shapes, 'look').border.colour, 'palette');
+  assert.equal(byId(out.shapes, 'fixed').border.colour, '#00ff00');
+});

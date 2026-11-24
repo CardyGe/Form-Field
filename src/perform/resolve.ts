@@ -1,5 +1,5 @@
 /** Perform: which shapes each zone owns, and the overlay a running show puts over the Map show. Never edits the saved show. */
-import { isShapeShown, type Group, type Shape } from '../map/show';
+import { isShapeShown, isVideoId, LIVE_SOURCE_ID, type Group, type Shape } from '../map/show';
 import type { Zone } from './types';
 
 /** The shape ids each zone owns. A shape belongs to the first zone claiming it; a deleted or empty target owns nothing. */
@@ -28,7 +28,10 @@ export function overlayShow<T extends { shapes: Shape[]; groups: Group[] }>(show
     const z = owner.get(s.id);
     if (!z || !z.launched) return { ...s, visible: false };
     if (z.sourceId === null) return { ...s, visible: true, sourceId: null, colour: '#000000', fill: 'colour', border: { ...s.border, width: 0, run: null } };
-    return { ...s, visible: true, sourceId: z.sourceId };
+    // Whenever the look cannot play (lost, over the limit, not ready, no composition) the wall draws the shape's own
+    // fill: during a show that is black, never Map's colour or test grid. The border keeps the colour it had in Map.
+    const ownColour = s.border.colour === 'shape' || (s.border.colour === 'palette' && (z.sourceId === LIVE_SOURCE_ID || isVideoId(z.sourceId)));
+    return { ...s, visible: true, sourceId: z.sourceId, colour: '#000000', fill: 'colour', border: ownColour ? { ...s.border, colour: s.colour } : s.border };
   });
   // Groups are forced visible so a group hidden in Map cannot darken a launched zone; blockers above already carry their own effective visibility.
   return { ...show, shapes, groups: show.groups.map(g => ({ ...g, visible: true })) };
