@@ -84,6 +84,19 @@ test('a material is checked again after it changes', () => {
   assert.equal(gate.knows([material]), false);
 });
 
+test('after a restored context every material is checked again, and an old wait is over, with the gate left as it was', () => {
+  const gate = new ProgramGate(), material = { version: 1 };
+  gate.open();
+  gate.remember([material]);
+  assert.throws(() => gate.before([program(false)]), ProgramsCompiling);
+  gate.forget();
+  assert.equal(gate.knows([material]), false);
+  assert.equal(gate.linking, false);
+  assert.equal(gate.on, true);
+  assert.throws(() => gate.before([program(false)]), ProgramsCompiling, 'still on: a program linking on the new context is refused');
+  gate.close();
+});
+
 test('the renderer to give up is the lowest rank, and the longest unused among equals', () => {
   const slot = (rank: number, lastUsed: number) => ({ rank, lastUsed });
   const slots: [string, { rank: number; lastUsed: number }][] = [['playing', slot(3, 1)], ['armed', slot(1, 2)], ['warm new', slot(-1, 90)], ['warm old', slot(-1, 10)]];

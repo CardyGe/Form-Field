@@ -1,6 +1,6 @@
 {
   "name": "form-and-field",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "description": "A local visual instrument studio for seamless 2D and 3D media.",
   "type": "module",
@@ -21,7 +21,9 @@
     "test:perform": "npm run build && node scripts/verify-perform.mjs",
     "test:perform:soak": "npm run build && node scripts/verify-perform-soak.mjs",
     "test:live": "npm run build && node scripts/verify-live.mjs && node scripts/verify-live-ui.mjs",
-    "test:projection": "npm run build && node scripts/verify-projection-media.mjs --performance --native && node scripts/verify-projection-media-ui.mjs"
+    "test:projection": "npm run build && node scripts/verify-projection-media.mjs --performance --native && node scripts/verify-projection-media-ui.mjs",
+    "test:morphogen": "npm run build && node scripts/verify-morphogen.mjs",
+    "test:morphogen:show": "npm run build && node scripts/verify-morphogen-show.mjs"
   },
   "devDependencies": {
     "@mediapipe/tasks-vision": "1.2.0",

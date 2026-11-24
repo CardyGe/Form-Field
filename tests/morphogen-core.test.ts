@@ -1,0 +1,165 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { MORPH_CONTROLS, defaultMorphParams, validateMorphParams } from '../src/morphogen/params';
+import { accumulateSteps, stableStep } from '../src/morphogen/stability';
+import { formAt } from '../src/morphogen/forms';
+import { ActivityGovernor, fieldActivity } from '../src/morphogen/activity';
+
+test('steps carry their fraction to the next frame', () => {
+  const first = accumulateSteps(0, 1 / 60, 6, .1, 12);
+  assert.equal(first.steps, 1);
+  assert.ok(Math.abs(first.carry - 0) < 1e-9);
+  const small = accumulateSteps(0, 1 / 120, 6, .1, 12);
+  assert.equal(small.steps, 0);
+  assert.ok(Math.abs(small.carry - .5) < 1e-9);
+  assert.equal(accumulateSteps(small.carry, 1 / 120, 6, .1, 12).steps, 1);
+});
+
+test('a stall runs at most twelve steps and drops the rest', () => {
+  const r = accumulateSteps(0, 5, 6, .1, 12);
+  assert.equal(r.steps, 12);
+  assert.equal(r.carry, 0);
+});
+
+test('zero speed runs no steps', () => {
+  assert.deepEqual(accumulateSteps(.4, 1, 0, .1, 12), { steps: 0, carry: .4 });
+});
+
+test('defaults are inside every control range', () => {
+  const d = defaultMorphParams();
+  for (const c of MORPH_CONTROLS) {
+    assert.ok(d[c.key] >= c.min && d[c.key] <= c.max, c.key);
+    assert.ok(c.description.length > 8, `${c.key} needs a plain description`);
+  }
+});
+
+test('validation repairs bad, missing and out-of-range values', () => {
+  const v = validateMorphParams({ wavelength: 9999, drive: 'x', depth: NaN });
+  assert.equal(v.wavelength, 32);
+  assert.equal(v.drive, .28);
+  assert.equal(v.depth, 1);
+  assert.deepEqual(validateMorphParams(null), defaultMorphParams());
+});
+
+test('whole-number controls validate to whole numbers', () => {
+  assert.equal(validateMorphParams({ fieldType: 2.7 }).fieldType, 3);
+  assert.equal(validateMorphParams({ palette: 40 }).palette, 11);
+});
+
+test('a full parameter set stays small enough for the Live message', () => {
+  assert.ok(JSON.stringify(defaultMorphParams()).length < 4096);
+});
+
+test('step at the default spacing matches the bound', () => {
+  assert.ok(Math.abs(stableStep(12, 0, 0) - .1251) < .0005);
+});
+
+test('a lively pattern gets no help', () => {
+  const g = new ActivityGovernor();
+  for (let i = 0; i < 30; i++) assert.deepEqual(g.update(.8, .35, 1), { driftBoost: 0, seedBurst: 0 });
+});
+
+test('a settled pattern gets more drift first and seeds only after eight seconds', () => {
+  const g = new ActivityGovernor();
+  const first = g.update(.05, .35, 1);
+  assert.ok(first.driftBoost > 0);
+  assert.equal(first.seedBurst, 0);
+  for (let i = 0; i < 6; i++) assert.equal(g.update(.05, .35, 1).seedBurst, 0);
+  assert.ok(g.update(.05, .35, 1.5).seedBurst > 0);
+});
+
+test('help relaxes after the pattern recovers and never exceeds its limits', () => {
+  const g = new ActivityGovernor();
+  for (let i = 0; i < 600; i++) { const r = g.update(0, .35, 1); assert.ok(r.driftBoost <= 1 && r.seedBurst <= 1); }
+  let last = g.update(.9, .35, 1);
+  for (let i = 0; i < 30; i++) last = g.update(.9, .35, 1);
+  assert.deepEqual(last, { driftBoost: 0, seedBurst: 0 });
+});
+
+test('Keep alive at zero never intervenes', () => {
+  const g = new ActivityGovernor();
+  for (let i = 0; i < 60; i++) assert.deepEqual(g.update(0, 0, 1), { driftBoost: 0, seedBurst: 0 });
+});
+
+test('activity is zero for an unchanged field and high for a new one', () => {
+  const a = Float32Array.from({ length: 400 }, (_, i) => Math.sin(i * .7)), b = Float32Array.from({ length: 400 }, (_, i) => Math.cos(i * 1.9));
+  assert.equal(fieldActivity(a, a), 0);
+  assert.ok(fieldActivity(a, b) > .8);
+  assert.equal(fieldActivity(new Float32Array(400), new Float32Array(400)), 0);
+});
+
+test('motion controls exist with lively defaults', () => {
+  const d = defaultMorphParams();
+  assert.ok(d.flowSpeed >= .4);
+  assert.ok(d.surge >= .3);
+  assert.ok(d.shimmer >= .4);
+});
+
+test('a moving form stays on screen for hours', () => {
+  const params = { ...defaultMorphParams(), orbit: 1, formX: .6, formY: -.6, formSize: .5 };
+  for (let time = 0; time < 20000; time += 7.3) {
+    const f = formAt(params, time);
+    assert.ok(Math.abs(f.x) <= 1 && Math.abs(f.y) <= 1, `form left the picture at ${time}`);
+  }
+});
+
+test('orbit zero holds the form exactly where it was placed', () => {
+  const f = formAt({ ...defaultMorphParams(), orbit: 0, formX: .3, formY: -.2 }, 123);
+  assert.equal(f.x, .3);
+  assert.equal(f.y, -.2);
+});
+
+test('orbit moves the form continuously', () => {
+  const params = { ...defaultMorphParams(), orbit: .6 }, a = formAt(params, 10), b = formAt(params, 10 + 1 / 60), c = formAt(params, 16);
+  assert.ok(Math.hypot(a.x - b.x, a.y - b.y) < .01, 'form jumped between frames');
+  assert.ok(Math.hypot(a.x - c.x, a.y - c.y) > .02, 'form is not moving');
+});
+
+/** The solver's update on the CPU: 9-point Laplacian applied twice, periodic edges. */
+function run(size: number, steps: number, wavelength: number, alignment: number, asymmetry: number, drive: number): Float64Array {
+  const K = (2 * Math.PI / wavelength) ** 2, dt = stableStep(wavelength, alignment, asymmetry);
+  let u = new Float64Array(size * size), next = new Float64Array(size * size);
+  let random = 12345;
+  for (let i = 0; i < u.length; i++) { random = random * 16807 % 2147483647; u[i] = (random / 2147483647 - .5) * .4; }
+  const at = (a: Float64Array, x: number, y: number) => a[((y + size) % size) * size + (x + size) % size];
+  const lap = (a: Float64Array, x: number, y: number) => .5 * (at(a, x + 1, y) + at(a, x - 1, y) + at(a, x, y + 1) + at(a, x, y - 1))
+    + .25 * (at(a, x + 1, y + 1) + at(a, x - 1, y + 1) + at(a, x + 1, y - 1) + at(a, x - 1, y - 1)) - 3 * at(a, x, y);
+  const l = new Float64Array(size * size);
+  for (let s = 0; s < steps; s++) {
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) l[y * size + x] = K * at(u, x, y) + lap(u, x, y);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const v = at(u, x, y), operator = K * l[y * size + x] + lap(l, x, y);
+      // Diffusion along x stands in for the steering term at full strength.
+      const along = alignment * Math.min(K, 1) * (at(u, x + 1, y) + at(u, x - 1, y) - 2 * v);
+      const value = v + dt * (K * K * (drive * v + asymmetry * v * v - v * v * v) - operator + along);
+      next[y * size + x] = Math.max(-1.5, Math.min(1.5, value));
+    }
+    [u, next] = [next, u];
+  }
+  return u;
+}
+
+test('solver stays bounded across extreme parameters', () => {
+  for (const wavelength of [7, 32]) for (const alignment of [0, 1]) for (const asymmetry of [0, .7]) for (const drive of [.05, .7]) {
+    const u = run(64, 2000, wavelength, alignment, asymmetry, drive);
+    let peak = 0;
+    for (const v of u) { assert.ok(Number.isFinite(v)); peak = Math.max(peak, Math.abs(v)); }
+    // Pressed against the clamp would mean the update is unstable and only the clamp is holding it.
+    assert.ok(peak < 1.49, `λ${wavelength} a${alignment} g${asymmetry} r${drive}: peak ${peak.toFixed(3)}`);
+  }
+});
+
+test('solver forms stripes at the requested spacing', () => {
+  const size = 96, wavelength = 12, u = run(size, 3000, wavelength, 0, .12, .28);
+  let best = 0, bestPeriod = 0;
+  for (let period = 6; period <= 24; period++) {
+    let total = 0;
+    for (let ky = 0; ky < 6; ky++) for (let angle = 0; angle < 12; angle++) {
+      const t = angle / 12 * Math.PI, k = 2 * Math.PI / period; let re = 0, im = 0;
+      for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) { const p = k * (x * Math.cos(t) + y * Math.sin(t)); re += u[y * size + x] * Math.cos(p); im += u[y * size + x] * Math.sin(p); }
+      total = Math.max(total, re * re + im * im);
+    }
+    if (total > best) { best = total; bestPeriod = period; }
+  }
+  assert.ok(Math.abs(bestPeriod - wavelength) <= wavelength * .2, `period ${bestPeriod}`);
+});

@@ -1,6 +1,17 @@
 # Form & Field
 
-A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.16 alpha.
+A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.17 alpha.
+
+## What's new in 0.17
+
+- **Map:** a new screen for projection mapping. Switch to **Map** in the header, draw shapes and drag their corners to fit the surfaces in the room, using a room photo, Snap, a test grid and Identify. The artwork shows on a projector while the controls stay on your screen, with Blackout.
+- **Anything can play on a shape:** give each shape a Studio instrument, an image, a video or the Live picture.
+- **Groups and scenes:** link shapes so they share one instrument, use **Make a grid** to spread one picture across many cells, and move between saved scenes by hand or with Auto-advance.
+- **Wild options:** Stagger, Vary each, Palette shift, Border runs with Chase, and instruments driven by a shape's outline. Each is off until you turn it on.
+- **Sound and MIDI:** Live and Map can follow sound bands, the beat and tempo, and MIDI controllers with learn.
+- **New Live looks:** **Relief** turns the camera into a kinetic metal wall, and **Signal Melt** adds live pose echoes.
+- **New in Studio:** the Ember Pulse Oscilloscope look, Copper Concertina in Kinetic Relief, and more projection-focused Fractals.
+- **Graphics recovery:** if the graphics context is lost, the Studio preview now comes back by itself, including instruments that build up a picture over time.
 
 ## What's new in 0.16
 
@@ -236,6 +247,8 @@ The four material instruments expose **Advanced shape**, **Advanced motion** and
 Family-specific controls add ink seed coverage, development and edge pigment; staggered rounded shutters; and circular and harmonic nodal figures. Ink preparation controls are not animation targets. Their cache keys include every preparation setting.
 
 Each new instrument has a fourth exploration look that demonstrates these controls. Neutral migration defaults preserve existing artwork.
+
+**Finish** also has **Colour split**, **Gradient map**, **Colour balance** and **Key**, and Glow gains **Glow colour spread** and **Glow streak**. **Time displacement** gains **Time mode** (Delay map, Echo, Median, Darkest, Brightest), **Direction**, **Twist**, **Time zoom**, **Colour reach** and **Colour lag**. All of them start off, so existing projects look the same. Seven new finish looks use them: Neon Map, Anamorphic, Time Vortex, Ghosts, Long Exposure, Premonition and Brightness Time. Results are in [the colour and time proof](docs/colour-and-time-proof.md).
 
 Volume Banding suppression uses deterministic sampling dither; High quality reduces the resulting sampling texture. Directional highlights are filtered against rapid normal changes to reduce sparkle. All render and grading changes use the shared compositor and native output pipeline. The detailed audit and research are in [the professional effect audit](docs/professional-effect-audit-0.10.md).
 

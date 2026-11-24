@@ -11,7 +11,8 @@ import { sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
-import { slitActive, slitFragment, sliceDelays } from './slitscan';
+import { channelSliceCounts, echoWeights, previewSliceScale, slicePhase, sliceWarpScale, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
+import { TIME_ECHO, TIME_MEDIAN, medianFramePlan, type MedianPlan, timeGatherFragment, timeMedianFragment, timeMode, timeTargetNeeds } from './time-stats';
 import { parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
@@ -21,8 +22,11 @@ import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
+import { SmokeCloudRenderer } from './SmokeCloud';
+import { compositesPlainly, plainOverFragment } from './smoke-cloud-composite';
 import { printActive, printUniforms } from './print-screen';
-import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
+import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
+import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -77,7 +81,7 @@ const PREVIEW_STEP_LIMIT = 8;
 /** Background settle source renders per preview frame while paused. */
 const SETTLE_CHUNK = 6;
 /** Source renders per feedback step: one, or one per time slice. */
-const stepCost = (layer: Layer) => slitActive(layer) ? sliceDelays(layer).length : 1;
+const stepCost = (layer: Layer) => slitActive(layer) ? sliceSourceRenders(layer) : 1;
 const layerKey = (layer: Layer) =>
   JSON.stringify(layer, (key, value) => key === 'dataUrl' && typeof value === 'string' ? `${value.length}:${value.slice(-64)}` : value);
 
@@ -171,6 +175,11 @@ export class StudioRenderer {
   private readonly liquid: THREE.ShaderMaterial;
   private readonly liquidLayouts = new Map<string, THREE.DataTexture>();
   private scope: ScopeRenderer | null = null;
+  private smokeClouds: SmokeCloudRenderer | null = null;
+  private plainOver: THREE.ShaderMaterial | null = null;
+  /** For checks: draws every layer through the full compositor. */
+  fullCompositorOnly = false;
+  private previewPlaying = true;
   /** Reduced-size stand-ins for `source` while the preview draws time slices. */
   private sliceSource: THREE.WebGLRenderTarget | null = null;
   private sliceSourceSmooth: THREE.WebGLRenderTarget | null = null;
@@ -188,9 +197,48 @@ export class StudioRenderer {
   private readonly slit: THREE.ShaderMaterial;
   /** Slit-scan accumulation, consumed before the next layer is drawn. */
   private slitTargets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null = null;
+  /** The slit shader in its MAX-blended form: the brightest straight colour among the slices. */
+  private readonly slitBound: THREE.ShaderMaterial;
+  /** The slit shader in its additive form: the change Colour lag makes to red and blue. */
+  private readonly slitLag: THREE.ShaderMaterial;
+  /** Half the slice size, for the Brightness map. Allocated on first use. */
+  private slitDriverTarget: THREE.WebGLRenderTarget | null = null;
+  /** Slice size, for Colour lag. Allocated on first use. */
+  private slitBoundTarget: THREE.WebGLRenderTarget | null = null;
+  private slitLagTarget: THREE.WebGLRenderTarget | null = null;
+  /** Echo, Darkest and Brightest: combines the slices over the slit targets. */
+  private readonly timeGather: THREE.ShaderMaterial;
+  /** The gather shader in its MAX-blended form: the brightest straight colour each channel combined. */
+  private readonly timeBound: THREE.ShaderMaterial;
+  /** The gather shader's light with no coverage: added for Echo, MAX-blended otherwise. */
+  private readonly timeLight: THREE.ShaderMaterial;
+  private readonly timeMedian: THREE.ShaderMaterial;
+  /** Allocated only while channels remember different numbers of slices. */
+  private statBoundTarget: THREE.WebGLRenderTarget | null = null;
+  private statLightTarget: THREE.WebGLRenderTarget | null = null;
+  /** The Median slices. Allocated on first use, within the memory budget. */
+  private medianTarget: THREE.WebGLArrayRenderTarget | null = null;
+  /** This frame's size for the Median array, the same for every layer. */
+  private medianPlan: MedianPlan | null = null;
   private readonly glowBright: THREE.ShaderMaterial;
   /** Glow finish: one bright-pass target and blur pyramid, shared by all layers. */
-  private glow: { bright: THREE.WebGLRenderTarget; pyramid: BloomPyramid } | null = null;
+  private glow: { bright: THREE.WebGLRenderTarget; pyramid: BloomPyramid; streak: StreakBlur } | null = null;
+  /** Colour and Lens finish: one target shared by all layers, built on first use. */
+  private lensTarget: THREE.WebGLRenderTarget | null = null;
+  private readonly lens = material(lensFragment, {
+    uSource: { value: null }, uAspect: { value: 1 }, uHeight: { value: 1 }, uTile: { value: 0 }, uPhase: { value: 0 }, uSeed: { value: 0 },
+    uSplitOn: { value: 0 }, uSplitAmount: { value: 0 }, uSplitShape: { value: 0 }, uSplitThreshold: { value: .15 },
+    uSplitWaves: { value: 4 }, uSplitTravel: { value: 1 }, uSplitOrder: { value: 0 }, uSplitBlocks: { value: 0 }, uSplitChance: { value: .5 },
+    uSplitDirection: { value: new THREE.Vector2(1, 0) }, uSplitCount: { value: 3 },
+    uSplitOffsets: { value: new Array<number>(15).fill(0) },
+    uSplitWeights: { value: Array.from({ length: 15 }, () => new THREE.Vector3()) },
+    uGradMix: { value: 0 }, uGradMidpoint: { value: .5 }, uGradShift: { value: 0 }, uGradKeep: { value: 0 }, uGradCount: { value: 0 },
+    uGradStops: { value: Array.from({ length: 6 }, () => new THREE.Color()) },
+    uGradeWb: { value: new THREE.Vector3(1, 1, 1) }, uShadowColour: { value: new THREE.Color() }, uHighlightColour: { value: new THREE.Color() },
+    uShadowTint: { value: 0 }, uHighlightTint: { value: 0 },
+    uKeyMix: { value: 0 }, uKeyMode: { value: 0 }, uKeyLow: { value: .25 }, uKeyHigh: { value: 1 }, uKeySoft: { value: .1 },
+    uKeyHue: { value: 120 }, uKeyHueRange: { value: 40 }, uKeyInvert: { value: 0 },
+  });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
@@ -225,9 +273,23 @@ export class StudioRenderer {
   private exporting = false;
   private prepareRevision = 0;
 
+  /** Anything whose contents were built up over frames lived on the lost context, so it is rebuilt. */
+  private readonly onContextRestored = () => {
+    for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
+    this.feedbackStates.clear();
+    this.releaseOilTargets();
+    this.instruments.resetGpuHistory();
+    this.smokeClouds?.resetGpuHistory();
+    // The studio light was drawn on the lost context: it is made again the next time a sculpture needs it.
+    this.environment?.dispose(); this.environment = null; this.sculptureScene.environment = null;
+    // Every program links again on the new context, so none counts as linked, and a wait on the old one is over.
+    this.gate.forget();
+  };
+
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false,
       premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
     this.maxTargetSize=Math.min(this.renderer.capabilities.maxTextureSize,
       this.renderer.getContext().getParameter(this.renderer.getContext().MAX_RENDERBUFFER_SIZE) as number);
     this.renderer.setPixelRatio(1);
@@ -294,7 +356,7 @@ export class StudioRenderer {
       uGate: { value: new THREE.Vector4() }, uOptics: { value: new THREE.Vector4() },
       uWear: { value: new THREE.Vector4() }, uTransport: { value: new THREE.Vector4() },
     });
-    this.image = material(imageFragment, { ...viewUniforms(), uImage: { value: this.fallback }, uFit: { value: new THREE.Vector2(1, 1) }, uMirror: { value: 0 }, uRepeat: { value: 1 } });
+    this.image = material(imageFragment, { ...viewUniforms(), uImage: { value: this.fallback }, uFit: { value: new THREE.Vector2(1, 1) }, uMirror: { value: 0 }, uRepeat: { value: 1 }, uExactEdge: { value: 0 } });
     this.composite = material(compositeFragment, {
       uBelow: { value: this.accumA.texture }, uSource: { value: this.source.texture }, uMask: { value: this.fallback },
       uTranslation: { value: new THREE.Vector2() }, uTexel: { value: new THREE.Vector2(1, 1) },
@@ -306,7 +368,7 @@ export class StudioRenderer {
       uPatternRing: { value: new THREE.Vector4() }, uPatternBackground: { value: new THREE.Color() },
       uMaskInvert: { value: 0 }, uGlow: { value: 0 },
       ...Object.fromEntries(BLOOM_HEIGHTS.map((_, i) => [`uGlowLevel${i}`, { value: this.fallback }])),
-      uGlowWeights: { value: [0, 0, 0, 0, 0] }, uGlowColour: { value: new THREE.Color() }, uGlowOn: { value: 0 },
+      uGlowChannels: { value: [0, 1, 2, 3, 4].map(() => new THREE.Vector3()) }, uGlowStreakMap: { value: this.fallback }, uGlowColour: { value: new THREE.Color() }, uGlowOn: { value: 0 },
       uPrintOn: { value: 0 }, uPrintCells: { value: 135 }, uPrintOffset: { value: 0 }, uPrintAngles: { value: [0, 0, 0, 0] },
       ...Object.fromEntries(FINISH_PARAMETERS.map(d=>['u'+d.key[0].toUpperCase()+d.key.slice(1),{value:d.default}])),
       uSaturation: {value:1}, uHue: {value:0}, uExposure:{value:1},
@@ -324,6 +386,33 @@ export class StudioRenderer {
     this.slit = material(slitFragment, {
       uAccum: { value: null }, uSource: { value: null }, uIndex: { value: 0 }, uCount: { value: 2 }, uSmooth: { value: 0 },
       uShape: { value: 0 }, uBlocks: { value: 8 }, uScroll: { value: 0 }, uAspect: { value: 1 }, uReverse: { value: 0 }, uSeed: { value: 0 },
+      uDriver: { value: this.fallback }, uBound: { value: this.fallback }, uLag: { value: this.fallback }, uTwist: { value: 0 }, uZoom: { value: 0 }, uChroma: { value: 0 },
+    });
+    this.slitBound = material(slitFragment, this.slit.uniforms);
+    this.slitBound.defines = { SLIT_BOUND: '' };
+    this.slitBound.blending = THREE.CustomBlending;
+    this.slitBound.blendEquation = THREE.MaxEquation;
+    this.slitBound.blendSrc = THREE.OneFactor; this.slitBound.blendDst = THREE.OneFactor;
+    this.slitLag = material(slitFragment, this.slit.uniforms);
+    this.slitLag.defines = { SLIT_LAG: '' };
+    this.slitLag.blending = THREE.CustomBlending;
+    this.slitLag.blendEquation = THREE.AddEquation;
+    this.slitLag.blendSrc = THREE.OneFactor; this.slitLag.blendDst = THREE.OneFactor;
+    this.timeGather = material(timeGatherFragment, {
+      uAccum: { value: this.fallback }, uSource: { value: this.fallback }, uBoundMap: { value: this.fallback }, uLightMap: { value: this.fallback },
+      uMode: { value: 1 }, uFirst: { value: 0 }, uLast: { value: 0 }, uBounded: { value: 0 }, uAlphaWeight: { value: 1 },
+      uKeep: { value: new THREE.Vector3(1, 1, 1) }, uWeights: { value: new THREE.Vector3(1, 1, 1) },
+    });
+    this.timeBound = material(timeGatherFragment, this.timeGather.uniforms);
+    this.timeBound.defines = { GATHER_BOUND: '' };
+    this.timeLight = material(timeGatherFragment, this.timeGather.uniforms);
+    this.timeLight.defines = { GATHER_LIGHT: '' };
+    for (const mat of [this.timeBound, this.timeLight]) {
+      mat.blending = THREE.CustomBlending; mat.blendEquation = THREE.MaxEquation;
+      mat.blendSrc = THREE.OneFactor; mat.blendDst = THREE.OneFactor;
+    }
+    this.timeMedian = material(timeMedianFragment, {
+      uLayers: { value: null }, uFill: { value: new THREE.Vector2(1, 1) }, uCount: { value: 3 }, uBounded: { value: 0 }, uChannels: { value: new THREE.Vector3(3, 3, 3) },
     });
     this.feedback = material(feedbackFragment, {
       uSource: { value: null }, uPrevious: { value: null }, uAspect: { value: 1 }, uZoom: { value: 1 }, uRotate: { value: 0 },
@@ -448,9 +537,11 @@ export class StudioRenderer {
   }
   private drawState() { return { autoClear: this.renderer.autoClear, clear: this.renderer.getClearColor(new THREE.Color()), alpha: this.renderer.getClearAlpha() }; }
 
+  isContextLost(): boolean { return this.renderer.getContext().isContextLost(); }
+
   private assertUsable(): void {
     if (this.disposed) throw new Error('This renderer has been disposed.');
-    if (this.renderer.getContext().isContextLost()) throw new Error('The GPU context was lost. Reload the renderer to resume the saved project.');
+    if (this.isContextLost()) throw new Error('The GPU context was lost. Reload the renderer to resume the saved project.');
   }
 
   // Looked up every frame. Building the key by joining strings would copy and
@@ -529,6 +620,7 @@ export class StudioRenderer {
       if (!done) return;
       for (const [key, asset] of this.assets) if (!required.has(key)) { asset.texture.dispose(); this.assets.delete(key); }
       if (!project.layers.some(layer => layer.kind === 'oil' && layer.visible)) this.releaseOilTargets();
+      this.smokeClouds?.keep(new Set(project.layers.filter(layer => layer.kind === 'smokecloud' && layer.visible).map(layer => layer.id)));
       if (!project.layers.some(layer => layer.kind === 'graphic' && layer.visible)) {
         this.graphicSource?.dispose(); this.graphicSource = null;
       }
@@ -552,6 +644,13 @@ export class StudioRenderer {
     this.quad.material = mat;
     this.renderer.setRenderTarget(output);
     this.renderer.render(this.quadScene, this.quadCamera);
+  }
+
+  /** Draws with blending onto what the target already holds. */
+  private drawOnto(mat: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget): void {
+    const autoClear = this.renderer.autoClear;
+    this.renderer.autoClear = false;
+    try { this.draw(mat, output); } finally { this.renderer.autoClear = autoClear; }
   }
 
   private releaseOilTargets(): void {
@@ -704,6 +803,9 @@ export class StudioRenderer {
     } else if (layer.kind === 'scope') {
       this.scope ??= new ScopeRenderer();
       this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t), smokeAudio);
+    } else if (layer.kind === 'smokecloud') {
+      this.smokeClouds ??= new SmokeCloudRenderer();
+      this.smokeClouds.draw(this.renderer, layer, original, localPhase, this.width, this.height, this.source, smokeAudio, { exact: this.exactFeedback, playing: this.previewPlaying, duration });
     } else if (layer.kind === 'liquid') {
       const u = this.liquid.uniforms;
       u.uAspect.value = aspect; u.uPhase.value = localPhase;
@@ -831,10 +933,13 @@ export class StudioRenderer {
     this.renderer.setClearColor(0, 0);
     this.renderer.setRenderTarget(this.accumA); this.renderer.clear();
     let below = this.accumA, next = this.accumB;
+    let soleSource: THREE.Texture | null = null;
     const wrapped = ((phase % TAU) + TAU) % TAU;
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
     this.releaseFeedback(project);
+    this.releaseTimeTargets(project);
+    this.medianPlan = medianFramePlan(project.layers, width, height, this.exporting);
     for (const original of project.layers) {
       if (!original.visible) continue;
       // Feedback layers advance in whole loop frames: every frame of the
@@ -847,8 +952,19 @@ export class StudioRenderer {
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
+      const finished = lensActive(original) ? this.lensSource(original, layer, sourceTexture, wrapped, width, height) : sourceTexture;
+      // Exports always use the full compositor; a live untouched Smoke Cloud does not need its cost at 4K.
+      if (!this.exporting && !this.fullCompositorOnly && compositesPlainly(layer, this.tiling)) {
+        // Alone in the frame, it is already the finished composite: drawing it over nothing changes no pixel.
+        if (project.layers.filter(item => item.visible).length === 1) { soleSource = finished; continue; }
+        this.plainOver ??= new THREE.ShaderMaterial({ vertexShader: fullscreenVertex, fragmentShader: plainOverFragment, uniforms: { uBelow: { value: null }, uSource: { value: null } }, depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false });
+        this.plainOver.uniforms.uBelow.value = below.texture; this.plainOver.uniforms.uSource.value = finished;
+        this.draw(this.plainOver, next);
+        [below, next] = [next, below];
+        continue;
+      }
       const u = this.composite.uniforms;
-      u.uBelow.value = below.texture; u.uSource.value = sourceTexture;
+      u.uBelow.value = below.texture; u.uSource.value = finished;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
       (u.uTexel.value as THREE.Vector2).set(1 / width, 1 / height);
       u.uAspect.value = width / height; u.uScale.value = layer.transform.scale;
@@ -870,7 +986,7 @@ export class StudioRenderer {
       u.uMaskSize.value = layer.mask.size; u.uMaskSoftness.value = layer.mask.softness;
       u.uMaskInvert.value = Number(layer.mask.invert);
       u.uGlow.value = number(layer, 'glow', layer.kind === 'sculpture' ? .12 : 0);
-      this.bindGlow(original, layer, sourceTexture, width, height);
+      this.bindGlow(original, layer, finished, width, height);
       this.bindPrint(original, layer, wrapped);
       for(const d of FINISH_PARAMETERS)u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=number(layer,d.key,d.default);
       u.uSaturation.value=number(layer,'saturation',1);u.uHue.value=number(layer,'hue',0);
@@ -892,11 +1008,67 @@ export class StudioRenderer {
       this.draw(this.composite, next);
       [below, next] = [next, below];
     }
-    this.finish.uniforms.uImage.value = below.texture;
+    this.finish.uniforms.uImage.value = soleSource ?? below.texture;
     (this.finish.uniforms.uBackground.value as THREE.Color).set(project.background);
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
     this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
     this.draw(this.finish, this.linearOutput);
+  }
+
+  /**
+   * Colour and Lens finish: runs on the layer's source after Feedback and Time
+   * displacement and writes to its own target, so it never enters the echo
+   * history. Sizes are in pixels of a 1080-line frame.
+   */
+  lensSource(original: Layer, layer: Layer, source: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
+    if (!lensActive(original)) return source;
+    const amount = number(layer, 'splitAmount', 0), order = Math.round(number(layer, 'splitOrder', 0));
+    // A modulated amount can rest at zero, where there is nothing to do.
+    const mix = number(layer, 'gradMix', 0);
+    const temperature = number(layer, 'gradeTemperature', 0), tint = number(layer, 'gradeTint', 0);
+    const shadow = number(layer, 'gradeShadowTint', 0), highlight = number(layer, 'gradeHighlightTint', 0), key = number(layer, 'keyMix', 0);
+    if (amount <= 0 && order === 0 && mix <= 0 && temperature === 0 && tint === 0 && shadow <= 0 && highlight <= 0 && key <= 0) return source;
+    this.lensTarget ??= target();
+    const output = this.lensTarget;
+    if (output.width !== width || output.height !== height) output.setSize(width, height);
+    setWrap(output, this.tiling);
+    const u = this.lens.uniforms, taps = spectralWeights(Math.min(15, number(layer, 'splitSamples', 3)));
+    const angle = number(layer, 'splitAngle', 0) * Math.PI / 180;
+    u.uSource.value = source; u.uAspect.value = width / height; u.uHeight.value = height; u.uTile.value = Number(this.tiling);
+    u.uPhase.value = phase; u.uSeed.value = number(layer, 'seed', 0) % 1000;
+    u.uSplitOn.value = Number(amount > 0); u.uSplitAmount.value = amount;
+    u.uSplitShape.value = Math.round(number(layer, 'splitShape', 0));
+    u.uSplitThreshold.value = number(layer, 'splitThreshold', .15);
+    u.uSplitWaves.value = Math.round(number(layer, 'splitWaves', 4));
+    u.uSplitTravel.value = Math.round(number(layer, 'splitTravel', 1));
+    u.uSplitOrder.value = order; u.uSplitBlocks.value = Math.round(number(layer, 'splitBlocks', 0));
+    u.uSplitChance.value = number(layer, 'splitChance', .5);
+    (u.uSplitDirection.value as THREE.Vector2).set(Math.cos(angle), Math.sin(angle));
+    u.uSplitCount.value = taps.length;
+    taps.forEach((sample, i) => {
+      (u.uSplitOffsets.value as number[])[i] = sample.offset;
+      (u.uSplitWeights.value as THREE.Vector3[])[i].fromArray(sample.weight);
+    });
+    // Gradient Map: a whole number of cycles, so the loop closes. The shift is
+    // in half periods of the fold (see foldTone), so offset 1 is a full turn.
+    u.uGradMix.value = mix; u.uGradMidpoint.value = safeMidpoint(number(layer, 'gradMidpoint', .5));
+    u.uGradShift.value = 2 * (number(layer, 'gradOffset', 0) + Math.round(number(layer, 'gradCycles', 0)) * phase / TAU);
+    u.uGradKeep.value = number(layer, 'gradKeep', 0);
+    const stops = gradientStops(Math.round(number(layer, 'gradPalette', 0)), layer.palette), colours = u.uGradStops.value as THREE.Color[];
+    u.uGradCount.value = Math.min(6, stops.length);
+    for (let i = 0; i < 6; i++) colours[i].set(stops[Math.min(i, stops.length - 1)] ?? '#000000');
+    // Grading and Key: neutral values leave the pixel exactly as it was.
+    (u.uGradeWb.value as THREE.Vector3).fromArray(whiteBalance(temperature, tint));
+    u.uShadowTint.value = shadow; u.uHighlightTint.value = highlight;
+    const swatch = (key: string, fallback: number) => { const i = Math.round(number(layer, key, fallback)); return layer.palette[i - 1] ?? DEFAULT_PALETTE[i - 1]; };
+    (u.uShadowColour.value as THREE.Color).set(swatch('gradeShadowColour', 1));
+    (u.uHighlightColour.value as THREE.Color).set(swatch('gradeHighlightColour', 2));
+    u.uKeyMix.value = key; u.uKeyMode.value = Math.round(number(layer, 'keyMode', 0));
+    u.uKeyLow.value = number(layer, 'keyLow', .25); u.uKeyHigh.value = number(layer, 'keyHigh', 1); u.uKeySoft.value = number(layer, 'keySoftness', .1);
+    u.uKeyHue.value = number(layer, 'keyHue', 120); u.uKeyHueRange.value = number(layer, 'keyHueRange', 40);
+    u.uKeyInvert.value = Math.round(number(layer, 'keyInvert', 0));
+    this.draw(this.lens, output);
+    return output.texture;
   }
 
   /**
@@ -908,16 +1080,21 @@ export class StudioRenderer {
     const u = this.composite.uniforms, amount = number(layer, 'glowMix', 0);
     const on = glowActive(original) && amount > 0;
     u.uGlowOn.value = Number(on);
-    if (!on) { BLOOM_HEIGHTS.forEach((_, i) => { u[`uGlowLevel${i}`].value = this.fallback; }); return; }
-    this.glow ??= { bright: lightTarget(true), pyramid: new BloomPyramid() };
-    const { bright, pyramid } = this.glow, w = Math.ceil(width / 2), h = Math.ceil(height / 2);
+    if (!on) { BLOOM_HEIGHTS.forEach((_, i) => { u[`uGlowLevel${i}`].value = this.fallback; }); u.uGlowStreakMap.value = this.fallback; return; }
+    this.glow ??= { bright: lightTarget(true), pyramid: new BloomPyramid(), streak: new StreakBlur() };
+    const { bright, pyramid, streak } = this.glow, w = Math.ceil(width / 2), h = Math.ceil(height / 2);
     if (bright.width !== w || bright.height !== h) bright.setSize(w, h);
     setWrap(bright, this.tiling);
     this.glowBright.uniforms.uSource.value = source;
     this.glowBright.uniforms.uThreshold.value = number(layer, 'glowThreshold', .5);
     this.draw(this.glowBright, bright);
     pyramid.render(bright.texture, width, height, (m, t) => this.draw(m, t), this.tiling).forEach((level, i) => { u[`uGlowLevel${i}`].value = level; });
-    u.uGlowWeights.value = bloomWeights(amount, number(layer, 'glowSize', .5));
+    bloomChannelWeights(amount, number(layer, 'glowSize', .5), number(layer, 'glowSpread', 0)).forEach((c, i) => (u.uGlowChannels.value[i] as THREE.Vector3).set(c[0], c[1], c[2]));
+    // Streaks stretch the same bright light; Cross also runs across, at right angles.
+    if (number(layer, 'glowStreak', 0) > 0) {
+      const cross = Math.round(number(layer, 'glowStreakShape', 0)) >= 1;
+      u.uGlowStreakMap.value = streak.render(bright.texture, width, height, number(layer, 'glowStreakAngle', 0), cross, (m, t) => this.draw(m, t), this.tiling);
+    } else u.uGlowStreakMap.value = this.fallback;
     const tint = Math.round(number(layer, 'glowTint', 0));
     if (tint >= 1) (u.uGlowColour.value as THREE.Color).set(layer.palette[tint - 1] ?? DEFAULT_PALETTE[tint - 1]);
   }
@@ -959,7 +1136,7 @@ export class StudioRenderer {
     // Exports draw every slice at full size.
     if (this.exporting) return this.slices(original, phase, total, duration);
     const width = this.width, height = this.height, source = this.source;
-    const scale = Math.max(.25, Math.min(.5, Math.sqrt(1.5 / sliceDelays(evaluateLayer(original, phase)).length)));
+    const scale = previewSliceScale(sliceSourceRenders(evaluateLayer(original, phase)));
     // Solid geometry keeps its edge smoothing; shaders smooth their own edges.
     const solid = original.kind === 'sculpture' || original.kind === 'relief';
     let stand = solid ? this.sliceSourceSmooth : this.sliceSource;
@@ -978,6 +1155,12 @@ export class StudioRenderer {
     const layer = evaluateLayer(original, phase), p = layer.params;
     if (!this.slitTargets) this.slitTargets = [target(), target()];
     for (const rt of this.slitTargets) if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
+    if (timeMode(p.slitMode) > 0) {
+      // These modes keep single pixels from any slice, so a stray edge line would persist.
+      this.image.uniforms.uExactEdge.value = 1;
+      try { return this.statSlices(original, phase, total, duration); }
+      finally { this.image.uniforms.uExactEdge.value = 0; }
+    }
     let [accum, next] = this.slitTargets;
     this.clearTarget(accum);
     const delays = sliceDelays(layer), u = this.slit.uniforms;
@@ -986,15 +1169,118 @@ export class StudioRenderer {
     u.uScroll.value = (((p.slitScroll ?? 0) * phase / TAU) % 1 + 1) % 1;
     u.uAspect.value = this.width / this.height; u.uReverse.value = Number((p.slitShift ?? 0) < 0);
     u.uSeed.value = (p.seed ?? 0) % 1000;
+    const warp = sliceWarpScale(p.slitShift ?? 0);
+    u.uTwist.value = (p.slitTwist ?? 0) * warp; u.uZoom.value = (p.slitZoom ?? 0) * warp;
+    const chroma = Math.max(0, p.slitChroma ?? 0);
+    u.uChroma.value = chroma;
+    const shape = p.slitShape ?? 0;
+    if (shape >= 4.5 && shape < 5.5) u.uDriver.value = this.slitDriver(original, phase, duration);
+    let lagTargets: { bound: THREE.WebGLRenderTarget; lag: THREE.WebGLRenderTarget } | null = null;
+    if (chroma > 0) {
+      lagTargets = { bound: this.slitBoundTarget ??= target(), lag: this.slitLagTarget ??= target() };
+      for (const rt of [lagTargets.bound, lagTargets.lag]) {
+        if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
+        this.clearTarget(rt);
+      }
+      u.uBound.value = lagTargets.bound.texture; u.uLag.value = lagTargets.lag.texture;
+    }
+    const direction = p.slitDirection ?? 0;
     delays.forEach((delay, index) => {
-      const earlier = ((phase - delay * TAU / total) % TAU + TAU) % TAU;
-      u.uSource.value = this.plainSource(original, earlier, duration);
+      u.uSource.value = this.plainSource(original, slicePhase(phase, delay, total, direction), duration);
       u.uAccum.value = accum.texture; u.uIndex.value = index;
+      if (lagTargets) {
+        this.drawOnto(this.slitBound, lagTargets.bound);
+        this.drawOnto(this.slitLag, lagTargets.lag);
+      }
       this.draw(this.slit, next);
       [accum, next] = [next, accum];
     });
     this.slitTargets = [accum, next];
     return accum.texture;
+  }
+
+  /**
+   * Echo, Median, Darkest and Brightest: the slices combined per channel. These
+   * modes ignore the delay map, Twist, Zoom and Colour lag.
+   */
+  private statSlices(original: Layer, phase: number, total: number, duration: number): THREE.Texture {
+    const evaluated = evaluateLayer(original, phase), mode = timeMode(evaluated.params.slitMode);
+    const p: Record<string, number> = { ...evaluated.params, slitMode: mode };
+    const delays = sliceDelays({ params: p }), count = delays.length, direction = p.slitDirection ?? 0;
+    const channels = channelSliceCounts(count, p.slitReach ?? 1);
+    const bounded = channels[0] !== count || channels[1] !== count;
+    const sliceAt = (delay: number) => this.plainSource(original, slicePhase(phase, delay, total, direction), duration);
+    if (mode === TIME_MEDIAN) {
+      const size = this.medianPlan;
+      if (!size) throw new Error('Median has no size for this frame.');
+      let layers = this.medianTarget;
+      if (!layers) {
+        layers = new THREE.WebGLArrayRenderTarget(size.width, size.height, size.depth, {
+          type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false,
+          minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false,
+        });
+        layers.texture.colorSpace = THREE.LinearSRGBColorSpace;
+        this.medianTarget = layers;
+      } else if (layers.width !== size.width || layers.height !== size.height || layers.depth !== size.depth) layers.setSize(size.width, size.height, size.depth);
+      setWrap(layers, this.tiling);
+      // A shorter layer fills a corner pixel for pixel; one above the budget fills it all, scaled.
+      const fillWidth = Math.min(this.width, layers.width), fillHeight = Math.min(this.height, layers.height);
+      layers.viewport.set(0, 0, fillWidth, fillHeight);
+      delays.forEach((delay, index) => {
+        this.copy.uniforms.uImage.value = sliceAt(delay);
+        this.quad.material = this.copy;
+        this.renderer.setRenderTarget(layers, index);
+        this.renderer.render(this.quadScene, this.quadCamera);
+      });
+      const u = this.timeMedian.uniforms;
+      u.uLayers.value = layers.texture; u.uCount.value = count; u.uBounded.value = Number(bounded);
+      (u.uFill.value as THREE.Vector2).set(fillWidth / layers.width, fillHeight / layers.height);
+      (u.uChannels.value as THREE.Vector3).fromArray(channels);
+      const output = this.slitTargets![0];
+      this.draw(this.timeMedian, output);
+      return output.texture;
+    }
+    let [accum, next] = this.slitTargets!;
+    this.clearTarget(accum);
+    const u = this.timeGather.uniforms, decay = p.slitDecay ?? .7;
+    const alphaWeights = echoWeights(count, decay), weights = channels.map(n => echoWeights(n, decay));
+    u.uMode.value = mode; u.uBounded.value = Number(bounded);
+    let extra: { bound: THREE.WebGLRenderTarget; light: THREE.WebGLRenderTarget } | null = null;
+    if (bounded) {
+      extra = { bound: this.statBoundTarget ??= target(), light: this.statLightTarget ??= target() };
+      for (const rt of [extra.bound, extra.light]) {
+        if (rt.width !== this.width || rt.height !== this.height) rt.setSize(this.width, this.height);
+        this.clearTarget(rt);
+      }
+      u.uBoundMap.value = extra.bound.texture; u.uLightMap.value = extra.light.texture;
+      this.timeLight.blendEquation = mode === TIME_ECHO ? THREE.AddEquation : THREE.MaxEquation;
+    }
+    delays.forEach((delay, index) => {
+      u.uSource.value = sliceAt(delay); u.uAccum.value = accum.texture;
+      u.uFirst.value = Number(index === 0); u.uLast.value = Number(index === count - 1);
+      u.uAlphaWeight.value = alphaWeights[index];
+      (u.uKeep.value as THREE.Vector3).set(Number(index < channels[0]), Number(index < channels[1]), Number(index < channels[2]));
+      (u.uWeights.value as THREE.Vector3).set(weights[0][index] ?? 0, weights[1][index] ?? 0, weights[2][index] ?? 0);
+      if (extra) {
+        this.drawOnto(this.timeBound, extra.bound);
+        this.drawOnto(this.timeLight, extra.light);
+      }
+      this.draw(this.timeGather, next);
+      [accum, next] = [next, accum];
+    });
+    this.slitTargets = [accum, next];
+    return accum.texture;
+  }
+
+  /** The current frame at half the slice size, which the Brightness map reads its delay from. */
+  private slitDriver(original: Layer, phase: number, duration: number): THREE.Texture {
+    const driver = this.slitDriverTarget ??= target();
+    const width = Math.max(1, Math.round(this.width / 2)), height = Math.max(1, Math.round(this.height / 2));
+    if (driver.width !== width || driver.height !== height) driver.setSize(width, height);
+    // plainSource reuses its target for every slice, so the frame is copied out.
+    this.copy.uniforms.uImage.value = this.plainSource(original, phase, duration);
+    this.draw(this.copy, driver);
+    return driver.texture;
   }
 
   /** One feedback step: the source at `phase` over the faded, transformed echo in `from`. */
@@ -1134,7 +1420,7 @@ export class StudioRenderer {
   /** True while a paused preview is still refining a feedback history. */
   needsRefresh(): boolean {
     for (const state of this.feedbackStates.values()) if (state.settle) return true;
-    return false;
+    return this.smokeClouds?.needsRefresh() ?? false;
   }
 
   private disposeFeedback(state: FeedbackState): void {
@@ -1148,8 +1434,25 @@ export class StudioRenderer {
     }
   }
 
-  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }): void {
+  /** Frees the optional finish targets as soon as no visible layer can use them. */
+  private releaseTimeTargets(project: Project): void {
+    const needs = timeTargetNeeds(project.layers), slit = this.slit.uniforms, gather = this.timeGather.uniforms;
+    if (!needs.median && this.medianTarget) { this.medianTarget.dispose(); this.medianTarget = null; this.timeMedian.uniforms.uLayers.value = null; }
+    if (!needs.statBound && this.statBoundTarget) {
+      this.statBoundTarget.dispose(); this.statBoundTarget = null; gather.uBoundMap.value = this.fallback;
+      this.statLightTarget?.dispose(); this.statLightTarget = null; gather.uLightMap.value = this.fallback;
+    }
+    if (!needs.colourLag && this.slitBoundTarget) {
+      this.slitBoundTarget.dispose(); this.slitBoundTarget = null; slit.uBound.value = this.fallback;
+      this.slitLagTarget?.dispose(); this.slitLagTarget = null; slit.uLag.value = this.fallback;
+    }
+    if (!needs.driver && this.slitDriverTarget) { this.slitDriverTarget.dispose(); this.slitDriverTarget = null; slit.uDriver.value = this.fallback; }
+    if (this.lensTarget && !project.layers.some(layer => layer.visible && lensActive(layer))) { this.lensTarget.dispose(); this.lensTarget = null; }
+  }
+
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }, playing = true): void {
     if (this.exporting) return;
+    this.previewPlaying = playing;
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();
@@ -1236,6 +1539,7 @@ export class StudioRenderer {
     if (this.disposed) return;
     this.disposed = true;
     this.gate.close();
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
     for (const asset of this.assets.values()) asset.texture.dispose();
     this.assets.clear();
     for (const rt of [this.source, this.fractalPreview, this.accumA, this.accumB, this.linearOutput, this.byteOutput, this.resolved]) rt.dispose();
@@ -1245,13 +1549,22 @@ export class StudioRenderer {
     this.super8Source?.dispose(); this.super8Source = null;
     for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
     this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
+    this.slitDriverTarget?.dispose(); this.slitDriverTarget = null;
+    this.slitBoundTarget?.dispose(); this.slitBoundTarget = null;
+    this.slitLagTarget?.dispose(); this.slitLagTarget = null;
+    this.statBoundTarget?.dispose(); this.statBoundTarget = null;
+    this.statLightTarget?.dispose(); this.statLightTarget = null;
+    this.medianTarget?.dispose(); this.medianTarget = null;
     this.feedbackStates.clear();
-    this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow = null; this.glowBright.dispose();
+    this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow?.streak.dispose(); this.glow = null; this.glowBright.dispose();
     this.tiledSurface?.dispose(); this.tiledSurface = null;
+    this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.graphics.dispose(); this.instruments.dispose();
-    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
+    for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;
+    this.smokeClouds?.dispose(); this.smokeClouds = null;
+    this.plainOver?.dispose(); this.plainOver = null;
     this.sliceSource?.dispose(); this.sliceSource = null;
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();

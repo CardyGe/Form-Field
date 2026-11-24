@@ -7,12 +7,14 @@ import { HOT_SIGNAL, NEON_STRATA } from '../core/palettes';
 import type { Link } from '../react/links';
 import { readLiveLink, MAX_LIVE_LINKS } from './modulate';
 import { validateReliefPalette, type ReliefPaletteName } from './relief-palettes';
+import { defaultMorphParams, validateMorphParams, type MorphParams } from '../morphogen/params';
+import { MORPH_LOOKS } from '../morphogen/looks';
 
 /** The part of the camera view that paints. 0..1, origin bottom-left. */
 export interface Box { left: number; right: number; bottom: number; top: number }
 export type PaintKey = 'response' | 'strokeLength' | 'bristle' | 'spread' | 'fadeSeconds' | 'colourChange' | 'ground';
 export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number }
-export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief', signal: 'Signal Melt' } as const;
+export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief', signal: 'Signal Melt', morphogen: 'Morphogen' } as const;
 export type LookKind = keyof typeof LOOK_LABELS;
 export type ReliefKey = 'depth' | 'reach' | 'settle' | 'lightAngle' | 'edgeLight';
 export const RELIEF_CONTROLS: LiveControl<ReliefKey>[] = [
@@ -47,6 +49,14 @@ export type SignalKey = 'poseCount' | 'poseFill' | 'poseEcho' | 'poseSpacing' | 
 export type SmokeKey = 'density' | 'emit' | 'smoulder' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange' | 'vividness';
 /** Where people are found. ignoreStillSeconds null means Off. */
 export interface PeopleSettings { ignoreStillSeconds: number | null; useEmptyRoom: boolean }
+export interface MorphogenCue { look: number; cue: number; seconds: number; hold: boolean; mutate: number; undo: number; scramble: number }
+const defaultMorphogenCue = (): MorphogenCue => ({ look: 0, cue: 0, seconds: 4, hold: false, mutate: 0, undo: 0, scramble: 0 });
+function validateMorphogenCue(value: unknown): MorphogenCue {
+  const v = record(value), d = defaultMorphogenCue(), count = (x: unknown) => typeof x === 'number' && Number.isSafeInteger(x) && x >= 0 ? x : 0;
+  return { look: typeof v.look === 'number' && Number.isInteger(v.look) && v.look >= 0 && v.look < MORPH_LOOKS.length ? v.look : d.look, cue: count(v.cue),
+    seconds: typeof v.seconds === 'number' && Number.isFinite(v.seconds) && v.seconds >= 0 && v.seconds <= 64 ? v.seconds : d.seconds, hold: v.hold === true, mutate: count(v.mutate), undo: count(v.undo), scramble: count(v.scramble) };
+}
+
 export interface LiveSettings {
   version: 1;
   source: { kind: 'camera' | 'file' | 'test'; deviceId: string | null };
@@ -69,6 +79,9 @@ export interface LiveSettings {
   /** forever: smoke never fades, and stays in the picture. */
   smoke: Record<SmokeKey, number> & { palette: string[]; forever: boolean };
   signal: Record<SignalKey, number> & { hold: boolean; removeBackground: boolean; keepStill: boolean; palette: string[] };
+  morphogen: MorphParams;
+  /** Performance moves. Each counter fires its move once when it rises, so a move reaches whichever window draws the look. */
+  morphogenCue: MorphogenCue;
   people: PeopleSettings;
 }
 
@@ -154,6 +167,8 @@ export function defaultLiveSettings(): LiveSettings {
     reliefPalette: 'material',
     signal: { ...Object.fromEntries(SIGNAL_CONTROLS.map(c => [c.key, c.default])) as Record<SignalKey, number>, hold: false, removeBackground: true, keepStill: true, palette: [...NEON_STRATA] },
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
+    morphogen: defaultMorphParams(),
+    morphogenCue: defaultMorphogenCue(),
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
     links: [],
   };
@@ -199,7 +214,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     quality: v.quality === 720 ? 720 : 1080,
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, ranged(paint[c.key], c.min, c.max, c.default)])) as Record<PaintKey, number>,
     palette: [...palette],
-    look: v.look === 'smoke' || v.look === 'relief' || v.look === 'signal' ? v.look : 'paint',
+    look: v.look === 'smoke' || v.look === 'relief' || v.look === 'signal' || v.look === 'morphogen' ? v.look : 'paint',
     reliefPresence: v.reliefPresence === true,
     reliefPalette: validateReliefPalette(v.reliefPalette),
     relief: {
@@ -212,6 +227,8 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     signal: { ...Object.fromEntries(SIGNAL_CONTROLS.map(c => [c.key, c.key === 'poseCount' ? Math.round(ranged(signal[c.key], c.min, c.max, c.default)) : ranged(signal[c.key], c.min, c.max, c.default)])) as Record<SignalKey, number>, hold: signal.hold === true, removeBackground: signal.removeBackground !== false, keepStill: signal.keepStill !== false, palette: [...(isPalette(signal.palette) ? signal.palette : d.signal.palette)] },
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, ranged(smoke[c.key], c.min, c.max, c.default)])) as Record<SmokeKey, number>,
       palette: [...(isPalette(smoke.palette) ? smoke.palette : d.smoke.palette)], forever: smoke.forever === true },
+    morphogen: validateMorphParams(v.morphogen),
+    morphogenCue: validateMorphogenCue(v.morphogenCue),
     people: { ignoreStillSeconds: still, useEmptyRoom: typeof people.useEmptyRoom === 'boolean' ? people.useEmptyRoom : false },
     links: readLiveLinks(v.links),
   };
@@ -227,6 +244,9 @@ export function chooseDisplay(displays: { id: number; primary: boolean }[], curr
 export function usesPeople(settings: LiveSettings): boolean {
   return settings.look === 'smoke' || (settings.look === 'relief' && settings.reliefPresence) || (settings.look === 'signal' && settings.signal.removeBackground);
 }
+
+/** Morphogen makes its own picture: a camera can disturb it, but it plays without one. */
+export function usesCamera(settings: LiveSettings): boolean { return settings.look !== 'morphogen'; }
 
 /** Signal treats stillness as participation unless the operator explicitly opts out. */
 export function personStillTimeout(settings: LiveSettings): number | null {

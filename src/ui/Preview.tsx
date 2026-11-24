@@ -9,6 +9,7 @@ import { previewSize } from '../rendering/preview-size';
 import type { ReactivityEngine } from '../react/engine';
 
 const TAU = Math.PI * 2;
+const CONTEXT_RESTORE_WARNING_MS = 5000;
 const actualDuration = (p: Project) => frameCount(p) * p.fps.den / p.fps.num;
 
 export function Preview({ tiled, project, playing, phase, rendererRef, smokeSound, onError, onEnded, checker, layer, locks, blocked, onChange, onVary, onNotice }: {
@@ -20,9 +21,9 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
   const helpId = useId();
   const { control, feedback, axes } = useCanvasInteraction({ canvas, layer, locks, blocked, onChange, onVary, onNotice });
   const enabled = !blocked && !tiled && layer?.visible;
-  const current = useRef({ project, playing,onEnded,tiled,smokeSound }), invalidate = useRef(true);
+  const current = useRef({ project, playing,onEnded,tiled,smokeSound,onNotice }), invalidate = useRef(true);
   const prepared = useRef<Project | null>(null);
-  current.current = { project, playing,onEnded,tiled,smokeSound };
+  current.current = { project, playing,onEnded,tiled,smokeSound,onNotice };
   useEffect(() => { invalidate.current = true; }, [tiled]);
   useEffect(() => {
     if (!canvas.current || !host.current) return;
@@ -36,6 +37,27 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
       invalidate.current = true;
     });
     resize.observe(host.current);
+    // three.js rebuilds its GPU state when the context returns; the project must then be prepared again.
+    const surface = canvas.current;
+    let lostTimer = 0, reportedLost = false;
+    const onContextLost = () => {
+      prepared.current = null;
+      window.clearTimeout(lostTimer);
+      current.current.onNotice('Graphics reset. Restoring the picture…');
+      lostTimer = window.setTimeout(() => { reportedLost = true; onError('The graphics context has not come back. Reload the app to resume the saved project.'); }, CONTEXT_RESTORE_WARNING_MS);
+    };
+    const onContextRestored = () => {
+      window.clearTimeout(lostTimer);
+      if (reportedLost) { reportedLost = false; onError(''); }
+      const project = current.current.project;
+      void engine.prepare(project).then(() => {
+        if (!alive || current.current.project !== project) return;
+        prepared.current = project; invalidate.current = true;
+        current.current.onNotice('Picture restored');
+      }).catch(error => { if (alive && !engine.isContextLost()) onError(String(error)); });
+    };
+    surface.addEventListener('webglcontextlost', onContextLost);
+    surface.addEventListener('webglcontextrestored', onContextRestored);
     const loop = (now: number) => {
       if (!alive) return;
       const state = current.current;
@@ -48,7 +70,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
         const size=previewSize(box.width,box.height,ratio,density);
         canvas.current!.style.width=`${size.cssWidth}px`;canvas.current!.style.height=`${size.cssHeight}px`;
         try { engine.render(state.project, phase.current, size.width, size.height,
-          state.playing && state.smokeSound ? { signals: state.smokeSound.signals, now } : undefined);
+          state.playing && state.smokeSound ? { signals: state.smokeSound.signals, now } : undefined, state.playing);
           const overlay = tileCanvas.current;
           if (state.tiled && overlay) {
             // Drawn in the same frame as the render, while the WebGL buffer is still valid.
@@ -59,17 +81,21 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
             for (let i = 0; i < 4; i++) g.drawImage(canvas.current!, (i % 2) * w, Math.floor(i / 2) * h, w, h);
           }
           invalidate.current = false; lastPhase = phase.current; }
-        catch (error) { prepared.current = null; onError(String(error)); }
+        catch (error) { prepared.current = null; if (!engine.isContextLost()) onError(String(error)); }
       }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
-    return () => { alive = false; prepared.current = null; cancelAnimationFrame(raf); resize.disconnect(); engine.dispose(); rendererRef.current = null; };
+    return () => {
+      alive = false; prepared.current = null; cancelAnimationFrame(raf); resize.disconnect(); window.clearTimeout(lostTimer);
+      surface.removeEventListener('webglcontextlost', onContextLost); surface.removeEventListener('webglcontextrestored', onContextRestored);
+      engine.dispose(); rendererRef.current = null;
+    };
   }, [onError, phase, rendererRef]);
   useEffect(() => {
     invalidate.current = true; prepared.current = null;
     let alive = true;
-    void rendererRef.current?.prepare(project).then(() => { if (alive) { prepared.current = project; invalidate.current = true; } }).catch(error => { if (alive) onError(String(error)); });
+    void rendererRef.current?.prepare(project).then(() => { if (alive) { prepared.current = project; invalidate.current = true; } }).catch(error => { if (alive && !rendererRef.current?.isContextLost()) onError(String(error)); });
     return () => { alive = false; };
   }, [project, onError, rendererRef]);
   return <>

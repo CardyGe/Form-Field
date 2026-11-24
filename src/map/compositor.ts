@@ -24,7 +24,8 @@ import type { LiveSettings } from '../live/settings';
 import { flatten, ringBounds } from './outline';
 import { IDENTITY, invert, multiply, quadToQuad, apply, type H3 } from './homography';
 import { coverCrop, landing, landingAspect, sourceSizeFor, type Landing } from './placement';
-import { Gpu, heldInverse, type ShapeDraw, type Texture } from './gpu';
+import { Gpu, heldInverse, type ShapeDraw, type Texture, FLASH_PROBE } from './gpu';
+import { FlashLimiter, type FlashCorrection } from './flash-limiter';
 import { chaseHead, chaseOffsets, insetOutline, onlySurfaceDiffers, outlinePolygon, staggerDelays, withSurface } from './wild';
 import { FrameHistory } from './frameHistory';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
@@ -138,7 +139,7 @@ export interface CompositorStats {
   /** The stage's own graphics context was lost and is waiting to come back: the wall is black meanwhile. */
   contextLost: boolean;
   /** Live in Map: whether the show's Live runs (null: none, camera off). */
-  live?: { running: boolean; state: string } | null;
+  live?: { running: boolean; state: string; midimix?: { active: boolean; look: number | null; queued: number | null } | null } | null;
   /** Stage 6: each video playing, by id: its state, and the beats a tempo loop plays as. */
   videos?: Record<string, { state: string; playsAs: number | null }>;
   linked?: Record<string, number>;
@@ -184,6 +185,8 @@ export class MapCompositor {
   private readonly modulator = new Modulator();
   private signals: Signals = {};
   /** What is drawn this frame: the show with its links applied. */
+  private readonly flashLimiter = new FlashLimiter();
+  private flashCorrection: FlashCorrection = { gain: 1, redScale: 1 };
   private drawn: Modulated<PlayShow> = { show: this.show, opacity: new Map(), speed: new Map(), params: new Map() };
   /** The overlay (test grid, names, identify, crosshair, selection), drawn in 2D when it changes. */
   private overlay: { key: string; canvas: OffscreenCanvas; texture: Texture | null; empty: boolean } | null = null;
@@ -727,7 +730,11 @@ export class MapCompositor {
     }
     // Live's newest picture, once for every shape that plays it.
     // A Live whose own graphics context was lost is made again; meanwhile its shapes play their fill.
-    if (this.live?.broken) { this.live.dispose(); this.live = null; this.dirty = true; this.updateLive(); }
+    if (this.live?.broken) {
+      const play = this.live.morphogenPlay;
+      this.live.dispose(); this.live = null; this.dirty = true; this.updateLive();
+      if (this.live) (this.live as LiveSlot).morphogenPlay = play;
+    }
     if (this.live) {
       if (!this.frozen) this.live.setSignals(this.signals);
       this.liveTexture = this.live.frame();
@@ -739,6 +746,7 @@ export class MapCompositor {
     const drawn = this.dirty || rendered || running || staggering || this.fades.size > 0 || this.glides.size > 0 || this.easing !== null;
     if (this.settling && !this.easing && this.fades.size === 0 && this.glides.size === 0) this.settling = false;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
+    this.limitFlashes(now, drawn);
     this.frameIndex++;
     const work = performance.now() - started;
     // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
@@ -746,6 +754,18 @@ export class MapCompositor {
     this.framesThisSecond++;
     if (now - this.secondStarted >= 1000) { this.fps = this.framesThisSecond * 1000 / (now - this.secondStarted); this.framesThisSecond = 0; this.secondStarted = now; }
     return drawn;
+  }
+
+  /** Reads the finished wall without waiting and corrects later frames. A correction that changes redraws the stage. */
+  private limitFlashes(now: number, drawn: boolean): void {
+    for (let probe = this.gpu.collectFlashProbe(); probe; probe = this.gpu.collectFlashProbe()) {
+      const next = this.flashLimiter.push(probe.pixels, FLASH_PROBE.width, FLASH_PROBE.height, probe.time);
+      if (next.gain !== this.flashCorrection.gain || next.redScale !== this.flashCorrection.redScale) {
+        this.flashCorrection = next; this.gpu.setOutputCorrection(next.gain, next.redScale); this.dirty = true;
+      }
+    }
+    // Keeps reading while dimmed, including under Freeze, so a steady picture always recovers.
+    if (drawn || this.flashCorrection.gain < 1 || this.flashCorrection.redScale < 1) this.gpu.requestFlashProbe(now / 1000);
   }
 
   stats(): CompositorStats {
@@ -761,7 +781,7 @@ export class MapCompositor {
       prepares: Object.fromEntries([...this.slots].map(([id, s]) => [id, s.prepares])),
       edgeBuilds: this.edgeBuilds,
       contextLost: this.lost,
-      live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status } : null,
+      live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status, midimix: this.live.midimix } : null,
       videos: Object.fromEntries([...this.videoSlots].map(([id, v]) => [id, { state: v.state, playsAs: v.playsAs }])),
       // For the scripted checks: the effect settings links are moving now, as drawn (source:layer:key → value).
       adjusted: this.adjusted,

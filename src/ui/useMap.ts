@@ -683,7 +683,7 @@ export function useMap(onError: (message: string) => void) {
   const liveRef = useRef<LiveSettings | null>(live);
   liveRef.current = live;
   const showUsesLive = usesLive(show);
-  const reacts = showReacts(show) || (showUsesLive && !!live?.links.some(l => l.on));
+  const reacts = showReacts(show) || (showUsesLive && (!!live?.links.some(l => l.on) || live?.look === 'morphogen'));
   const [panelOpen, setPanelOpen] = useState(false);
   useEffect(() => { if (live) kept.live = live; if (outputOpen) sendLive(); }, [live, showUsesLive, outputOpen]);
   /** This screen's own compositor hears Live's Clear and Capture empty room here, as the wall does through messages. */

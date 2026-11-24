@@ -24,7 +24,7 @@ export class ProgramGate {
   private waiting: LinkingProgram | null = null;
   /** The last attempt was refused because another renderer holds the turn. */
   private queued = false;
-  private readonly linked = new WeakMap<object, number>();
+  private linked = new WeakMap<object, number>();
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
@@ -69,6 +69,8 @@ export class ProgramGate {
   remember(materials: readonly { version: number }[]): void { for (const m of materials) this.linked.set(m, m.version); }
   open(): void { this.endTurn(); this.on = true; this.waiting = null; this.queued = false; }
   close(): void { this.endTurn(); this.on = false; this.waiting = null; this.queued = false; }
+  /** After the context is restored: every program links again there, and a program waited on before never will. Stays on or off. */
+  forget(): void { this.endTurn(); this.waiting = null; this.queued = false; this.linked = new WeakMap(); }
 }
 
 /**
