@@ -130,24 +130,31 @@ export class ReactivityEngine {
 
   /** The tempo before the show, while one is running. None of the show controls write preferences. */
   private show: { bpm: number } | null = null;
-  /** A show follows the music, unless the saved source is MIDI clock, which stays in charge. */
+  /**
+   * A show follows the music, unless the saved source is MIDI clock: that leads while it runs, and when it is stopped
+   * or silent the show follows the music until it runs again (see TempoClock.midiShowTick).
+   */
   beginShowClock(): void {
     if (this.show) return;
     this.show = { bpm: this.tempo.bpm };
     this.tempo.clearBarStart();
-    if (this.prefs.tempo !== 'midi') this.tempo.setSource('follow');
+    if (this.prefs.tempo === 'midi') this.tempo.beginMidiShow();
+    else this.tempo.setSource('follow');
   }
   /** Back to the saved source and its tempo. The beat count carries on. */
   endShowClock(): void {
     if (!this.show) return;
     const { bpm } = this.show;
     this.show = null;
+    this.tempo.endMidiShow();
     this.tempo.setSource(this.prefs.tempo);
     if (this.prefs.tempo !== 'midi') this.tempo.setBpm(this.prefs.tempo === 'fixed' ? this.prefs.bpm : bpm);
   }
   showTap(): void { this.tempo.manualTap(performance.now() / 1000); }
   followAgain(): void { this.tempo.resumeFollow(performance.now() / 1000); }
   setBarStart(): void { this.tempo.setBarStart(performance.now() / 1000); }
+  /** During a MIDI clock show: whether MIDI clock leads, is silent, or Tap or Follow took over. Null otherwise. */
+  showMidiClock(): 'leading' | 'silent' | 'operator' | null { return this.tempo.midiShowState(this.last); }
 
   private run(): void {
     const loop = (now: number) => {
@@ -176,6 +183,7 @@ export class ReactivityEngine {
       out['beat.pulse'] = beat.pulse;
       out['beat.count'] = beat.count;
     }
+    this.tempo.midiShowTick(t);
     this.tempo.followTick(t);
     const clock = this.tempo.advance(t);
     out['tempo.phase'] = clock.phase; out['tempo.beat'] = clock.beat; out['tempo.bpm'] = clock.bpm;

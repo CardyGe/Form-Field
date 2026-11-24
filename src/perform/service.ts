@@ -36,6 +36,8 @@ export interface ClockLink {
   /** The sound input's and the controller's status, when the clock has them. */
   audio?(): AudioStatus;
   midi?(): MidiStatus;
+  /** During a show whose saved source is MIDI clock: whether it leads, is silent, or Tap or Follow took over. */
+  midiClock?(): 'leading' | 'silent' | 'operator' | null;
 }
 interface Deps { wall: WallLink; clock: ClockLink; show: () => ShowDocument; now: () => number; id: () => string; random: () => number; live?: () => LiveSettings | null }
 
@@ -278,6 +280,7 @@ export class PerformService {
     if (this.isRunning) {
       if (['lost', 'missing', 'failed'].includes(this.audio.state)) notices.push('Audio lost. The show keeps running on the held tempo.');
       if (this.midi === 'lost') notices.push('MIDImix lost. The picture keeps its values until it reconnects.');
+      if (this.deps.clock.midiClock?.() === 'silent') notices.push('MIDI clock stopped. The show follows the music until it runs again.');
       if (!this.deps.wall.isOpen()) notices.push('The projector window is closed. The show carries on and resumes when it opens.');
     }
     return { running: this.isRunning, clock, launcher: this.launcher, controls: this.controls, shift: this.shift, audio: this.audio, midi: this.midi, armed: this.wallArmed, waiting, stuck, notices, prepareMs: Object.fromEntries(this.prepared) };
@@ -606,6 +609,7 @@ export function performService(): PerformService {
       subscribe: fn => reactivity().subscribe(fn),
       audio: () => reactivity().audio.status,
       midi: () => reactivity().midi.status,
+      midiClock: () => reactivity().showMidiClock(),
     },
     show: () => mapLink?.show() ?? (() => { throw new Error('Perform needs the Map session'); })(),
     live: () => mapLink?.live() ?? null,

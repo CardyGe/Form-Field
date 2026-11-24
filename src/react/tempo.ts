@@ -10,6 +10,8 @@ export type FollowState = 'locked' | 'holding' | 'manual';
 export interface TempoState { bpm: number; phase: number; beat: number; bar: number }
 export const BPM_RANGE = { min: 40, max: 240 };
 const TAP_RESET = 2;
+/** Seconds without a MIDI clock tick before a show stops waiting for it and follows the music. */
+export const MIDI_SILENT_S = 2;
 const FOLLOW = {
   min: 85, max: 175,
   /** How far from the expected beat an onset may land, in beats. Onsets outside it never move the beat or the tempo. */
@@ -275,8 +277,46 @@ export class TempoClock {
     f.state = 'holding';
     f.accepted = 0;
   }
+  /**
+   * A show whose saved source is MIDI clock. MIDI clock leads it only while it is running and ticking: stopped, or silent
+   * for MIDI_SILENT_S, the show follows the music, and it leads again when it runs. Tap or Follow hands the show to the
+   * operator until MIDI clock next falls silent. `operator`: Tap or Follow chose the source.
+   */
+  private midiShow: { operator: boolean } | null = null;
+  beginMidiShow(): void { this.midiShow = { operator: false }; }
+  endMidiShow(): void { this.midiShow = null; }
+  /** MIDI clock is running and a tick came within the last MIDI_SILENT_S. */
+  private midiRunning(t: number): boolean { return this.midi.running && t - this.midi.last < MIDI_SILENT_S; }
+  /** Each frame of a MIDI clock show, before the clock is read. */
+  midiShowTick(t: number): void {
+    const show = this.midiShow;
+    if (!show) return;
+    this.lastT = Math.max(this.lastT, t);
+    if (!this.midiRunning(t)) {
+      show.operator = false;
+      if (this.source === 'midi') this.setSource('follow');
+      return;
+    }
+    if (this.source === 'follow' && !show.operator && this.follow.state !== 'manual') this.setSource('midi');
+  }
+  /** For the Perform status: MIDI clock leads the show, is silent (the show follows the music), or the operator chose. */
+  midiShowState(t: number): 'leading' | 'silent' | 'operator' | null {
+    if (!this.midiShow) return null;
+    if (this.source === 'midi') return 'leading';
+    return this.midiRunning(t) ? 'operator' : 'silent';
+  }
+  /** During a MIDI clock show, Tap or Follow moves the show off MIDI clock, carrying the beat count on. */
+  private operatorTakes(t: number): void {
+    if (!this.midiShow) return;
+    this.midiShow.operator = true;
+    if (this.source !== 'midi') return;
+    this.lastT = Math.max(this.lastT, t);
+    this.setSource('follow');
+  }
+
   /** A tap during a show: the clock is manual until told to follow again. Saved preferences are not touched. */
   manualTap(t: number): void {
+    this.operatorTakes(t);
     if (this.source !== 'follow') return;
     this.follow.state = 'manual';
     this.tap(t);
@@ -284,6 +324,9 @@ export class TempoClock {
   }
   /** Back to following the music, from the current beat and tempo. */
   resumeFollow(t: number): void {
+    // From MIDI clock, the switch itself starts following (HOLDING until onsets lock).
+    if (this.midiShow && this.source === 'midi') { this.operatorTakes(t); return; }
+    this.operatorTakes(t);
     if (this.source !== 'follow' || this.follow.state !== 'manual') return;
     this.anchor = { t, beats: this.beatsAt(t) };
     this.bpm = foldBpm(this.bpm);
