@@ -31,19 +31,18 @@ export const GOVERNOR = {
   forgiveSeconds: 60,
   /** Steps per second the picture glides through. */
   glidePerSecond: .5,
-  /** Bloom keeps at least its widest levels. */
-  minBloomLevels: 2,
   /** At most half the small marks are let go. */
   minInstanceScale: .5,
   /** Steps: 1 bloom, 2 tear, 3 instances. */
   steps: 3,
 } as const;
 
-const FULL_BLOOM = 5;
-
 export interface MeridianQuality {
-  /** Bloom levels kept, 2 to 5. A fraction is part-way through letting the tightest one go. */
-  bloomLevels: number;
+  /**
+   * Share of bloom kept, 1 to 0. Bloom fades rather than changing shape, so nothing steps; at 0 its passes are not drawn at
+   * all, which is where the saving is.
+   */
+  bloom: number;
   /** Share of the glitch tear and glitch shards kept, 0 to 1. */
   tear: number;
   /** Share of small marks (nodes and dots) kept, 0.5 to 1. */
@@ -54,7 +53,7 @@ export interface MeridianQuality {
   level: number;
 }
 
-export const FULL_QUALITY: Readonly<MeridianQuality> = Object.freeze({ bloomLevels: FULL_BLOOM, tear: 1, instanceScale: 1, reduced: false, level: 0 });
+export const FULL_QUALITY: Readonly<MeridianQuality> = Object.freeze({ bloom: 1, tear: 1, instanceScale: 1, reduced: false, level: 0 });
 
 const clamp01 = (v: number) => v < 0 ? 0 : v > 1 ? 1 : v;
 
@@ -111,7 +110,7 @@ export class MeridianGovernor {
 
   private write(): MeridianQuality {
     const out = this.out, level = this.level;
-    out.bloomLevels = FULL_BLOOM - (FULL_BLOOM - GOVERNOR.minBloomLevels) * clamp01(level);
+    out.bloom = 1 - clamp01(level);
     out.tear = 1 - clamp01(level - 1);
     out.instanceScale = 1 - (1 - GOVERNOR.minInstanceScale) * clamp01(level - 2);
     out.reduced = level > 1e-9 || this.target > 0;

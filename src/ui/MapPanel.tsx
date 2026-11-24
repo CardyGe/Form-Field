@@ -169,8 +169,9 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const [localVideos, setLocalVideos] = useState<Record<string, { state: string; playsAs: number | null }>>({});
   const [localLimiting, setLocalLimiting] = useState(false);
   const [localFailed, setLocalFailed] = useState(false);
+  const [localReduced, setLocalReduced] = useState(false);
   useEffect(() => {
-    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); setLocalLimiting(false); setLocalFailed(false); return; }
+    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); setLocalLimiting(false); setLocalFailed(false); setLocalReduced(false); return; }
     const timer = setInterval(() => {
       const next = compositor.current?.stats().live ?? null;
       setLocalLive(old => old?.running === next?.running && old?.state === next?.state ? old : next);
@@ -178,6 +179,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
       setLocalVideos(old => JSON.stringify(old) === JSON.stringify(videos) ? old : videos);
       setLocalLimiting(!!compositor.current?.stats().flashGuard?.limiting);
       setLocalFailed(!!compositor.current?.stats().flashGuard?.failed);
+      setLocalReduced(!!compositor.current?.stats().meridianQuality?.reduced);
     }, 500);
     return () => clearInterval(timer);
   }, [map.outputOpen]);
@@ -721,6 +723,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   // Safety stays on screen whatever else the status line is saying.
   const guardPolicy = useMemo(() => wallGuardPolicy(map.show.sources.map(s => s.project)), [map.show.sources]);
   const guardLimiting = guardPolicy.on && (map.outputOpen ? !!wall?.flashGuard?.limiting : localLimiting);
+  const qualityReduced = map.outputOpen ? !!wall?.meridianQuality?.reduced : localReduced;
   const guardFailed = guardPolicy.on && !!(map.outputOpen ? wall?.flashGuard?.failed : localFailed);
   const guardWarning = guardFailed ? 'Flash limiter unavailable: the wall is not limited' : guardPolicy.warn ? (guardPolicy.on ? 'Flash guard is off on one Meridian layer' : 'Flash guard is off: the wall is not limited') : null;
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
@@ -796,7 +799,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} liveStatus={localLive} videoStatus={map.outputOpen ? map.wallState?.videos ?? {} : localVideos} />
       </aside>
     </div>
-    <footer className="map-status" role="status"><span>{status}</span>{guardWarning && <strong className="map-flash-guard is-off" role="alert">{guardWarning}</strong>}{guardLimiting && <strong className="map-flash-guard" role="alert">Flash guard: limiting</strong>}{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
+    <footer className="map-status" role="status"><span>{status}</span>{guardWarning && <strong className="map-flash-guard is-off" role="alert">{guardWarning}</strong>}{guardLimiting && <strong className="map-flash-guard" role="alert">Flash guard: limiting</strong>}{qualityReduced && <strong className="map-quality" role="status" title="Meridian is drawing less bloom, tearing or small detail to keep the wall smooth. Lines stay sharp and the flash limiter is unchanged. It comes back after a few calm seconds.">Quality reduced</strong>}{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
     {looksOpen && lookShape && <MapLookBrowser current={currentLook(lookShape)} colour={lookShape.colour} onPick={value => act.play(lookShape.id, value, sharedSelection || linkedChanges)} onClose={() => setLooksOpen(false)} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label={menu.shapeId ? 'Shape' : 'Stage'} entries={menuEntries(menu.shapeId)} onClose={() => setMenu(null)} />}
   </section>;

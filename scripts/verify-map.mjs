@@ -1304,6 +1304,28 @@ try {
     meridianReport.calm = { changedBytes: untouched.changedBytes, gpuMedianMs: untouched.medianMs, gpuWorstMs: untouched.worstMs, cpuMs: seen.at(-1).cpuMs, fps: (await output.evaluate(() => window.__mapStats.fps)) };
   });
 
+  await check('a whole graphics card reset: Evolve is back on the wall within 3 s, where it was, and the limiter is on again', async () => {
+    const picture = () => output.evaluate(() => { const c = document.querySelector('canvas'), o = new OffscreenCanvas(160, 90), x = o.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0, 160, 90); const d = x.getImageData(0, 0, 160, 90).data, l = new Float32Array(160 * 90); let lit = 0; for (let i = 0; i < l.length; i++) { l[i] = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 765; if (l[i] > .12) lit++; } return { l: Array.from(l), lit: lit / l.length }; });
+    const differ = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
+    const before = await picture();
+    await sleep(2500);
+    const drift = differ(before.l, (await picture()).l); // how far the wall moves by itself in 2.5 s
+    const start = await picture(), framesBefore = (await output.evaluate(() => window.__mapStats.meridian.ev)).frames;
+    const lost = output.evaluate(() => window.__mapLoseAll(400));
+    const started = Date.now(); let back = null, darkest = 1;
+    await lost;
+    const near = Math.max(drift * 2.5, .01);
+    while (Date.now() - started < 8000) { const p = await picture(); darkest = Math.min(darkest, p.lit); if (Date.now() - started > 450 && p.lit > start.lit * .5 && differ(start.l, p.l) <= near) { back = { ms: Date.now() - started, p }; break; } await sleep(100); }
+    assert.ok(back, `the wall did not come back near where it was within 8 s (darkest lit ${darkest})`);
+    await sleep(1600);
+    const after = await output.evaluate(() => window.__mapStats);
+    const moved = differ(start.l, back.p.l);
+    meridianReport.reset = { backMs: back.ms, moved: +moved.toFixed(4), drift: +drift.toFixed(4), darkestLit: +darkest.toFixed(4), framesBefore, framesAfter: after.meridian.ev.frames, guard: after.flashGuard, failing: after.failing };
+    assert.ok(back.ms <= 3000, `back after ${back.ms} ms`);
+    assert.ok(after.meridian.ev.frames > framesBefore, `Evolve started again rather than carrying on: ${framesBefore} → ${after.meridian.ev.frames}`);
+    assert.ok(after.flashGuard?.on && after.flashGuard.failed === null, `guard after the reset: ${JSON.stringify(after.flashGuard)}`);
+  });
+
   await check('a MIDI note fires Drop once and Hold once through their links', async () => {
     const before = (await output.evaluate(() => window.__mapStats.meridian.ev));
     await react('midi', [0x90, 60, 127]); await sleep(1300);

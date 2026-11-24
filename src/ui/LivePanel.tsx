@@ -112,6 +112,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
           {live.meridian.status.startsWith('Movement only') && <p className="live-status warn">People are being found from movement alone. Keep the projection and moving lights out of the camera's view; Throw and Release wait until people are found.</p>}
           {live.meridian.limiterError ? <p className="live-status warn" role="alert">Flash limiter is not running ({live.meridian.limiterError}). The picture is shown unlimited: keep strobing moves off.</p>
             : live.meridian.limiterOn ? <p className="live-status">Flash limiter on</p> : null}
+          {live.meridian.qualityReduced && <p className="live-status" role="status" title="Less bloom, tearing or small detail, to keep the output smooth. Lines stay sharp and the flash limiter is unchanged. It comes back after a few calm seconds.">Quality reduced</p>}
         </section>}
         <LiveLookControls s={s} update={live.update} reactFor={reactFor} onView={() => live.setView('art')} onClear={live.clear} />
       </aside>

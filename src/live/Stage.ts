@@ -88,9 +88,9 @@ export class Stage {
   }
 
   /** Meridian's word for the operator: who is there, the camera, and the flash limiter. Null for other looks. */
-  meridianReadout(): { status: string; bodies: number; limiterOn: boolean; limiterError: string | null } | null {
+  meridianReadout(): { status: string; bodies: number; limiterOn: boolean; limiterError: string | null; qualityReduced: boolean } | null {
     const r = this.renderer.meridianReport();
-    return r ? { status: r.status, bodies: r.bodies, limiterOn: r.limiter.on, limiterError: r.limiter.error } : null;
+    return r ? { status: r.status, bodies: r.bodies, limiterOn: r.limiter.on, limiterError: r.limiter.error, qualityReduced: r.qualityReduced } : null;
   }
 
   dispose(): void {

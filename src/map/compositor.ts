@@ -48,6 +48,8 @@ export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: numbe
 export const MAX_LIVE_INSTRUMENTS = 24;
 /** After its graphics context is lost, a source waits this long before it is started again. */
 const RESTART_AFTER_MS = 5000;
+/** A lost source context that comes back within this long carries on in place, where it was; otherwise it is restarted. */
+const RESTORE_WAIT_MS = 2000;
 
 /** One instrument source on this stage. */
 interface Slot {
@@ -67,6 +69,12 @@ interface Slot {
   prepares: number;
   /** Show time since this source last drew. It stands still under Freeze, so the Conductor does. */
   performanceDt: number;
+  /** Its graphics context is lost and may come back: the shape holds its last picture, and the instrument keeps its place. */
+  lost: boolean;
+  /** Back from a lost context: its composition is being prepared again before it draws. */
+  restoring: boolean;
+  /** If the context has not come back by then, the source is let go and started again later. */
+  lostTimer: number;
 }
 
 /** A shape's crossfade from what it played before to what it plays now. start is set once the new content is ready. */
@@ -112,6 +120,10 @@ export interface CompositorStats {
   /** For the scripted checks: each Meridian source's Conductor and moves. */
   meridian?: Record<string, { status: string; beats: number; wave: number; frames: number; drops: number; holds: number; linkedSeed: boolean; phase: number }>;
   flashGuard?: { failed: string | null; on: boolean; warn: boolean; limiting: boolean; area: number; cpuMs: number } | null;
+  /** Meridian's quality governor on this wall: whether it is giving up bloom, tearing or small marks, and how far (0 to 3). */
+  meridianQuality?: { reduced: boolean; level: number } | null;
+  /** For the soak and the scripted checks: per-layer Meridian records held across all sources. */
+  meridianRecords?: number;
 }
 
 /** Runs each frame for each source, so it allocates nothing. */
@@ -150,6 +162,8 @@ export class MapCompositor {
   private readonly overLimit = new Set<string>();
   private governor: Governor = initialGovernor();
   private last: number | null = null;
+  /** Whether the last frame was drawn: Meridian's governor judges only back-to-back drawn frames. */
+  private drewLast = false;
   private frameIndex = 0;
   private framesThisSecond = 0;
   private secondStarted = 0;
@@ -327,6 +341,8 @@ export class MapCompositor {
     if (!this.frozen) this.fadeClock += seconds * 1000;
     const scale = GOVERNOR_SCALES[this.governor.level];
     const draw = !this.frozen && drawsThisFrame(this.governor.level, this.frameIndex);
+    // Meridian's own governor hears the wall's frame time (NaN, which it ignores, after an idle or frozen frame).
+    const paceMs = this.drewLast && !this.frozen ? seconds * 1000 : Number.NaN;
 
     this.overLimit.clear();
     let rendered = false;
@@ -351,6 +367,8 @@ export class MapCompositor {
       else if (slot.pending && project !== slot.pending && project !== slot.project && !needsPrepare(slot.pending, project)) slot.latest = project;
       else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) { slot.latest = null; this.prepare(slot, project, !!source.followOutline); }
       if (!slot.project || !slot.renderer) continue;
+      // Lost or being prepared again after a reset: the shape holds its last picture and the clocks wait.
+      if (slot.lost || slot.restoring) continue;
       if (!this.frozen) {
         // In tempo sync the loop follows the clock's beats; without a clock it runs at its own speed.
         const synced = source.tempoSync ? tempoPhase(this.signals, source.tempoSync) : null;
@@ -360,9 +378,11 @@ export class MapCompositor {
       if (!draw) continue;
       // Drawn once, at the size of the largest place it lands on the stage.
       // Sized from the shapes as set, not as links move them: a zoom on the bass would otherwise resize the instrument many times a second.
-      const size = sourceSizeFor(users.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), scale);
+      // Meridian keeps its full size: smaller would soften its lines. Its own governor gives up bloom, tearing and small marks instead.
+      const meridian = hasMeridian(slot.project);
+      const size = sourceSizeFor(users.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), meridian ? 1 : scale);
       try {
-        if (hasMeridian(slot.project)) { slot.renderer.setPerformanceSignals(this.signals, slot.performanceDt); slot.performanceDt = 0; }
+        if (meridian) { slot.renderer.setPerformanceSignals(this.signals, slot.performanceDt); slot.performanceDt = 0; slot.renderer.paceMeridian(paceMs); }
         slot.renderer.render(withParams(slot.project, this.structureHold.apply(source.id, slot.project, this.drawn.params.get(source.id), slot.phase)), slot.phase, size.width, size.height, { signals: this.signals, now });
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);
         rendered = true;
@@ -393,6 +413,7 @@ export class MapCompositor {
     const easing = this.guardPolicy.on || this.limiterFade !== null;
     const drawn = this.dirty || rendered || running || staggering || easing || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
+    this.drewLast = drawn && draw;
     this.frameIndex++;
     const work = performance.now() - started;
     // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
@@ -422,8 +443,31 @@ export class MapCompositor {
       staggered: this.histories.size, delayed: this.delays.size,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
       meridian: Object.fromEntries([...this.slots].flatMap(([id, s]) => { const report = s.renderer?.meridianReport(); return report ? [[id, { ...report, phase: s.phase }]] : []; })),
+      meridianQuality: this.meridianQuality(),
+      meridianRecords: [...this.slots.values()].reduce((n, s) => n + (s.renderer?.meridianRecords() ?? 0), 0),
       flashGuard: this.guardPolicy.present ? { failed: this.gpu.guardError, on: this.guardPolicy.on, warn: this.guardPolicy.warn, limiting: performance.now() < this.limitingUntil, area: this.gpu.limitedArea, cpuMs: this.guardCost } : null,
     };
+  }
+
+  /** The most reduced Meridian source on this wall, or null when none plays Meridian. */
+  private meridianQuality(): { reduced: boolean; level: number } | null {
+    let found = false, reduced = false, level = 0;
+    for (const slot of this.slots.values()) {
+      if (!slot.renderer || !slot.project || !hasMeridian(slot.project)) continue;
+      const q = slot.renderer.meridianQuality();
+      found = true; reduced ||= q.reduced; level = Math.max(level, q.level);
+    }
+    return found ? { reduced, level } : null;
+  }
+
+  /**
+   * For the scripted checks: a whole graphics card reset, as macOS gives one. Every context this wall uses is lost (the stage and
+   * each instrument), and each is given back after `ms`.
+   */
+  loseAllForCheck(ms: number): Promise<void> {
+    const contexts = [this.gpu.gl, ...[...this.slots.values()].map(s => s.canvas.getContext('webgl2'))].map(gl => gl?.getExtension('WEBGL_lose_context')).filter((e): e is WEBGL_lose_context => !!e);
+    for (const e of contexts) e.loseContext();
+    return new Promise(done => window.setTimeout(() => { for (const e of contexts) e.restoreContext(); done(); }, ms));
   }
 
   /** A show was really loaded (not a scene change): what linked moves changed in the last one ends here. */
@@ -470,6 +514,7 @@ export class MapCompositor {
 
   /** Lets a source go, and gives its graphics context back now rather than whenever it is garbage collected. */
   private release(id: string, slot: Slot): void {
+    window.clearTimeout(slot.lostTimer); slot.lost = false; slot.restoring = false;
     slot.renderer?.dispose();
     slot.renderer = null;
     if (!this.lost) this.gpu.free(slot.texture);
@@ -501,14 +546,30 @@ export class MapCompositor {
     if (this.slots.size >= MAX_LIVE_INSTRUMENTS) { this.overLimit.add(id); return null; }
     this.restartAt.delete(id);
     const canvas = document.createElement('canvas');
-    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0, performanceDt: 0 };
-    // A lost context (the graphics card reset, or too many contexts) drops the source: its shape plays its own fill
-    // rather than freezing on its last picture, and the source starts again after a pause.
+    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0, performanceDt: 0, lost: false, restoring: false, lostTimer: 0 };
+    // A lost context: after a graphics card reset it usually comes back within a moment, and the instrument carries on where
+    // it was (its clocks and Meridian's phrase live outside the graphics card) while its shape holds the last picture. One that
+    // does not come back (too many contexts) drops the source: its shape plays its own fill, and the source starts again later.
     canvas.addEventListener('webglcontextlost', event => {
       event.preventDefault();
       if (this.slots.get(id) !== slot) return;
-      this.release(id, slot);
-      this.restartAt.set(id, performance.now() + RESTART_AFTER_MS);
+      slot.lost = true; slot.restoring = false;
+      window.clearTimeout(slot.lostTimer);
+      slot.lostTimer = window.setTimeout(() => {
+        if (this.slots.get(id) !== slot || !slot.lost) return;
+        this.release(id, slot);
+        this.restartAt.set(id, performance.now() + RESTART_AFTER_MS);
+      }, RESTORE_WAIT_MS);
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      if (this.slots.get(id) !== slot || !slot.lost) return;
+      window.clearTimeout(slot.lostTimer);
+      slot.lost = false;
+      const project = slot.project;
+      if (!slot.renderer || !project) return;
+      slot.restoring = true;
+      slot.renderer.prepare(project).then(() => { if (this.slots.get(id) === slot) { slot.restoring = false; this.dirty = true; } })
+        .catch(error => { if (this.slots.get(id) !== slot) return; slot.restoring = false; this.release(id, slot); this.restartAt.set(id, performance.now() + RESTART_AFTER_MS); slot.failed = String((error as Error)?.message ?? error); });
     });
     try { slot.renderer = new StudioRenderer(canvas); }
     catch (error) { slot.failed = `This computer could not start an instrument: ${String((error as Error)?.message ?? error)}`; }

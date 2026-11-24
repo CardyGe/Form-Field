@@ -270,8 +270,28 @@ async function verifyInApp(qa, failures) {
     const litMost = Math.max(...seen.lit), changed = seen.moved.filter(value => value > .05).length;
     if (!(litMost > .005)) failures.push(`the Meridian layer does not draw in the app (lit ${litMost.toFixed(4)})`);
     if (changed < FRAMES / 2) failures.push(`the picture changed in only ${changed} of ${FRAMES - 1} steps`);
+    // A graphics card reset in the Studio preview: the picture comes back within 3 s, near where it was.
+    const look = async () => { const png = (await preview.screenshot()).toString('base64'); return qa.evaluate(async png => {
+      const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(png), c => c.charCodeAt(0))], { type: 'image/png' }));
+      const c = new OffscreenCanvas(160, 90), x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(bitmap, 0, 0, 160, 90);
+      const d = x.getImageData(0, 0, 160, 90).data, l = []; let lit = 0;
+      for (let i = 0; i < d.length; i += 4) { const v = (d[i] + d[i + 1] + d[i + 2]) / 765; l.push(v); if (v > .12) lit++; }
+      return { l, lit: lit / l.length };
+    }, png); };
+    const differ = (a, b) => { let s = 0; for (let i = 0; i < a.l.length; i++) s += Math.abs(a.l[i] - b.l[i]); return s / a.l.length; };
+    const first = await look(); await ui.waitForTimeout(2500); const start = await look(), drift = differ(first, start);
+    await ui.evaluate(() => { const c = document.querySelector('canvas[aria-label="Composition preview"]'); window.__lose = c.getContext('webgl2').getExtension('WEBGL_lose_context'); window.__lose.loseContext(); });
+    const lostAt = Date.now();
+    await ui.waitForTimeout(400);
+    await ui.evaluate(() => window.__lose.restoreContext());
+    let back = null, darkest = 1;
+    while (Date.now() - lostAt < 8000) { const p = await look(); darkest = Math.min(darkest, p.lit); if (p.lit > start.lit * .5 && differ(start, p) <= Math.max(drift * 2.5, .01)) { back = { ms: Date.now() - lostAt, moved: +differ(start, p).toFixed(4) }; break; } await ui.waitForTimeout(100); }
+    const restoredNotice = await ui.getByText('Picture restored').count();
+    const reset = { back, drift: +drift.toFixed(4), darkestLit: +darkest.toFixed(4), restoredNotice };
+    if (!back) failures.push(`the Studio preview did not come back near where it was after a graphics reset (${JSON.stringify(reset)})`);
+    else if (back.ms > 3000) failures.push(`the Studio preview took ${back.ms} ms to come back after a graphics reset`);
     if (appErrors.length) failures.push(`app console errors: ${appErrors.join(' | ').slice(0, 400)}`);
-    return { added: true, surface, duration: saved.duration, animateStructural, animateLive, motionOption, motionLive, litMost: +litMost.toFixed(4), changedSteps: changed, of: FRAMES - 1 };
+    return { added: true, surface, reset, duration: saved.duration, animateStructural, animateLive, motionOption, motionLive, litMost: +litMost.toFixed(4), changedSteps: changed, of: FRAMES - 1 };
   } finally {
     await real.close();
   }
@@ -483,8 +503,56 @@ try {
       target.dispose();
       return worst;
     };
+    // The quality governor: what each step gives up, that lines and the default picture are untouched, that a step is not
+    // visible, and what it saves on the graphics card at 1080p.
+    const governorChecks = () => {
+      const w = 1920, h = 1080, target = floatTarget(w, h), full = { bloom: 1, tear: 1, instanceScale: 1, reduced: false, level: 0 };
+      const enc = v => { v = Math.max(0, Math.min(1, v)); return 255 * (v <= .0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - .055); };
+      const shot = (quality, params = {}, seed = 2, phase = phaseOf(2, 4, .4)) => {
+        meridian.setQuality(quality); const layer = layerFor(seed); Object.assign(layer.params, params);
+        meridian.draw(gl, layer, phase, w, h, target, draw); return read(target, w, h);
+      };
+      const compare = (a, b) => { let worst = 0, sum = 0, n = 0; for (let i = 0; i < a.length; i += 4) for (let k = 0; k < 3; k++) { const d = Math.abs(enc(a[i + k]) - enc(b[i + k])); worst = Math.max(worst, d); sum += d; n++; } return { worst: +worst.toFixed(2), mean: +(sum / n).toFixed(4) }; };
+      const same = (a, b) => a.every((v, i) => v === b[i]);
+      const q = (bloom, tear = 1, instanceScale = 1) => ({ bloom, tear, instanceScale, reduced: true, level: 0 });
+      const out = {};
+      out.fullIsDefault = same(shot(null), shot(full));
+      // Bloom: the moment its passes stop being drawn, and one 60 fps glide step, in 8-bit output levels.
+      const frameStep = .5 / 60;
+      out.boundaries = { top: compare(shot(full), shot(q(1 - frameStep))), middle: compare(shot(q(.5)), shot(q(.5 - frameStep))), off: compare(shot(q(frameStep)), shot(q(0))) };
+      out.glideStep = out.boundaries.top;
+      out.bloomFloorVsFull = compare(shot(full), shot(q(0)));
+      // Lines: with no bloom in the look, bloom off draws exactly the same lines as full quality.
+      out.linesSame = same(shot(full, { lightBloomAmount: 0, macroHeat: .5 }), shot(q(0), { lightBloomAmount: 0, macroHeat: .5 }));
+      // Tear: at 0 the full-frame tear pass is not drawn. Marks keep their own small offsets, which cost nothing.
+      const share = (a, b) => { let moved = 0; for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) > .008 || Math.abs(a[i + 1] - b[i + 1]) > .008 || Math.abs(a[i + 2] - b[i + 2]) > .008) moved++; return moved / (a.length / 4); };
+      const clean = shot(full, { glitchAmount: 0 });
+      const torn = shot(full, { glitchAmount: 1 });
+      out.tearShare = { full: +share(torn, clean).toFixed(4), reduced: +share(shot(q(1, 0), { glitchAmount: 1 }), clean).toFixed(4), passRemoved: 0 };
+      out.tearShare.passRemoved = +share(torn, shot(q(1, 0), { glitchAmount: 1 })).toFixed(4);
+      out.tearPassOff = meridian.tearAmount > 0 && meridian.quality.tear === 0;
+      // Small marks: a dense field of nodes, at half.
+      shot(full, { nodeDensity: 1, macroDensity: 1 }); const marksFull = meridian.marks.count;
+      shot(q(0, 0, .5), { nodeDensity: 1, macroDensity: 1 }); const marksHalf = meridian.marks.count;
+      out.marks = { full: marksFull, reduced: marksHalf };
+      // Graphics card time per frame, median of 30, with each draw waited for.
+      const pixel = new Uint8Array(4), timeOf = quality => {
+        const times = [];
+        for (let i = 0; i < 34; i++) {
+          meridian.setQuality(quality); const layer = layerFor(2);
+          gl.getContext().readPixels(0, 0, 1, 1, gl.getContext().RGBA, gl.getContext().UNSIGNED_BYTE, pixel);
+          const a = performance.now(); meridian.draw(gl, layer, phaseOf(2, 4, .4), w, h, target, draw);
+          gl.setRenderTarget(target); const f = new Float32Array(4); gl.readRenderTargetPixels(target, 0, 0, 1, 1, f); gl.setRenderTarget(null);
+          if (i >= 4) times.push(performance.now() - a);
+        }
+        times.sort((x, y) => x - y); return +times[times.length >> 1].toFixed(2);
+      };
+      out.gpuMs = { full: timeOf(full), noBloom: timeOf(q(0)), noTear: timeOf(q(0, 0)), all: timeOf(q(0, 0, .5)) };
+      meridian.setQuality(null); target.dispose();
+      return out;
+    };
     const toBase64 = bytes => { let text = ''; for (let i = 0; i < bytes.length; i += 32768) text += String.fromCharCode(...bytes.subarray(i, i + 32768)); return btoa(text); };
-    window.meridianQA = { toBase64, m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold, tearChecks, tearHold, tearBlack, tearShort, tearEmpty, tearAlpha };
+    window.meridianQA = { toBase64, m, studio, layerFor, phaseOf, measure, ringWidth, sweep, structuralHold, tearChecks, tearHold, tearBlack, tearShort, tearEmpty, tearAlpha, governorChecks };
   });
 
   const report = { luma: {}, widths: {}, errors };
@@ -933,6 +1001,17 @@ try {
     if (!r.same) failures.push(`a saved ${key} Motion route still changes an Evolve export`);
   }
 
+  report.governor = await page.evaluate(() => window.meridianQA.governorChecks());
+  console.log('governor', JSON.stringify(report.governor));
+  {
+    const g = report.governor;
+    if (!g.fullIsDefault) failures.push('full quality from the governor differs from the default picture');
+    if (!g.linesSame) failures.push('the governor changed how lines are drawn');
+    if (!g.tearPassOff || !(g.tearShare.passRemoved > .05)) failures.push(`the tear step did not remove the tear pass: ${JSON.stringify(g.tearShare)}`);
+    if (!(g.marks.reduced < g.marks.full * .8)) failures.push(`instances at half kept ${g.marks.reduced} of ${g.marks.full}`);
+    for (const [b, d] of Object.entries(g.boundaries)) if (d.worst > 12 || d.mean > .5) failures.push(`one 60 fps bloom glide step at the ${b} moves the picture by ${JSON.stringify(d)} levels`);
+    if (g.glideStep.worst > 6) failures.push(`one glide step moves the picture by ${g.glideStep.worst} levels`);
+  }
   report.ui = await verifyInApp(page, failures);
   console.log(JSON.stringify({ firstFrame: report.firstFrame, mark: report.mark, structuralHold: report.structuralHold, sweep: report.sweep, tear: report.tear, tearHold: report.tearHold, tearBlack: report.tearBlack, tearShort: report.tearShort, tearEmpty: report.tearEmpty, tearAlpha: report.tearAlpha, ui: report.ui }));
   console.log(JSON.stringify(report.widths), JSON.stringify(report.shared), Object.entries(report.luma).map(([seed, l]) => `${seed}: build ${l.build.toFixed(3)} peak ${l.peak.toFixed(3)} rest ${l.rest.toFixed(4)}`).join(' | '));

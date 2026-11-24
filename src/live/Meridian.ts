@@ -17,6 +17,7 @@ import { MeridianLiveCore } from '../meridian/live-core';
 import { GRID_HEIGHT, GRID_WIDTH } from '../meridian/bodies';
 import { LIVE_CAPACITY } from '../meridian/interactions';
 import { MERIDIAN_DEFAULTS } from '../meridian/parameters';
+import { FULL_QUALITY, type MeridianQuality } from '../meridian/governor';
 import type { Layer } from '../shared/types';
 
 /** The Evolve clock's loop length here: Live never loops, it only needs a phase that moves on in real time. */
@@ -27,6 +28,8 @@ const NO_SIGNALS: Signals = {};
 export class Meridian implements Look {
   /** This frame's sound, beat, tempo and MIDI, set by LiveRenderer. */
   signals: Signals = NO_SIGNALS;
+  /** What the quality governor allows this frame, set by LiveRenderer. Never touches line width or the flash limiter. */
+  quality: Readonly<MeridianQuality> = FULL_QUALITY;
   private readonly picture = new MeridianRenderer();
   private readonly target: THREE.WebGLRenderTarget;
   private readonly presence: PresenceGrid;
@@ -74,6 +77,7 @@ export class Meridian implements Look {
     this.runtime.externalTempo = music && external;
     this.runtime.dt = seconds;
     const phase = ((time % DURATION) / DURATION) * TAU;
+    this.picture.setQuality(this.quality);
     this.picture.draw(this.passes.renderer, this.layer, phase, this.width, this.height, this.target, this.draw, this.runtime);
     this.drawMs = this.drawMs * 0.95 + (performance.now() - started) * 0.05;
   }
@@ -84,10 +88,10 @@ export class Meridian implements Look {
   clear(): void { this.core.clear(); }
 
   /** Read-only state for the operator and the scripted checks: numbers and words, never a picture. */
-  diagnostics(): { bodies: number; attract: number; readbackMs: number; gridMs: number; status: string; mode: string; cameraLost: boolean; links: number; merges: number; throws: number; releases: number; charge: number; crowd: number; drawMs: number; positions: { id: number; x: number; y: number; energy: number; stillness: number }[] } {
+  diagnostics(): { bodies: number; attract: number; readbackMs: number; gridMs: number; status: string; mode: string; cameraLost: boolean; links: number; merges: number; throws: number; releases: number; charge: number; crowd: number; drawMs: number; qualityReduced: boolean; qualityLevel: number; positions: { id: number; x: number; y: number; energy: number; stillness: number }[] } {
     const f = this.core.frame;
     return { bodies: f.bodies, attract: f.attract, readbackMs: this.presence.readbackMs, gridMs: this.presence.intervalMs, status: this.core.status, mode: this.core.mode, cameraLost: this.core.cameraLost,
-      links: f.links, merges: f.merges, throws: f.throws, releases: f.releases, charge: f.charge, crowd: f.crowdEnergy, drawMs: this.drawMs,
+      links: f.links, merges: f.merges, throws: f.throws, releases: f.releases, charge: f.charge, crowd: f.crowdEnergy, drawMs: this.drawMs, qualityReduced: this.quality.reduced, qualityLevel: this.quality.level,
       positions: this.core.bodies.map(b => ({ id: b.id, x: b.x, y: b.y, energy: b.energy, stillness: b.stillness })) };
   }
 

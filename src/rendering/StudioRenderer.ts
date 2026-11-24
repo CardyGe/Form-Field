@@ -21,6 +21,7 @@ import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { MeridianRenderer, type MeridianRuntime } from './MeridianRenderer';
+import { MeridianGovernor, type MeridianQuality } from '../meridian/governor';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
@@ -174,6 +175,10 @@ export class StudioRenderer {
   private meridian: MeridianRenderer | null = null;
   private readonly meridianRuntime: MeridianRuntime = {};
   private performanceSet = false;
+  /** Meridian's quality governor for this renderer's live picture. An export never uses it. */
+  private readonly meridianGovernor = new MeridianGovernor();
+  /** The Meridian layers drawn last, so state for a removed layer can be let go. */
+  private meridianIds: string[] = [];
   /** One Mark record, rewritten in place, so a Mark costs no allocation per frame. */
   private meridianMark: NonNullable<MeridianRuntime['mark']> | null = null;
   private readonly drawPass = (material: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget) => this.draw(material, output);
@@ -813,6 +818,7 @@ export class StudioRenderer {
     const total = frameCount(project);
     this.meridianRuntime.loopFrames = total;
     this.releaseFeedback(project);
+    if (this.meridian) { this.meridian.setQuality(this.exporting ? null : this.meridianGovernor.quality); this.forgetRemovedMeridian(project); }
     for (let i = 0; i < project.layers.length; i++) if (project.layers[i].kind === 'meridian') {
       this.meridian ??= new MeridianRenderer();
       this.meridian.beginComposition(project, wrapped, width, height, duration, this.exporting, this.meridianRuntime);
@@ -1130,6 +1136,27 @@ export class StudioRenderer {
       this.disposeFeedback(state); this.feedbackStates.delete(id);
     }
   }
+
+  /**
+   * Live output only: the time between the last two drawn frames, in ms, for Meridian's quality governor. Slow frames that last
+   * give up bloom, then the tear, then small marks; calm ones bring them back. Exports ignore it.
+   */
+  paceMeridian(frameMs: number): void { this.meridianGovernor.update(frameMs); }
+
+  /** What the governor allows Meridian now. `reduced` is shown to the operator as Quality reduced. */
+  meridianQuality(): Readonly<MeridianQuality> { return this.meridianGovernor.quality; }
+
+  /** A Meridian layer left the composition: its clocks and pictures go too. Allocates only when the layers change. */
+  private forgetRemovedMeridian(project: Project): void {
+    let n = 0, same = true;
+    for (let i = 0; i < project.layers.length; i++) if (project.layers[i].kind === 'meridian') { if (this.meridianIds[n] !== project.layers[i].id) same = false; n++; }
+    if (same && n === this.meridianIds.length) return;
+    this.meridianIds = project.layers.filter(l => l.kind === 'meridian').map(l => l.id);
+    this.meridian?.forgetLayers(new Set(this.meridianIds));
+  }
+
+  /** For the scripted checks and the soak: how many per-layer Meridian records this renderer holds. */
+  meridianRecords(): number { return this.meridian?.layerRecords() ?? 0; }
 
   /** For the scripted checks: the Conductor and moves of this renderer's Evolve. */
   meridianReport(): ReturnType<MeridianRenderer['performanceReport']> | null { return this.meridian?.performanceReport() ?? null; }

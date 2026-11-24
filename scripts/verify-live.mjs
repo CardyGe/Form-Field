@@ -17,6 +17,8 @@ const only = process.argv.find(a => a.startsWith('--only='))?.slice(7) ?? null;
 const out = path.join(root, 'work/live');
 await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {LiveRenderer} from './src/live/LiveRenderer';
+export {installLiveChecks} from './src/live/live-checks';
+export {MeridianGovernor} from './src/meridian/governor';
 export {TestSource, TestMaskProvider, CROWD_SCENES} from './src/live/test-source';
 export {defaultLiveSettings, RELIEF_PRESETS} from './src/live/settings';
 export {recolourGLSL, setRamp} from './src/live/recolour';
@@ -63,7 +65,7 @@ try {
         const first = new m.TestSource(); first.figure = !!options.figure;
         const holder = { source: first }, made = { providers: 0 };
         const frames = { get element() { return holder.source.element; }, get frameId() { return holder.source.frameId; } };
-        const renderer = new m.LiveRenderer(canvas, frames, () => { made.providers++; return made.provider = new m.TestMaskProvider(() => holder.source); });
+        const renderer = m.installLiveChecks(new m.LiveRenderer(canvas, frames, () => { made.providers++; return made.provider = new m.TestMaskProvider(() => holder.source); }));
         const settings = m.defaultLiveSettings(); settings.quality = 720; change?.(settings); renderer.settings = settings;
         const current = { get source() { return holder.source; }, renderer, canvas, made,
           swap() { const next = new m.TestSource(); next.figure = holder.source.figure; holder.source = next; return next; } };
@@ -874,6 +876,34 @@ try {
     assert.ok(r.darkest <= 12, `the black is ${r.darkest}/255 after the restore`);
     assert.ok(flashCount(r.before) <= 1 && flashCount(r.after) <= 1, `flashes before ${flashCount(r.before)}, after ${flashCount(r.after)}; after ${r.after.slice(0, 8).map(v => v.toFixed(3))}`);
     assert.ok(Math.max(...r.after) < .2, `the strobe reached ${Math.max(...r.after).toFixed(3)} after the restore`);
+  });
+  await check('meridian: a graphics reset in the middle of a strobe stays limited throughout, and the picture is back within 3 s', async () => {
+    const r = await page.evaluate(async () => {
+      window.live.meridian('three'); await window.live.walk(240);
+      const painted = window.live.painted(0).fraction;
+      const { renderer, canvas } = window.live.current, context = renderer.loseContextForCheck(), means = [];
+      const restored = new Promise(r => canvas.addEventListener('webglcontextrestored', r, { once: true }));
+      renderer.flashTest = true;
+      for (let i = 0; i < 300; i++) {
+        if (i === 90) context.lose();
+        if (i === 120) context.restore();
+        await new Promise(r => setTimeout(r, 0)); renderer.frame(window.live.STEP); means.push(window.live.light());
+      }
+      await restored;
+      const during = window.live.report().limiter;
+      renderer.flashTest = false;
+      let steps = 0;
+      for (; steps < 600; steps++) { await new Promise(r => setTimeout(r, 0)); window.live.current.source.advance(window.live.STEP); renderer.frame(window.live.STEP); if (window.live.painted(0).fraction > painted * .5) break; }
+      return { means, during, painted, steps, after: window.live.painted(0).fraction, report: window.live.report() };
+    });
+    // Flashes in every one-second window (60 steps), through the loss and the restore.
+    let worst = 0;
+    for (let i = 0; i + 60 <= r.means.length; i += 10) worst = Math.max(worst, flashCount(r.means.slice(i, i + 60)));
+    console.log(`reset mid-strobe: worst ${worst} flashes in a second, brightest ${Math.max(...r.means).toFixed(3)}, picture back after ${r.steps} steps`);
+    assert.ok(worst <= 3, `${worst} flashes in one second across the reset`);
+    assert.ok(Math.max(...r.means.slice(125)) < .2, `the strobe reached ${Math.max(...r.means.slice(125)).toFixed(3)} after the restore`);
+    assert.ok(r.during.on === true && r.during.error === null, `limiter after the restore: ${JSON.stringify(r.during)}`);
+    assert.ok(r.steps <= 180, `the picture took ${r.steps} steps (over 3 s at 60 fps) to come back (painted ${r.after} against ${r.painted})`);
   });
   await check('meridian: switching looks back and forth is limited, and other looks are shown exactly as drawn', async () => {
     const r = await page.evaluate(async () => {

@@ -13,6 +13,7 @@ import { markFromOutput, type MarkPlacement } from '../meridian/mark-placement';
 import { LightGrid, type LightPlacement, type LightTone, type ToneCurve } from '../meridian/light-measure';
 import { LinkedOverrides, MoveRouter, type LinkedEdit } from '../meridian/moves';
 import { MusicLight } from '../meridian/music-light';
+import { FULL_QUALITY, type MeridianQuality } from '../meridian/governor';
 import { musicStatus } from '../meridian/music-status';
 import { applyLockedVariation, MAX_STORED_SEED } from '../meridian/panel';
 import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
@@ -212,6 +213,10 @@ export class MeridianRenderer {
   private compositionStamp = 0;
   private lastComposition: number | null = null;
   private readonly diagnostics = { status: 'free', beats: 0, wave: 0, frames: 0, drops: 0, holds: 0, dropDown: false, holdDown: false };
+  /** What the governor allows on live output. Exports and checks draw at full quality. */
+  private quality: Readonly<MeridianQuality> = FULL_QUALITY;
+  /** Where this frame's Evolve glitch shards sit in the list, so the governor can let them go; -1 for none. */
+  private shardsFrom = -1;
 
   constructor() {
     for (const [instances, material] of [[this.curves, this.curveMaterial], [this.marks, this.markMaterial]] as const) {
@@ -523,7 +528,9 @@ export class MeridianRenderer {
     sourceViewMatrix(layer.transform, width / height, this.view);
     this.view.invert();
     this.saturationLimit = entry.stamp === this.compositionStamp ? entry.saturation : Infinity;
+    this.shardsFrom = EVOLVE_ELEMENTS;
     this.renderList(renderer, list, live, layer.palette, this.view, layer.transform.scale, 0, 0, width, height, target, draw);
+    this.shardsFrom = -1;
     this.saturationLimit = Infinity;
   }
 
@@ -655,6 +662,22 @@ export class MeridianRenderer {
     }
   }
 
+  /**
+   * The quality governor's choice for live output: bloom, then the tear and glitch shards, then small marks. Null, or any
+   * export, draws everything. Line width and the flash guard are never changed by it.
+   */
+  setQuality(quality: Readonly<MeridianQuality> | null): void { this.quality = quality ?? FULL_QUALITY; }
+
+  /** A layer, source or show was removed: its clocks, performance and measured pictures go with it. */
+  forgetLayers(keep: ReadonlySet<string>): void {
+    for (const map of [this.transports, this.evolveTransports, this.evolveExact, this.evolveWalls, this.evolveLive, this.evolveEntries] as Map<string, unknown>[]) {
+      for (const id of [...map.keys()]) if (!keep.has(id)) map.delete(id);
+    }
+  }
+
+  /** For the scripted checks and the soak: how many per-layer records are held. */
+  layerRecords(): number { return this.transports.size + this.evolveTransports.size + this.evolveExact.size + this.evolveWalls.size + this.evolveLive.size + this.evolveEntries.size; }
+
   /** Draws a ready-made list with no phrase behind it. Live input and the checks use this. */
   drawList(renderer: THREE.WebGLRenderer, list: DisplayList, params: Readonly<Record<string, number>>, palette: readonly string[], width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw): void {
     this.tearAmount = 0;
@@ -698,21 +721,25 @@ export class MeridianRenderer {
     renderer.clear();
     renderer.render(this.scene, this.camera);
 
-    const glowWidth = Math.max(2, Math.round(width / 2)), glowHeight = Math.max(2, Math.round(height / 2));
-    u.uGlowPass.value = 1; u.uRes.value = .5;
-    if (this.glow.width !== glowWidth || this.glow.height !== glowHeight) this.glow.setSize(glowWidth, glowHeight);
-    renderer.setRenderTarget(this.glow);
-    renderer.clear();
-    renderer.render(this.scene, this.camera);
-    renderer.setClearColor(this.mixed, clearAlpha);
-
-    const levels = this.bloom.render(this.glow.texture, glowWidth, glowHeight, draw);
+    // Under the governor bloom fades, keeping its shape, so nothing steps; once it is gone its passes are not drawn at all. The
+    // fade follows a display curve, so its last steps into black are as gentle as its first.
+    const bloomShare = Math.max(0, Math.min(1, this.quality.bloom)) ** 2.2;
     const r = this.resolve.uniforms;
     r.uLight.value = this.light.texture;
-    for (let i = 0; i < levels.length; i++) r[BLOOM_UNIFORMS[i]].value = levels[i];
+    if (bloomShare > 0) {
+      const glowWidth = Math.max(2, Math.round(width / 2)), glowHeight = Math.max(2, Math.round(height / 2));
+      u.uGlowPass.value = 1; u.uRes.value = .5;
+      if (this.glow.width !== glowWidth || this.glow.height !== glowHeight) this.glow.setSize(glowWidth, glowHeight);
+      renderer.setRenderTarget(this.glow);
+      renderer.clear();
+      renderer.render(this.scene, this.camera);
+      const levels = this.bloom.render(this.glow.texture, glowWidth, glowHeight, draw);
+      for (let i = 0; i < levels.length; i++) r[BLOOM_UNIFORMS[i]].value = levels[i];
+    }
+    renderer.setClearColor(this.mixed, clearAlpha);
     // Bloom size moves the glow from the tight levels to the wide ones; the hero's halo size pushes it further.
     const size = Math.min(1, Math.max(0, read(p, 'lightBloomSize') + (read(p, 'heroHaloSize') - 1) * .4));
-    const amount = read(p, 'lightBloomAmount') * 3 * (1 + .8 * peak), weights = r.uWeights.value as number[];
+    const amount = read(p, 'lightBloomAmount') * 3 * (1 + .8 * peak) * bloomShare, weights = r.uWeights.value as number[];
     for (let i = 0; i < weights.length; i++) {
       const t = i / (weights.length - 1);
       weights[i] = amount * ((1 - size) * (1 - t) * (1 - t) + size * (.3 + .3 * t) * (1 - .55 * t));
@@ -727,17 +754,18 @@ export class MeridianRenderer {
     r.uLift.value = read(p, 'lightBackgroundLift');
     r.uBlack.value = read(p, 'outputBlackLevel');
     r.uTransparent.value = read(p, 'outputTransparent') >= .5 ? 1 : 0;
-    if (this.tearAmount <= 0 && this.markAlpha <= 0) { draw(this.resolve, target); return; }
+    const tearAmount = this.tearAmount * this.quality.tear;
+    if (tearAmount <= 0 && this.markAlpha <= 0) { draw(this.resolve, target); return; }
     if (this.untorn.width !== width || this.untorn.height !== height) this.untorn.setSize(width, height);
     draw(this.resolve, this.untorn);
-    if (this.tearAmount <= 0) {
+    if (tearAmount <= 0) {
       this.markPass.uniforms.uImage.value = this.untorn.texture;
       draw(this.markPass, target);
       return;
     }
     const t = this.tear.uniforms, rows = 1 / (.018 + .2 * read(p, 'glitchBlockSize') ** 1.5);
     t.uImage.value = this.untorn.texture;
-    t.uTear.value = this.tearAmount;
+    t.uTear.value = tearAmount;
     t.uAspect.value = aspect;
     t.uLift.value = r.uLift.value;
     t.uBlack.value = r.uBlack.value;
@@ -747,13 +775,23 @@ export class MeridianRenderer {
     draw(this.tear, target);
   }
 
-  /** Splits the list between the ring strip and the plain quad, so a dot never pays for a ring's geometry. */
+  /**
+   * Splits the list between the ring strip and the plain quad, so a dot never pays for a ring's geometry. Under the governor,
+   * glitch shards fade with the tear, and a fixed, seeded share of small nodes and dots fades out and is not drawn at all.
+   */
   private partition(list: DisplayList): void {
-    const data = list.data, curves = this.curves.data, marks = this.marks.data;
+    const data = list.data, curves = this.curves.data, marks = this.marks.data, q = this.quality;
+    const shardsFrom = q.tear < 1 ? this.shardsFrom : -1, shardsTo = shardsFrom + GLITCH_SHARDS, thin = q.instanceScale < 1;
     let c = 0, m = 0;
     for (let i = 0; i < list.count; i++) {
-      const from = i * STRIDE, curve = data[from] <= PRIMITIVE.arc, into = curve ? curves : marks, at = (curve ? c++ : m++) * STRIDE;
+      const from = i * STRIDE, kind = data[from];
+      let fade = 1;
+      if (i >= shardsFrom && i < shardsTo) fade = q.tear;
+      else if (thin && (kind === PRIMITIVE.dot || kind === PRIMITIVE.square) && data[from + 3] < SMALL_MARK) fade = keepShare(markHash(i, data[from + 11]), q.instanceScale);
+      if (fade <= 0) continue;
+      const curve = kind <= PRIMITIVE.arc, into = curve ? curves : marks, at = (curve ? c++ : m++) * STRIDE;
       for (let k = 0; k < STRIDE; k++) into[at + k] = data[from + k];
+      if (fade < 1) into[at + 9] *= fade;
     }
     this.curves.count = c; this.marks.count = m;
     this.curves.commit(); this.marks.commit();
@@ -823,6 +861,19 @@ function tearNoise(seed: number, step: number, salt: number): number {
   let hash = Math.imul(seed ^ Math.imul(step + 1, 0x85ebca6b), 0xc2b2ae35) ^ Math.imul(salt, 0x27d4eb2f);
   hash = Math.imul(hash ^ (hash >>> 15), 0x2c1b3c6d);
   return (((hash ^ (hash >>> 13)) >>> 0) / 4294967296) * 97;
+}
+
+/** Nodes and dots smaller than this (in frame heights) may be let go by the governor; larger points, such as the phrase's point, never are. */
+const SMALL_MARK = .008;
+/** A fixed number in 0 to 1 for one mark, so the same marks go and come back as the governor moves. */
+function markHash(index: number, seed: number): number {
+  let h = Math.imul(index + 1, 0x9e3779b1) ^ Math.imul(Math.round(seed * 4096), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d); h ^= h >>> 13;
+  return (h >>> 0) / 4294967296;
+}
+/** How much of a mark is kept at this share: marks fade over a narrow band rather than switching off. */
+function keepShare(hash: number, share: number): number {
+  return Math.max(0, Math.min(1, (share - hash) / .08 + 1));
 }
 
 function smoothRange(value: number, start: number, end: number): number {

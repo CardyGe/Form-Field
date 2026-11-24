@@ -20,6 +20,7 @@ import { Meridian } from './Meridian';
 import { WallLimiterGl } from '../map/wall-limiter-gl';
 import { LIMITER, limiterScales } from '../meridian/wall-limiter';
 import { MERIDIAN_DEFAULTS } from '../meridian/parameters';
+import { MeridianGovernor } from '../meridian/governor';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
 import { LiveModulator } from './modulate';
@@ -95,10 +96,18 @@ export class LiveRenderer {
   limiterError: string | null = null;
   /** Whether the last frame went through the limiter. */
   limited = false;
-  /** For the scripted checks: the artwork is replaced by a full-field white flash on every other frame, or by steady white. */
-  flashTest: boolean | 'white' = false;
-  private flashOn = false;
-  private readonly white: THREE.DataTexture;
+  /** Meridian's quality governor for this output: bloom, then tearing, then small marks, when frames stay slow. */
+  private readonly governor = new MeridianGovernor();
+  /**
+   * Installed only by the scripted checks (live-checks.ts, never imported by the app): replaces the finished artwork, for
+   * example with a strobe, before it reaches the limiter.
+   */
+  private checkImage: ((image: THREE.Texture) => THREE.Texture) | null = null;
+  private readonly onContextLost = () => {
+    this.contextLost = true; this.limiter = null; this.limitInput = null; this.limitFresh = true; this.limited = false;
+    if (this.settings.look === 'meridian') this.limiterError = CONTEXT_LOST;
+  };
+  private readonly onContextRestored = () => { this.contextLost = false; this.limitFresh = true; };
 
   /** `makeProvider` starts person finding when a look needs people. Without it, people are never found. */
   /** How many frames have been drawn: Map waits for one before it shows Live. */
@@ -113,7 +122,6 @@ export class LiveRenderer {
     this.renderer.autoClear = false;
     try { this.passes = new Passes(this.renderer); } catch (error) { this.renderer.dispose(); throw error; }
     this.black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); this.black.needsUpdate = true;
-    this.white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); this.white.needsUpdate = true;
     this.final = this.passes.material(finalFragment, { uImage: { value: this.black }, uBlackout: { value: 0 }, uEncode: { value: 1 } });
     this.tracking = new Tracking(this.passes, makeProvider);
     this.trackingView = this.passes.material(trackingViewFragment, { uCamera: { value: null }, uFlow: { value: null }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
@@ -121,11 +129,8 @@ export class LiveRenderer {
     this.counted.since = performance.now();
     // three makes its own resources again after a lost context; the limiter's raw ones are let go without touching the
     // lost context and built afresh on the first frame back, starting from black so even that frame is limited.
-    canvas.addEventListener('webglcontextlost', () => {
-      this.contextLost = true; this.limiter = null; this.limitInput = null; this.limitFresh = true; this.limited = false;
-      if (this.settings.look === 'meridian') this.limiterError = CONTEXT_LOST;
-    });
-    canvas.addEventListener('webglcontextrestored', () => { this.contextLost = false; this.limitFresh = true; });
+    canvas.addEventListener('webglcontextlost', this.onContextLost);
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
   }
 
   start(): void {
@@ -157,15 +162,15 @@ export class LiveRenderer {
       this.look?.dispose();
       this.look = new looks[this.settings.look](this.passes, this.width, this.height);
       this.lookKind = this.settings.look;
+      this.governor.reset();
     }
     if (!this.look) return;
     if (this.settings.look === 'signal' && this.signalSource !== this.source.element) this.look.clear();
     this.signalSource = this.source.element;
-    if (this.look instanceof Meridian) this.look.signals = this.signals;
+    if (this.look instanceof Meridian) { this.look.signals = this.signals; this.look.quality = this.governor.update(seconds * 1000); }
     this.look.step(step, this.time, this.tracking, settings);
     let image: THREE.Texture = this.look.output, encode = 1;
-    if (this.flashTest === 'white') image = this.white;
-    else if (this.flashTest) { this.flashOn = !this.flashOn; image = this.flashOn ? this.white : this.black; }
+    if (this.checkImage) image = this.checkImage(image);
     if (this.view === 'tracking') {
       const u = this.trackingView.uniforms, box = this.settings.box;
       u.uCamera.value = this.tracking.camera; u.uFlow.value = this.tracking.flow;
@@ -249,49 +254,11 @@ export class LiveRenderer {
     return texture;
   }
 
-  /** For the scripted checks: loses the graphics context, and gives it back. */
-  loseContextForCheck(): { lose(): void; restore(): void } | null {
-    const extension = this.renderer.getContext().getExtension('WEBGL_lose_context');
-    return extension ? { lose: () => extension.loseContext(), restore: () => extension.restoreContext() } : null;
-  }
-
   /** Meridian's own state and the limiter's, for the operator and the scripted checks: numbers and words, never a picture. */
   meridianReport(): (ReturnType<Meridian['diagnostics']> & { limiter: { on: boolean; error: string | null; area: number; cpuMs: number } }) | null {
     if (!(this.look instanceof Meridian)) return null;
     return { ...this.look.diagnostics(), limiter: { on: this.limited, error: this.limiterError, area: this.limiter?.limitedArea ?? 0, cpuMs: this.limitCost } };
   }
-
-  /** For the scripted checks: how many bytes of the canvas differ from the picture the limiter was given. Call after a frame, in the same task. */
-  probeLimiter(): { changedBytes: number; bytes: number; brightest: number } | null {
-    if (!this.limitInput || this.contextLost) return null;
-    const gl = this.renderer.getContext(), w = this.width, h = this.height, input = new Uint8Array(w * h * 4), shown = new Uint8Array(w * h * 4);
-    this.renderer.readRenderTargetPixels(this.limitInput, 0, 0, w, h, input);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, shown); this.renderer.resetState();
-    let changedBytes = 0, brightest = 0;
-    for (let i = 0; i < input.length; i++) { if (input[i] !== shown[i]) changedBytes++; if ((i & 3) !== 3 && shown[i] > brightest) brightest = shown[i]; }
-    return { changedBytes, bytes: input.length, brightest };
-  }
-
-  /** For the scripted checks: what one limiter frame costs the graphics card in ms, net of an empty round trip. The limiter then starts afresh. */
-  probeLimiterCost(): { medianMs: number; worstMs: number } | null {
-    if (!this.limiter || !this.limitInput || !this.limited) return null;
-    const gl = this.renderer.getContext() as WebGL2RenderingContext, pixel = new Uint8Array(4), costs: number[] = [];
-    const texture = (this.renderer.properties.get(this.limitInput.texture) as { __webglTexture?: WebGLTexture }).__webglTexture!;
-    for (let i = 0; i < 40; i++) {
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-      const a = performance.now(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-      const b = performance.now();
-      this.limiter.limit(texture, null, 0, 0, false, MERIDIAN_HOLDS);
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-      costs.push(Math.max(0, performance.now() - b - (b - a)));
-    }
-    this.renderer.resetState(); this.limitFresh = true;
-    costs.sort((x, y) => x - y);
-    return { medianMs: costs[costs.length >> 1], worstMs: costs[costs.length - 1] };
-  }
-
-  /** For the scripted checks: makes the limiter unavailable, as on a graphics card that cannot run it. */
-  breakLimiter(): void { this.limiter?.dispose(); this.limiter = { width: this.width, height: this.height, error: 'switched off for a check', limitedArea: 0, limit: () => false, dispose() {}, ready: () => false } as unknown as WallLimiterGl; }
 
   /** Wipes the artwork back to its ground. */
   clear(): void { this.look?.clear(); }
@@ -339,8 +306,10 @@ export class LiveRenderer {
   dispose(): void {
     if (this.disposed) return;
     this.stop(); this.disposed = true;
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
     for (const item of [this.final, this.trackingView, this.tracking, this.black, this.scratch]) item.dispose();
-    this.limiter?.dispose(); this.limitInput?.dispose(); this.white.dispose();
+    this.limiter?.dispose(); this.limitInput?.dispose(); this.checkImage = null;
     this.peopleView?.dispose();
     this.look?.dispose();
     this.passes.dispose(); this.renderer.dispose();

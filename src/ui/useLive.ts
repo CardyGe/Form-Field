@@ -8,7 +8,7 @@ import { MeterStore } from '../react/meter';
 
 export interface Display { id: number; label: string; primary: boolean }
 /** What Meridian Live tells the operator: words and counts, never a picture. */
-export interface MeridianReadout { status: string; bodies: number; limiterOn: boolean; limiterError: string | null }
+export interface MeridianReadout { status: string; bodies: number; limiterOn: boolean; limiterError: string | null; qualityReduced: boolean }
 /** What Meridian hears when it follows the music: the same signals Map and the Studio give it. */
 const MERIDIAN_SIGNALS = ['audio.level', 'audio.bass', 'audio.mids', 'audio.highs', 'beat.pulse', 'tempo.beat', 'tempo.phase', 'tempo.bpm', 'tempo.external'];
 const followsMusic = (s: LiveSettings | null): boolean => s?.look === 'meridian' && s.meridian.liveMusic >= .5;
@@ -177,5 +177,5 @@ export function useLive(onError: (message: string) => void) {
 function readMeridian(value: unknown): MeridianReadout | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
-  return typeof v.status === 'string' && typeof v.bodies === 'number' ? { status: v.status.slice(0, 80), bodies: v.bodies, limiterOn: v.limiterOn === true, limiterError: typeof v.limiterError === 'string' ? v.limiterError.slice(0, 200) : null } : null;
+  return typeof v.status === 'string' && typeof v.bodies === 'number' ? { status: v.status.slice(0, 80), bodies: v.bodies, limiterOn: v.limiterOn === true, limiterError: typeof v.limiterError === 'string' ? v.limiterError.slice(0, 200) : null, qualityReduced: v.qualityReduced === true } : null;
 }
