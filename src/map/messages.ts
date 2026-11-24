@@ -4,6 +4,7 @@ import { usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow
 import { shapeValidity } from './outline';
 import { EMBER_SMOKE_INPUTS } from '../react/ember-smoke';
 import { acceptSignals, type Signals } from '../react/signals';
+import { wallGuardPolicy } from '../meridian/wall-guard';
 import { ownCornersPinnable } from './placement';
 import type { LiveSettings } from '../live/settings';
 
@@ -30,7 +31,11 @@ export type MapMessage =
   /** Open Live's camera again (after it was unplugged, or refused and then allowed). */
   | { type: 'liveRetry' }
   /** Stage 6: every video that cannot play loads again. */
-  | { type: 'videoRetry' };
+  | { type: 'videoRetry' }
+  /** A show file was opened: linked Meridian moves from before it end. A scene change never sends this. */
+  | { type: 'performanceReset' }
+  /** Installation mode: whether Meridian's autopilot steers Evolve on the wall, and its pace in beats. */
+  | { type: 'installation'; autopilot: boolean; everyBeats: number };
 
 /** Live's settings travel under the same limit as on Live's own output. */
 export const LIVE_SETTINGS_LIMIT = 16 * 1024;
@@ -78,6 +83,8 @@ export function toWire(show: ShowDocument): WireShow {
     // Not rounded: a pinnable quad at the edge of the rules could round to one that is not.
     stageCorners: show.stageCorners,
     usesLive: usesLive(show),
+    // Only when true, so what a show without Meridian sends is unchanged.
+    ...(wallGuardPolicy(show.sources.map(s => s.project)).on ? { guardWall: true } : {}),
     videos: show.videos,
   };
 }
@@ -118,10 +125,14 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
     case 'fade': return finite(value.ms) && (value.ms as number) >= 0 && (value.ms as number) <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, LIVE_SETTINGS_LIMIT);
-    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': return true;
+    case 'installation': return typeof value.autopilot === 'boolean' && finite(value.everyBeats) && (value.everyBeats as number) >= 16 && (value.everyBeats as number) <= 128;
     default: return false;
   }
 }
+
+/** `tempo.external` is set by the operator window when the tempo comes from MIDI, tap or a fixed number. */
+const MERIDIAN_INPUTS = ['audio.bass', 'audio.mids', 'audio.highs', 'audio.level', 'beat.pulse', 'tempo.bpm', 'tempo.external'];
 
 /**
  * The signals the wall needs each frame: what Map's links listen to, the tempo (for tempo sync), and, while the show
@@ -132,5 +143,7 @@ export function wallInputs(show: ShowDocument, live: LiveSettings | null): Set<s
   if (live && usesLive(show)) for (const l of live.links) inputs.add(l.input);
   if (live?.look === 'morphogen' && usesLive(show)) for (const input of midimixInputs(MIDIMIX_MAP)) inputs.add(input);
   if (show.sources.some(s => s.project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1))) for (const input of EMBER_SMOKE_INPUTS) inputs.add(input);
+  // Meridian follows the music on the wall as it does in Studio, so it needs the sound and the tempo's source.
+  if (show.sources.some(s => s.project.layers.some(l => l.visible && l.kind === 'meridian'))) for (const input of MERIDIAN_INPUTS) inputs.add(input);
   return inputs;
 }

@@ -21,7 +21,7 @@ function createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload,
     : { ...(windowed ? { width: 960, height: 540 } : display.bounds), frame: false, resizable: false, movable: false, minimizable: false, fullscreenable: true, skipTaskbar: true };
   const window = new BrowserWindow({
     ...kind, show: false, backgroundColor: '#000000', title, autoHideMenuBar: true,
-    webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: false, spellcheck: false },
+    webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, backgroundThrottling: false, spellcheck: false, additionalArguments: windowed ? ['--form-field-checks'] : [] },
   });
   window.displayId = display.id;
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

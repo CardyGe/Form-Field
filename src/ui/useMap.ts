@@ -4,6 +4,8 @@ import { applyStudioEdit, initialMapState, mapReducer, type MapState } from '../
 import type { Project } from '../shared/types';
 import { autosaveSchedule, canEdit } from '../map/autosave';
 import { acceptMapMessage, sourcesToSend, toWire, wallInputs, type MapMessage } from '../map/messages';
+import { installationMessage, logFault, saveInstallation, useInstallation } from './installation';
+import { installationDisplay } from './installation-display';
 import { useLiveSettings } from './useLiveSettings';
 import type { LiveSettings } from '../live/settings';
 import { createShow, usesLive, validateShow, type ShowDocument } from '../map/show';
@@ -11,13 +13,11 @@ import { reactivity, type ReactivityEngine } from '../react/engine';
 import { fire, type TriggerAction } from '../react/links';
 import type { Signals } from '../react/signals';
 import { MeterStore } from '../react/meter';
-import { usesEmberSmokeAudio } from '../react/ember-smoke';
+import { heardSignals, onlySignals } from '../live/heard';
+import { showReacts } from './show-reacts';
 import { autoAdvanceDue, nextAutoScene } from '../map/wild';
 
-/** Whether a show uses sound, the beat, tempo or MIDI at all: only then does the engine listen. */
-export const showReacts = (show: ShowDocument) => show.links.length > 0 || show.triggers.length > 0 || show.sources.some(s => s.tempoSync !== null || s.project.layers.some(usesEmberSmokeAudio))
-  // Stage 7: a border run with the tempo, or auto-advance by bars, follows the beat.
-  || show.shapes.some(s => !!s.border.run?.beats) || show.autoAdvance?.unit === 'bars';
+export { showReacts };
 
 export type MapTool = 'select' | 'rectangle' | 'triangle' | 'ellipse' | 'pen';
 /** The shapes soloed, directly or through their group, that are still in the show. */
@@ -251,6 +251,31 @@ export function useMap(onError: (message: string) => void) {
   }, []);
   useEffect(() => { if (!outputOpen) { setWallPicture(null); setWallState(null); } }, [outputOpen]);
 
+  // Installation mode: on launch the last show goes to its projector, and Meridian's autopilot runs on the wall. It opens only on
+  // the saved projector (or, with none saved, a display that is not the main screen), and tries again whenever the displays
+  // change, so a projector switched on after the Mac is found. Closing the wall by hand is respected until the displays change.
+  const installation = useInstallation(), triedDisplays = useRef<Display[] | null>(null);
+  const [installationWaiting, setInstallationWaiting] = useState<string | null>(null);
+  useEffect(() => { if (outputOpen) bridge?.send(installationMessage()); }, [outputOpen, outputEpoch, installation]);
+  useEffect(() => {
+    const active = loaded && !!bridge && !!installation?.on && installation.surface === 'map';
+    if (!active || outputOpen) { setInstallationWaiting(null); return; }
+    const choice = installationDisplay(installation!.display, displays);
+    setInstallationWaiting(choice.waiting);
+    if (choice.id === null || triedDisplays.current === displays) return;
+    triedDisplays.current = displays;
+    const id = choice.id;
+    void bridge!.openOutput(id).then(() => { if (installation!.display !== id) void saveInstallation({ display: id }).catch(() => {}); })
+      .catch(error => { triedDisplays.current = null; logFault(`Installation could not open the wall: ${(error as Error).message}`); });
+  }, [loaded, outputOpen, displays, installation]);
+  // Faults on the wall go to the installation log, as sentences.
+  useEffect(() => {
+    if (!wallState) return;
+    for (const failing of wallState.failing) logFault(`Map ${failing.id}: ${failing.reason}`);
+    if (wallState.flashGuard?.failed) logFault(`Map: flash limiter unavailable: ${wallState.flashGuard.failed}`);
+    if (wallState.live?.limiter?.error) logFault(`Map: Live flash limiter unavailable: ${wallState.live.limiter.error}`);
+  }, [wallState]);
+
   // Sends to the wall. During a drag, show and crosshair go at most once per animation frame (the latest wins);
   // anything sent at once replaces what is waiting for the frame, so an old preview never lands after a release.
   const waiting = useRef<{ show?: MapMessage; crosshair?: MapMessage }>({});
@@ -414,7 +439,7 @@ export function useMap(onError: (message: string) => void) {
   const [panelOpen, setPanelOpen] = useState(false);
   useEffect(() => { if (outputOpen) sendLive(); }, [live, showUsesLive, outputOpen]);
   /** This screen's own compositor hears Live's Clear and Capture empty room here, as the wall does through messages. */
-  const onLiveAction = useRef<((action: 'clear' | 'captureRoom' | 'retry' | 'videoRetry') => void) | null>(null);
+  const onLiveAction = useRef<((action: 'clear' | 'captureRoom' | 'retry' | 'videoRetry' | 'performanceReset') => void) | null>(null);
   const clearLive = () => { onLiveAction.current?.('clear'); if (outputOpen) bridge?.send({ type: 'liveClear' }); };
   const retryVideos = () => { onLiveAction.current?.('videoRetry'); if (outputOpen) bridge?.send({ type: 'videoRetry' }); };
   const retryLive = () => { onLiveAction.current?.('retry'); if (outputOpen) bridge?.send({ type: 'liveRetry' }); };
@@ -472,11 +497,13 @@ export function useMap(onError: (message: string) => void) {
     const off = engine.subscribe(now => {
       const { panelOpen, outputOpen, reacts } = listening.current;
       // The wall gets only the signals the show uses, so a controller with many knobs never makes the message too large.
+      // Whether the tempo stands on its own (MIDI, tap, a fixed number) travels with the signals, for Meridian's Conductor.
+      const heard = heardSignals(now, engine.prefs.tempo);
       if (outputOpen && reacts) {
         const used = wallInputs(stateRef.current.show, liveRef.current);
-        bridge?.send({ type: 'signals', signals: Object.fromEntries(Object.entries(now).filter(([k]) => used.has(k))) });
+        bridge?.send({ type: 'signals', signals: onlySignals(heard, used) });
       }
-      onSignals.current?.(now);
+      onSignals.current?.(heard);
       for (const action of fire(stateRef.current.show.triggers, prev, now)) triggerAct.current(action);
       prev = now;
       // The panel's meters update a few times a second, not every frame.
@@ -488,7 +515,11 @@ export function useMap(onError: (message: string) => void) {
   }, [engine, active]);
   const openOutput = async () => {
     if (display === null) return;
-    try { await bridge?.openOutput(display); }
+    try {
+      await bridge?.openOutput(display);
+      // The projector the operator chose is the one an installation waits for.
+      if (installation?.on && installation.surface === 'map' && installation.display !== display) void saveInstallation({ display }).catch(() => {});
+    }
     catch (error) { onError((error as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); await refreshDisplays(); }
   };
   const closeOutput = () => { void bridge?.closeOutput(); };
@@ -515,6 +546,9 @@ export function useMap(onError: (message: string) => void) {
     if (isDamaged(opened)) { setNotice(DAMAGED); return; }
     const { show: next } = validateShow(opened);
     setSelection(null); setPreview(null); setLastRefusal(null);
+    // A real load ends linked Reseed, Recall and Mutate, even when the same show comes back and its sources keep playing.
+    onLiveAction.current?.('performanceReset');
+    if (listening.current.outputOpen) bridge.send({ type: 'performanceReset' });
     step({ type: 'load', show: next });
     const dropped = leftOut(opened, next);
     setNotice(dropped > 0 ? `Show opened. ${dropped} shape${dropped === 1 ? '' : 's'} could not be read and ${dropped === 1 ? 'was' : 'were'} left out.` : 'Show opened');
@@ -555,5 +589,5 @@ export function useMap(onError: (message: string) => void) {
   return { currentShow: () => stateRef.current.show, live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, retryVideos, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
     show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
     solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
-    lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
+    lastRefusal, installationWaiting, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

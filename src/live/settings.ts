@@ -9,12 +9,16 @@ import { readLiveLink, MAX_LIVE_LINKS } from './modulate';
 import { validateReliefPalette, type ReliefPaletteName } from './relief-palettes';
 import { defaultMorphParams, validateMorphParams, type MorphParams } from '../morphogen/params';
 import { MORPH_LOOKS } from '../morphogen/looks';
+import { LIVE_PARAMETERS, type LiveKey } from '../meridian/interactions';
+import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
+import { MERIDIAN_LOOKS, type MeridianLook } from '../meridian/presets';
+import { SEED_SCHEME } from '../meridian/schemes';
 
 /** The part of the camera view that paints. 0..1, origin bottom-left. */
 export interface Box { left: number; right: number; bottom: number; top: number }
 export type PaintKey = 'response' | 'strokeLength' | 'bristle' | 'spread' | 'fadeSeconds' | 'colourChange' | 'ground';
-export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number }
-export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief', signal: 'Signal Melt', morphogen: 'Morphogen' } as const;
+export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number; group?: string; description?: string }
+export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief', signal: 'Signal Melt', morphogen: 'Morphogen', meridian: 'Meridian' } as const;
 export type LookKind = keyof typeof LOOK_LABELS;
 export type ReliefKey = 'depth' | 'reach' | 'settle' | 'lightAngle' | 'edgeLight';
 export const RELIEF_CONTROLS: LiveControl<ReliefKey>[] = [
@@ -47,6 +51,29 @@ export const RELIEF_PRESETS: { name: string; settings: ReliefSettings }[] = [
 
 export type SignalKey = 'poseCount' | 'poseFill' | 'poseEcho' | 'poseSpacing' | 'chargeSeconds' | 'release' | 'halo' | 'vividness' | 'contours' | 'echoSpread' | 'colourChange' | 'maskThreshold' | 'maskSoftness' | 'shift' | 'relief' | 'focus' | 'chroma' | 'memorySeconds' | 'blockSize' | 'tear' | 'response' | 'mix';
 export type SmokeKey = 'density' | 'emit' | 'smoulder' | 'response' | 'rise' | 'swirl' | 'lifeSeconds' | 'colourChange' | 'vividness';
+/** Meridian Live: the Studio's macros it shares, the moves, the interaction mix and how people are read. */
+export const MERIDIAN_LIVE_MACROS = ['macroDensity', 'macroTension', 'macroOrder', 'macroSpeed', 'macroWeight', 'macroHeat', 'macroScale', 'scoreEvolution'] as const;
+export const MERIDIAN_LIVE_MOVES = ['moveNext', 'moveHold', 'moveDrop', 'moveCollapse', 'moveBurst'] as const;
+export type MeridianLiveKey = LiveKey | typeof MERIDIAN_LIVE_MACROS[number] | typeof MERIDIAN_LIVE_MOVES[number] | 'colourPalette' | 'liveMusic';
+const studioControl = (key: string, group: string): LiveControl<MeridianLiveKey> => {
+  const d = MERIDIAN_PARAMETERS.find(item => item.key === key)!;
+  return { key: key as MeridianLiveKey, label: d.label, min: d.min, max: d.max, step: d.step, default: d.default, group, description: d.description };
+};
+export const MERIDIAN_LIVE_CONTROLS: LiveControl<MeridianLiveKey>[] = [
+  ...MERIDIAN_LIVE_MACROS.map(key => studioControl(key, 'Macros')),
+  studioControl('colourPalette', 'Macros'),
+  ...LIVE_PARAMETERS.map(p => ({ key: p.key, label: p.label, min: p.min, max: p.max, step: p.step, default: p.default, group: p.group, description: p.description })),
+  { key: 'liveMusic', label: 'Follow the music', min: 0, max: 1, step: 1, default: 1, group: 'Music', description: 'On, the beat and the sound reach Meridian through Sound & MIDI.' },
+  ...MERIDIAN_LIVE_MOVES.map(key => studioControl(key, 'Moves')),
+];
+/** Whole numbers: rounded when loaded. */
+const MERIDIAN_WHOLE: readonly string[] = ['liveMaxBodies', 'colourPalette', 'liveMusic'];
+export type MeridianLiveSettings = Record<MeridianLiveKey, number> & { palette: string[]; seed: number; preset: string | null };
+/** The Studio looks Live can start from: Evolve only, the slow living structure. */
+export const MERIDIAN_LIVE_LOOKS: readonly MeridianLook[] = MERIDIAN_LOOKS.filter(look => look.params.scoreStyle === 2);
+const MERIDIAN_START = MERIDIAN_LIVE_LOOKS[0];
+const MAX_SEED = 4294967295;
+
 /** Where people are found. ignoreStillSeconds null means Off. */
 export interface PeopleSettings { ignoreStillSeconds: number | null; useEmptyRoom: boolean }
 export interface MorphogenCue { look: number; cue: number; seconds: number; hold: boolean; mutate: number; undo: number; scramble: number }
@@ -82,6 +109,8 @@ export interface LiveSettings {
   morphogen: MorphParams;
   /** Performance moves. Each counter fires its move once when it rises, so a move reaches whichever window draws the look. */
   morphogenCue: MorphogenCue;
+  /** Meridian Live. `preset` is the Studio look it started from, whose other values it keeps. */
+  meridian: MeridianLiveSettings;
   people: PeopleSettings;
 }
 
@@ -169,9 +198,38 @@ export function defaultLiveSettings(): LiveSettings {
     smoke: { ...Object.fromEntries(SMOKE_CONTROLS.map(c => [c.key, c.default])) as Record<SmokeKey, number>, palette: [...HOT_SIGNAL], forever: false },
     morphogen: defaultMorphParams(),
     morphogenCue: defaultMorphogenCue(),
+    meridian: defaultMeridian(),
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
     links: [],
   };
+}
+
+function defaultMeridian(): MeridianLiveSettings {
+  const values = Object.fromEntries(MERIDIAN_LIVE_CONTROLS.map(c => [c.key, c.default])) as Record<MeridianLiveKey, number>;
+  return { ...values, palette: [...MERIDIAN_START.palette], seed: MERIDIAN_START.params.seed, preset: MERIDIAN_START.id };
+}
+
+function validateMeridian(raw: unknown, isPalette: (p: unknown) => p is string[]): MeridianLiveSettings {
+  const d = defaultMeridian(), v = record(raw);
+  const values = Object.fromEntries(MERIDIAN_LIVE_CONTROLS.map(c => {
+    const value = ranged(v[c.key], c.min, c.max, c.default);
+    return [c.key, MERIDIAN_WHOLE.includes(c.key) ? Math.round(value) : value];
+  })) as Record<MeridianLiveKey, number>;
+  const seed = typeof v.seed === 'number' && Number.isFinite(v.seed) && v.seed >= 0 && v.seed <= MAX_SEED ? Math.round(v.seed) : d.seed;
+  const preset = v.preset === null ? null : typeof v.preset === 'string' && MERIDIAN_LIVE_LOOKS.some(l => l.id === v.preset) ? v.preset : d.preset;
+  return { ...values, palette: [...(isPalette(v.palette) ? v.palette : d.palette)], seed, preset };
+}
+
+/**
+ * Load from Studio preset: the look's macros, seed, palette and colour scheme, with anything the look leaves out back at the
+ * Studio default. The interaction mix, everything else in Live, and the links are kept. An unknown look changes nothing.
+ */
+export function meridianFromStudioLook(settings: LiveSettings, id: string): LiveSettings {
+  const look = MERIDIAN_LIVE_LOOKS.find(l => l.id === id);
+  if (!look) return settings;
+  const meridian = { ...settings.meridian, palette: [...look.palette], seed: look.params.seed ?? MERIDIAN_DEFAULTS.seed, preset: look.id };
+  for (const key of [...MERIDIAN_LIVE_MACROS, 'colourPalette'] as const) meridian[key] = look.params[key] ?? (key === 'colourPalette' ? SEED_SCHEME : MERIDIAN_DEFAULTS[key]);
+  return { ...settings, meridian };
 }
 
 const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
@@ -214,7 +272,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     quality: v.quality === 720 ? 720 : 1080,
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, ranged(paint[c.key], c.min, c.max, c.default)])) as Record<PaintKey, number>,
     palette: [...palette],
-    look: v.look === 'smoke' || v.look === 'relief' || v.look === 'signal' || v.look === 'morphogen' ? v.look : 'paint',
+    look: v.look === 'smoke' || v.look === 'relief' || v.look === 'signal' || v.look === 'morphogen' || v.look === 'meridian' ? v.look : 'paint',
     reliefPresence: v.reliefPresence === true,
     reliefPalette: validateReliefPalette(v.reliefPalette),
     relief: {
@@ -229,6 +287,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
       palette: [...(isPalette(smoke.palette) ? smoke.palette : d.smoke.palette)], forever: smoke.forever === true },
     morphogen: validateMorphParams(v.morphogen),
     morphogenCue: validateMorphogenCue(v.morphogenCue),
+    meridian: validateMeridian(v.meridian, isPalette),
     people: { ignoreStillSeconds: still, useEmptyRoom: typeof people.useEmptyRoom === 'boolean' ? people.useEmptyRoom : false },
     links: readLiveLinks(v.links),
   };
@@ -240,15 +299,15 @@ export function chooseDisplay(displays: { id: number; primary: boolean }[], curr
   return (displays.find(d => !d.primary) ?? displays[0])?.id ?? null;
 }
 
-/** Paint and motion-only Relief run with optical flow alone; Signal finds people when it removes the background. */
+/** Paint and motion-only Relief run with optical flow alone; Signal finds people when it removes the background; Meridian always looks for people. */
 export function usesPeople(settings: LiveSettings): boolean {
-  return settings.look === 'smoke' || (settings.look === 'relief' && settings.reliefPresence) || (settings.look === 'signal' && settings.signal.removeBackground);
+  return settings.look === 'smoke' || settings.look === 'meridian' || (settings.look === 'relief' && settings.reliefPresence) || (settings.look === 'signal' && settings.signal.removeBackground);
 }
 
 /** Morphogen makes its own picture: a camera can disturb it, but it plays without one. */
 export function usesCamera(settings: LiveSettings): boolean { return settings.look !== 'morphogen'; }
 
-/** Signal treats stillness as participation unless the operator explicitly opts out. */
+/** Signal treats stillness as participation unless the operator explicitly opts out. Meridian always does: standing still is Charge. */
 export function personStillTimeout(settings: LiveSettings): number | null {
-  return settings.look === 'signal' && settings.signal.keepStill ? null : settings.people.ignoreStillSeconds;
+  return settings.look === 'meridian' || (settings.look === 'signal' && settings.signal.keepStill) ? null : settings.people.ignoreStillSeconds;
 }

@@ -12,6 +12,7 @@ import type { Signals } from '../react/signals';
 import type { Gpu, Texture } from './gpu';
 import type { MorphogenPlay } from '../morphogen/play';
 import { liveReadiness, type LiveReadiness } from './liveReady';
+import { LIMITER } from '../meridian/wall-limiter';
 
 /** Live draws at this shape whatever its quality. */
 export const LIVE_ASPECT = 16 / 9;
@@ -30,6 +31,8 @@ export class LiveSlot {
   private fileChosen = false;
   /** Whether the last frame() uploaded a new picture (the stage must be drawn again). */
   fresh = false;
+  /** Until when the footer says Live's flash limiter is limiting, held briefly as the wall's own is. */
+  private limitingUntil = 0;
 
   constructor(private readonly gpu: Gpu, settings: LiveSettings) {
     this.canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.broken = true; });
@@ -82,12 +85,19 @@ export class LiveSlot {
     if (readiness === 'hold') return this.texture;
     if (readiness !== 'play') return null;
     const drawn = this.stage.renderer.framesDrawn;
+    if (this.stage.renderer.limitedArea >= LIMITER.trigger) this.limitingUntil = performance.now() + 1500;
     if (drawn !== this.uploaded && this.canvas.width > 0) {
       this.texture = this.gpu.upload(this.canvas, this.texture);
       this.uploaded = drawn;
       this.fresh = true;
     }
     return this.texture;
+  }
+  /** Live's own flash limiter while it plays Meridian, for Map's footer: null for the other looks. */
+  get limiter(): { limiting: boolean; error: string | null } | null {
+    const renderer = this.stage.renderer;
+    if (renderer.settings.look !== 'meridian') return null;
+    return { limiting: performance.now() < this.limitingUntil, error: renderer.limiterError };
   }
   /** The picture on the wall now, for a fade away from Live. */
   get current(): Texture | null { const r = this.readiness; return r === 'play' || r === 'hold' ? this.texture : null; }

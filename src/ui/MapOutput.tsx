@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MapCompositor } from '../map/compositor';
 import { STAGE_SIZE } from '../map/show';
 import { applyMapMessage, initialWall } from '../map/wall';
+import { setInstallation } from '../meridian/installation-state';
 import PreviewWorker from '../map/preview-worker?worker&inline';
 
 /** At most five previews a second, and only after the wall has changed. */
@@ -42,6 +43,8 @@ export default function MapOutput() {
       if (kind === 'liveCaptureRoom') { compositor.liveCaptureRoom(); return; }
       if (kind === 'liveRetry') { compositor.liveRetry(); return; }
       if (kind === 'videoRetry') { compositor.videoRetry(); return; }
+      if (kind === 'performanceReset') { compositor.resetPerformance(); return; }
+      if (kind === 'installation') { setInstallation(message); return; }
       // A show carrying a fade time is a scene switch, crossfading over the scene's time.
       const fadeMs = (message as { fadeMs?: unknown }).fadeMs;
       if (kind === 'show' && typeof fadeMs === 'number') { apply(fadeMs); return; }
@@ -79,6 +82,14 @@ export default function MapOutput() {
       if (compositor.requestPreview()) { sentPicture = now; busy = true; reading = true; changed = false; }
     };
     raf = requestAnimationFrame(tick);
+    // For the scripted checks only, in their own test window. A real wall never has these.
+    if (bridge.checks) {
+      (window as unknown as { __mapGuardProbe?: () => unknown }).__mapGuardProbe = () => compositor.probeGuardCost();
+      (window as unknown as { __mapLimiterLab?: (only?: string) => Promise<unknown> }).__mapLimiterLab = only => import('../map/limiter-lab').then(lab => lab.runLimiterLab(only));
+      (window as unknown as { __mapLoseAll?: (ms: number, instrumentsOnly?: boolean) => Promise<void> }).__mapLoseAll = (ms, instrumentsOnly) => compositor.loseAllForCheck(ms, instrumentsOnly);
+      (window as unknown as { __mapProbeFrame?: () => unknown }).__mapProbeFrame = () => compositor.probeFrameCost();
+      (window as unknown as { __mapWallLimiter?: (on: boolean) => void }).__mapWallLimiter = on => compositor.setWallLimiterForCheck(on);
+    }
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };
     window.addEventListener('keydown', key);
     bridge.ready();

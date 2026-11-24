@@ -10,16 +10,8 @@
  */
 import { STAGE_SIZE } from './show';
 import { IDENTITY, type H3 } from './homography';
+import { VERTEX, WallLimiterGl } from './wall-limiter-gl';
 
-const VERTEX = `#version 300 es
-in vec2 aUnit;
-uniform vec4 uRect;      // x, y, width, height in stage pixels
-uniform vec2 uStage;
-out vec2 vStage;
-void main() {
-  vStage = uRect.xy + aUnit * uRect.zw;
-  gl_Position = vec4(vStage.x / uStage.x * 2. - 1., 1. - vStage.y / uStage.y * 2., 0., 1.);
-}`;
 
 const SHAPE = `#version 300 es
 precision highp float;
@@ -107,6 +99,7 @@ void main() {
   o = vec4(v, 1.);  // premultiplied over the black stage
 }`;
 
+
 export interface Texture { tex: WebGLTexture; width: number; height: number }
 /** One shape to draw. Matrices are 3 × 3, row major, from stage pixels to the picture's 0..1 square. */
 export interface ShapeDraw {
@@ -146,6 +139,14 @@ export class Gpu {
   private copyFb!: WebGLFramebuffer;
   private drawFb!: WebGLFramebuffer;
   private blank!: Texture;
+  private limiter!: WallLimiterGl;
+  private stageCopy: WebGLTexture | null = null;
+  private pointsFb: WebGLFramebuffer | null = null;
+  private pointsStride = 0;
+  /** Why the wall limiter could not be built; null when it is fine or not yet needed. */
+  get guardError(): string | null { return this.limiter.error; }
+  /** The share of the wall last found trying to change, read back a few times a second for the operator only. */
+  get limitedArea(): number { return this.limiter.limitedArea; }
   private readback: { buffer: WebGLBuffer; sync: WebGLSync } | null = null;
   private flashReads: { sync: WebGLSync; buffer: WebGLBuffer; time: number }[] = [];
   private flashBuffers: WebGLBuffer[] = [];
@@ -171,19 +172,7 @@ export class Gpu {
   /** Programs, buffers and the stage framebuffer. Called again after a lost context is restored. */
   setUp(): void {
     const gl = this.gl;
-    const compile = (fragment: string, uniforms: string[], vertex = VERTEX): Program => {
-      const make = (type: number, src: string) => {
-        const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s);
-        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader');
-        return s;
-      };
-      const program = gl.createProgram()!;
-      gl.attachShader(program, make(gl.VERTEX_SHADER, vertex)); gl.attachShader(program, make(gl.FRAGMENT_SHADER, fragment));
-      gl.bindAttribLocation(program, 0, 'aUnit');
-      gl.linkProgram(program);
-      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'program');
-      return { program, u: Object.fromEntries(uniforms.map(n => [n, gl.getUniformLocation(program, n)])) };
-    };
+    const compile = (fragment: string, uniforms: string[]) => this.compile(fragment, uniforms);
     this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uLook', 'uAlpha', 'uDecor', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
     this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex', 'uGain', 'uRedScale']);
@@ -192,16 +181,13 @@ export class Gpu {
     const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    const target = (w: number, h: number) => {
-      const tex = this.texture();
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      const fb = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-      return { tex, fb };
-    };
+    const target = (w: number, h: number) => this.target(w, h);
     ({ tex: this.stageTex, fb: this.stageFb } = target(STAGE_SIZE.width, STAGE_SIZE.height));
     ({ tex: this.previewTex, fb: this.previewFb } = target(PREVIEW.width, PREVIEW.height));
     this.flashFb = target(FLASH_PROBE.width, FLASH_PROBE.height).fb;
+    // The wall guard's passes are built the first time a show with Meridian needs them.
+    this.limiter = new WallLimiterGl(gl, STAGE_SIZE.width, STAGE_SIZE.height, this.quad);
+    this.stageCopy = null; this.pointsFb = null;
     this.copyFb = gl.createFramebuffer()!;
     this.drawFb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -214,6 +200,29 @@ export class Gpu {
     this.readback = null; this.readbackBuffer = null;
     this.flashReads = []; this.flashBuffers = [];
     this.generation++;
+  }
+
+  private compile(fragment: string, uniforms: string[], vertex = VERTEX): Program {
+    const gl = this.gl;
+    const make = (type: number, src: string) => {
+      const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader');
+      return s;
+    };
+    const program = gl.createProgram()!;
+    gl.attachShader(program, make(gl.VERTEX_SHADER, vertex)); gl.attachShader(program, make(gl.FRAGMENT_SHADER, fragment));
+    gl.bindAttribLocation(program, 0, 'aUnit');
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'program');
+    return { program, u: Object.fromEntries(uniforms.map(n => [n, gl.getUniformLocation(program, n)])) };
+  }
+
+  private target(w: number, h: number): { tex: WebGLTexture; fb: WebGLFramebuffer } {
+    const gl = this.gl, tex = this.texture();
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    const fb = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex, fb };
   }
 
   private texture(): WebGLTexture {
@@ -306,6 +315,57 @@ export class Gpu {
     gl.uniform1i(u.uRun, d.run && d.decor ? 1 : 0); bind(4, 'uRunTex', d.run?.texture ?? null);
     gl.uniform2f(u.uRunAt, d.run?.head ?? 0, d.run?.length ?? 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  /**
+   * The wall limiter, in the frame being drawn, with no readback in its path: measures the stage as drawn so far, updates each
+   * cell's allowed light, and applies it to the flat stage before the overlays and corners. `init` starts from this picture;
+   * `fade` (0 to 1) eases the limit away. Returns false if the limiter is unavailable, leaving the picture as it is.
+   */
+  limitStage(dt: number, fade: number, init: boolean, holds: { light: number; red: number } = { light: 1, red: 1 }): boolean {
+    if (!this.limiter.ready()) { this.backToStage(); return false; }
+    const gl = this.gl;
+    // The limiter reads a copy of the stage and draws the limited picture back over it.
+    this.backToStage();
+    gl.activeTexture(gl.TEXTURE0);
+    if (!this.stageCopy) {
+      this.stageCopy = this.texture();
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, STAGE_SIZE.width, STAGE_SIZE.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.stageCopy);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    const done = this.limiter.limit(this.stageCopy, this.stageFb, dt, fade, init, holds);
+    gl.bindVertexArray(this.quad);
+    this.backToStage();
+    return done;
+  }
+
+  /** For the scripted checks: the flat stage's pixels as they stand. */
+  readStage(out: Uint8Array): void {
+    this.backToStage();
+    this.gl.readPixels(0, 0, STAGE_SIZE.width, STAGE_SIZE.height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, out);
+  }
+
+  /** For the scripted checks: every `stride`th pixel of the flat stage, exactly as it stands, unfiltered. */
+  readStagePoints(out: Uint8Array, stride: number): void {
+    const gl = this.gl, w = Math.floor(STAGE_SIZE.width / stride), h = Math.floor(STAGE_SIZE.height / stride);
+    if (!this.pointsFb || this.pointsStride !== stride) {
+      ({ fb: this.pointsFb } = this.target(w, h)); this.pointsStride = stride;
+    }
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.stageFb);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.pointsFb);
+    gl.blitFramebuffer(0, 0, w * stride, h * stride, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.pointsFb);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    this.backToStage();
+  }
+
+  backToStage(): void {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.stageFb);
+    gl.viewport(0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.enable(gl.BLEND);
   }
 
   /** A stage-sized picture laid over everything drawn so far. */

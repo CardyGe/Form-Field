@@ -5,6 +5,7 @@
  *   source.<id>.param.<layer>.<setting>
  * A target's range comes from the shape's own rules, or from the instrument's parameter definitions.
  */
+import { MERIDIAN_UNLINKED } from '../meridian/parameters';
 import { readParameterDefinitions, scopeParameterVisible, visibleParameterDefinitions } from '../core/project';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { BRIGHTNESS_MAX, LIVE_SOURCE_ID, SPEED_RANGE, ZOOM_RANGE, isVideoId, type ShowDocument } from './show';
@@ -33,6 +34,7 @@ export function parseTarget(target: string): Target | null {
 }
 
 export function canLinkParameter(layer: Layer, key: string): boolean {
+  if (layer.kind === 'meridian') return !MERIDIAN_UNLINKED.includes(key);
   return layer.kind !== 'scope' || key !== 'scopeMode' && key !== 'emberPhrases';
 }
 
@@ -121,6 +123,7 @@ export function targetOptions(show: Pick<ShowDocument, 'shapes' | 'sources'>): {
 
 /** Whether a setting can follow sound: preparation settings, the seed and whole-number choices only change by restarting. */
 export function reactable(d: Pick<ParameterDefinition, 'key' | 'step' | 'preparation'>): { ok: true } | { ok: false; why: 'restarts' } {
+  if (d.key === 'moveRecall') return { ok: true }; // A pad choosing a slot: it never restarts anything.
   return d.preparation || d.key === 'seed' || d.step >= 1 ? { ok: false, why: 'restarts' } : { ok: true };
 }
 

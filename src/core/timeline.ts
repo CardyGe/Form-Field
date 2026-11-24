@@ -1,5 +1,6 @@
 import type { Layer, Modulation, Project } from '../shared/types';
 import { clampParameter, hashSeed, readParameterDefinitions, seededRandom } from './project';
+import { motionIgnored } from '../meridian/parameters';
 
 const TAU = Math.PI * 2;
 const wrap = (value: number, period = TAU): number => ((value % period) + period) % period;
@@ -91,6 +92,7 @@ export function evaluateLayer(layer: Layer, phase: number): Layer {
   const definitions = readParameterDefinitions(layer.kind);
   const seed = layer.params.seed ?? hashSeed(layer.id);
   for (const [key, mod] of Object.entries(layer.modulations)) {
+    if (motionIgnored(layer, key)) continue;
     const signal = sampleModulation(mod, phase, hashSeed(`${seed}:${key}`));
     const sample = signal * mod.amount;
     if(mod.range){

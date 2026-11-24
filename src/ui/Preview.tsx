@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import type { Layer, Project } from '../shared/types';
 import type { VariationLocks } from '../core/project';
 import { frameCount } from '../core/timeline';
@@ -23,6 +23,8 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
   const enabled = !blocked && !tiled && layer?.visible;
   const current = useRef({ project, playing,onEnded,tiled,smokeSound,onNotice }), invalidate = useRef(true);
   const prepared = useRef<Project | null>(null);
+  // Meridian's quality governor gave something up to keep the preview smooth.
+  const [qualityReduced, setQualityReduced] = useState(false);
   current.current = { project, playing,onEnded,tiled,smokeSound,onNotice };
   useEffect(() => { invalidate.current = true; }, [tiled]);
   useEffect(() => {
@@ -30,7 +32,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
     let engine: StudioRenderer;
     try { engine = new StudioRenderer(canvas.current); rendererRef.current = engine; }
     catch (error) { onError(String(error)); return; }
-    let alive = true, raf = 0, previous = performance.now(), lastPhase = -1;
+    let alive = true, raf = 0, previous = performance.now(), lastPhase = -1, lastDrawn = -1, reduced = false;
     let box = { width: 960, height: 540 }, density = window.devicePixelRatio;
     const resize = new ResizeObserver(([entry]) => {
       box = { width: entry.contentRect.width, height: entry.contentRect.height };
@@ -69,8 +71,11 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
         const ratio = state.project.width / state.project.height;
         const size=previewSize(box.width,box.height,ratio,density);
         canvas.current!.style.width=`${size.cssWidth}px`;canvas.current!.style.height=`${size.cssHeight}px`;
+        // Meridian's governor judges back-to-back drawn frames only: a paused preview says nothing about how heavy the show is.
+        const meridian = state.project.layers.some(l => l.visible && l.kind === 'meridian');
+        if (meridian && lastDrawn >= 0) engine.paceMeridian(now - lastDrawn);
         try { engine.render(state.project, phase.current, size.width, size.height,
-          state.playing && state.smokeSound ? { signals: state.smokeSound.signals, now } : undefined, state.playing);
+          state.playing && state.smokeSound ? { signals: state.smokeSound.signals, now, externalTempo: state.smokeSound.prefs.tempo !== 'beat' } : undefined, state.playing);
           const overlay = tileCanvas.current;
           if (state.tiled && overlay) {
             // Drawn in the same frame as the render, while the WebGL buffer is still valid.
@@ -80,9 +85,11 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
             g.clearRect(0, 0, size.width, size.height);
             for (let i = 0; i < 4; i++) g.drawImage(canvas.current!, (i % 2) * w, Math.floor(i / 2) * h, w, h);
           }
-          invalidate.current = false; lastPhase = phase.current; }
-        catch (error) { prepared.current = null; if (!engine.isContextLost()) onError(String(error)); }
-      }
+          invalidate.current = false; lastPhase = phase.current; lastDrawn = now;
+          const nowReduced = meridian && engine.meridianQuality().reduced;
+          if (nowReduced !== reduced) { reduced = nowReduced; setQualityReduced(nowReduced); } }
+        catch (error) { prepared.current = null; lastDrawn = -1; if (!engine.isContextLost()) onError(String(error)); }
+      } else lastDrawn = -1;
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -102,6 +109,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
     <div className={`preview-host ${checker ? 'checker' : ''} ${enabled ? 'interactive' : ''} ${control ? 'pan-ready' : ''} ${feedback.mode === 'pan' ? 'is-panning' : ''}`} ref={host} data-interaction={feedback.mode ?? 'idle'}>
       <canvas ref={canvas} style={tiled ? { visibility: 'hidden' } : undefined} aria-label="Composition preview" role="button" tabIndex={0} aria-disabled={!enabled} aria-describedby={helpId} title="Click to vary · Drag to shape · Ctrl-drag to pan · Ctrl-scroll to zoom · Shift for fine control" />
       <canvas ref={tileCanvas} className="tile-preview" aria-hidden="true" hidden={!tiled} />
+      {qualityReduced && <div className="m-quality-note" role="status" title="Meridian is drawing less bloom, tearing or small detail to keep the preview smooth. Lines stay sharp and Flash guard is unchanged. It comes back after a few calm seconds.">Quality reduced</div>}
       {layer && <div className="canvas-target" aria-hidden="true"><span className={enabled ? 'canvas-target-dot' : 'canvas-target-dot inactive'} /><strong>{layer.name}</strong><span>{!layer.visible ? 'Hidden' : blocked ? 'Interaction paused' : feedback.mode === 'shape' ? 'Shaping' : feedback.mode === 'pan' ? 'Panning' : feedback.mode === 'zoom' ? 'Zooming' : 'Interactive'}</span></div>}
       {feedback.mode === 'shape' && axes.length > 0 && <><div className="canvas-reticle" aria-hidden="true" style={{ left: feedback.x, top: feedback.y }} /><div className="canvas-readout" aria-hidden="true">{axes.map((d, i) => <span key={d.key}><b>{i === 0 ? '↔' : '↕'}</b>{d.label}<strong>{Number(layer!.params[d.key].toFixed(3))}</strong></span>)}</div></>}
     </div>

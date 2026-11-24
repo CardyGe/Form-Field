@@ -188,3 +188,16 @@ test('loading Live’s settings waits for a save still being written (leaving on
   assert.deepEqual(loaded, { look: 'smoke' });
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+test('a packaged app never gives the artwork window the check hooks, even with the test window asked for', async () => {
+  const before = process.env.STUDIO_LIVE_TEST_WINDOW;
+  process.env.STUDIO_LIVE_TEST_WINDOW = '1';
+  try {
+    const packaged = harness({ allowChecks: false });
+    await packaged.handlers.get('studio:live:openOutput')(packaged.fromStudio, 7);
+    assert.deepEqual(packaged.windows[0].options.webPreferences.additionalArguments, []);
+    const checks = harness();
+    await checks.handlers.get('studio:live:openOutput')(checks.fromStudio, 7);
+    assert.deepEqual(checks.windows[0].options.webPreferences.additionalArguments, ['--form-field-checks']);
+  } finally { if (before === undefined) delete process.env.STUDIO_LIVE_TEST_WINDOW; else process.env.STUDIO_LIVE_TEST_WINDOW = before; }
+});

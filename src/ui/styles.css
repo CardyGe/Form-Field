@@ -561,3 +561,5 @@ a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .finish-picker-group img { display: block; width: 100%; aspect-ratio: 2.25; object-fit: cover; }
 .finish-picker-group span { display: block; padding: 3px 5px 0; overflow: hidden; font-size: 10.5px; white-space: nowrap; text-overflow: ellipsis; }
 .finish-picker-group small { position: absolute; top: 3px; right: 3px; padding: 1px 4px; border-radius: 3px; color: #19200f; background: var(--accent); font-size: 9px; font-weight: 600; }
+.live-starts.meridian-moves { flex-direction: row; flex-wrap: wrap; }
+.live-starts.meridian-moves .text-button { flex: 1 1 30%; justify-content: center; }

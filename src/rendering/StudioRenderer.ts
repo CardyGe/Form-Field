@@ -23,6 +23,8 @@ import { liquidFragment } from './liquid';
 import { ScopeRenderer } from './ScopeRenderer';
 import { SmokeCloudRenderer } from './SmokeCloud';
 import { compositesPlainly, plainOverFragment } from './smoke-cloud-composite';
+import { MeridianRenderer, type MeridianRuntime } from './MeridianRenderer';
+import { MeridianGovernor, type MeridianQuality } from '../meridian/governor';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
@@ -180,6 +182,16 @@ export class StudioRenderer {
   /** For checks: draws every layer through the full compositor. */
   fullCompositorOnly = false;
   private previewPlaying = true;
+  private meridian: MeridianRenderer | null = null;
+  private readonly meridianRuntime: MeridianRuntime = {};
+  private performanceSet = false;
+  /** Meridian's quality governor for this renderer's live picture. An export never uses it. */
+  private readonly meridianGovernor = new MeridianGovernor();
+  /** The Meridian layers drawn last, so state for a removed layer can be let go. */
+  private meridianIds: string[] = [];
+  /** One Mark record, rewritten in place, so a Mark costs no allocation per frame. */
+  private meridianMark: NonNullable<MeridianRuntime['mark']> | null = null;
+  private readonly drawPass = (material: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget) => this.draw(material, output);
   /** Reduced-size stand-ins for `source` while the preview draws time slices. */
   private sliceSource: THREE.WebGLRenderTarget | null = null;
   private sliceSourceSmooth: THREE.WebGLRenderTarget | null = null;
@@ -565,6 +577,10 @@ export class StudioRenderer {
         required.add(this.assetKey(layer.image.dataUrl, false, repeat));
         pending.push(this.loadAsset(layer.image.dataUrl, false, repeat).promise);
       }
+      if (layer.kind === 'meridian' && layer.meridian?.mark) {
+        required.add(this.assetKey(layer.meridian.mark.dataUrl, false));
+        pending.push(this.loadAsset(layer.meridian.mark.dataUrl, false).promise);
+      }
       if (layer.mask.kind === 'image' && layer.mask.dataUrl) {
         required.add(this.assetKey(layer.mask.dataUrl, true));
         pending.push(this.loadAsset(layer.mask.dataUrl, true).promise);
@@ -823,6 +839,18 @@ export class StudioRenderer {
       const [x, y] = imageFit(layer.image, aspect);
       (this.image.uniforms.uFit.value as THREE.Vector2).set(x, y);
       this.draw(this.image, this.source);
+    } else if (layer.kind === 'meridian') {
+      this.meridian ??= new MeridianRenderer();
+      this.meridianRuntime.structure = original.params;
+      this.meridianRuntime.live = !this.exporting && !slitActive(original);
+      this.meridianRuntime.duration = duration;
+      const mark = layer.meridian?.mark, markAsset = mark ? this.assets.get(this.assetKey(mark.dataUrl, false)) : undefined;
+      if (mark && markAsset?.texture.image) {
+        const held = this.meridianMark ??= { texture: markAsset.texture, width: mark.width, height: mark.height };
+        held.texture = markAsset.texture; held.width = mark.width; held.height = mark.height;
+        this.meridianRuntime.mark = held;
+      } else this.meridianRuntime.mark = null;
+      this.meridian.draw(this.renderer, layer, phase, this.width, this.height, this.source, this.drawPass, this.meridianRuntime);
     } else {
       const u = this.sculptureUniforms;
       for(const [key,value] of Object.entries(SCULPTURE_SHAPE_DEFAULTS))u[`studio${key[0].toUpperCase()}${key.slice(1)}`].value=number(layer,key,value);
@@ -886,9 +914,16 @@ export class StudioRenderer {
     const wrapped = ((phase % TAU) + TAU) % TAU;
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
+    this.meridianRuntime.loopFrames = total;
     this.releaseFeedback(project);
     this.releaseTimeTargets(project);
     this.medianPlan = medianFramePlan(project.layers, width, height, this.exporting);
+    if (this.meridian) { this.meridian.setQuality(this.exporting ? null : this.meridianGovernor.quality); this.forgetRemovedMeridian(project); }
+    for (let i = 0; i < project.layers.length; i++) if (project.layers[i].kind === 'meridian') {
+      this.meridian ??= new MeridianRenderer();
+      this.meridian.beginComposition(project, wrapped, width, height, duration, this.exporting, this.meridianRuntime);
+      break;
+    }
     for (const original of project.layers) {
       if (!original.visible) continue;
       // Feedback layers advance in whole loop frames: every frame of the
@@ -896,7 +931,7 @@ export class StudioRenderer {
       const feedback = feedbackActive(original);
       const framePhase = feedback ? phaseAtFrame(frameAtPhase(wrapped, total), total) : wrapped;
       const sourcePhase = this.sourcePhase(original, framePhase, duration);
-      const layer = evaluateLayer(original, sourcePhase);
+      const layer = (original.kind === 'meridian' ? this.meridian?.evaluatedFor(original) : undefined) ?? evaluateLayer(original, sourcePhase);
       if (layer.opacity <= 0) continue;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
@@ -918,7 +953,7 @@ export class StudioRenderer {
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
       (u.uTexel.value as THREE.Vector2).set(1 / width, 1 / height);
       u.uAspect.value = width / height; u.uScale.value = layer.transform.scale;
-      u.uRotation.value = layer.transform.rotation; u.uOpacity.value = layer.opacity;
+      u.uRotation.value = layer.transform.rotation; u.uOpacity.value = layer.opacity * (original.kind === 'meridian' ? this.meridian?.layerGain(original) ?? 1 : 1);
       u.uPatternRepeat.value = layer.kind === 'graphic' ? (graphicRenderPlan(layer,sourcePhase,width,height,this.maxTargetSize).inView ? 2 : 1) : 0;
       u.uSourceInView.value=Number(layer.kind!=='graphic');
       (u.uSourceViewInverse.value as THREE.Matrix3).copy(sourceViewMatrix(layer.transform,width/height)).invert();
@@ -1466,9 +1501,55 @@ export class StudioRenderer {
     if (this.warpTarget && !project.layers.some(layer => layer.visible && warpActive(layer))) { this.warpTarget.dispose(); this.warpTarget = null; }
   }
 
-  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }, playing = true): void {
+  /**
+   * Live output only: the time between the last two drawn frames, in ms, for Meridian's quality governor. Slow frames that last
+   * give up bloom, then the tear, then small marks; calm ones bring them back. Exports ignore it.
+   */
+  paceMeridian(frameMs: number): void { this.meridianGovernor.update(frameMs); }
+
+  /** What the governor allows Meridian now. `reduced` is shown to the operator as Quality reduced. */
+  meridianQuality(): Readonly<MeridianQuality> { return this.meridianGovernor.quality; }
+
+  /** A Meridian layer left the composition: its clocks and pictures go too. Allocates only when the layers change. */
+  private forgetRemovedMeridian(project: Project): void {
+    let n = 0, same = true;
+    for (let i = 0; i < project.layers.length; i++) if (project.layers[i].kind === 'meridian') { if (this.meridianIds[n] !== project.layers[i].id) same = false; n++; }
+    if (same && n === this.meridianIds.length) return;
+    this.meridianIds = project.layers.filter(l => l.kind === 'meridian').map(l => l.id);
+    this.meridian?.forgetLayers(new Set(this.meridianIds));
+  }
+
+  /** For the scripted checks and the soak: how many per-layer Meridian records this renderer holds. */
+  meridianRecords(): number { return this.meridian?.layerRecords() ?? 0; }
+
+  /** For the scripted checks: the Conductor and moves of this renderer's Evolve. */
+  meridianReport(): ReturnType<MeridianRenderer['performanceReport']> | null { return this.meridian?.performanceReport() ?? null; }
+
+  /** A project was loaded: linked Meridian moves from the last one end here. */
+  resetMeridianPerformance(): void { this.meridian?.resetPerformance(); }
+
+  /**
+   * What Meridian hears on the next drawn frame, from Map: the same signals and rule as the Studio preview, with the time since
+   * this source last drew, which stands still under Freeze. Allocates nothing, and is not part of the composition.
+   */
+  setPerformanceSignals(signals: Readonly<Record<string, number>>, dt: number): void {
+    const external = signals['tempo.external'] === 1;
+    this.meridianRuntime.signals = external || signals['audio.level'] !== undefined ? signals : undefined;
+    this.meridianRuntime.externalTempo = external;
+    this.meridianRuntime.dt = dt;
+    this.performanceSet = true;
+  }
+
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean }, playing = true): void {
     if (this.exporting) return;
     this.previewPlaying = playing;
+    // With the tempo source on the detected beat and no sound, the tempo clock is only a default: Meridian stays on its own.
+    if (this.performanceSet) this.performanceSet = false;
+    else {
+      this.meridianRuntime.signals = sound && (sound.externalTempo || sound.signals['audio.level'] !== undefined) ? sound.signals : undefined;
+      this.meridianRuntime.externalTempo = sound?.externalTempo === true;
+      this.meridianRuntime.dt = undefined;
+    }
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();
@@ -1571,6 +1652,7 @@ export class StudioRenderer {
     this.scope?.dispose(); this.scope = null;
     this.smokeClouds?.dispose(); this.smokeClouds = null;
     this.plainOver?.dispose(); this.plainOver = null;
+    this.meridian?.dispose(); this.meridian = null;
     this.sliceSource?.dispose(); this.sliceSource = null;
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();

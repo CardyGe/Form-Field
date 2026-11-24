@@ -84,7 +84,7 @@ test('0.9 instruments migrate only absent new controls and keep original require
  }
 });
 test('new finisher and advanced controls reject explicit corruption, without mutating saved state',()=>{
- for(const kind of ['surface','sculpture','fractal','oil','liquid','scope','super8','graphic','image',...INSTRUMENT_KINDS] as const){
+ for(const kind of ['surface','sculpture','fractal','oil','liquid','scope','super8','graphic','image','smokecloud','meridian',...INSTRUMENT_KINDS] as const){
   const p={...createProject(),layers:[createLayer(kind)]};
   for(const d of parameterDefinitions(kind).filter(d=>d.advanced||FINISH_KEYS.includes(d.key))){
    for(const value of [NaN,Infinity,d.min-1,d.max+1]){const q=structuredClone(p);q.layers[0].params[d.key]=value;assert.throws(()=>validateProject(q),new RegExp('params.'+d.key));}

@@ -42,7 +42,14 @@ contextBridge.exposeInMainWorld('studio', Object.freeze({
     closeHandlers.add(callback);
     return () => closeHandlers.delete(callback);
   },
+  installation: Object.freeze({
+    get: () => invoke('installation:get'),
+    set: settings => invoke('installation:set', settings),
+    log: text => invoke('installation:log', text),
+  }),
   map: Object.freeze({
+    // True only in the small window the scripted checks open, so their probes never ship to a real wall.
+    checks: process.argv.includes('--form-field-checks'),
     loadAutosave: () => invoke('map:loadAutosave'),
     saveAutosave: text => invoke('map:saveAutosave', text),
     openShow: () => invoke('map:openShow'),

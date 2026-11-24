@@ -68,6 +68,8 @@ export interface WireSource { id: string; kind: 'instrument'; speed: number; rev
 export interface WireShow { format: 'formshow'; version: 8; stage: { width: number; height: number }; shapes: Shape[]; sources: WireSource[]; groups: Group[]; stageCorners: Point[] | null; links: Link[];
   /** The show plays Live somewhere (a shape, or a scene): the wall keeps Live's camera running. */
   usesLive: boolean;
+  /** The show holds a guarded Meridian layer, so the wall is limited before its compositions arrive. */
+  guardWall?: boolean;
   /** Stage 6: the videos shapes play, with their paths (the wall fetches them through the app). */
   videos: VideoSource[] }
 
@@ -116,7 +118,10 @@ export const dataUrlBytes = (dataUrl: string) => { const i = dataUrl.indexOf(','
 export function imageBytes(show: Pick<ShowDocument, 'sources'>): number {
   // Every stored copy counts: a picture made separate is stored, saved and sent again.
   let bytes = 0;
-  for (const s of show.sources) for (const l of s.project.layers) if (l.image?.dataUrl) bytes += dataUrlBytes(l.image.dataUrl);
+  for (const s of show.sources) for (const l of s.project.layers) {
+    if (l.image?.dataUrl) bytes += dataUrlBytes(l.image.dataUrl);
+    if (l.meridian?.mark?.dataUrl) bytes += dataUrlBytes(l.meridian.mark.dataUrl);
+  }
   return bytes;
 }
 
@@ -438,6 +443,7 @@ export function validateWireShow(value: unknown): WireShow {
   return { format: 'formshow', version: 8, stage: { ...STAGE_SIZE }, shapes, sources: kept, groups: read.groups, stageCorners: isRecord(value) ? readCorners(value.stageCorners).corners : null,
     links: isRecord(value) ? readLinks(value.links, { shapes, sources: [...kept, ...videos] }, true).links : [],
     usesLive: (isRecord(value) && value.usesLive === true) || shapes.some(s => s.sourceId === LIVE_SOURCE_ID),
+    ...(isRecord(value) && value.guardWall === true ? { guardWall: true } : {}),
     videos };
 }
 

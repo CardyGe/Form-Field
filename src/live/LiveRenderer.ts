@@ -19,12 +19,20 @@ import { MorphogenPlay } from '../morphogen/play';
 import { FlashLimiter } from '../map/flash-limiter';
 import { Smoke } from './Smoke';
 import { Relief } from './Relief';
+import { Meridian } from './Meridian';
+import { WallLimiterGl } from '../map/wall-limiter-gl';
+import { LIMITER, limiterScales } from '../meridian/wall-limiter';
+import { MERIDIAN_DEFAULTS } from '../meridian/parameters';
+import { MeridianGovernor } from '../meridian/governor';
 import type { Look } from './look';
 import { trackingViewFragment } from './tracking-shaders';
 import { LiveModulator } from './modulate';
 import type { Signals } from '../react/signals';
 
-const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal, morphogen: Morphogen };
+const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal, morphogen: Morphogen, meridian: Meridian };
+/** Meridian on the Live output keeps to the same flash rule as the wall in Map, at Flash Guard's default strictness. */
+const CONTEXT_LOST = 'the graphics card reset; the limiter starts again as soon as it is back';
+const MERIDIAN_HOLDS = limiterScales({ safetyMaxFlashes: MERIDIAN_DEFAULTS.safetyMaxFlashes, safetyRedLimit: MERIDIAN_DEFAULTS.safetyRedLimit });
 
 /** Operator setup view: the camera dimmed, people in blue with a pink outline. Never shown in the artwork window. */
 const peopleViewFragment = /* glsl */`
@@ -87,6 +95,31 @@ export class LiveRenderer {
   private running = false;
   private disposed = false;
   private counted = { frames: 0, since: 0, worst: 0 };
+  /** The flash limiter for Meridian's output, its 8-bit input, and whether it must start again from the next picture. */
+  private limiter: WallLimiterGl | null = null;
+  private limitInput: THREE.WebGLRenderTarget | null = null;
+  private limitFresh = true;
+  /** The graphics context is lost: the limiter's own pictures and programs went with it and are made again on its return. */
+  private contextLost = false;
+  private limitCost = 0;
+  /** Why the limiter could not run on the last Meridian frame; null when it ran. The picture is shown without it meanwhile (the artwork window keeps its basic limiter). */
+  limiterError: string | null = null;
+  /** Whether the last frame went through the limiter. */
+  limited = false;
+  /** The share of the picture the limiter is holding back now; 0 when it is not running. */
+  get limitedArea(): number { return this.limited ? this.limiter?.limitedArea ?? 0 : 0; }
+  /** Meridian's quality governor for this output: bloom, then tearing, then small marks, when frames stay slow. */
+  private readonly governor = new MeridianGovernor();
+  /**
+   * Installed only by the scripted checks (live-checks.ts, never imported by the app): replaces the finished artwork, for
+   * example with a strobe, before it reaches the limiter.
+   */
+  private checkImage: ((image: THREE.Texture) => THREE.Texture) | null = null;
+  private readonly onContextLost = () => {
+    this.contextLost = true; this.limiter = null; this.limitInput = null; this.limitFresh = true; this.limited = false;
+    if (this.settings.look === 'meridian') this.limiterError = CONTEXT_LOST;
+  };
+  private readonly onContextRestored = () => { this.contextLost = false; this.limitFresh = true; this.restartLook(); };
 
   /** `makeProvider` starts person finding when a look needs people. Without it, people are never found. */
   /** How many frames have been drawn: Map waits for one before it shows Live. */
@@ -111,8 +144,11 @@ export class LiveRenderer {
     this.trackingView = this.passes.material(trackingViewFragment, { uCamera: { value: null }, uFlow: { value: null }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
     this.scratch = this.passes.target(1, 1);
     this.counted.since = performance.now();
-    // Three rebuilds its own resources after a restored context; the look's simulation has lost its state, so it starts again.
-    canvas.addEventListener('webglcontextrestored', this.restartLook);
+    // three makes its own resources again after a lost context; the look's simulation has lost its state, so it starts again.
+    // The limiter's raw resources are let go without touching the lost context and built afresh on the first frame back,
+    // starting from black so even that frame is limited.
+    canvas.addEventListener('webglcontextlost', this.onContextLost);
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
   }
 
   /** The artwork window's flash protection. In Map, the wall's own limiter does this job instead. */
@@ -172,13 +208,16 @@ export class LiveRenderer {
       this.look = new looks[this.settings.look](this.passes, this.width, this.height);
       this.look.adoptPlay?.(this.morphogenPlay);
       this.lookKind = this.settings.look;
+      this.governor.reset();
     }
     if (!this.look) return;
     if (this.settings.look === 'signal' && this.signalSource !== this.source.element) this.look.clear();
     this.signalSource = this.source.element;
     this.look.setSignals?.(this.signals, this.settings);
+    if (this.look instanceof Meridian) { this.look.signals = this.signals; this.look.quality = this.governor.update(seconds * 1000); }
     this.look.step(step, this.time, this.tracking, settings);
     let image: THREE.Texture = this.look.output, encode = 1;
+    if (this.checkImage) image = this.checkImage(image);
     if (this.view === 'tracking') {
       const u = this.trackingView.uniforms, box = this.settings.box;
       u.uCamera.value = this.tracking.camera; u.uFlow.value = this.tracking.flow;
@@ -196,10 +235,78 @@ export class LiveRenderer {
     this.final.uniforms.uImage.value = image;
     this.final.uniforms.uEncode.value = encode;
     this.final.uniforms.uBlackout.value = this.blackout ? 1 : 0;
-    this.passes.draw(this.final, null);
+    // Meridian's artwork goes through the wall's flash limiter. Once it has been used, the other looks' pictures go through it
+    // too, unchanged (the limit faded fully away), so it knows what the wall showed and switching back to Meridian is limited.
+    // The setup views are the operator's only, so they never do.
+    const guarded = this.settings.look === 'meridian' && this.view === 'art';
+    const following = !guarded && this.view === 'art' && this.limiter !== null;
+    if (this.contextLost) {
+      this.limited = false;
+      if (guarded) this.limiterError = CONTEXT_LOST;
+    } else if (guarded) {
+      if (!this.limitOutput(seconds, 0)) { this.passes.draw(this.final, null); this.limitFresh = true; this.limited = false; }
+    } else {
+      if (!following || !this.limitOutput(seconds, 1)) { this.passes.draw(this.final, null); this.limitFresh = this.limitFresh || !following; }
+      if (this.view !== 'art') this.limitFresh = true;
+      this.limited = false;
+    }
+    // The artwork window's own flash protection reads the picture before the limiters and dims the whole output on top.
     if (encode === 1) this.limitFlashes();
     this.framesDrawn++;
     this.counted.frames++;
+  }
+
+  /**
+   * Draws the finished picture through the flash limiter onto the canvas, in the frame it limits, with no readback. Returns
+   * false, having drawn nothing, if the limiter cannot run: the caller then shows the picture as it is and the warning stands.
+   */
+  private limitOutput(seconds: number, fade: number): boolean {
+    const started = performance.now(), gl = this.renderer.getContext() as WebGL2RenderingContext;
+    try {
+      if (!this.limiter || this.limiter.width !== this.width || this.limiter.height !== this.height) {
+        this.limiter?.dispose(); this.limitInput?.dispose();
+        this.limiter = new WallLimiterGl(gl, this.width, this.height);
+        this.limitInput = new THREE.WebGLRenderTarget(this.width, this.height, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+        this.limitInput.texture.colorSpace = THREE.NoColorSpace;
+        this.limitFresh = true;
+      }
+      const dt = Number.isFinite(seconds) ? Math.min(LIMITER.longestStep, Math.max(0, seconds)) : 0;
+      if (this.limitFresh) {
+        // A fresh start (first use, a new size, a graphics reset, back from a setup view) begins from black, so the picture
+        // that follows is already limited: a large bright arrival climbs by the rule rather than appearing at once.
+        const blackout = this.final.uniforms.uBlackout.value;
+        this.final.uniforms.uBlackout.value = 1;
+        this.passes.draw(this.final, this.limitInput!);
+        this.final.uniforms.uBlackout.value = blackout;
+        const black = this.limitTexture();
+        const primed = this.limiter.limit(black, null, 0, 0, true, MERIDIAN_HOLDS);
+        this.renderer.resetState();
+        if (!primed) { this.limiterError = this.limiter.error ?? 'the flash limiter could not start'; return false; }
+      }
+      this.passes.draw(this.final, this.limitInput!);
+      const done = this.limiter.limit(this.limitTexture(), null, dt, fade, false, MERIDIAN_HOLDS);
+      this.renderer.resetState();
+      if (!done) { this.limiterError = this.limiter.error ?? 'the flash limiter could not start'; return false; }
+      this.limitFresh = false; this.limiterError = null; this.limited = fade < 1;
+      this.limitCost = this.limitCost * .95 + (performance.now() - started) * .05;
+      return true;
+    } catch (error) {
+      this.renderer.resetState();
+      this.limiterError = String((error as Error)?.message ?? error);
+      return false;
+    }
+  }
+
+  private limitTexture(): WebGLTexture {
+    const texture = (this.renderer.properties.get(this.limitInput!.texture) as { __webglTexture?: WebGLTexture }).__webglTexture;
+    if (!texture) throw new Error('the picture to limit could not be found');
+    return texture;
+  }
+
+  /** Meridian's own state and the limiter's, for the operator and the scripted checks: numbers and words, never a picture. */
+  meridianReport(): (ReturnType<Meridian['diagnostics']> & { limiter: { on: boolean; error: string | null; area: number; cpuMs: number } }) | null {
+    if (!(this.look instanceof Meridian)) return null;
+    return { ...this.look.diagnostics(), limiter: { on: this.limited, error: this.limiterError, area: this.limiter?.limitedArea ?? 0, cpuMs: this.limitCost } };
   }
 
   /** Wipes the artwork back to its ground. */
@@ -248,9 +355,11 @@ export class LiveRenderer {
   dispose(): void {
     if (this.disposed) return;
     this.stop(); this.disposed = true;
-    this.canvas.removeEventListener('webglcontextrestored', this.restartLook);
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
     this.flashTarget?.dispose();
     for (const item of [this.final, this.trackingView, this.tracking, this.black, this.scratch]) item.dispose();
+    this.limiter?.dispose(); this.limitInput?.dispose(); this.checkImage = null;
     this.peopleView?.dispose();
     this.look?.dispose();
     this.passes.dispose(); this.renderer.dispose();
