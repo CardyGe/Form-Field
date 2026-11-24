@@ -64,6 +64,6 @@ export function applyMapMessage(state: WallState, value: unknown): WallState {
     case 'signals': return { ...state, signals: message.signals };
     case 'fade': return { ...state, fadeMs: message.ms };
     case 'liveSettings': return { ...state, live: message.settings === null ? null : validateLiveSettings(message.settings) };
-    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': return state;
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': case 'installation': return state;
   }
 }

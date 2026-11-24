@@ -32,7 +32,9 @@ export type MapMessage =
   /** Stage 6: every video that cannot play loads again. */
   | { type: 'videoRetry' }
   /** A show file was opened: linked Meridian moves from before it end. A scene change never sends this. */
-  | { type: 'performanceReset' };
+  | { type: 'performanceReset' }
+  /** Installation mode: whether Meridian's autopilot steers Evolve on the wall, and its pace in beats. */
+  | { type: 'installation'; autopilot: boolean; everyBeats: number };
 
 /** Live's settings travel under the same limit as on Live's own output. */
 export const LIVE_SETTINGS_LIMIT = 16 * 1024;
@@ -123,6 +125,7 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'fade': return finite(value.ms) && (value.ms as number) >= 0 && (value.ms as number) <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, LIVE_SETTINGS_LIMIT);
     case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': return true;
+    case 'installation': return typeof value.autopilot === 'boolean' && finite(value.everyBeats) && (value.everyBeats as number) >= 16 && (value.everyBeats as number) <= 128;
     default: return false;
   }
 }

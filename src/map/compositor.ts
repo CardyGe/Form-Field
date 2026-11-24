@@ -124,6 +124,8 @@ export interface CompositorStats {
   meridianQuality?: { reduced: boolean; level: number } | null;
   /** For the soak and the scripted checks: per-layer Meridian records held across all sources. */
   meridianRecords?: number;
+  /** The compositor's own work per drawn frame on the CPU, in ms, smoothed. */
+  cpuMs?: number;
 }
 
 /** Runs each frame for each source, so it allocates nothing. */
@@ -164,6 +166,7 @@ export class MapCompositor {
   private last: number | null = null;
   /** Whether the last frame was drawn: Meridian's governor judges only back-to-back drawn frames. */
   private drewLast = false;
+  private workMs = 0;
   private frameIndex = 0;
   private framesThisSecond = 0;
   private secondStarted = 0;
@@ -416,6 +419,7 @@ export class MapCompositor {
     this.drewLast = drawn && draw;
     this.frameIndex++;
     const work = performance.now() - started;
+    if (drawn) this.workMs = this.workMs ? this.workMs * .95 + work * .05 : work;
     // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
     if (!this.frozen && drawn) this.governor = governorStep(this.governor, frameCost(work, seconds * 1000));
     this.framesThisSecond++;
@@ -443,10 +447,29 @@ export class MapCompositor {
       staggered: this.histories.size, delayed: this.delays.size,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
       meridian: Object.fromEntries([...this.slots].flatMap(([id, s]) => { const report = s.renderer?.meridianReport(); return report ? [[id, { ...report, phase: s.phase }]] : []; })),
-      meridianQuality: this.meridianQuality(),
+      meridianQuality: this.meridianQuality(), cpuMs: +this.workMs.toFixed(2),
       meridianRecords: [...this.slots.values()].reduce((n, s) => n + (s.renderer?.meridianRecords() ?? 0), 0),
       flashGuard: this.guardPolicy.present ? { failed: this.gpu.guardError, on: this.guardPolicy.on, warn: this.guardPolicy.warn, limiting: performance.now() < this.limitingUntil, area: this.gpu.limitedArea, cpuMs: this.guardCost } : null,
     };
+  }
+
+  /**
+   * For the soak and the scripted checks: the time of a whole drawn frame, CPU and graphics card together, each one waited for
+   * with a one-pixel read. The median and worst of `count`, net of an empty round trip.
+   */
+  probeFrameCost(count = 24): { medianMs: number; worstMs: number } | null {
+    if (this.lost || this.disposed) return null;
+    const gl = this.gpu.gl, pixel = new Uint8Array(4), costs: number[] = [];
+    for (let i = 0; i < count; i++) {
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      const a = performance.now(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      const b = performance.now();
+      this.dirty = true; this.frame(b);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      costs.push(Math.max(0, performance.now() - b - (b - a)));
+    }
+    costs.sort((x, y) => x - y);
+    return { medianMs: +costs[costs.length >> 1].toFixed(2), worstMs: +costs[costs.length - 1].toFixed(2) };
   }
 
   /** The most reduced Meridian source on this wall, or null when none plays Meridian. */

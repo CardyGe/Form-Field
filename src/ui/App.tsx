@@ -38,6 +38,7 @@ import { MeridianControls, useMeridianPerformance } from './MeridianControls';
 import { listensToMusic, motionParameters } from '../meridian/panel';
 import { motionIgnored } from '../meridian/parameters';
 import { sameCanvasValues } from '../core/canvas-interaction';
+import { loadInstallation } from './installation';
 
 const TAU = Math.PI * 2;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -167,6 +168,8 @@ export default function App() {
   const [playing, setPlaying] = useState(true), phase = useRef(0), rendererRef = useRef<StudioRenderer | null>(null);
   /** Live is a separate screen over the studio; the studio pauses underneath it. */
   const [mode, setMode] = useState<'studio' | 'live' | 'map'>('studio');
+  // Installation mode: launched with it on, the app goes straight to the show it ran last (Map or Live), which opens its output.
+  useEffect(() => { void loadInstallation().then(settings => { if (settings?.on) setMode(settings.surface); }); }, []);
   const [emberSound, setEmberSound] = useState<ReactivityEngine | null>(null);
   const emberMeters = useMemo(() => new MeterStore(), []);
   const hasEmber = project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1);

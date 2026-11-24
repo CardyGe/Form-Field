@@ -8,6 +8,7 @@ import { EVOLVE_INACTIVE, applyLockedVariation, applyMorph, captureMorph, filter
 import { heldMoves } from '../meridian/held-moves';
 import { assertImportableImage, MAX_IMPORT_SIDE, meridianMark } from '../core/project';
 import './meridian.css';
+import { InstallationControls } from './InstallationControls';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const definition = (key: string) => MERIDIAN_PARAMETERS.find(d => d.key === key)!;
@@ -307,6 +308,7 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
       <MarkControl layer={layer} edit={edit} notify={notify} />
     </section>
     {evolve && soundSlot && <MusicBlock slot={soundSlot} />}
+    {evolve && <section className="m-block" aria-label="Installation"><InstallationControls surface="map" /></section>}
     <label className="m-search"><Icon name="search" size={14} /><input type="search" aria-label="Search parameters" placeholder={`Search ${PANEL_PARAMETERS.length} parameters`} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') setQuery(''); }} /></label>
     <div className="m-groups">
       {MERIDIAN_GROUPS.filter(group => groups.has(group)).map(group => {

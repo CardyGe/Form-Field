@@ -5,6 +5,7 @@ import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { reactivity, type ReactivityEngine } from '../react/engine';
 import { MeterStore } from '../react/meter';
+import { installationMessage, logFault, useInstallation } from './installation';
 
 export interface Display { id: number; label: string; primary: boolean }
 /** What Meridian Live tells the operator: words and counts, never a picture. */
@@ -76,6 +77,7 @@ export function useLive(onError: (message: string) => void) {
         const now = latest.current;
         if (now.settings) bridge.send({ type: 'settings', settings: now.settings });
         bridge.send({ type: 'blackout', on: now.blackout });
+        bridge.send(installationMessage());
       }
     });
     const offState = bridge.onState(({ people: status, roomCaptured, meridian: readout, ...state }) => { setSourceState(state as SourceState); setPeople({ status: status ?? null, roomCaptured: roomCaptured === true }); setMeridian(readMeridian(readout)); });
@@ -90,6 +92,21 @@ export function useLive(onError: (message: string) => void) {
     return () => { offOutput(); offState(); offDisplays(); offPreview(); if (url) URL.revokeObjectURL(url); void bridge.closeOutput().catch(() => {}); };
   }, []);
   useEffect(() => { if (!outputOpen) setPreview(null); }, [outputOpen]);
+
+  // Installation mode: on launch the saved Live settings go straight to the output, and Meridian's autopilot runs there.
+  const installation = useInstallation(), autoOpened = useRef(false);
+  useEffect(() => { if (outputOpen) bridge?.send(installationMessage()); }, [installation]);
+  useEffect(() => {
+    if (autoOpened.current || outputOpen || !bridge || !settings || !installation?.on || installation.surface !== 'live') return;
+    const display = installation.display ?? settings.display;
+    if (display === null || settings.source.kind === 'file') return;
+    autoOpened.current = true;
+    void bridge.openOutput(display).catch(error => logFault(`Installation could not open the Live output: ${(error as Error).message}`));
+  }, [settings, outputOpen, installation]);
+  useEffect(() => {
+    if (meridian?.limiterError) logFault(`Live: flash limiter not running: ${meridian.limiterError}`);
+    if (meridian?.status.startsWith('Camera lost')) logFault(`Live: ${meridian.status}`);
+  }, [meridian]);
 
   // The local renderer: only while the artwork window is closed.
   const ready = !!settings && access !== null;

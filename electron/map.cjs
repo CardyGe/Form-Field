@@ -72,6 +72,7 @@ function acceptMapMessage(value) {
     case 'fade': return finite(value.ms) && value.ms >= 0 && value.ms <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, 16 * 1024);
     case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': return true;
+    case 'installation': return typeof value.autopilot === 'boolean' && finite(value.everyBeats) && value.everyBeats >= 16 && value.everyBeats <= 128;
     default: return false;
   }
 }

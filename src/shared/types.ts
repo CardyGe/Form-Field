@@ -169,11 +169,21 @@ export interface StudioBridge {
   onExportProgress(callback: (progress: ExportProgress) => void): () => void;
   live: LiveBridge;
   map: MapBridge;
+  /** Installation mode: absent in older builds. */
+  installation?: InstallationBridge;
 }
 /** Sent from the studio window to the artwork window. */
-export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' } | { type: 'signals'; signals: Record<string, number> };
+export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' } | { type: 'signals'; signals: Record<string, number> } | { type: 'installation'; autopilot: boolean; everyBeats: number };
 /** What the artwork window reports: its camera, and person finding when the look uses it. */
 export type LiveReport = SourceState & { people?: PeopleStatus; roomCaptured?: boolean; /** Meridian Live: words and counts, never a picture. */ meridian?: { status: string; bodies: number; limiterOn: boolean; limiterError: string | null; qualityReduced?: boolean } };
+/** Installation mode's saved settings, as the main process validates them. */
+export interface InstallationSettings { on: boolean; surface: 'map' | 'live'; autopilot: boolean; everyBeats: number; display: number | null }
+export interface InstallationBridge {
+  get(): Promise<{ settings: InstallationSettings; running: boolean }>;
+  set(settings: InstallationSettings): Promise<{ settings: InstallationSettings; running: boolean }>;
+  /** Records one fault string. Resolves false if it was not plain text. */
+  log(text: string): Promise<boolean>;
+}
 export interface LiveBridge {
   /** The saved settings as stored, or null. Pass the result through validateLiveSettings. */
   loadSettings(): Promise<unknown>;

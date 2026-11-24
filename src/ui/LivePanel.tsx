@@ -1,6 +1,7 @@
 import { useRef, type ComponentProps, type ReactNode } from 'react';
 import { LiveLookControls, LiveReactSection, Slider, liveLinks } from './LiveLookControls';
 import { useLive } from './useLive';
+import { InstallationControls } from './InstallationControls';
 import { LINKS_BUDGET, IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SIGNAL_STARTS, SMOKE_CONTROLS, SMOKE_STARTS, usesPeople, type Box, type LiveSettings, type SignalKey } from '../live/settings';
 import { RELIEF_PALETTES, validateReliefPalette } from '../live/relief-palettes';
 import { rampHex } from '../live/colour';
@@ -112,6 +113,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
           {live.meridian.status.startsWith('Movement only') && <p className="live-status warn">People are being found from movement alone. Keep the projection and moving lights out of the camera's view; Throw and Release wait until people are found.</p>}
           {live.meridian.limiterError ? <p className="live-status warn" role="alert">Flash limiter is not running ({live.meridian.limiterError}). The picture is shown unlimited: keep strobing moves off.</p>
             : live.meridian.limiterOn ? <p className="live-status">Flash limiter on</p> : null}
+          <InstallationControls surface="live" display={s.display} />
           {live.meridian.qualityReduced && <p className="live-status" role="status" title="Less bloom, tearing or small detail, to keep the output smooth. Lines stay sharp and the flash limiter is unchanged. It comes back after a few calm seconds.">Quality reduced</p>}
         </section>}
         <LiveLookControls s={s} update={live.update} reactFor={reactFor} onView={() => live.setView('art')} onClear={live.clear} />

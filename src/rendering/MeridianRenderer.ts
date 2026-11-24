@@ -14,6 +14,8 @@ import { LightGrid, type LightPlacement, type LightTone, type ToneCurve } from '
 import { LinkedOverrides, MoveRouter, type LinkedEdit } from '../meridian/moves';
 import { MusicLight } from '../meridian/music-light';
 import { FULL_QUALITY, type MeridianQuality } from '../meridian/governor';
+import { Autopilot } from '../meridian/autopilot';
+import { installation } from '../meridian/installation-state';
 import { musicStatus } from '../meridian/music-status';
 import { applyLockedVariation, MAX_STORED_SEED } from '../meridian/panel';
 import { MERIDIAN_DEFAULTS, MERIDIAN_PARAMETERS } from '../meridian/parameters';
@@ -70,6 +72,8 @@ const BLOOM_UNIFORMS = BLOOM_HEIGHTS.map((_, i) => `uBloom${i}`);
 /** One layer's live performance: its clock, its light, and what linked moves have changed for this session only. */
 interface EvolveLive {
   conductor: Conductor; light: MusicLight; router: MoveRouter; overrides: LinkedOverrides; baseSeed: number; presses: number;
+  /** Installation autopilot for this layer, made when it is first switched on, and its pace. */
+  pilot: Autopilot | null; pilotBeats: number; pilotChanges: number;
   readonly input: { dt: number; signals: Readonly<Record<string, number>>; params: Readonly<Record<string, number>>; externalTempo: boolean };
 }
 /** One Evolve layer's picture for this composition frame, drawn once and measured before anything reaches the screen. */
@@ -77,6 +81,9 @@ interface EvolveEntry { readonly list: DisplayList; stamp: number; phase: number
 const EXPORT_TABLES = 8;
 const isEvolveLayer = (layer: Layer): boolean => layer.visible && layer.kind === 'meridian' && Math.round(layer.params.scoreStyle ?? SCORE_STYLE_EVOLVE) === SCORE_STYLE_EVOLVE;
 const NO_SIGNALS: Readonly<Record<string, number>> = Object.freeze({});
+const AUTOPILOT_MUTATE: LinkedEdit = { kind: 'mutate', slot: -1 };
+/** A layer's id as a number, so two layers with the same seed are not steered alike. */
+const hashId = (id: string): number => { let h = 2166136261; for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619); return h >>> 0; };
 
 interface CachedScore { signature: Float64Array; score: Score; used: number }
 
@@ -379,9 +386,11 @@ export class MeridianRenderer {
   }
 
   /** For the scripted checks: what the last Evolve layer's Conductor and moves did. */
-  performanceReport(): { status: string; beats: number; wave: number; frames: number; drops: number; holds: number; linkedSeed: boolean } {
+  performanceReport(): { status: string; beats: number; wave: number; frames: number; drops: number; holds: number; linkedSeed: boolean; autopilotChanges: number } {
     const { status, beats, wave, frames, drops, holds } = this.diagnostics;
-    return { status, beats, wave, frames, drops, holds, linkedSeed: [...this.evolveLive.values()].some(live => live.overrides.seed !== null) };
+    let autopilotChanges = 0;
+    for (const live of this.evolveLive.values()) autopilotChanges += live.pilotChanges;
+    return { status, beats, wave, frames, drops, holds, linkedSeed: [...this.evolveLive.values()].some(live => live.overrides.seed !== null), autopilotChanges };
   }
 
   /** A project was loaded: what linked moves changed in the last one must not carry over. */
@@ -476,6 +485,20 @@ export class MeridianRenderer {
       const input = performer.input;
       input.dt = Math.min(wall, .25); input.signals = runtime.signals ?? NO_SIGNALS; input.params = live; input.externalTempo = runtime.externalTempo === true;
       const frame = performer.conductor.update(input);
+      // Installation: the autopilot presses only Next and Mutate, Evolve's continuous moves, on the Conductor's clock.
+      if (installation.autopilot) {
+        if (!performer.pilot || performer.pilotBeats !== installation.everyBeats) { performer.pilot = new Autopilot(performer.baseSeed ^ hashId(layer.id), installation.everyBeats); performer.pilotBeats = installation.everyBeats; }
+        const action = performer.pilot.next(frame, live);
+        if (action.moves.length) {
+          performer.pilotChanges++;
+          if (action.moves[0] === 'moveNext') moves.next = true;
+          else {
+            this.applyLinkedEdit(performer, AUTOPILOT_MUTATE, layer, structure, seed, action.seed);
+            performer.overrides.apply(structure, live);
+            Object.assign(view, live);
+          }
+        }
+      }
       performer.light.update(frame, live, input.dt, transport.clock.music);
       musicStatus.status = frame.status; musicStatus.bpm = frame.bpm;
       const seen = this.diagnostics;
@@ -536,15 +559,15 @@ export class MeridianRenderer {
 
   private evolvePerformer(layer: Layer, seed: number): EvolveLive {
     let state = this.evolveLive.get(layer.id);
-    if (!state) { state = { conductor: new Conductor(), light: new MusicLight(), router: new MoveRouter(), overrides: new LinkedOverrides(), baseSeed: seed, presses: 0, input: { dt: 0, signals: NO_SIGNALS, params: this.live, externalTempo: false } }; this.evolveLive.set(layer.id, state); }
+    if (!state) { state = { conductor: new Conductor(), light: new MusicLight(), router: new MoveRouter(), overrides: new LinkedOverrides(), baseSeed: seed, presses: 0, pilot: null, pilotBeats: 0, pilotChanges: 0, input: { dt: 0, signals: NO_SIGNALS, params: this.live, externalTempo: false } }; this.evolveLive.set(layer.id, state); }
     if (state.baseSeed !== seed) { state.baseSeed = seed; state.overrides.seed = null; } // The performer chose a seed, which replaces a linked one.
     return state;
   }
 
   /** A linked Mutate, Reseed or Recall lasts for this session and never edits the show. */
-  private applyLinkedEdit(state: EvolveLive, edit: LinkedEdit, layer: Layer, structure: Readonly<Record<string, number>>, seed: number): void {
+  private applyLinkedEdit(state: EvolveLive, edit: LinkedEdit, layer: Layer, structure: Readonly<Record<string, number>>, seed: number, chosen?: number): void {
     state.presses++;
-    const picked = (Math.imul(seed ^ 0x51ed270b, 0x9e3779b1) + Math.imul(state.presses, 0x85ebca6b)) >>> 0;
+    const picked = chosen ?? (Math.imul(seed ^ 0x51ed270b, 0x9e3779b1) + Math.imul(state.presses, 0x85ebca6b)) >>> 0;
     if (edit.kind === 'reseed' && !layer.meridian?.locks.includes('Score')) state.overrides.seed = 1 + picked % MAX_STORED_SEED;
     else if (edit.kind === 'recall') { const stored = layer.params[`seedSlot${edit.slot}`]; if (stored) state.overrides.seed = stored >>> 0; }
     else if (edit.kind === 'mutate') {

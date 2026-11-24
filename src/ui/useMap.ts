@@ -4,6 +4,7 @@ import { applyStudioEdit, initialMapState, mapReducer, type MapState } from '../
 import type { Project } from '../shared/types';
 import { autosaveSchedule, canEdit } from '../map/autosave';
 import { acceptMapMessage, sourcesToSend, toWire, wallInputs, type MapMessage } from '../map/messages';
+import { installationMessage, logFault, useInstallation } from './installation';
 import { useLiveSettings } from './useLiveSettings';
 import type { LiveSettings } from '../live/settings';
 import { createShow, usesLive, validateShow, type ShowDocument } from '../map/show';
@@ -247,6 +248,22 @@ export function useMap(onError: (message: string) => void) {
     };
   }, []);
   useEffect(() => { if (!outputOpen) { setWallPicture(null); setWallState(null); } }, [outputOpen]);
+
+  // Installation mode: on launch the last show goes straight to the projector, and Meridian's autopilot runs on the wall.
+  const installation = useInstallation(), autoOpened = useRef(false);
+  useEffect(() => { if (outputOpen) bridge?.send(installationMessage()); }, [outputOpen, outputEpoch, installation]);
+  useEffect(() => {
+    if (autoOpened.current || !loaded || outputOpen || !bridge || !installation?.on || installation.surface !== 'map' || !displays.length) return;
+    autoOpened.current = true;
+    const id = installation.display !== null && displays.some(d => d.id === installation.display) ? installation.display : display;
+    if (id !== null) void bridge.openOutput(id).catch(error => logFault(`Installation could not open the wall: ${(error as Error).message}`));
+  }, [loaded, outputOpen, displays, display, installation]);
+  // Faults on the wall go to the installation log, as sentences.
+  useEffect(() => {
+    if (!wallState) return;
+    for (const failing of wallState.failing) logFault(`Map ${failing.id}: ${failing.reason}`);
+    if (wallState.flashGuard?.failed) logFault(`Map: flash limiter unavailable: ${wallState.flashGuard.failed}`);
+  }, [wallState]);
 
   // Sends to the wall. During a drag, show and crosshair go at most once per animation frame (the latest wins);
   // anything sent at once replaces what is waiting for the frame, so an old preview never lands after a release.
