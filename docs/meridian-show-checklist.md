@@ -2,6 +2,11 @@
 
 Print this on one page. Meridian is alpha until party feedback is in.
 
+## Day before (on the show Mac, from a repo checkout)
+
+- [ ] This needs the source folder, `npm run build` and Playwright, so do it at home, never at the venue. It starts a second copy of the app and measures a set test show, not yours. With `--fullscreen` it takes over the second display.
+- [ ] Close other apps, then run `caffeinate -i node scripts/soak-meridian.mjs --hours 0.25` and read the fps it prints. Quit it before you open the app for the show.
+
 ## Before doors
 
 - [ ] Mac on power, sleep off, notifications off. Open Form & Field and switch to **Map**.
@@ -12,7 +17,7 @@ Print this on one page. Meridian is alpha until party feedback is in.
 - [ ] Press **Blackout**, then press it again to bring the picture back.
 - [ ] Live (if used): aim the camera away from the projection and the lighting rig. Read the Live status line: "Movement only" means people are found from movement alone, so keep the beam and moving lights out of its view. Step in front and check shapes follow you.
 - [ ] MIDI controller plugged in and learned (if used). Press each control once.
-- [ ] Frame rate: close other apps, then run `caffeinate -i node scripts/soak-meridian.mjs --hours 0.25` on this Mac and read the fps it prints.
+- [ ] Frame rate: close other apps. With your show on the wall and music playing for a few minutes, watch the Map footer: **Quality reduced** means Meridian is cutting glow and detail to keep up. Watch the wall too: motion should be smooth, with no stutter. There is no fps readout in the app.
 - [ ] Optional: turn on Installation mode so autopilot can run the show.
 
 ## During the set
