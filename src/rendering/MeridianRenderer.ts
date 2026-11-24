@@ -4,7 +4,7 @@ import type { Layer, Project } from '../shared/types';
 import { compose } from '../meridian/composer';
 import { DisplayList, STRIDE } from '../meridian/display-list';
 import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate';
-import { Conductor } from '../meridian/conductor';
+import { Conductor, type ConductorFrame } from '../meridian/conductor';
 import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, EVOLVE_ELEMENTS, evolveScheme, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveClock, type EvolveTransport } from '../meridian/evolve';
 import { FlashGuard, guardLoopCells } from '../meridian/flash-guard';
 import { heldMoves } from '../meridian/held-moves';
@@ -41,6 +41,12 @@ export interface MeridianRuntime {
   duration?: number;
   /** The tempo comes from MIDI, tap or a fixed number rather than from the sound. */
   externalTempo?: boolean;
+  /**
+   * Meridian Live: called in the live preview once Evolve has drawn its list and before it is shown, with the Conductor's frame,
+   * so people can move the structure on the same clock. `capacity` is the list's room for the marks it adds.
+   */
+  influence?: (list: DisplayList, frame: ConductorFrame, aspect: number) => void;
+  capacity?: number;
 }
 
 const TAU = Math.PI * 2;
@@ -291,13 +297,13 @@ export class MeridianRenderer {
     this.renderList(renderer, list, live, layer.palette, this.view, layer.transform.scale, position.progress, peak, width, height, target, draw);
   }
 
-  private createEntry(): EvolveEntry {
-    return { list: new DisplayList(EVOLVE_ELEMENTS + GLITCH_SHARDS), stamp: -1, phase: 0, seed: 0, scheme: 0, area: 0, red: 0, gain: 1, saturation: Infinity };
+  private createEntry(capacity = 0): EvolveEntry {
+    return { list: new DisplayList(Math.max(EVOLVE_ELEMENTS + GLITCH_SHARDS, capacity)), stamp: -1, phase: 0, seed: 0, scheme: 0, area: 0, red: 0, gain: 1, saturation: Infinity };
   }
 
-  private entryFor(id: string): EvolveEntry {
+  private entryFor(id: string, capacity = 0): EvolveEntry {
     let entry = this.evolveEntries.get(id);
-    if (!entry) { entry = this.createEntry(); this.evolveEntries.set(id, entry); }
+    if (!entry || entry.list.data.length < capacity * STRIDE) { entry = this.createEntry(capacity); this.evolveEntries.set(id, entry); }
     return entry;
   }
 
@@ -475,7 +481,7 @@ export class MeridianRenderer {
       transport.clock.aspect = width / height;
       const clock = advanceEvolve(transport, phase, duration, wall, seed, live, moves);
       Object.assign(view, transport.values);
-      if (!list) evaluateEvolve(seed, clock, view, entry.list);
+      if (!list) { evaluateEvolve(seed, clock, view, entry.list); runtime.influence?.(entry.list, frame, width / height); }
       scheme = clock.schemeSeed;
     } else {
       this.exactView(view, runtime);
@@ -499,7 +505,7 @@ export class MeridianRenderer {
 
   /** Evolve: free-running and eased in the preview, an exact closed path in an export. It has no Rest, so the Mark stays off. */
   private drawEvolve(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, runtime?: MeridianRuntime): void {
-    const live = this.live, entry = this.entryFor(layer.id);
+    const live = this.live, entry = this.entryFor(layer.id, runtime?.capacity ?? 0);
     if (runtime?.live && !runtime.list && entry.stamp === this.compositionStamp && entry.phase === phase) {
       // Already moved on and drawn for this frame; only the values the light needs are read back.
       this.evolveLive.get(layer.id)?.overrides.apply(runtime.structure ?? layer.params, live);

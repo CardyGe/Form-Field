@@ -70,7 +70,7 @@ export interface InteractionContext {
   beats: number; bpm: number;
   /** Seconds, for slow cycles only. */
   time: number;
-  /** The last presence grid, for the lattice. Null keeps the last answer. */
+  /** The last presence grid, for the lattice. Null: nobody is inside anything. */
   presence: PresenceField | null;
   /** No camera frames: everyone is treated as gone and Attract comes in quickly. */
   cameraLost: boolean;
@@ -367,7 +367,7 @@ export class Interactions {
       const stillness = body ? body.stillness : 0, presence = body ? clamp(body.presence, 0, 1) : 0;
       if (chargeOn > 0 && stillness > 0.5 && this.releaseLock[s] <= 0) this.charge[s] = Math.min(1, this.charge[s] + step / chargeSeconds);
       else if (stillness <= 0.5) this.charge[s] = Math.max(0, this.charge[s] - step / 1.5);
-      const radius = clamp((body ? body.size : 0.4) * 0.5 * bodyScale, 0.04, 0.32) * (1 + 0.45 * grow) * (1 - 0.22 * this.charge[s] * chargeOn);
+      const radius = clamp((body ? body.size : 0.4) * 0.28 * bodyScale, 0.035, 0.2) * (1 + 0.45 * grow) * (1 - 0.22 * this.charge[s] * chargeOn);
       this.or[s] = toward(this.or[s], this.or[s] + (radius - this.or[s]) * ease(step, 0.5), 0.004 * frames);
       this.oa[s] = toward(this.oa[s], 0.85 * orbit * presence, ALPHA_LIMIT * frames);
       this.oturn[s] += step * 0.35 * (1 + (body ? body.energy : 0));
@@ -503,7 +503,7 @@ export class Interactions {
     const decay = Math.exp(-3 * step / wakeSeconds), rise = step * 4;
     for (let j = 0; j < LATTICE_ROWS; j++) for (let i = 0; i < LATTICE_COLS; i++) {
       const k = j * LATTICE_COLS + i;
-      if (f || ctx.cameraLost) this.inside[k] = this.presenceAt(f, ((i + 0.5) / LATTICE_COLS - 0.5) * aspect, (j + 0.5) / LATTICE_ROWS - 0.5, aspect, scale, alignX, alignY) ? 1 : 0;
+      this.inside[k] = this.presenceAt(f, ((i + 0.5) / LATTICE_COLS - 0.5) * aspect, (j + 0.5) / LATTICE_ROWS - 0.5, aspect, scale, alignX, alignY) ? 1 : 0;
       this.wake[k] = this.inside[k] ? Math.min(1, this.wake[k] + rise) : this.wake[k] * decay;
     }
     if (evolveCount < BASE) return;
@@ -558,11 +558,11 @@ export class Interactions {
     for (let s = 0; s < MAX_BODIES; s++) {
       const at = ORBIT_AT + s * ORBIT_MARKS, a = this.oa[s], x = this.ox[s], y = this.oy[s], r = this.or[s], c = this.charge[s] * chargeOn, turn = this.oturn[s];
       this.put(data, at, PRIMITIVE.ring, x, y, r, 0, 0.5, -1.3 * PX, 0.1 + 0.25 * c, 0, a, 0.31 + s * 0.01);
-      this.put(data, at + 1, PRIMITIVE.ring, x, y, r * 1.5, 0, 0.2, -0.9 * PX, 0.05, 0, a * 0.5, 0.41 + s * 0.01);
-      for (let q = 0; q < 4; q++) this.put(data, at + 2 + q, PRIMITIVE.arc, x, y, r * 1.95, wrapAngle(turn + q * TAU / 4), 0.9, -1 * PX, 0.06, 0.4, a * 0.6, 0.5 + q * 0.03);
+      this.put(data, at + 1, PRIMITIVE.ring, x, y, r * 1.4, 0, 0.2, -0.9 * PX, 0.05, 0, a * 0.45, 0.41 + s * 0.01);
+      for (let q = 0; q < 4; q++) this.put(data, at + 2 + q, PRIMITIVE.arc, x, y, r * 1.75, wrapAngle(turn + q * TAU / 4), 0.8, -1 * PX, 0.06, 0.4, a * 0.5, 0.5 + q * 0.03);
       this.put(data, at + 6, PRIMITIVE.dot, x, y, 0.0045, 0, 0, 0, 0.22, 0, a * 0.9, 0.62);
       const sweep = c * TAU;
-      this.put(data, at + 7, PRIMITIVE.arc, x, y, r * 1.22, wrapAngle(Math.PI / 2 - sweep), Math.max(1e-4, sweep), -2 * PX, 0.2 + 0.45 * c, 1, a * (0.3 + 0.7 * c) * smooth(c / 0.05), 0.7);
+      this.put(data, at + 7, PRIMITIVE.arc, x, y, r * 1.18, wrapAngle(Math.PI / 2 - sweep), Math.max(1e-4, sweep), -2 * PX, 0.2 + 0.45 * c, 1, a * (0.3 + 0.7 * c) * smooth(c / 0.05), 0.7);
     }
   }
 

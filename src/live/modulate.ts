@@ -1,21 +1,21 @@
 /**
  * Live's links: sound, the beat, tempo and MIDI driving the sliders of Live's looks (and sensitivity), applied to a copy
  * of the settings for one frame. The settings themselves stay as the operator set them.
- *   live.paint.<key> | live.smoke.<key> | live.relief.<key> | live.signal.<key> | live.sensitivity
+ *   live.paint.<key> | live.smoke.<key> | live.relief.<key> | live.signal.<key> | live.meridian.<key> | live.sensitivity
  */
 import { evaluate, readLinkWith, type Link } from '../react/links';
 import type { Signals } from '../react/signals';
-import { PAINT_CONTROLS, RELIEF_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SMOKE_CONTROLS, type LiveControl, type LiveSettings } from './settings';
+import { MERIDIAN_LIVE_CONTROLS, PAINT_CONTROLS, RELIEF_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SMOKE_CONTROLS, type LiveControl, type LiveSettings } from './settings';
 
 export const MAX_LIVE_LINKS = 64;
-type Section = 'paint' | 'smoke' | 'relief' | 'signal';
+type Section = 'paint' | 'smoke' | 'relief' | 'signal' | 'meridian';
 // A function, not a table: settings.ts imports this file, so its controls are only ready once both have loaded.
-const controls = (s: Section): readonly LiveControl<string>[] => ({ paint: PAINT_CONTROLS, smoke: SMOKE_CONTROLS, relief: RELIEF_CONTROLS, signal: SIGNAL_CONTROLS })[s];
-const LABELS: Record<Section, string> = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief', signal: 'Signal Melt' };
+const controls = (s: Section): readonly LiveControl<string>[] => ({ paint: PAINT_CONTROLS, smoke: SMOKE_CONTROLS, relief: RELIEF_CONTROLS, signal: SIGNAL_CONTROLS, meridian: MERIDIAN_LIVE_CONTROLS })[s];
+const LABELS: Record<Section, string> = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief', signal: 'Signal Melt', meridian: 'Meridian' };
 
 export function liveTargetRange(target: string): { min: number; max: number; label: string } | null {
   if (target === 'live.sensitivity') return { min: SENSITIVITY.min, max: SENSITIVITY.max, label: 'Sensitivity' };
-  const m = /^live\.(paint|smoke|relief|signal)\.([A-Za-z0-9]{1,40})$/.exec(target);
+  const m = /^live\.(paint|smoke|relief|signal|meridian)\.([A-Za-z0-9]{1,40})$/.exec(target);
   if (!m) return null;
   const c = controls(m[1] as Section).find(x => x.key === m[2]);
   return c ? { min: c.min, max: c.max, label: `${LABELS[m[1] as Section]} · ${c.label}` } : null;
@@ -28,7 +28,7 @@ export class LiveModulator {
   apply(settings: LiveSettings, signals: Signals, dt: number): LiveSettings {
     const links = settings.links.filter(l => l.on);
     if (!links.length) return settings;
-    const out: LiveSettings = { ...settings, paint: { ...settings.paint }, smoke: { ...settings.smoke }, relief: { ...settings.relief }, signal: { ...settings.signal } };
+    const out: LiveSettings = { ...settings, paint: { ...settings.paint }, smoke: { ...settings.smoke }, relief: { ...settings.relief }, signal: { ...settings.signal }, meridian: { ...settings.meridian } };
     for (const target of new Set(links.map(l => l.target))) {
       const range = liveTargetRange(target);
       if (!range) continue;
@@ -45,8 +45,8 @@ export class LiveModulator {
 
 /** Ready-made reactions for the look on screen. Each adds an ordinary link. */
 export const LIVE_REACTIONS = {
-  'movement-bass': { label: 'Movement on the bass', input: 'audio.bass', amount: 0.35, attackMs: 20, releaseMs: 250, keys: { paint: 'response', smoke: 'response', relief: 'reach', signal: 'response' } },
-  'glow-beat': { label: 'Glow on the beat', input: 'beat.pulse', amount: 0.4, attackMs: 0, releaseMs: 160, keys: { paint: 'spread', smoke: 'emit', relief: 'edgeLight', signal: 'halo' } },
+  'movement-bass': { label: 'Movement on the bass', input: 'audio.bass', amount: 0.35, attackMs: 20, releaseMs: 250, keys: { paint: 'response', smoke: 'response', relief: 'reach', signal: 'response', meridian: 'macroTension' } },
+  'glow-beat': { label: 'Glow on the beat', input: 'beat.pulse', amount: 0.4, attackMs: 0, releaseMs: 160, keys: { paint: 'spread', smoke: 'emit', relief: 'edgeLight', signal: 'halo', meridian: 'macroHeat' } },
 } as const;
 export type LiveReaction = keyof typeof LIVE_REACTIONS;
 

@@ -12,10 +12,12 @@ import { _electron as electron } from 'playwright';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const reliefPerf = process.argv.includes('--relief');
 const performanceRun = process.argv.includes('--performance');
+// --only=meridian runs just the checks whose names start with that word, for working on one look.
+const only = process.argv.find(a => a.startsWith('--only='))?.slice(7) ?? null;
 const out = path.join(root, 'work/live');
 await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {LiveRenderer} from './src/live/LiveRenderer';
-export {TestSource, TestMaskProvider} from './src/live/test-source';
+export {TestSource, TestMaskProvider, CROWD_SCENES} from './src/live/test-source';
 export {defaultLiveSettings, RELIEF_PRESETS} from './src/live/settings';
 export {recolourGLSL, setRamp} from './src/live/recolour';
 export {Passes} from './src/live/passes';
@@ -41,6 +43,7 @@ page.on('pageerror', e => errors.push(String(e)));
 page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
 const results = [];
 const check = async (name, run) => {
+  if (only && !name.startsWith(only)) return;
   try { await run(); results.push(`ok    ${name}`); }
   catch (error) { results.push(`FAIL  ${name}\n      ${String(error.message).split('\n')[0]}`); process.exitCode = 1; }
 };
@@ -737,6 +740,138 @@ try {
     const r = await page.evaluate(() => { const at = vividness => { window.live.smoke(s => { s.smoke.vividness = vividness; s.smoke.swirl = 1; s.smoke.colourChange = 1; s.smoke.palette = [...window.live.m.NEON_STRATA]; }); window.live.run(480); return window.live.offFigure().saturation; };
       return { flat: at(0), vivid: at(1) }; });
     assert.ok(r.vivid > r.flat * 1.3, `saturation at Vividness 1: ${r.vivid.toFixed(2)}, at 0: ${r.flat.toFixed(2)}`);
+  });
+  // --- Meridian Live: people move the living structure ---
+  await page.evaluate(() => {
+    // Frames one at a time with a pause between, so the presence grid's reads (which never block a frame) can arrive.
+    window.live.meridian = (scene, change) => { const c = window.live.make(s => { s.look = 'meridian'; change?.(s); }); c.source.crowd = scene; return c; };
+    // The pause comes before each frame, so the last frame is still on the canvas when the caller reads it.
+    window.live.walk = async (frames, advance = true) => { const { source, renderer } = window.live.current; for (let i = 0; i < frames; i++) { await new Promise(r => setTimeout(r, 0)); if (advance) source.advance(window.live.STEP); renderer.frame(window.live.STEP); } };
+    window.live.report = () => window.live.current.renderer.meridianReport();
+    // Mean brightness (0..255) of the picture inside a window around uv (x, y), origin bottom-left.
+    window.live.around = (x, y, r = .08) => { const { data, width, height } = window.live.pixels(); let sum = 0, n = 0;
+      for (let py = Math.floor((1 - y - r) * height); py < (1 - y + r) * height; py++) for (let px = Math.floor((x - r * 9 / 16) * width); px < (x + r * 9 / 16) * width; px++) {
+        if (px < 0 || py < 0 || px >= width || py >= height) continue; const i = (py * width + px) * 4; sum += data[i] + data[i + 1] + data[i + 2]; n += 3; }
+      return n ? sum / n : 0; };
+  });
+  await check('meridian: people appear as bodies, and the picture gathers where they are', async () => {
+    const r = await page.evaluate(async () => {
+      const run = async scene => { window.live.meridian(scene); await window.live.walk(360); return window.live.report(); };
+      const empty = await run('empty'); const emptyPicture = window.live.pixels().data.slice(); const emptyPng = await window.live.png();
+      const people = await run('three'); const picture = window.live.pixels().data; const peoplePng = await window.live.png();
+      const bright = (data, x, y) => { const { width, height } = window.live.pixels(); let sum = 0, n = 0;
+        for (let py = Math.floor((1 - y - .2) * height); py < (1 - y + .2) * height; py++) for (let px = Math.floor((x - .07) * width); px < (x + .07) * width; px++) {
+          if (px < 0 || py < 0 || px >= width || py >= height) continue; const i = (py * width + px) * 4; sum += data[i] + data[i + 1] + data[i + 2]; n += 3; } return sum / Math.max(1, n); };
+      const lift = people.positions.map(b => bright(picture, b.x, b.y) - bright(emptyPicture, b.x, b.y));
+      return { emptyPng, peoplePng, empty: empty.bodies, bodies: people.bodies, mode: people.mode, status: people.status, lift, attractEmpty: empty.attract, attractPeople: people.attract, readbackMs: people.readbackMs, gridMs: people.gridMs };
+    });
+    await save('meridian-empty', r.emptyPng); await save('meridian-three', r.peoplePng);
+    assert.equal(r.empty, 0, 'nobody in the empty room');
+    assert.equal(r.bodies, 3, `${r.bodies} bodies for three people (${r.status})`);
+    assert.equal(r.mode, 'people');
+    assert.ok(r.attractEmpty > .9 && r.attractPeople < .1, `attract empty ${r.attractEmpty}, with people ${r.attractPeople}`);
+    for (const lift of r.lift) assert.ok(lift > 2, `the picture around each person is brighter than the empty room's: ${r.lift.map(v => v.toFixed(1))}`);
+    assert.ok(r.readbackMs < 30, `presence grid read in ${r.readbackMs} ms`);
+  });
+  await check('meridian: the camera picture never reaches the artwork', async () => {
+    for (const file of ['src/live/Meridian.ts', 'src/live/meridian-presence.ts', 'src/meridian/live-core.ts']) {
+      const text = await fs.readFile(path.join(root, file), 'utf8');
+      assert.ok(!/feed\.camera|uCamera|\.camera\b/.test(text), `${file} reads the camera picture`);
+    }
+    // And on screen: a camera full of bright stripes, with nobody found, draws exactly what an empty dark room draws.
+    const r = await page.evaluate(async () => {
+      window.live.meridian('empty'); await window.live.walk(120); const dark = window.live.pixels().data.slice();
+      const c = window.live.meridian('empty'); c.source.field = true; c.made; await window.live.walk(1); window.live.current.made.provider.coverAll = false; await window.live.walk(119);
+      return window.live.difference(dark, window.live.pixels().data);
+    });
+    assert.ok(r < 1, `a bright moving camera changed the empty picture by ${r}/255`);
+  });
+  await check('meridian: losing the camera eases into attract within two seconds, and its return does not jump', async () => {
+    const r = await page.evaluate(async () => {
+      window.live.meridian('one'); await window.live.walk(240);
+      const before = window.live.report();
+      await window.live.walk(120, false);
+      const lost = window.live.report();
+      await window.live.walk(300);
+      return { before, lost, back: window.live.report() };
+    });
+    assert.equal(r.before.bodies, 1);
+    assert.equal(r.lost.status, 'Camera lost · attract');
+    assert.ok(r.lost.attract > .9, `attract ${r.lost.attract} two seconds after the camera went`);
+    assert.equal(r.back.bodies, 1); assert.ok(r.back.attract < .3, `attract ${r.back.attract} after the camera returned`);
+  });
+  await check('meridian: a people-model failure falls back to movement-only bodies', async () => {
+    const r = await page.evaluate(async () => {
+      window.live.meridian('one'); await window.live.walk(30);
+      window.live.current.made.provider.dispose();
+      await window.live.walk(300);
+      return window.live.report();
+    });
+    assert.equal(r.mode, 'movement');
+    assert.ok(r.status.startsWith('Movement only'), r.status);
+    assert.ok(r.bodies >= 1, `${r.bodies} bodies from movement alone`);
+  });
+  await check('meridian: the Live output goes through the flash limiter, and calm Meridian is left exactly as drawn', async () => {
+    const r = await page.evaluate(async () => {
+      window.live.meridian('demo'); await window.live.walk(600);
+      const { renderer } = window.live.current; renderer.frame(window.live.STEP);
+      return { probe: renderer.probeLimiter(), report: window.live.report() };
+    });
+    assert.ok(r.report.limiter.on, `limiter on (${r.report.limiter.error})`);
+    assert.equal(r.probe.changedBytes, 0, `${r.probe.changedBytes} bytes changed by the limiter`);
+  });
+  await check('meridian: a full-field strobe on the Live output is held to three flashes a second', async () => {
+    const r = await page.evaluate(async () => {
+      window.live.meridian('empty'); await window.live.walk(30);
+      const { renderer } = window.live.current; renderer.flashTest = true;
+      const means = [];
+      // Mean light, linear, as the flash rule measures it.
+      const lin = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+      for (let i = 0; i < 180; i++) { renderer.frame(window.live.STEP); const { data } = window.live.pixels(); let sum = 0; for (let k = 0; k < data.length; k += 16) sum += .2126 * lin(data[k]) + .7152 * lin(data[k + 1]) + .0722 * lin(data[k + 2]); means.push(sum / (data.length / 16)); }
+      renderer.flashTest = false;
+      return means;
+    });
+    console.log('strobe light', r.filter((_, i) => i % 6 === 0).map(v => v.toFixed(3)).join(' '));
+    // A flash is a rise of a tenth of full light (linear) from the last low.
+    let low = r[0], flashes = 0, rising = false;
+    for (const v of r) { if (v < low) { low = v; rising = false; } if (!rising && v - low >= .1) { flashes++; rising = true; } if (rising && v < low + .05) { rising = false; low = v; } else if (rising) low = Math.min(low, v); }
+    assert.ok(flashes <= 3 * 3 + 1, `${flashes} flashes in three seconds of a 30 Hz strobe`);
+    assert.ok(Math.max(...r) > .03, 'the picture is not simply black');
+  });
+  await check('meridian: if the limiter cannot run, the picture stays and a warning shows', async () => {
+    const r = await page.evaluate(async () => {
+      window.live.meridian('three'); await window.live.walk(120);
+      const before = window.live.painted(0).fraction;
+      const { renderer } = window.live.current; renderer.breakLimiter(); await window.live.walk(10);
+      return { before, painted: window.live.painted(0).fraction, report: window.live.report() };
+    });
+    assert.ok(r.painted > .001, `painted ${r.painted} (before ${r.before})`);
+    assert.equal(r.report.limiter.on, false); assert.ok(r.report.limiter.error, 'a warning is given');
+  });
+  await check('meridian: two minutes at 1080p with the crowd test source', async () => {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.show());
+    const seconds = Number(process.env.MERIDIAN_PERF_SECONDS) || 120;
+    const r = await page.evaluate(async seconds => {
+      const { source, renderer } = window.live.meridian('demo', s => { s.quality = 1080; });
+      let last = performance.now(), running = true; const gaps = [];
+      renderer.start();
+      const tick = now => { if (!running) return; gaps.push(now - last); source.advance((now - last) / 1000); last = now; requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+      await new Promise(r => setTimeout(r, 2000)); gaps.length = 0; renderer.stats();
+      const reports = [];
+      for (let t = 0; t < seconds; t += 10) { await new Promise(r => setTimeout(r, 10000)); reports.push(window.live.report()); }
+      running = false;
+      const stats = renderer.stats(); renderer.stop(); renderer.frame(1 / 60);
+      const cost = renderer.probeLimiterCost(); gaps.sort((a, b) => a - b);
+      const report = window.live.report();
+      return { seconds, fps: stats.fps, worstMs: stats.worstMs, medianMs: gaps[gaps.length >> 1], p99Ms: gaps[Math.floor(gaps.length * .99)], over25ms: gaps.filter(g => g > 25).length, frames: gaps.length,
+        limiterCpuMs: report.limiter.cpuMs, limiterGpu: cost, readbackMs: report.readbackMs, gridMs: report.gridMs, drawMs: report.drawMs, bodiesSeen: Math.max(...reports.map(x => x.bodies)), statuses: reports.map(x => x.status) };
+    }, seconds);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.hide());
+    await fs.writeFile(path.join(out, 'meridian-performance.json'), JSON.stringify(r, null, 2));
+    console.log(`meridian performance: ${JSON.stringify(r)}`);
+    assert.ok(r.bodiesSeen >= 3, `at most ${r.bodiesSeen} bodies seen`);
+    assert.ok(r.fps >= 58, `${r.fps.toFixed(1)} fps over ${r.seconds} s at 1080p (worst ${r.worstMs.toFixed(1)} ms, ${r.over25ms} frames over 25 ms)`);
   });
   /* STAGES */
   await check('no page errors', async () => assert.deepEqual(errors, []));
