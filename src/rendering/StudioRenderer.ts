@@ -7,7 +7,7 @@ import { isInstrument } from '../core/instruments';
 import * as THREE from 'three';
 import { GraphicRenderer } from './GraphicRenderer';
 import { graphicRenderPlan } from './graphic-view';
-import { sourceViewMatrix } from './source-view';
+import { imageFit, sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
@@ -27,6 +27,7 @@ import { compositesPlainly, plainOverFragment } from './smoke-cloud-composite';
 import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
+import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -238,6 +239,21 @@ export class StudioRenderer {
     uShadowTint: { value: 0 }, uHighlightTint: { value: 0 },
     uKeyMix: { value: 0 }, uKeyMode: { value: 0 }, uKeyLow: { value: .25 }, uKeyHigh: { value: 1 }, uKeySoft: { value: .1 },
     uKeyHue: { value: 120 }, uKeyHueRange: { value: 40 }, uKeyInvert: { value: 0 },
+  });
+  /** Warp finish: one target shared by all layers, built on first use. */
+  private warpTarget: THREE.WebGLRenderTarget | null = null;
+  private readonly warp = material(warpFragment, {
+    uSource: { value: null }, uResolution: { value: new THREE.Vector2(1, 1) }, uAspect: { value: 1 }, uSeed: { value: 0 },
+    uBendAmount: { value: 0 }, uBendField: { value: 0 }, uBendScale: { value: 3 }, uBendDirection: { value: new THREE.Vector2(1, 0) },
+    uBendTurn: { value: 0 }, uBendDetail: { value: 3 }, uBendFalloff: { value: .5 }, uBendChroma: { value: 0 }, uBendCount: { value: 1 },
+    uBendPoints: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
+    uLiquidAmount: { value: 0 }, uLiquidStyle: { value: 0 }, uLiquidScale: { value: 2 }, uLiquidSteps: { value: 6 }, uLiquidDetail: { value: 3 },
+    uLiquidTurn: { value: 0 }, uLiquidTrail: { value: 0 }, uLiquidChroma: { value: 0 }, uLiquidDrift: { value: new THREE.Vector2(1, 0) },
+    uBelow: { value: null }, uLumaAmount: { value: 0 }, uLumaSource: { value: 0 }, uLumaChannel: { value: 0 }, uLumaMode: { value: 0 },
+    uLumaDirection: { value: new THREE.Vector2(0, 1) }, uLumaThreshold: { value: 0 }, uLumaSoft: { value: .2 }, uLumaChroma: { value: 0 },
+    uPolarAmount: { value: 0 }, uPolarMode: { value: 0 }, uPolarCentre: { value: new THREE.Vector2() }, uPolarTwist: { value: 0 },
+    uMirrorAmount: { value: 0 }, uMirrorMode: { value: 0 }, uMirrorSegments: { value: 6 }, uMirrorTurn: { value: 0 },
+    uLayerView: { value: new THREE.Matrix3() }, uLayerInverse: { value: new THREE.Matrix3() }, uLayerMoved: { value: 0 }, uLayerBounded: { value: 0 }, uLayerExtent: { value: new THREE.Vector2(1, 1) }, uPictureInset: { value: new THREE.Vector2(0, 0) },
   });
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
@@ -864,13 +880,7 @@ export class StudioRenderer {
       this.image.uniforms.uImage.value = asset.texture;
       this.image.uniforms.uMirror.value = number(layer,'mirror',0);
       this.image.uniforms.uRepeat.value = number(layer,'repeat',1);
-      const imageAspect = layer.image.width / layer.image.height;
-      let x = 1, y = 1;
-      if (layer.image.fit === 'contain') {
-        if (imageAspect > aspect) y = aspect / imageAspect; else x = imageAspect / aspect;
-      } else {
-        if (imageAspect > aspect) x = imageAspect / aspect; else y = aspect / imageAspect;
-      }
+      const [x, y] = imageFit(layer.image, aspect);
       (this.image.uniforms.uFit.value as THREE.Vector2).set(x, y);
       this.draw(this.image, this.source);
     } else {
@@ -952,7 +962,8 @@ export class StudioRenderer {
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
-      const finished = lensActive(original) ? this.lensSource(original, layer, sourceTexture, wrapped, width, height) : sourceTexture;
+      const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
+      const finished = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
       // Exports always use the full compositor; a live untouched Smoke Cloud does not need its cost at 4K.
       if (!this.exporting && !this.fullCompositorOnly && compositesPlainly(layer, this.tiling)) {
         // Alone in the frame, it is already the finished composite: drawing it over nothing changes no pixel.
@@ -1013,6 +1024,71 @@ export class StudioRenderer {
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
     this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
     this.draw(this.finish, this.linearOutput);
+  }
+
+  /**
+   * Warp finish: moves the layer's pixels after Feedback and Time and before
+   * Colour and Lens, in its own target, so it never enters the echo history.
+   * `below` is the picture under this layer, read by Luma Warp.
+   */
+  warpSource(original: Layer, layer: Layer, source: THREE.Texture, below: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
+    if (!warpActive(original)) return source;
+    // A modulated amount can rest at zero, where there is nothing to do.
+    const amount = Math.max(0, number(layer, 'bendAmount', 0)), liquid = Math.max(0, number(layer, 'liquidAmount', 0)), luma = Math.max(0, number(layer, 'lumaWarpAmount', 0));
+    const polar = Math.min(1, Math.max(0, number(layer, 'polarAmount', 0))), mirror = Math.min(1, Math.max(0, number(layer, 'mirrorAmount', 0)));
+    if (amount <= 0 && liquid <= 0 && luma <= 0 && polar <= 0 && mirror <= 0) return source;
+    this.warpTarget ??= target();
+    const output = this.warpTarget;
+    if (output.width !== width || output.height !== height) output.setSize(width, height);
+    setWrap(output, this.tiling);
+    const u = this.warp.uniforms, angle = number(layer, 'bendAngle', 0) * Math.PI / 180, seed = number(layer, 'seed', 0) % 1000;
+    const points = warpPoints(Math.min(8, Math.round(number(layer, 'bendPoints', 3))), seed);
+    u.uSource.value = source; u.uAspect.value = width / height; u.uSeed.value = seed;
+    (u.uResolution.value as THREE.Vector2).set(width, height);
+    u.uBendAmount.value = amount; u.uBendField.value = Math.round(number(layer, 'bendField', 0));
+    u.uBendScale.value = number(layer, 'bendScale', 3);
+    (u.uBendDirection.value as THREE.Vector2).set(Math.cos(angle), Math.sin(angle));
+    // Whole cycles only, so the loop closes.
+    u.uBendTurn.value = Math.round(number(layer, 'bendCycles', 1)) * phase;
+    u.uBendDetail.value = Math.round(number(layer, 'bendDetail', 3));
+    u.uBendFalloff.value = number(layer, 'bendFalloff', .5); u.uBendChroma.value = number(layer, 'bendChroma', 0);
+    u.uBendCount.value = points.length;
+    points.forEach((point, i) => (u.uBendPoints.value as THREE.Vector3[])[i].set(point.x, point.y, point.polarity));
+    const style = Math.round(number(layer, 'liquidStyle', 0)), drift = seed * 2.39996;
+    u.uLiquidAmount.value = liquid; u.uLiquidStyle.value = style; u.uLiquidScale.value = number(layer, 'liquidScale', 2);
+    u.uLiquidSteps.value = Math.min(16, Math.max(1, Math.round(number(layer, 'liquidSteps', 6))));
+    u.uLiquidDetail.value = Math.min(5, Math.max(1, Math.round(number(layer, 'liquidDetail', 3))));
+    // Whole cycles only, so the loop closes.
+    u.uLiquidTurn.value = Math.round(number(layer, 'liquidCycles', 1)) * phase;
+    // The trail control belongs to Flow, so a value left from Flow never shows on another style.
+    u.uLiquidTrail.value = style === 1 ? number(layer, 'liquidTrail', 0) : 0;
+    u.uLiquidChroma.value = number(layer, 'liquidChroma', 0);
+    (u.uLiquidDrift.value as THREE.Vector2).set(Math.cos(drift), Math.sin(drift));
+    const lumaAngle = number(layer, 'lumaWarpAngle', 90) * Math.PI / 180;
+    u.uBelow.value = below; u.uLumaAmount.value = luma;
+    u.uLumaSource.value = Math.round(number(layer, 'lumaWarpSource', 0)); u.uLumaChannel.value = Math.round(number(layer, 'lumaWarpChannel', 0));
+    u.uLumaMode.value = Math.round(number(layer, 'lumaWarpMode', 0));
+    (u.uLumaDirection.value as THREE.Vector2).set(Math.cos(lumaAngle), Math.sin(lumaAngle));
+    u.uLumaThreshold.value = number(layer, 'lumaWarpThreshold', 0); u.uLumaSoft.value = number(layer, 'lumaWarpSoft', .2);
+    u.uLumaChroma.value = number(layer, 'lumaWarpChroma', 0);
+    // Positive Y is down the screen, the same as a layer's position.
+    u.uPolarAmount.value = polar; u.uPolarMode.value = Math.round(number(layer, 'polarMode', 0));
+    (u.uPolarCentre.value as THREE.Vector2).set(number(layer, 'polarCentreX', 0), -number(layer, 'polarCentreY', 0));
+    u.uPolarTwist.value = number(layer, 'polarTwist', 0);
+    u.uMirrorAmount.value = mirror; u.uMirrorMode.value = Math.round(number(layer, 'mirrorMode', 0));
+    u.uMirrorSegments.value = Math.max(2, Math.round(number(layer, 'mirrorSegments', 6)));
+    // Whole turns only, so the loop closes.
+    u.uMirrorTurn.value = number(layer, 'mirrorAngle', 0) * Math.PI / 180 + Math.round(number(layer, 'mirrorTurns', 0)) * phase;
+    // Mirror and Polar pivot on the layer, so a moved picture stays in view.
+    const pose = layerWarpView(layer.transform, width / height), picture = warpPicture(layer, width, height);
+    (u.uLayerView.value as THREE.Matrix3).copy(pose.view); (u.uLayerInverse.value as THREE.Matrix3).copy(pose.inverse);
+    // A bounded Image works in its layer's space even unmoved, where that space is the frame's.
+    u.uLayerMoved.value = Number(pose.moved || picture.bounded);
+    u.uLayerBounded.value = Number(picture.bounded);
+    (u.uLayerExtent.value as THREE.Vector2).set(picture.extent[0], picture.extent[1]);
+    (u.uPictureInset.value as THREE.Vector2).set(picture.inset[0], picture.inset[1]);
+    this.draw(this.warp, output);
+    return output.texture;
   }
 
   /**
@@ -1448,6 +1524,7 @@ export class StudioRenderer {
     }
     if (!needs.driver && this.slitDriverTarget) { this.slitDriverTarget.dispose(); this.slitDriverTarget = null; slit.uDriver.value = this.fallback; }
     if (this.lensTarget && !project.layers.some(layer => layer.visible && lensActive(layer))) { this.lensTarget.dispose(); this.lensTarget = null; }
+    if (this.warpTarget && !project.layers.some(layer => layer.visible && warpActive(layer))) { this.warpTarget.dispose(); this.warpTarget = null; }
   }
 
   render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }, playing = true): void {
@@ -1559,6 +1636,7 @@ export class StudioRenderer {
     this.glow?.bright.dispose(); this.glow?.pyramid.dispose(); this.glow?.streak.dispose(); this.glow = null; this.glowBright.dispose();
     this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
+    this.warpTarget?.dispose(); this.warpTarget = null; this.warp.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();

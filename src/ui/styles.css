@@ -535,6 +535,8 @@ a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .finish-parts button { min-height: 24px; border-radius: 3px; color: var(--muted); font-size: 11px; }
 .finish-parts button:hover { color: var(--ink); }
 .finish-parts button[aria-pressed=true] { color: var(--ink); background: #414141; }
+.finish-groups { grid-template-columns: repeat(6,minmax(0,1fr)); margin: 6px 0 0; }
+.finish-groups button { min-width: 0; padding: 0 2px; overflow: hidden; font-size: 10.5px; text-overflow: ellipsis; }
 .finish-detail-body .parameter input[type=range] { height: 24px; }
 .finish-detail-body .parameter-label input { height: 22px; }
 .finish-detail-body .stacked-label { display: grid; grid-template-columns: minmax(80px,1.1fr) minmax(0,1.9fr); gap: 6px; align-items: center; min-height: 28px; margin-bottom: 0; color: #cececa; }

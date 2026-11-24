@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FINISH_KEYS } from '../src/core/finishing';
+import { warpControlVisible, visibleBelow } from '../src/rendering/warp';
 import { createLayer, visibleParameterDefinitions } from '../src/core/project';
-import { FINISH_EFFECTS, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, powerLocked, resetFinishEffect, searchFinishEffects, toggleFinishEffect } from '../src/ui/finish-rack';
+import { FINISH_EFFECTS, addFinishEffect, pickerEffects, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, powerLocked, resetFinishEffect, searchFinishEffects, toggleFinishEffect } from '../src/ui/finish-rack';
 
 const effect = (id: string) => FINISH_EFFECTS.find(item => item.id === id)!;
 const defs = (layer = createLayer('surface')) => visibleParameterDefinitions(layer);
@@ -107,4 +108,56 @@ test('search matches names, groups and descriptions, with every word required', 
   assert.ok(ids('halftone').includes('print'));
   assert.deepEqual(ids('halftone glow'), []);
   assert.equal(ids('  ').length, FINISH_EFFECTS.length);
+});
+
+test('the picker filters by group and search together', () => {
+  assert.equal(pickerEffects(FINISH_EFFECTS, 'All', '').length, FINISH_EFFECTS.length);
+  assert.deepEqual(pickerEffects(FINISH_EFFECTS, 'Warp', '').map(item => item.id), ['warp', 'liquid', 'lumaWarp', 'polar', 'mirror']);
+  assert.deepEqual(pickerEffects(FINISH_EFFECTS, 'Warp', 'circle').map(item => item.id), ['polar']);
+  assert.deepEqual(pickerEffects(FINISH_EFFECTS, 'Time', 'circle'), []);
+});
+
+test('warp controls appear only for the type that uses them', () => {
+  const base = createLayer('surface');
+  const on = (params: Record<string, number>) => ({ ...base, params: { ...base.params, bendAmount: .2, ...params } });
+  assert.equal(warpControlVisible(base, 'bendAmount'), true);
+  assert.equal(warpControlVisible(base, 'bendField'), false);
+  assert.equal(warpControlVisible(on({ bendField: 1 }), 'bendDetail'), true);
+  assert.equal(warpControlVisible(on({ bendField: 0 }), 'bendDetail'), false);
+  assert.equal(warpControlVisible(on({ bendField: 3 }), 'bendPoints'), true);
+  assert.equal(warpControlVisible(on({ bendField: 2 }), 'bendFalloff'), true);
+  assert.equal(warpControlVisible(on({ bendField: 1 }), 'bendFalloff'), false);
+  assert.equal(warpControlVisible(on({ bendField: 0 }), 'bendAngle'), true);
+  assert.equal(warpControlVisible(on({ bendField: 4 }), 'bendAngle'), false);
+});
+
+test('the other warps show their extras only for the choice that uses them', () => {
+  const base = createLayer('surface');
+  const p = (params: Record<string, number>) => ({ ...base, params: { ...base.params, ...params } });
+  assert.equal(warpControlVisible(p({ liquidStyle: 1 }), 'liquidTrail'), false);
+  assert.equal(warpControlVisible(p({ liquidAmount: .3, liquidStyle: 1 }), 'liquidTrail'), true);
+  assert.equal(warpControlVisible(p({ liquidAmount: .3, liquidStyle: 0 }), 'liquidTrail'), false);
+  assert.equal(warpControlVisible(p({ lumaWarpAmount: .3, lumaWarpMode: 0 }), 'lumaWarpAngle'), true);
+  assert.equal(warpControlVisible(p({ lumaWarpAmount: .3, lumaWarpMode: 1 }), 'lumaWarpAngle'), false);
+  assert.equal(warpControlVisible(p({ mirrorAmount: 1, mirrorMode: 3 }), 'mirrorSegments'), true);
+  assert.equal(warpControlVisible(p({ mirrorAmount: 1, mirrorMode: 2 }), 'mirrorSegments'), false);
+  assert.equal(warpControlVisible(p({ polarAmount: 1 }), 'polarTwist'), true);
+  assert.equal(warpControlVisible(p({}), 'polarTwist'), false);
+  assert.equal(warpControlVisible({ ...base, modulations: { mirrorAmount: { kind: 'sine', amount: .2, cycles: 1, phase: 0, points: [] } } }, 'mirrorMode'), true);
+});
+
+test('a layer below means a visible layer under this one', () => {
+  const [a, b, c] = ['a', 'b', 'c'].map(id => ({ ...createLayer('surface'), id }));
+  assert.equal(visibleBelow([a, b, c], 'a'), false);
+  assert.equal(visibleBelow([a, b, c], 'c'), true);
+  assert.equal(visibleBelow([{ ...a, visible: false }, b], 'b'), false);
+  assert.equal(visibleBelow([a, b], 'missing'), false);
+});
+
+test('warp labels and descriptions avoid the technical words', () => {
+  const banned = /displacement|domain|curl|divergence|gradient|advection/i;
+  for (const id of ['warp', 'liquid', 'lumaWarp', 'polar', 'mirror']) {
+    const item = effect(id), defs = visibleParameterDefinitions(createLayer('surface')).filter(d => item.keys.includes(d.key));
+    for (const text of [item.label, item.description, ...defs.flatMap(d => [d.label, d.description ?? ''])]) assert.doesNotMatch(text, banned, `${id}: ${text}`);
+  }
 });

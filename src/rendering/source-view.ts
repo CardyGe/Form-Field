@@ -10,6 +10,18 @@ export function sourceViewMatrix(transform: Layer['transform'], aspect: number):
     d,e,.5-d*(.5+transform.x)+e*(transform.y-.5),0,0,1);
 }
 
+/** How far an image spans its layer box on each axis. Contain leaves one axis under 1 and Cover takes one past it. */
+export function imageFit(image: NonNullable<Layer['image']>, aspect: number): [number, number] {
+  const imageAspect = image.width / image.height;
+  let x = 1, y = 1;
+  if (image.fit === 'contain') {
+    if (imageAspect > aspect) y = aspect / imageAspect; else x = imageAspect / aspect;
+  } else {
+    if (imageAspect > aspect) x = imageAspect / aspect; else y = aspect / imageAspect;
+  }
+  return [x, y];
+}
+
 export const sourceViewGLSL = /* glsl */`
 uniform mat3 uView, uViewInverse;
 uniform float uViewScale;

@@ -162,12 +162,31 @@ try {
    await page.getByRole('button',{name:'Add effect',exact:true}).click();
    for(const title of titles)assert.equal(await page.getByRole('button',{name:'Add '+title,exact:true}).count(),expected?1:0,kind+': '+title);
    if(expected){
-    assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Add effect fits one screen.');
-    assert.ok(await page.locator('.finish-picker img').evaluateAll(all=>all.length===11&&all.every(i=>i.complete&&i.naturalWidth>0)),'Every effect has a thumbnail.');
+    for(const group of ['Colour','Light','Warp','Surface','Time']){
+     await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:group,exact:true}).click();
+     assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'The '+group+' group of Add effect fits one screen.');
+     if(group==='Warp')assert.equal(await page.locator('.finish-picker-group button').count(),5,'The Warp filter shows five cards.');
+    }
+    await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:'All',exact:true}).click();
+    assert.ok(await page.locator('.finish-picker img').evaluateAll(all=>all.length===16&&all.every(i=>i.complete&&i.naturalWidth>0)),'Every effect has a thumbnail.');
     await snapshot('add-effect');
     const search=page.getByLabel('Search effects',{exact:true});await search.fill('halftone');
     assert.equal(await page.locator('.finish-picker-group button').count(),1);await search.fill('');await page.keyboard.press('Escape');
     assert.equal(await page.locator('.finish-picker').count(),0);
+    await page.getByRole('button',{name:'Add effect',exact:true}).click();
+    assert.equal(await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:'All',exact:true}).getAttribute('aria-pressed'),'true','The group filter starts at All again.');
+    await openFinish(page);
+    for(const [title,key] of [['Warp','bendAmount'],['Liquid','liquidAmount'],['Luma Warp','lumaWarpAmount'],['Polar','polarAmount'],['Mirror','mirrorAmount']]){
+     await openFinish(page,title);await saved(x=>x.layers[0].params[key]>0);
+     assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),title+' fits one screen.');
+     if(title==='Luma Warp'){
+      assert.equal(await page.getByText('There is no layer below this one, so nothing moves.',{exact:true}).count(),0);
+      await page.getByLabel('Driven by',{exact:true}).selectOption('1');await saved(x=>x.layers[0].params.lumaWarpSource===1);
+      assert.equal(await page.getByText('There is no layer below this one, so nothing moves.',{exact:true}).count(),1,'The bottom layer says why nothing moves.');
+      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Luma Warp with its message fits one screen.');
+     }
+     await page.getByRole('button',{name:'Remove',exact:true}).click();await saved(x=>x.layers[0].params[key]===0);
+    }
     await openFinish(page,'Colour split');await saved(x=>x.layers[0].params.splitAmount===8);
     assert.equal(await page.getByLabel('Split shape',{exact:true}).count(),1);
     assert.equal(await page.getByLabel('Channel order',{exact:true}).count(),1);
@@ -188,6 +207,28 @@ try {
    }
    await page.getByRole('button',{name:'Shape',exact:true}).click();
   }
+  await fs.writeFile(fixture,JSON.stringify(original));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===original.id);
+ });
+ await check('Luma explains a zero-opacity layer below, and the group filter survives a layer switch honestly',async()=>{
+  const named=(kind,name,extra={})=>({...model.createLayer(kind),name,...extra});
+  const p={...model.createProject(),layers:[named('surface','Under',{opacity:0}),named('surface','Over'),named('graphic','Flat')]};
+  await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===p.id);
+  await page.getByRole('button',{name:'Select Over',exact:true}).click();
+  await page.getByRole('button',{name:'Finish',exact:true}).click();
+  await openFinish(page,'Luma Warp');await saved(x=>x.layers[1].params.lumaWarpAmount>0);
+  await page.getByLabel('Driven by',{exact:true}).selectOption('1');await saved(x=>x.layers[1].params.lumaWarpSource===1);
+  assert.equal(await page.getByText('There is no layer below this one, so nothing moves.',{exact:true}).count(),1,'A zero-opacity layer below counts as nothing below.');
+  await openFinish(page);await page.getByRole('button',{name:'Add effect',exact:true}).click();
+  const groups=page.getByRole('group',{name:'Effect groups',exact:true});
+  await groups.getByRole('button',{name:'Warp',exact:true}).click();
+  assert.equal(await page.locator('.finish-picker-group button').count(),5,'The Warp filter shows five cards.');
+  await page.getByRole('button',{name:'Select Flat',exact:true}).click();
+  await groups.getByRole('button',{name:'All',exact:true}).waitFor();
+  assert.equal(await page.getByText('No effects match that search.',{exact:true}).count(),0,'A filter the new layer lacks shows no false empty state.');
+  assert.ok(await page.locator('.finish-picker-group button').count()>0,'The picker still lists this layer\'s effects.');
+  assert.equal(await groups.getByRole('button',{name:'All',exact:true}).getAttribute('aria-pressed'),'true','The picker falls back to All.');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button',{name:'Shape',exact:true}).click();
   await fs.writeFile(fixture,JSON.stringify(original));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===original.id);
  });
  await check('preset browsing preserves the family filter and applies normal saved looks',async()=>{

@@ -112,6 +112,18 @@ Finish → Time displacement makes parts of the frame show the layer as it was s
 
 Each slice is the looping source rendered again at an earlier moment, so no history is stored. The loop closes exactly, needs no warm-up and can be exported in any order. Each slice costs one extra render of the source, so 12 slices render about 12 times slower than the plain layer. Time displacement runs before Feedback and Flat colour, so both apply to the stitched result. It needs a source that moves: raise the source's Cycles per loop if the steps barely show. Three looks live under Library → Presets → Time displacement.
 
+## Warp
+
+Five effects in Finish → Add effect bend any layer except Graphic Patterns. Each is off until you raise its amount, and layers using one cannot use Tile Edges.
+
+- **Warp** bends the picture with Waves, Noise, Ripple, Magnetic or Plasma.
+- **Liquid** pushes it along currents: Swirl, Flow, Ridge, Vortex or Chaos.
+- **Luma Warp** moves it by its own light or by the layer below. Soft pictures suit it best: on very fine detail, such as Fractals, Edges and Contours break up into grain.
+- **Polar** wraps the picture into a circle or unrolls a circle into a strip.
+- **Mirror** folds it left-right, top-bottom, four ways or into a kaleidoscope.
+
+Distances are shares of the frame height, so a look matches at every export size, and motion runs in whole cycles so loops close exactly. On a still Image, only Warp and Liquid move by themselves; give Mirror some turns per loop to animate it.
+
 ## Feedback
 
 Any layer except Graphic Patterns and Ink *Evolving* can feed back into itself (Finish → Feedback). Each frame keeps a faded echo of the last one, zoomed, turned, moved and hue-shifted, and the new source is drawn with it. Flat colour and outlines then apply to the result, so echoes are re-banded into flat poster colour.

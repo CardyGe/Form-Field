@@ -1,4 +1,4 @@
-import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS, PRINT_KEYS, SPLIT_KEYS, GRADIENT_KEYS, GRADE_KEYS, KEY_KEYS} from './finishing';
+import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS, PRINT_KEYS, SPLIT_KEYS, GRADIENT_KEYS, GRADE_KEYS, KEY_KEYS, WARP_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, POLAR_KEYS, MIRROR_KEYS} from './finishing';
 import { isSimplePolygon } from './surface-layout';
 import { TIMING_PARAMETERS, TIMING_KEYS } from './timing';
 import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW } from './palettes';
@@ -7,6 +7,7 @@ import { supportsSlitScan } from '../rendering/slitscan';
 import { supportsGlow } from '../rendering/bloom';
 import { supportsPrint } from '../rendering/print-screen';
 import { supportsLens } from '../rendering/colour-lens';
+import { supportsWarp } from '../rendering/warp';
 import { SCOPE_FIGURES } from '../rendering/scope-curve';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import type { Layer, LayerKind, ParameterDefinition, Preset, Project } from '../shared/types';
@@ -426,11 +427,13 @@ const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
 // continue to use the complete instrument definition.
 /** Every control of the per-layer lens pass: hidden on layers that take no lens. */
 const LENS_KEYS = [...SPLIT_KEYS, ...GRADIENT_KEYS, ...GRADE_KEYS, ...KEY_KEYS];
+/** Every control of the warp pass: hidden on layers that take no warp. */
+const WARP_ALL_KEYS = [...WARP_KEYS, ...LIQUID_KEYS, ...LUMA_WARP_KEYS, ...POLAR_KEYS, ...MIRROR_KEYS];
 export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const visible = familyParameterDefinitions(layer);
-  const glow = supportsGlow(layer), print = supportsPrint(layer), lens = supportsLens(layer);
-  return glow && print && lens ? visible : visible.filter(d => (glow || !GLOW_KEYS.includes(d.key)) && (print || !PRINT_KEYS.includes(d.key)) &&
-    (lens || !LENS_KEYS.includes(d.key)));
+  const glow = supportsGlow(layer), print = supportsPrint(layer), lens = supportsLens(layer), warp = supportsWarp(layer);
+  return glow && print && lens && warp ? visible : visible.filter(d => (glow || !GLOW_KEYS.includes(d.key)) && (print || !PRINT_KEYS.includes(d.key)) &&
+    (lens || !LENS_KEYS.includes(d.key)) && (warp || !WARP_ALL_KEYS.includes(d.key)));
 }
 function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const definitions = parameterDefinitions(layer.kind);
@@ -625,7 +628,7 @@ const FINISH_LOOK_KEYS = [...FEEDBACK_KEYS, ...SLIT_KEYS, ...GLOW_KEYS, ...PRINT
 /** Whether the layer takes finishes at all or, with an id, that finish: glow
  * and print looks need a layer that supports them. */
 export function finishSupported(layer: Pick<Layer, 'kind' | 'params'>, finishId?: string): boolean {
-  if (!supportsFeedback(layer) || !supportsSlitScan(layer)) return false;
+  if (!supportsFeedback(layer) || !supportsSlitScan(layer) || !supportsWarp(layer)) return false;
   const look = FINISH_LOOKS.find(item => item.id === finishId);
   if (!look) return true;
   return (supportsGlow(layer) || !GLOW_KEYS.some(key => key in look.params)) && (supportsPrint(layer) || !PRINT_KEYS.some(key => key in look.params)) &&
@@ -740,7 +743,7 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
     const glow = GLOW_KEYS.includes(key);
     // Colour and Lens are explicit choices too: never varied. Glow's streak
     // shape is a stepped choice, so it is fixed even when glow is on.
-    if (LENS_KEYS.includes(key) || key === 'glowStreakShape' || key === 'glowStreakAngle') continue;
+    if (WARP_ALL_KEYS.includes(key) || LENS_KEYS.includes(key) || key === 'glowStreakShape' || key === 'glowStreakAngle') continue;
     // These extras are off at their stored value, so a variation must not switch them on.
     if (key in VARIATION_OFF_VALUES && original === VARIATION_OFF_VALUES[key]) continue;
     if (glow && (key === 'glowMix' || key === 'glowTint' || !((layer.params.glowMix ?? 0) > 0))) continue;
