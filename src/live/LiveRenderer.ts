@@ -27,6 +27,7 @@ import type { Signals } from '../react/signals';
 
 const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal, meridian: Meridian };
 /** Meridian on the Live output keeps to the same flash rule as the wall in Map, at Flash Guard's default strictness. */
+const CONTEXT_LOST = 'the graphics card reset; the limiter starts again as soon as it is back';
 const MERIDIAN_HOLDS = limiterScales({ safetyMaxFlashes: MERIDIAN_DEFAULTS.safetyMaxFlashes, safetyRedLimit: MERIDIAN_DEFAULTS.safetyRedLimit });
 
 /** Operator setup view: the camera dimmed, people in blue with a pink outline. Never shown in the artwork window. */
@@ -87,13 +88,15 @@ export class LiveRenderer {
   private limiter: WallLimiterGl | null = null;
   private limitInput: THREE.WebGLRenderTarget | null = null;
   private limitFresh = true;
+  /** The graphics context is lost: the limiter's own pictures and programs went with it and are made again on its return. */
+  private contextLost = false;
   private limitCost = 0;
   /** Why the limiter could not run on the last Meridian frame; null when it ran. The picture is shown unlimited meanwhile. */
   limiterError: string | null = null;
   /** Whether the last frame went through the limiter. */
   limited = false;
-  /** For the scripted checks: the artwork is replaced by a full-field white flash on every other frame. */
-  flashTest = false;
+  /** For the scripted checks: the artwork is replaced by a full-field white flash on every other frame, or by steady white. */
+  flashTest: boolean | 'white' = false;
   private flashOn = false;
   private readonly white: THREE.DataTexture;
 
@@ -116,6 +119,13 @@ export class LiveRenderer {
     this.trackingView = this.passes.material(trackingViewFragment, { uCamera: { value: null }, uFlow: { value: null }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
     this.scratch = this.passes.target(1, 1);
     this.counted.since = performance.now();
+    // three makes its own resources again after a lost context; the limiter's raw ones are let go without touching the
+    // lost context and built afresh on the first frame back, starting from black so even that frame is limited.
+    canvas.addEventListener('webglcontextlost', () => {
+      this.contextLost = true; this.limiter = null; this.limitInput = null; this.limitFresh = true; this.limited = false;
+      if (this.settings.look === 'meridian') this.limiterError = CONTEXT_LOST;
+    });
+    canvas.addEventListener('webglcontextrestored', () => { this.contextLost = false; this.limitFresh = true; });
   }
 
   start(): void {
@@ -154,7 +164,8 @@ export class LiveRenderer {
     if (this.look instanceof Meridian) this.look.signals = this.signals;
     this.look.step(step, this.time, this.tracking, settings);
     let image: THREE.Texture = this.look.output, encode = 1;
-    if (this.flashTest) { this.flashOn = !this.flashOn; image = this.flashOn ? this.white : this.black; }
+    if (this.flashTest === 'white') image = this.white;
+    else if (this.flashTest) { this.flashOn = !this.flashOn; image = this.flashOn ? this.white : this.black; }
     if (this.view === 'tracking') {
       const u = this.trackingView.uniforms, box = this.settings.box;
       u.uCamera.value = this.tracking.camera; u.uFlow.value = this.tracking.flow;
@@ -172,9 +183,21 @@ export class LiveRenderer {
     this.final.uniforms.uImage.value = image;
     this.final.uniforms.uEncode.value = encode;
     this.final.uniforms.uBlackout.value = this.blackout ? 1 : 0;
-    // Meridian's artwork goes through the wall's flash limiter. The setup views are the operator's only, so they never do.
+    // Meridian's artwork goes through the wall's flash limiter. Once it has been used, the other looks' pictures go through it
+    // too, unchanged (the limit faded fully away), so it knows what the wall showed and switching back to Meridian is limited.
+    // The setup views are the operator's only, so they never do.
     const guarded = this.settings.look === 'meridian' && this.view === 'art';
-    if (!guarded || !this.limitOutput(seconds)) { this.passes.draw(this.final, null); this.limitFresh = true; this.limited = false; }
+    const following = !guarded && this.view === 'art' && this.limiter !== null;
+    if (this.contextLost) {
+      this.limited = false;
+      if (guarded) this.limiterError = CONTEXT_LOST;
+    } else if (guarded) {
+      if (!this.limitOutput(seconds, 0)) { this.passes.draw(this.final, null); this.limitFresh = true; this.limited = false; }
+    } else {
+      if (!following || !this.limitOutput(seconds, 1)) { this.passes.draw(this.final, null); this.limitFresh = this.limitFresh || !following; }
+      if (this.view !== 'art') this.limitFresh = true;
+      this.limited = false;
+    }
     this.framesDrawn++;
     this.counted.frames++;
   }
@@ -183,7 +206,7 @@ export class LiveRenderer {
    * Draws the finished picture through the flash limiter onto the canvas, in the frame it limits, with no readback. Returns
    * false, having drawn nothing, if the limiter cannot run: the caller then shows the picture as it is and the warning stands.
    */
-  private limitOutput(seconds: number): boolean {
+  private limitOutput(seconds: number, fade: number): boolean {
     const started = performance.now(), gl = this.renderer.getContext() as WebGL2RenderingContext;
     try {
       if (!this.limiter || this.limiter.width !== this.width || this.limiter.height !== this.height) {
@@ -193,14 +216,24 @@ export class LiveRenderer {
         this.limitInput.texture.colorSpace = THREE.NoColorSpace;
         this.limitFresh = true;
       }
-      this.passes.draw(this.final, this.limitInput!);
-      const texture = (this.renderer.properties.get(this.limitInput!.texture) as { __webglTexture?: WebGLTexture }).__webglTexture;
-      if (!texture) throw new Error('the picture to limit could not be found');
       const dt = Number.isFinite(seconds) ? Math.min(LIMITER.longestStep, Math.max(0, seconds)) : 0;
-      const done = this.limiter.limit(texture, null, this.limitFresh ? 0 : dt, 0, this.limitFresh, MERIDIAN_HOLDS);
+      if (this.limitFresh) {
+        // A fresh start (first use, a new size, a graphics reset, back from a setup view) begins from black, so the picture
+        // that follows is already limited: a large bright arrival climbs by the rule rather than appearing at once.
+        const blackout = this.final.uniforms.uBlackout.value;
+        this.final.uniforms.uBlackout.value = 1;
+        this.passes.draw(this.final, this.limitInput!);
+        this.final.uniforms.uBlackout.value = blackout;
+        const black = this.limitTexture();
+        const primed = this.limiter.limit(black, null, 0, 0, true, MERIDIAN_HOLDS);
+        this.renderer.resetState();
+        if (!primed) { this.limiterError = this.limiter.error ?? 'the flash limiter could not start'; return false; }
+      }
+      this.passes.draw(this.final, this.limitInput!);
+      const done = this.limiter.limit(this.limitTexture(), null, dt, fade, false, MERIDIAN_HOLDS);
       this.renderer.resetState();
       if (!done) { this.limiterError = this.limiter.error ?? 'the flash limiter could not start'; return false; }
-      this.limitFresh = false; this.limiterError = null; this.limited = true;
+      this.limitFresh = false; this.limiterError = null; this.limited = fade < 1;
       this.limitCost = this.limitCost * .95 + (performance.now() - started) * .05;
       return true;
     } catch (error) {
@@ -208,6 +241,18 @@ export class LiveRenderer {
       this.limiterError = String((error as Error)?.message ?? error);
       return false;
     }
+  }
+
+  private limitTexture(): WebGLTexture {
+    const texture = (this.renderer.properties.get(this.limitInput!.texture) as { __webglTexture?: WebGLTexture }).__webglTexture;
+    if (!texture) throw new Error('the picture to limit could not be found');
+    return texture;
+  }
+
+  /** For the scripted checks: loses the graphics context, and gives it back. */
+  loseContextForCheck(): { lose(): void; restore(): void } | null {
+    const extension = this.renderer.getContext().getExtension('WEBGL_lose_context');
+    return extension ? { lose: () => extension.loseContext(), restore: () => extension.restoreContext() } : null;
   }
 
   /** Meridian's own state and the limiter's, for the operator and the scripted checks: numbers and words, never a picture. */
@@ -218,7 +263,7 @@ export class LiveRenderer {
 
   /** For the scripted checks: how many bytes of the canvas differ from the picture the limiter was given. Call after a frame, in the same task. */
   probeLimiter(): { changedBytes: number; bytes: number; brightest: number } | null {
-    if (!this.limitInput || !this.limited) return null;
+    if (!this.limitInput || this.contextLost) return null;
     const gl = this.renderer.getContext(), w = this.width, h = this.height, input = new Uint8Array(w * h * 4), shown = new Uint8Array(w * h * 4);
     this.renderer.readRenderTargetPixels(this.limitInput, 0, 0, w, h, input);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, shown); this.renderer.resetState();

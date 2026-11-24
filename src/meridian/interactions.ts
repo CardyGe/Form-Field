@@ -74,6 +74,8 @@ export interface InteractionContext {
   presence: PresenceField | null;
   /** No camera frames: everyone is treated as gone and Attract comes in quickly. */
   cameraLost: boolean;
+  /** People are found from movement alone, which light or a projection in view can fake: no Throw and no Release. */
+  movementOnly?: boolean;
 }
 export interface InteractionFrame {
   /** 0 to 1: how far Attract has come in. */
@@ -217,7 +219,7 @@ export class Interactions {
    */
   update(bodies: readonly Body[], ctx: InteractionContext, params: Readonly<Record<string, number>>, dt: number, out: DisplayList): InteractionFrame {
     const step = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.1) : 0, frames = clamp(step * 60, 0, 2);
-    this.P = params; this.listData = out.data;
+    this.P = params; this.listData = out.data; this.movementOnly = ctx.movementOnly === true;
     this.beats = finite(ctx.beats, 0); this.bpm = finite(ctx.bpm, 120); this.snap = this.v('liveBeatSnap');
     const aspect = finite(ctx.aspect, 16 / 9) > 0 ? finite(ctx.aspect, 16 / 9) : 16 / 9;
     const scale = this.v('liveAlignScale'), alignX = this.v('liveAlignX'), alignY = this.v('liveAlignY');
@@ -322,15 +324,15 @@ export class Interactions {
         if (best < 0) continue;
         slot = best;
         this.slotId[slot] = body.id;
-        if (this.oa[slot] < UNSEEN) {
-          // A new ring is born in the structure's centre and drifts out to the person.
-          this.ox[slot] = 0; this.oy[slot] = 0; this.or[slot] = 0.03; this.oturn[slot] = slot * 0.7;
-          this.charge[slot] = 0; this.cooldown[slot] = 0; this.releaseLock[slot] = 0;
-        }
+        // A newcomer starts their own charge, whoever had the slot before.
+        this.charge[slot] = 0; this.cooldown[slot] = 0; this.releaseLock[slot] = 0;
+        // A new ring is born in the structure's centre and drifts out to the person. A ring still fading from someone who
+        // has just left glides over to the newcomer from where it is, so nothing jumps.
+        if (this.oa[slot] < UNSEEN) { this.ox[slot] = 0; this.oy[slot] = 0; this.or[slot] = 0.03; this.oturn[slot] = slot * 0.7; }
       }
       this.slotBody[slot] = index;
     }
-    // A slot whose person has gone is free once its ring has faded.
+    // A slot whose person has gone is free at once: its ring fades on its own, and a newcomer prefers the most faded slot.
     for (let s = 0; s < MAX_BODIES; s++) if (this.slotBody[s] < 0) this.slotId[s] = -1;
   }
 
@@ -374,6 +376,8 @@ export class Interactions {
       if (this.oturn[s] > TAU) this.oturn[s] -= TAU;
       if (!body) continue;
       const vx = this.pvx[index], vy = this.pvy[index], fast = Math.hypot(vx, vy), energy = body.energy;
+      // Movement alone cannot tell a person from a beam of light or the projection, so nothing is fired from it.
+      if (this.movementOnly) { strongest = Math.max(strongest, this.charge[s]); continue; }
       // Release: a sudden move after charging. It fires once: the charge is spent at once, whenever the bloom lands.
       if (chargeOn > 0 && this.charge[s] >= RELEASE_AT && (energy > 0.45 || fast > 0.6)) {
         this.queueAt(KIND_BLOOM, s, this.charge[s] * this.v('liveReleaseStrength'));
@@ -423,6 +427,18 @@ export class Interactions {
   }
 
   private crowding = 1;
+  private movementOnly = false;
+
+  /**
+   * Clear: everyone is forgotten, along with what was waiting for the beat, but nothing is cut. Rings, links, wakes and the
+   * structure's lean all fade and glide back within the usual limits, as if the room had emptied.
+   */
+  forget(): void {
+    this.slotId.fill(-1); this.slotBody.fill(-1);
+    this.charge.fill(0); this.cooldown.fill(0); this.releaseLock.fill(0);
+    this.merged.fill(0); this.qKind.fill(0);
+    this.conductTime = 0;
+  }
   private readonly linkKept = new Uint8Array(PAIRS);
   private readonly mergeKept = new Uint8Array(PAIRS);
   private readonly mergeShown = new Float64Array(PAIRS);

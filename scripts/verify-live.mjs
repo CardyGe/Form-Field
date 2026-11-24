@@ -838,6 +838,62 @@ try {
     assert.ok(flashes <= 3 * 3 + 1, `${flashes} flashes in three seconds of a 30 Hz strobe`);
     assert.ok(Math.max(...r) > .03, 'the picture is not simply black');
   });
+  await page.evaluate(() => {
+    // Three seconds of a 30 Hz full-field strobe on the Live output: the mean linear light of every frame.
+    const lin = v => { v /= 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+    window.live.light = () => { const { data } = window.live.pixels(); let sum = 0; for (let k = 0; k < data.length; k += 16) sum += .2126 * lin(data[k]) + .7152 * lin(data[k + 1]) + .0722 * lin(data[k + 2]); return sum / (data.length / 16); };
+    window.live.darkest = () => { const { data } = window.live.pixels(); let low = 255; for (let k = 0; k < data.length; k += 4) low = Math.min(low, Math.max(data[k], data[k + 1], data[k + 2])); return low; };
+    window.live.strobe = async () => { const { renderer } = window.live.current; renderer.flashTest = true; const means = [];
+      for (let i = 0; i < 180; i++) { await new Promise(r => setTimeout(r, 0)); renderer.frame(window.live.STEP); means.push(window.live.light()); }
+      renderer.flashTest = false; return means; };
+  });
+  const flashCount = means => { let low = means[0], flashes = 0, rising = false;
+    for (const v of means) { if (v < low) { low = v; rising = false; } if (!rising && v - low >= .1) { flashes++; rising = true; } if (rising && v < low + .05) { rising = false; low = v; } else if (rising) low = Math.min(low, v); }
+    return flashes; };
+  await check('meridian: after the graphics card resets, the limiter says so, comes back, and holds a strobe again', async () => {
+    const r = await page.evaluate(async () => {
+      window.live.meridian('three'); await window.live.walk(240);
+      const before = await window.live.strobe(); await window.live.walk(30);
+      const { renderer, canvas } = window.live.current, context = renderer.loseContextForCheck();
+      const restored = new Promise(r => canvas.addEventListener('webglcontextrestored', r, { once: true }));
+      context.lose(); await window.live.walk(10);
+      const whileLost = window.live.report().limiter;
+      context.restore(); await restored; await window.live.walk(240);
+      // Anything the lost context left in the error queue is read off first; errors from drawing afterwards are what count.
+      const gl = renderer.renderer.getContext(); const stale = []; for (let e = gl.getError(), n = 0; e && n < 8; e = gl.getError(), n++) stale.push(e);
+      await window.live.walk(30);
+      const report = window.live.report(), back = report.limiter, darkest = window.live.darkest(), glError = gl.getError(), bodies = report.bodies;
+      const after = await window.live.strobe();
+      return { bodies, before, after, whileLost, back, darkest, glError, stale, painted: window.live.painted(0).fraction };
+    });
+    assert.equal(r.bodies, 3, `${r.bodies} bodies after the restore: the presence grid must come back too`);
+    assert.ok(r.whileLost.on === false && /graphics card reset/.test(r.whileLost.error ?? ''), `while lost: ${JSON.stringify(r.whileLost)}`);
+    assert.ok(r.back.on === true && r.back.error === null, `after restore: ${JSON.stringify(r.back)}`);
+    console.log(`context reset: errors left from the loss ${JSON.stringify(r.stale)}, darkest ${r.darkest}, strobe after ${Math.max(...r.after).toFixed(3)}`);
+    assert.equal(r.glError, 0, `GL error ${r.glError} while drawing after the restore (left from the loss: ${r.stale})`);
+    assert.ok(r.darkest <= 12, `the black is ${r.darkest}/255 after the restore`);
+    assert.ok(flashCount(r.before) <= 1 && flashCount(r.after) <= 1, `flashes before ${flashCount(r.before)}, after ${flashCount(r.after)}; after ${r.after.slice(0, 8).map(v => v.toFixed(3))}`);
+    assert.ok(Math.max(...r.after) < .2, `the strobe reached ${Math.max(...r.after).toFixed(3)} after the restore`);
+  });
+  await check('meridian: switching looks back and forth is limited, and other looks are shown exactly as drawn', async () => {
+    const r = await page.evaluate(async () => {
+      const c = window.live.meridian('three'); await window.live.walk(120);
+      const { renderer } = c;
+      // Paint shows black, Meridian a full-field white: switching every frame would be a 30 Hz strobe.
+      renderer.flashTest = 'white'; const meridianFrames = [];
+      for (let i = 0; i < 60; i++) {
+        const meridian = i % 2 === 1;
+        renderer.settings = { ...renderer.settings, look: meridian ? 'meridian' : 'paint' }; renderer.blackout = !meridian;
+        await new Promise(r => setTimeout(r, 0)); renderer.frame(window.live.STEP);
+        if (meridian) meridianFrames.push(window.live.light());
+      }
+      renderer.flashTest = false; renderer.blackout = false;
+      renderer.settings = { ...renderer.settings, look: 'paint' }; await window.live.walk(60); renderer.frame(window.live.STEP);
+      return { meridianFrames, paint: renderer.probeLimiter() };
+    });
+    assert.ok(Math.max(...r.meridianFrames) < .2, `Meridian frames reached ${Math.max(...r.meridianFrames).toFixed(3)}: ${r.meridianFrames.slice(0, 6).map(v => v.toFixed(3))}`);
+    assert.equal(r.paint?.changedBytes, 0, `Paint after Meridian: ${JSON.stringify(r.paint)}`);
+  });
   await check('meridian: if the limiter cannot run, the picture stays and a warning shows', async () => {
     const r = await page.evaluate(async () => {
       window.live.meridian('three'); await window.live.walk(120);

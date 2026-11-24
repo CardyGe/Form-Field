@@ -25,6 +25,7 @@ export function MeridianLiveControls({ s, update, reactFor }: { s: LiveSettings;
   const look = MERIDIAN_LIVE_LOOKS.find(l => l.id === m.preset);
   return <>
     <p className="live-note">Walk in and a ring follows you. Stand still to charge it, then move suddenly to release it. Stand near someone to link up; move together to lift the whole piece.</p>
+    <p className="live-note">Point the camera at the people, not at the projection, the screen or the lighting rig. Until people are found, Meridian works from movement alone, and moving light it can see may be taken for a person.</p>
     <label className="stacked-label">Load from Studio preset<select aria-label="Load from Studio preset" value={look?.id ?? ''} onChange={e => update(v => meridianFromStudioLook(v, e.target.value))}>
       {!look && <option value="">Custom</option>}
       {MERIDIAN_LIVE_LOOKS.map(l => <option key={l.id} value={l.id} title={l.description}>{l.name}</option>)}

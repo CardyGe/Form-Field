@@ -109,6 +109,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
       <aside className="live-column" aria-label={LOOK_LABELS[s.look]}>
         {s.look === 'meridian' && live.meridian && <section className="live-people" aria-label="Meridian status">
           <p className={`live-status ${live.meridian.status.startsWith('Camera lost') || live.meridian.status.startsWith('Movement only') ? 'warn' : ''}`} role="status">{live.meridian.status}</p>
+          {live.meridian.status.startsWith('Movement only') && <p className="live-status warn">People are being found from movement alone. Keep the projection and moving lights out of the camera's view; Throw and Release wait until people are found.</p>}
           {live.meridian.limiterError ? <p className="live-status warn" role="alert">Flash limiter is not running ({live.meridian.limiterError}). The picture is shown unlimited: keep strobing moves off.</p>
             : live.meridian.limiterOn ? <p className="live-status">Flash limiter on</p> : null}
         </section>}

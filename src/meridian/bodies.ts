@@ -42,6 +42,12 @@ export interface BodySettings {
   followSpeed: number;
   /** The smallest blob that can be a person, as a share of the frame's area. */
   minSize: number;
+  /**
+   * No people model: presence is only recent movement, so light beams and a projection the camera can see could look like
+   * people. Blobs must then be person-shaped (solid, upright, not a thin line or a ring) and stay a moment at a steady size
+   * before anyone is found.
+   */
+  movementOnly?: boolean;
 }
 
 const ON = 0.4;               // Presence at which a cell belongs to someone.
@@ -61,6 +67,11 @@ const ENERGY_RISE = 0.15, ENERGY_FALL = 0.5;
 const PRESENCE_RISE = 0.3, PRESENCE_FALL = 0.5;
 const SHARED_DAMP = 3;        // Seconds: how slowly two people inside one blob lose the speed they came in with.
 const MAX_BLOBS = 32;
+const CONFIRM_SECONDS = 0.4;  // Movement only: how long a blob must last, at a steady size, before it is a person.
+const CONFIRM_GATE = 0.08;    // uv: how far a waiting blob may move between grids and still be the same one.
+const STEADY_SIZE = 1.45;     // The most a waiting blob's area may grow or shrink by between grids.
+const MIN_FILL = 0.4;         // Movement only: share of its bounding box a blob must fill. A line or a ring fills far less.
+const MIN_UPRIGHT = 0.5, MAX_UPRIGHT = 6; // Movement only: height over width, in cells. A shaft of light is far taller.
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 const ease = (dt: number, tau: number): number => 1 - Math.exp(-dt / Math.max(1e-4, tau));
@@ -93,6 +104,17 @@ export class BodyTracker {
     body: { id: 0, x: 0, y: 0, vx: 0, vy: 0, size: 0, energy: 0, stillness: 0, age: 0, presence: 0 }, alive: false, rawX: 0, rawY: 0, missing: 0, matched: false, shared: false, area: 0,
   }));
   private readonly active: Body[] = [];
+  // Movement only: blobs waiting to be confirmed as people.
+  private waiting = 0;
+  private readonly wX = new Float64Array(MAX_BLOBS);
+  private readonly wY = new Float64Array(MAX_BLOBS);
+  private readonly wArea = new Float64Array(MAX_BLOBS);
+  private readonly wAge = new Float64Array(MAX_BLOBS);
+  private readonly nX = new Float64Array(MAX_BLOBS);
+  private readonly nY = new Float64Array(MAX_BLOBS);
+  private readonly nArea = new Float64Array(MAX_BLOBS);
+  private readonly nAge = new Float64Array(MAX_BLOBS);
+  private readonly bAge = new Float64Array(MAX_BLOBS);
   private nextId = 1;
   private refractory = 0;
   private primed = false;
@@ -103,7 +125,7 @@ export class BodyTracker {
 
   reset(): void {
     for (const t of this.tracks) t.alive = false;
-    this.active.length = 0;
+    this.active.length = 0; this.waiting = 0;
     this.refractory = 0; this.primed = false; this.lighting = false;
   }
 
@@ -130,7 +152,8 @@ export class BodyTracker {
     if (flash) this.refractory = REFRACTORY; else this.refractory = Math.max(0, this.refractory - step);
     this.lighting = flash || this.refractory > 0;
 
-    this.findBlobs(width, height, settings.minSize);
+    this.findBlobs(width, height, settings.minSize, settings.movementOnly === true);
+    this.confirm(step, settings.movementOnly === true);
     this.match(width, height, step, settings);
     return this.publish();
   }
@@ -143,7 +166,7 @@ export class BodyTracker {
   }
 
   /** Connected cells above ON, four-connected. Blobs too small to be a person, or too large to be one, are left out. */
-  private findBlobs(width: number, height: number, minSize: number): void {
+  private findBlobs(width: number, height: number, minSize: number, movementOnly: boolean): void {
     const cells = width * height, labels = this.labels, presence = this.presence, movement = this.movement, stack = this.stack;
     const smallest = Math.max(3, clamp(Number.isFinite(minSize) ? minSize : 0.006, 0, 0.5) * cells), largest = GIANT_SHARE * cells;
     labels.fill(0);
@@ -164,6 +187,10 @@ export class BodyTracker {
         if (r < height - 1 && labels[i + width] === 0 && presence[i + width] >= ON) { labels[i + width] = label; stack[top++] = i + width; }
       }
       if (count < smallest || count > largest) continue;
+      if (movementOnly) {
+        const cols = right - left + 1, rows = up - bottom + 1, upright = rows / cols;
+        if (count / (cols * rows) < MIN_FILL || upright < MIN_UPRIGHT || upright > MAX_UPRIGHT) continue;
+      }
       // Full: the new blob replaces the smallest kept, if it is larger.
       let at = this.blobCount;
       if (at >= MAX_BLOBS) {
@@ -246,7 +273,7 @@ export class BodyTracker {
       for (const t of tracks) if (t.alive) alive++;
       if (alive >= most) break;
       let largest = -1;
-      for (let b = 0; b < blobs; b++) if (!this.bTaken[b] && (largest < 0 || this.bCells[b] > this.bCells[largest])) largest = b;
+      for (let b = 0; b < blobs; b++) if (!this.bTaken[b] && this.bAge[b] >= 0 && (largest < 0 || this.bCells[b] > this.bCells[largest])) largest = b;
       if (largest < 0) break;
       this.bTaken[largest] = 1;
       let free = 0;
@@ -267,6 +294,29 @@ export class BodyTracker {
       if (alive <= most || !smallest) break;
       smallest.alive = false;
     }
+  }
+
+  /**
+   * Movement only: each blob is matched to one waiting from the last grid, nearest first. One that has stayed near, at a
+   * steady size, for CONFIRM_SECONDS may become a person; one that has not is held back (bAge below zero). With the people
+   * model every blob may become a person at once.
+   */
+  private confirm(step: number, movementOnly: boolean): void {
+    const blobs = this.blobCount;
+    if (!movementOnly) { this.bAge.fill(0, 0, blobs); this.waiting = 0; return; }
+    let next = 0;
+    for (let b = 0; b < blobs; b++) {
+      let best = -1, bestD = CONFIRM_GATE;
+      for (let w = 0; w < this.waiting; w++) {
+        const d = Math.hypot(this.bX[b] - this.wX[w], this.bY[b] - this.wY[w]), ratio = this.bCells[b] / Math.max(1, this.wArea[w]);
+        if (d < bestD && ratio < STEADY_SIZE && ratio > 1 / STEADY_SIZE) { bestD = d; best = w; }
+      }
+      const age = best >= 0 ? this.wAge[best] + step : 0;
+      if (best >= 0) this.wArea[best] = -1; // used
+      this.nX[next] = this.bX[b]; this.nY[next] = this.bY[b]; this.nArea[next] = this.bCells[b]; this.nAge[next] = age; next++;
+      this.bAge[b] = age >= CONFIRM_SECONDS ? age : -1;
+    }
+    this.wX.set(this.nX); this.wY.set(this.nY); this.wArea.set(this.nArea); this.wAge.set(this.nAge); this.waiting = next;
   }
 
   /** Speed from the blob's own centre. Along an axis where the blob is cut by the frame edge, the centre says nothing. */

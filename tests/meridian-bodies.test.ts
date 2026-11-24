@@ -171,3 +171,63 @@ test('an RGBA grid reads the same as an RG grid', () => {
   assert.equal(x.length, 1); assert.equal(y.length, 1);
   assert.ok(Math.abs(x[0].x - y[0].x) < 1e-9 && Math.abs(x[0].y - y[0].y) < 1e-9);
 });
+
+// --- Movement-only mode: party light and a projector in view must not become people ---
+const MOVEMENT: BodySettings = { ...SETTINGS, movementOnly: true };
+/** Lights cells along a line from (x0, y0) to (x1, y1) in uv, `thick` cells wide. */
+function beam(grid: Uint8Array, x0: number, y0: number, x1: number, y1: number, thick = 2): void {
+  const steps = 400;
+  for (let s = 0; s <= steps; s++) {
+    const x = (x0 + (x1 - x0) * s / steps) * W, y = (y0 + (y1 - y0) * s / steps) * H;
+    for (let dy = 0; dy < thick; dy++) for (let dx = 0; dx < thick; dx++) {
+      const c = Math.floor(x) + dx, r = Math.floor(y) + dy;
+      if (c < 0 || r < 0 || c >= W || r >= H) continue;
+      grid[(r * W + c) * 2] = 255; grid[(r * W + c) * 2 + 1] = 200;
+    }
+  }
+}
+/** A thin ring of light, `radius` cells across from its centre, like Meridian's own rings seen by the camera. */
+function ring(grid: Uint8Array, cx: number, cy: number, radius: number, thick = 2): void {
+  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
+    const d = Math.hypot(c + 0.5 - cx * W, r + 0.5 - cy * H);
+    if (Math.abs(d - radius) <= thick / 2) { grid[(r * W + c) * 2] = 255; grid[(r * W + c) * 2 + 1] = 180; }
+  }
+}
+
+test('movement only: sweeping narrow beams make no bodies', () => {
+  const t = new BodyTracker();
+  for (let i = 0; i < 600; i++) {
+    const g = blank(), time = i * DT;
+    // A moving head sweeping slowly across the room, a fast one crossing it, and an upright shaft drifting.
+    beam(g, 0.1 + 0.3 * Math.sin(time * 0.4), 0, 0.5 + 0.3 * Math.sin(time * 0.4), 1);
+    beam(g, (time * 0.9) % 1, 0, ((time * 0.9) % 1) + 0.25, 0.8);
+    beam(g, 0.7 + 0.1 * Math.sin(time * 0.3), 0, 0.7 + 0.1 * Math.sin(time * 0.3), 1, 3);
+    assert.equal(t.update(g, W, H, DT, MOVEMENT).length, 0, `frame ${i}`);
+  }
+});
+
+test('movement only: a projected ring seen by the camera makes no body', () => {
+  const t = new BodyTracker();
+  for (let i = 0; i < 600; i++) {
+    const g = blank(), time = i * DT;
+    // Meridian's rings, drifting and breathing on the wall the camera can see.
+    ring(g, 0.5 + 0.05 * Math.sin(time * 0.5), 0.5, 9 + 2 * Math.sin(time), 2);
+    ring(g, 0.3, 0.45 + 0.03 * Math.sin(time * 0.7), 6, 2);
+    assert.equal(t.update(g, W, H, DT, MOVEMENT).length, 0, `frame ${i}`);
+  }
+});
+
+test('movement only: a person must stay a moment, with a steady size, before they are found', () => {
+  const t = new BodyTracker();
+  let bodies: readonly Body[] = [];
+  for (let i = 0; i < 5; i++) bodies = t.update(scene([{ x: 0.4, y: 0.5, move: 0.5 }]), W, H, DT, MOVEMENT);
+  assert.equal(bodies.length, 0, 'not at once');
+  for (let i = 0; i < 25; i++) bodies = t.update(scene([{ x: 0.4 + i * 0.002, y: 0.5, move: 0.5 }]), W, H, DT, MOVEMENT);
+  assert.equal(bodies.length, 1, 'found within a second');
+  // A blob that keeps changing size is not a person.
+  const flicker = new BodyTracker();
+  for (let i = 0; i < 90; i++) assert.equal(flicker.update(scene([{ x: 0.6, y: 0.5, h: i % 2 ? 0.25 : 0.6, move: 0.5 }]), W, H, DT, MOVEMENT).length, 0, `frame ${i}`);
+  // With the people model, people are found at once, as before.
+  const model = new BodyTracker();
+  assert.equal(model.update(scene([{ x: 0.4, y: 0.5 }]), W, H, DT, SETTINGS).length, 1);
+});

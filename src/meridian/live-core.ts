@@ -47,17 +47,23 @@ export class MeridianLiveCore {
   private sinceFrame = Infinity;
   private readonly field: PresenceField = { data: new Uint8Array(GRID_WIDTH * GRID_HEIGHT * 4), width: GRID_WIDTH, height: GRID_HEIGHT, stride: 4 };
   private haveField = false;
-  private readonly trackerSettings = { maxBodies: 8, followSpeed: 0.5, minSize: 0.006 };
+  private readonly trackerSettings = { maxBodies: 8, followSpeed: 0.5, minSize: 0.006, movementOnly: false };
   private presetId: string | null | undefined;
   private preset: Readonly<Record<string, number>> = {};
   private drop = false; private burst = false;
-  private readonly context = { aspect: 16 / 9, beats: 0, bpm: 124, time: 0, presence: null as PresenceField | null, cameraLost: true };
+  private readonly context = { aspect: 16 / 9, beats: 0, bpm: 124, time: 0, presence: null as PresenceField | null, cameraLost: true, movementOnly: false };
 
   /** What the operator sees under the picture. */
   get status(): string {
     if (this.cameraLost) return STATUS_CAMERA_LOST;
     const n = this.frame.bodies, who = n === 0 ? 'Nobody there · attract' : `${n} ${n === 1 ? 'person' : 'people'}`;
     return this.mode === 'movement' ? `${STATUS_MOVEMENT_ONLY} · ${who}` : who;
+  }
+
+  /** Clear: the room's memory goes (bodies, charges, what waits for the beat); the picture fades rather than cuts. */
+  clear(): void {
+    this.tracker.reset(); this.interactions.forget(); this.bodies = [];
+    this.drop = false; this.burst = false;
   }
 
   reset(): void {
@@ -82,6 +88,7 @@ export class MeridianLiveCore {
     const s = this.trackerSettings;
     s.maxBodies = Math.round(clamp(finite(values.liveMaxBodies, 8), 1, 8));
     s.followSpeed = clamp(finite(values.liveFollow, 0.5), 0, 1);
+    s.movementOnly = this.mode === 'movement';
     this.bodies = this.tracker.update(data, width, height, dt, s);
     if (width === GRID_WIDTH && height === GRID_HEIGHT && data.length >= this.field.data.length) { this.field.data.set(data.subarray(0, this.field.data.length)); this.haveField = true; }
   }
@@ -112,7 +119,7 @@ export class MeridianLiveCore {
   /** Called from inside Evolve's frame, once it has drawn: people move the structure. */
   influence(list: DisplayList, beats: number, bpm: number, aspect: number, time: number, dt: number, values: Readonly<Record<string, number>>): InteractionFrame {
     const c = this.context;
-    c.aspect = aspect; c.beats = beats; c.bpm = bpm; c.time = time; c.cameraLost = this.cameraLost;
+    c.aspect = aspect; c.beats = beats; c.bpm = bpm; c.time = time; c.cameraLost = this.cameraLost; c.movementOnly = this.mode === 'movement';
     c.presence = this.haveField && !this.cameraLost ? this.field : null;
     const frame = this.interactions.update(this.cameraLost ? NOBODY : this.bodies, c, values, dt, list);
     // The Drop and the room-wide ripple reach Evolve as moves on the next frame.

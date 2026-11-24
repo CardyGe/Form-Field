@@ -1471,6 +1471,30 @@ try {
     await blackout.click(); await freeze.click(); await react('midi', [0xb0, 21, 0]);
   });
 
+  await check('after the wall\'s graphics card resets, the shared limiter is built again and still holds hammered Blackout', async () => {
+    const lost = await output.evaluate(async () => {
+      const canvas = document.querySelector('canvas'), gl = canvas.getContext('webgl2'), ext = gl.getExtension('WEBGL_lose_context');
+      const restored = new Promise(r => canvas.addEventListener('webglcontextrestored', r, { once: true }));
+      ext.loseContext(); await new Promise(r => setTimeout(r, 400)); ext.restoreContext(); await restored;
+      return true;
+    });
+    assert.ok(lost);
+    await sleep(1600);
+    const guard = await output.evaluate(() => window.__mapStats.flashGuard);
+    assert.ok(guard?.on && guard.failed === null, `guard after the reset: ${JSON.stringify(guard)}`);
+    const freeze = studio.getByRole('button', { name: 'Freeze', exact: true }), blackout = studio.getByRole('button', { name: 'Blackout', exact: true });
+    await react('midi', [0xb0, 21, 127]); await sleep(1600);
+    await freeze.click(); await sleep(300);
+    const counting = captureFlashes(5000);
+    await studio.evaluate(() => { const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Blackout'); let n = 0; window.__hammer = setInterval(() => { if (n++ < 40) b.click(); else clearInterval(window.__hammer); }, 100); });
+    const seen = await counting;
+    await studio.evaluate(() => clearInterval(window.__hammer));
+    meridianReport.frozenBlackoutAfterReset = seen;
+    assert.ok(seen.changes <= 6, `hammered Blackout after the reset: ${JSON.stringify(seen)}`);
+    if (await blackout.getAttribute('aria-pressed') === 'true') { await blackout.click(); await sleep(200); }
+    await freeze.click(); await react('midi', [0xb0, 21, 0]);
+  });
+
   await check('reopening the same show ends a linked Reseed, but a scene change keeps it', async () => {
     await openFile('calm');
     await meridianStats(s => s.meridian?.ev?.frames > 10, 'the show is not playing');

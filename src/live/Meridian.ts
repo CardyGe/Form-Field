@@ -80,8 +80,8 @@ export class Meridian implements Look {
 
   resize(width: number, height: number): void { this.width = width; this.height = height; this.target.setSize(width, height); }
 
-  /** Clear wipes the room's memory: bodies, charges and wakes. The structure itself carries on, as it never empties. */
-  clear(): void { this.core.reset(); }
+  /** Clear forgets the room: bodies, charges and what waits for the beat. Rings and wakes fade out; the structure carries on. */
+  clear(): void { this.core.clear(); }
 
   /** Read-only state for the operator and the scripted checks: numbers and words, never a picture. */
   diagnostics(): { bodies: number; attract: number; readbackMs: number; gridMs: number; status: string; mode: string; cameraLost: boolean; links: number; merges: number; throws: number; releases: number; charge: number; crowd: number; drawMs: number; positions: { id: number; x: number; y: number; energy: number; stillness: number }[] } {

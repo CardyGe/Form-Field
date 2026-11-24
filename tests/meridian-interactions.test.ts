@@ -36,14 +36,14 @@ class Rig {
   readonly view: Record<string, number> = {};
   t = 0; beats = 0.3; bpm = 120;
   constructor(extra: Record<string, number> = {}) { this.params = { ...MERIDIAN_DEFAULTS, ...LIVE_DEFAULTS, ...extra }; }
-  step(bodies: readonly Body[], options: { presence?: PresenceField | null; cameraLost?: boolean } = {}): InteractionFrame {
+  step(bodies: readonly Body[], options: { presence?: PresenceField | null; cameraLost?: boolean; movementOnly?: boolean } = {}): InteractionFrame {
     this.t += DT; this.beats += DT * this.bpm / 60;
     const clock = advanceEvolve(this.transport, (this.t / LOOP) * Math.PI * 2, LOOP, DT, SEED, this.params, idle);
     Object.assign(this.view, this.params, this.transport.values);
     evaluateEvolve(SEED, clock, this.view, this.list);
-    return this.live.update(bodies, { aspect: ASPECT, beats: this.beats, bpm: this.bpm, time: this.t, presence: options.presence === undefined ? field(bodies) : options.presence, cameraLost: options.cameraLost === true }, this.params, DT, this.list);
+    return this.live.update(bodies, { aspect: ASPECT, beats: this.beats, bpm: this.bpm, time: this.t, presence: options.presence === undefined ? field(bodies) : options.presence, cameraLost: options.cameraLost === true, movementOnly: options.movementOnly === true }, this.params, DT, this.list);
   }
-  run(seconds: number, bodies: readonly Body[] | ((t: number) => readonly Body[]), options: { presence?: PresenceField | null; cameraLost?: boolean } = {}): InteractionFrame {
+  run(seconds: number, bodies: readonly Body[] | ((t: number) => readonly Body[]), options: { presence?: PresenceField | null; cameraLost?: boolean; movementOnly?: boolean } = {}): InteractionFrame {
     let frame!: InteractionFrame;
     for (let i = 0; i < Math.round(seconds * FPS); i++) frame = this.step(typeof bodies === 'function' ? bodies(this.t) : bodies, options);
     return frame;
@@ -292,3 +292,58 @@ function endMove(a: Float32Array, b: Float32Array, at: number): number {
   ends(a, p); ends(b, q);
   return Math.max(Math.hypot(p[0] - q[0], p[1] - q[1]), Math.hypot(p[2] - q[2], p[3] - q[3]));
 }
+
+/** Follows every mark between frames: the largest move and light change seen. */
+function watcher(rig: Rig) {
+  let last: Float32Array | null = null;
+  const seen = { moved: 0, faded: 0 };
+  return { seen, look() {
+    const d = rig.list.data;
+    if (last) for (let k = 0; k < rig.list.count; k++) {
+      const at = k * STRIDE;
+      seen.faded = Math.max(seen.faded, Math.abs(d[at + 9] - last[at + 9]));
+      if (Math.max(d[at + 9], last[at + 9]) <= 0.04 || Math.min(d[at + 9], last[at + 9]) < 0.012) continue;
+      seen.moved = Math.max(seen.moved, endMove(last, d, at));
+    }
+    last = d.slice(0, rig.list.count * STRIDE);
+  } };
+}
+
+test('a newcomer never inherits a departed person\'s charge', () => {
+  const rig = new Rig({ liveChargeSeconds: 1, liveBeatSnap: 0 });
+  // A full room: eight people, the first standing still until charged.
+  const others = Array.from({ length: 7 }, (_, i) => body(i + 2, 0.2 + i * 0.1, 0.3 + (i % 2) * 0.4, { energy: 0.1 }));
+  let frame = rig.run(2.5, t => [body(1, 0.1, 0.5, { stillness: t, energy: 0.02 }), ...others]);
+  assert.ok(frame.charge > 0.9);
+  // They leave, and at once someone new takes their place and moves suddenly, while the old ring is still fading.
+  rig.step(others);
+  frame = rig.run(2, [body(9, 0.12, 0.5, { vx: 0.3, energy: 0.9, stillness: 0 }), ...others]);
+  assert.equal(frame.releases, 0, 'no bloom they never charged');
+  assert.ok(frame.charge < 0.05, `charge ${frame.charge}`);
+});
+
+test('Clear forgets people but lets every mark fade within the limits', () => {
+  const rig = new Rig({ liveChargeSeconds: 1 });
+  const crowd = (t: number) => [body(1, 0.3, 0.5, { stillness: t, energy: 0.02 }), body(2, 0.45, 0.5), body(3, 0.7, 0.4, { vx: 0.2, energy: 0.5 })];
+  rig.run(3, crowd);
+  const w = watcher(rig);
+  w.look();
+  rig.live.forget();
+  for (let i = 0; i < 3 * FPS; i++) { rig.step(i < 90 ? [] : []); w.look(); }
+  assert.ok(w.seen.moved <= MAX_MOVE + 1e-6, `moved ${w.seen.moved}`);
+  assert.ok(w.seen.faded <= MAX_ALPHA + 1e-6, `light changed ${w.seen.faded}`);
+  assert.ok(rig.mark(LIVE_SLOTS.orbit).alpha < 0.02, 'and the rings have gone');
+  // People still there after Clear are found again, gliding in.
+  const again = new Rig(); again.run(2, [body(1, 0.3, 0.5)]);
+  const w2 = watcher(again); w2.look(); again.live.forget();
+  for (let i = 0; i < 2 * FPS; i++) { again.step([body(7, 0.3, 0.5)]); w2.look(); }
+  assert.ok(w2.seen.moved <= MAX_MOVE + 1e-6 && w2.seen.faded <= MAX_ALPHA + 1e-6, JSON.stringify(w2.seen));
+});
+
+test('movement only: no Throw and no Release, while rings still follow people', () => {
+  const rig = new Rig({ liveChargeSeconds: 1, liveBeatSnap: 0 });
+  rig.run(2, t => [body(1, 0.5, 0.5, { stillness: t, energy: 0.02 })], { movementOnly: true });
+  const frame = rig.run(2, [body(1, 0.5, 0.5, { vx: 1.4, energy: 0.95 })], { movementOnly: true });
+  assert.equal(frame.throws, 0); assert.equal(frame.releases, 0);
+  assert.ok(rig.mark(LIVE_SLOTS.orbit).alpha > 0.3, 'the ring is still there');
+});
