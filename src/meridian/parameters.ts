@@ -206,12 +206,12 @@ const REACTION: Row[] = [
   ['reactionBeatSnap', 'Beat snap', 0, 1, 0.01, 0.5, 'From reacting freely at 0 to landing exactly on the beat at 1.'],
 ];
 const MOVE_ROWS: Row[] = [
-  ['moveNext', 'Next', 0, 1, 0.01, 0, 'Starts a new phrase at the next quantise point.'],
-  ['moveHold', 'Hold', 0, 1, 0.01, 0, 'Stays in the Charge state for as long as it is held.'],
-  ['moveDrop', 'Drop', 0, 1, 0.01, 0, 'Jumps straight to the peak on the next beat.'],
-  ['moveCollapse', 'Collapse', 0, 1, 0.01, 0, 'Collapses the design early.'],
-  ['moveMutate', 'Mutate', 0, 1, 0.01, 0, 'Varies the next phrase while keeping its character.'],
-  ['moveReseed', 'Reseed', 0, 1, 0.01, 0, 'Makes a new composition for the next phrase.'],
+  ['moveNext', 'Next', 0, 1, 0.01, 0, 'Moves on to the next form. Evolve glides there.'],
+  ['moveHold', 'Hold', 0, 1, 0.01, 0, 'Holds the current form for as long as it is held.'],
+  ['moveDrop', 'Drop', 0, 1, 0.01, 0, 'Swells the hero and the light to their peak.'],
+  ['moveCollapse', 'Collapse', 0, 1, 0.01, 0, 'Gathers the structure inward while held, then lets it open again.'],
+  ['moveMutate', 'Mutate', 0, 1, 0.01, 0, 'Varies the drawing while keeping its character.'],
+  ['moveReseed', 'Reseed', 0, 1, 0.01, 0, 'Moves to a new composition.'],
   ['moveBurst', 'Burst', 0, 1, 0.01, 0, 'Fires a short burst of energy through the design.'],
   ['moveRecall', 'Recall', 0, 8, 1, 0, 'Plays a saved seed next. 0 is none, 1 to 8 are the seed slots.'],
 ];

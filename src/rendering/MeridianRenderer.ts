@@ -132,8 +132,11 @@ class Instances {
 export class MeridianRenderer {
   private readonly curves = new Instances(strip(CURVE_SIDES));
   private readonly marks = new Instances(strip(1));
-  private readonly list = new DisplayList(CAPACITY);
-  private readonly ghost = new DisplayList(CAPACITY);
+  /** Dense and Pulse only (about 1 MB each), so a renderer that draws only Evolve never makes them. */
+  private listStore: DisplayList | null = null;
+  private ghostStore: DisplayList | null = null;
+  private get list(): DisplayList { return this.listStore ??= new DisplayList(CAPACITY); }
+  private get ghost(): DisplayList { return this.ghostStore ??= new DisplayList(CAPACITY); }
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.Camera();
   private readonly light = lightTarget();

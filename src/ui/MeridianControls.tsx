@@ -277,12 +277,10 @@ function FlashGuardControl({ value, onChange }: { value: number; onChange: (n: n
   return <div className="m-guard"><span>Flash guard on</span><button className="m-capture" onClick={() => setAsking(true)}>Turn off…</button></div>;
 }
 
-export function MeridianControls({ layer, edit, performance, notify, onAnimateKey, onStart, onEnd, queued, soundSlot }: {
+export function MeridianControls({ layer, edit, performance, notify, onAnimateKey, onStart, onEnd, soundSlot }: {
   soundSlot?: ReactNode;
   layer: Layer; edit: (change: (l: Layer) => Layer) => void; performance: MeridianPerformance; notify: (message: string) => void;
   onAnimateKey?: (key: string) => void; onStart: () => void; onEnd: () => void;
-  /** Structural keys waiting for the next phrase. The Conductor supplies this; nothing is queued without it. */
-  queued?: ReadonlySet<string>;
 }) {
   const [query, setQuery] = useState(''), [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const searching = query.trim().length > 0;
@@ -296,7 +294,7 @@ export function MeridianControls({ layer, edit, performance, notify, onAnimateKe
     const body = d.key === 'safetyFlashGuard' ? <FlashGuardControl value={value} onChange={n => setParam(d.key, n)} /> : d.key === 'seed' ? <SeedField value={value} onChange={n => setParam('seed', n)} />
       : choices ? <ChoiceParameter label={d.label} name={d.label} options={[...choices]} value={value} resetTo={d.default} onChange={n => setParam(d.key, n)} />
       : <Parameter definition={d} value={value} animated={!!layer.modulations[d.key]} onChange={n => setParam(d.key, n)} onAnimate={!onAnimateKey || d.step === 1 || d.structural || motionIgnored(layer, d.key) ? undefined : () => onAnimateKey(d.key)} onStart={onStart} onEnd={onEnd} />;
-    return <div className={`m-param ${unused ? 'is-unused' : ''}`} key={d.key} title={unused ? 'Not used by Evolve' : undefined}>{unused && <span className="m-unused">Not in Evolve</span>}{queued?.has(d.key) && <span className="m-next">Next phrase</span>}{body}</div>;
+    return <div className={`m-param ${unused ? 'is-unused' : ''}`} key={d.key} title={unused ? 'Not used by Evolve' : undefined}>{unused && <span className="m-unused">Not in Evolve</span>}{body}</div>;
   };
   return <div className="meridian-controls">
     <section className="m-block" aria-label="Macros"><div className="m-macros">{MACROS.map(d => <MacroFader key={d.key} d={d} value={layer.params[d.key] ?? d.default} onChange={n => setParam(d.key, n)} onStart={onStart} onEnd={onEnd} />)}</div></section>

@@ -60,7 +60,6 @@
 .m-group-body { display: flex; flex-direction: column; gap: 2px; padding: 0 0 8px; min-width: 0; }
 .m-param { position: relative; min-width: 0; }
 .m-param .stacked-label { margin: 2px 0 4px; }
-.m-next { display: inline-block; margin-bottom: 1px; padding: 0 5px; border-radius: 3px; background: color-mix(in srgb, var(--m-hot) 20%, transparent); color: var(--m-hot); font-size: 9px; font-weight: 600; line-height: 14px; }
 .m-seed { display: grid; grid-template-columns: minmax(0, 1fr) 110px; align-items: center; min-height: 34px; color: #cececa; font-size: 11px; }
 .m-seed span { cursor: default; }
 .m-seed input { width: 100%; height: 26px; padding: 3px 5px; border: 1px solid #414141; border-radius: 4px; background: #242424; color: var(--ink); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
