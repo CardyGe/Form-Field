@@ -5,7 +5,8 @@ import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { reactivity, type ReactivityEngine } from '../react/engine';
 import { MeterStore } from '../react/meter';
-import { installationMessage, logFault, useInstallation } from './installation';
+import { installationMessage, logFault, saveInstallation, useInstallation } from './installation';
+import { installationDisplay } from './installation-display';
 
 export interface Display { id: number; label: string; primary: boolean }
 /** What Meridian Live tells the operator: words and counts, never a picture. */
@@ -94,15 +95,23 @@ export function useLive(onError: (message: string) => void) {
   useEffect(() => { if (!outputOpen) setPreview(null); }, [outputOpen]);
 
   // Installation mode: on launch the saved Live settings go straight to the output, and Meridian's autopilot runs there.
-  const installation = useInstallation(), autoOpened = useRef(false);
+  // Only on the saved projector (or, with none saved, a display that is not the main screen), trying again whenever the displays
+  // change, so a projector switched on after the Mac is found. Closing the output by hand is respected until the displays change.
+  const installation = useInstallation(), triedDisplays = useRef<Display[] | null>(null);
+  const [installationWaiting, setInstallationWaiting] = useState<string | null>(null);
   useEffect(() => { if (outputOpen) bridge?.send(installationMessage()); }, [installation]);
   useEffect(() => {
-    if (autoOpened.current || outputOpen || !bridge || !settings || !installation?.on || installation.surface !== 'live') return;
-    const display = installation.display ?? settings.display;
-    if (display === null || settings.source.kind === 'file') return;
-    autoOpened.current = true;
-    void bridge.openOutput(display).catch(error => logFault(`Installation could not open the Live output: ${(error as Error).message}`));
-  }, [settings, outputOpen, installation]);
+    const active = !!bridge && !!settings && !!installation?.on && installation.surface === 'live';
+    if (!active || outputOpen) { setInstallationWaiting(null); return; }
+    if (settings!.source.kind === 'file') { setInstallationWaiting('Installation cannot open the output while a video file is the source.'); return; }
+    const choice = installationDisplay(installation!.display, displays);
+    setInstallationWaiting(choice.waiting);
+    if (choice.id === null || triedDisplays.current === displays) return;
+    triedDisplays.current = displays;
+    const id = choice.id;
+    void bridge!.openOutput(id).then(() => { if (installation!.display !== id) void saveInstallation({ display: id }).catch(() => {}); })
+      .catch(error => { triedDisplays.current = null; logFault(`Installation could not open the Live output: ${(error as Error).message}`); });
+  }, [settings, outputOpen, displays, installation]);
   useEffect(() => {
     if (meridian?.limiterError) logFault(`Live: flash limiter not running: ${meridian.limiterError}`);
     if (meridian?.status.startsWith('Camera lost')) logFault(`Live: ${meridian.status}`);
@@ -174,7 +183,10 @@ export function useLive(onError: (message: string) => void) {
   const clear = () => { stage.current?.renderer.clear(); if (outputOpen) bridge?.send({ type: 'clear' }); };
   const openOutput = async () => {
     if (!settings || settings.display === null) return;
-    try { await bridge?.openOutput(settings.display); }
+    try {
+      await bridge?.openOutput(settings.display);
+      if (installation?.on && installation.surface === 'live' && installation.display !== settings.display) void saveInstallation({ display: settings.display }).catch(() => {});
+    }
     catch (error) { onError((error as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); await refreshDisplays(); }
   };
   const closeOutput = () => { void bridge?.closeOutput(); };
@@ -186,7 +198,7 @@ export function useLive(onError: (message: string) => void) {
   const chooseFile = (chosen: File) => { setFile(chosen); update(s => ({ ...s, source: { kind: 'file', deviceId: s.source.deviceId } })); };
 
   return { settings: settings ?? defaultLiveSettings(), ready, access, update, sourceState, cameras, displays, outputOpen, blackout, setBlackout, clear,
-    openOutput, closeOutput, view, setView, people, meridian, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge,
+    openOutput, closeOutput, view, setView, people, meridian, installationWaiting, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge,
     engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen };
 }
 

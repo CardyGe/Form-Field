@@ -4,7 +4,8 @@ import { applyStudioEdit, initialMapState, mapReducer, type MapState } from '../
 import type { Project } from '../shared/types';
 import { autosaveSchedule, canEdit } from '../map/autosave';
 import { acceptMapMessage, sourcesToSend, toWire, wallInputs, type MapMessage } from '../map/messages';
-import { installationMessage, logFault, useInstallation } from './installation';
+import { installationMessage, logFault, saveInstallation, useInstallation } from './installation';
+import { installationDisplay } from './installation-display';
 import { useLiveSettings } from './useLiveSettings';
 import type { LiveSettings } from '../live/settings';
 import { createShow, usesLive, validateShow, type ShowDocument } from '../map/show';
@@ -249,15 +250,23 @@ export function useMap(onError: (message: string) => void) {
   }, []);
   useEffect(() => { if (!outputOpen) { setWallPicture(null); setWallState(null); } }, [outputOpen]);
 
-  // Installation mode: on launch the last show goes straight to the projector, and Meridian's autopilot runs on the wall.
-  const installation = useInstallation(), autoOpened = useRef(false);
+  // Installation mode: on launch the last show goes to its projector, and Meridian's autopilot runs on the wall. It opens only on
+  // the saved projector (or, with none saved, a display that is not the main screen), and tries again whenever the displays
+  // change, so a projector switched on after the Mac is found. Closing the wall by hand is respected until the displays change.
+  const installation = useInstallation(), triedDisplays = useRef<Display[] | null>(null);
+  const [installationWaiting, setInstallationWaiting] = useState<string | null>(null);
   useEffect(() => { if (outputOpen) bridge?.send(installationMessage()); }, [outputOpen, outputEpoch, installation]);
   useEffect(() => {
-    if (autoOpened.current || !loaded || outputOpen || !bridge || !installation?.on || installation.surface !== 'map' || !displays.length) return;
-    autoOpened.current = true;
-    const id = installation.display !== null && displays.some(d => d.id === installation.display) ? installation.display : display;
-    if (id !== null) void bridge.openOutput(id).catch(error => logFault(`Installation could not open the wall: ${(error as Error).message}`));
-  }, [loaded, outputOpen, displays, display, installation]);
+    const active = loaded && !!bridge && !!installation?.on && installation.surface === 'map';
+    if (!active || outputOpen) { setInstallationWaiting(null); return; }
+    const choice = installationDisplay(installation!.display, displays);
+    setInstallationWaiting(choice.waiting);
+    if (choice.id === null || triedDisplays.current === displays) return;
+    triedDisplays.current = displays;
+    const id = choice.id;
+    void bridge!.openOutput(id).then(() => { if (installation!.display !== id) void saveInstallation({ display: id }).catch(() => {}); })
+      .catch(error => { triedDisplays.current = null; logFault(`Installation could not open the wall: ${(error as Error).message}`); });
+  }, [loaded, outputOpen, displays, installation]);
   // Faults on the wall go to the installation log, as sentences.
   useEffect(() => {
     if (!wallState) return;
@@ -504,7 +513,11 @@ export function useMap(onError: (message: string) => void) {
   }, [engine, active]);
   const openOutput = async () => {
     if (display === null) return;
-    try { await bridge?.openOutput(display); }
+    try {
+      await bridge?.openOutput(display);
+      // The projector the operator chose is the one an installation waits for.
+      if (installation?.on && installation.surface === 'map' && installation.display !== display) void saveInstallation({ display }).catch(() => {});
+    }
     catch (error) { onError((error as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); await refreshDisplays(); }
   };
   const closeOutput = () => { void bridge?.closeOutput(); };
@@ -574,5 +587,5 @@ export function useMap(onError: (message: string) => void) {
   return { currentShow: () => stateRef.current.show, live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, retryVideos, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
     show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
     solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
-    lastRefusal, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
+    lastRefusal, installationWaiting, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

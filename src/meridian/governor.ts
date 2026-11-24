@@ -11,10 +11,25 @@
  */
 
 export const GOVERNOR = {
-  /** A frame slower than this is over budget. */
-  budgetMs: 20,
-  /** A frame slower than this breaks a run of calm frames. Between the two, a frame neither helps nor hurts. */
-  breaksCalmMs: 25,
+  /**
+   * A frame is over budget when it is slower than the display's refresh interval times this, and at least `slackMs` over it:
+   * 20 ms at 60 Hz, 24 ms at 50 Hz, 40 ms at 30 Hz, 10.8 ms at 120 Hz.
+   */
+  budgetShare: 1.2,
+  slackMs: 2.5,
+  /** A frame slower than the refresh interval times this breaks a run of calm frames (25 ms at 60 Hz). */
+  breaksCalmShare: 1.5,
+  /** Frame intervals the refresh is read from, and how many are needed before anything is judged. */
+  sampleFrames: 64,
+  learnFrames: 16,
+  /** The refresh is read as this low share of recent intervals, so missed refreshes and slow frames do not move it. */
+  refreshPercentile: .25,
+  /**
+   * A refresh that reads slower is believed slowly: over this many seconds at full quality, and much more slowly while
+   * reduced, so a slow show is not mistaken for a slow display. A faster reading is believed at once.
+   */
+  learnSlowerSeconds: 20,
+  learnSlowerReducedSeconds: 120,
   /** A gap this long is a stall (a hidden window, a dialog, a reset), not a measure of the show. */
   stallMs: 250,
   /** Most any one frame can add to the slow count, so a single hitch never reaches a step. */
@@ -66,11 +81,20 @@ export class MeridianGovernor {
   private sinceRecovery = Infinity;
   private steady = 0;
   private readonly out: MeridianQuality = { ...FULL_QUALITY };
+  private readonly samples = new Float32Array(GOVERNOR.sampleFrames).fill(Infinity);
+  private readonly sorted = new Float32Array(GOVERNOR.sampleFrames);
+  private sampled = 0;
+  private refresh = Number.NaN;
+
+  /** The display's refresh interval as measured, in ms; NaN until enough frames have been seen. */
+  get refreshMs(): number { return this.refresh; }
 
   /** One drawn frame: how long it took from the last one, in ms. Returns the quality to draw the next frame with. */
   update(frameMs: number): MeridianQuality {
     if (!(frameMs > 0) || frameMs >= GOVERNOR.stallMs) return this.out;
     const dt = frameMs / 1000;
+    if (!this.learn(frameMs, dt)) return this.out;
+    const budget = Math.max(this.refresh * GOVERNOR.budgetShare, this.refresh + GOVERNOR.slackMs), breaksCalm = this.refresh * GOVERNOR.breaksCalmShare;
     this.sinceRecovery += dt;
     this.steady += dt;
     if (this.steady >= GOVERNOR.forgiveSeconds) this.wait = GOVERNOR.recoverSeconds;
@@ -78,10 +102,10 @@ export class MeridianGovernor {
     // Slowness is judged only once the last step has fully taken effect, so it never gives up more than it needs to.
     const settled = Math.abs(this.level - this.target) < 1e-9;
     if (!settled) this.slow = 0;
-    else if (frameMs > GOVERNOR.budgetMs) this.slow += Math.min(dt, GOVERNOR.longestCountedSeconds);
+    else if (frameMs > budget) this.slow += Math.min(dt, GOVERNOR.longestCountedSeconds);
     else this.slow = Math.max(0, this.slow - dt);
-    if (frameMs > GOVERNOR.breaksCalmMs) this.calm = 0;
-    else if (frameMs <= GOVERNOR.budgetMs) this.calm += dt;
+    if (frameMs > Math.max(breaksCalm, budget)) this.calm = 0;
+    else if (frameMs <= budget) this.calm += dt;
 
     if (this.slow >= GOVERNOR.sustainSeconds && settled && this.target < GOVERNOR.steps) {
       this.target++;
@@ -96,6 +120,28 @@ export class MeridianGovernor {
     if (this.level < this.target) this.level = Math.min(this.target, this.level + glide);
     else if (this.level > this.target) this.level = Math.max(this.target, this.level - glide);
     return this.write();
+  }
+
+  /**
+   * Reads the display's refresh interval from recent frames: a low share of them, so missed refreshes and slow frames do not
+   * count. Returns false while too few frames have been seen to judge anything.
+   */
+  private learn(frameMs: number, dt: number): boolean {
+    const samples = this.samples, n = Math.min(this.sampled + 1, samples.length);
+    samples[this.sampled % samples.length] = frameMs;
+    this.sampled++;
+    if (n < GOVERNOR.learnFrames) return false;
+    // Slots not filled yet hold Infinity, so they sort to the end: no views or copies are made.
+    const sorted = this.sorted;
+    sorted.set(samples);
+    sorted.sort();
+    const low = sorted[Math.floor(n * GOVERNOR.refreshPercentile)];
+    if (!(this.refresh > 0) || low < this.refresh * .97) this.refresh = low;
+    else if (low > this.refresh * 1.03) {
+      const tau = this.target === 0 ? GOVERNOR.learnSlowerSeconds : GOVERNOR.learnSlowerReducedSeconds;
+      this.refresh += (low - this.refresh) * (1 - Math.exp(-dt / tau));
+    }
+    return true;
   }
 
   /** Back to full quality at once: a new show, or the output was closed and opened again. */
@@ -117,4 +163,17 @@ export class MeridianGovernor {
     out.level = level;
     return out;
   }
+}
+
+/**
+ * How much of one mark the governor keeps at `share` of small marks, 0 to 1. `identity` must be the mark's own fixed identity
+ * (an element or voice number), never its place in a list, so the same marks go and come back however the list shifts.
+ * A mark fades over a narrow band of `share` rather than switching off.
+ */
+export function keepMark(identity: number, share: number): number {
+  if (share >= 1) return 1;
+  let h = Math.imul((identity | 0) + 1, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d); h ^= h >>> 13; h = Math.imul(h, 0x297a2d39); h ^= h >>> 16;
+  const hash = (h >>> 0) / 4294967296;
+  return Math.max(0, Math.min(1, (share - hash) / .08 + 1));
 }

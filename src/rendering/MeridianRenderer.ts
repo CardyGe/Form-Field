@@ -5,7 +5,7 @@ import { compose } from '../meridian/composer';
 import { DisplayList, STRIDE } from '../meridian/display-list';
 import { evaluate, positionAt, type PhrasePosition } from '../meridian/evaluate';
 import { Conductor, type ConductorFrame } from '../meridian/conductor';
-import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, EVOLVE_ELEMENTS, evolveScheme, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveClock, type EvolveTransport } from '../meridian/evolve';
+import { advanceEvolve, applyEvolveLight, createEvolveClock, createEvolveTransport, evaluateEvolve, EVOLVE_ELEMENTS, EVOLVE_NODES_FROM, NODE_VOICES, evolveScheme, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveClock, type EvolveTransport } from '../meridian/evolve';
 import { FlashGuard, guardLoopCells } from '../meridian/flash-guard';
 import { heldMoves } from '../meridian/held-moves';
 import { applyMacros } from '../meridian/macros';
@@ -13,7 +13,7 @@ import { markFromOutput, type MarkPlacement } from '../meridian/mark-placement';
 import { LightGrid, type LightPlacement, type LightTone, type ToneCurve } from '../meridian/light-measure';
 import { LinkedOverrides, MoveRouter, type LinkedEdit } from '../meridian/moves';
 import { MusicLight } from '../meridian/music-light';
-import { FULL_QUALITY, type MeridianQuality } from '../meridian/governor';
+import { FULL_QUALITY, keepMark, type MeridianQuality } from '../meridian/governor';
 import { Autopilot } from '../meridian/autopilot';
 import { installation } from '../meridian/installation-state';
 import { musicStatus } from '../meridian/music-status';
@@ -295,7 +295,7 @@ export class MeridianRenderer {
     let list = runtime?.list;
     if (!list) {
       list = this.list;
-      evaluate(score, position, this.perf, live, list);
+      evaluate(score, position, this.perf, live, list, this.quality.instanceScale);
       this.appendGhosts(score, live, position.beat, list);
     }
     const ends = score.stateEnds, peak = smoothRange(position.progress, ends[3], ends[3] + (ends[4] - ends[3]) * .2) * (1 - smoothRange(position.progress, ends[4], ends[5]));
@@ -673,7 +673,7 @@ export class MeridianRenderer {
       const then = beat - (k / GHOSTS) * trail * GHOST_BEATS * score.bars;
       if (then <= 0) break;
       positionAt(score, then, BEATS_PER_BAR, position);
-      evaluate(score, position, this.perf, params, ghost);
+      evaluate(score, position, this.perf, params, ghost, this.quality.instanceScale);
       const fade = afterglow * .26 * (1 - (k - 1) / GHOSTS) ** 2;
       for (let i = 0; i < ghost.count && list.count < CAPACITY; i++) {
         const d = ghost.data, at = i * STRIDE;
@@ -756,10 +756,13 @@ export class MeridianRenderer {
       renderer.setRenderTarget(this.glow);
       renderer.clear();
       renderer.render(this.scene, this.camera);
-      const levels = this.bloom.render(this.glow.texture, glowWidth, glowHeight, draw);
+    }
+    // As before the governor: the caller's clear colour is back before the bloom pyramid draws.
+    renderer.setClearColor(this.mixed, clearAlpha);
+    if (bloomShare > 0) {
+      const levels = this.bloom.render(this.glow.texture, this.glow.width, this.glow.height, draw);
       for (let i = 0; i < levels.length; i++) r[BLOOM_UNIFORMS[i]].value = levels[i];
     }
-    renderer.setClearColor(this.mixed, clearAlpha);
     // Bloom size moves the glow from the tight levels to the wide ones; the hero's halo size pushes it further.
     const size = Math.min(1, Math.max(0, read(p, 'lightBloomSize') + (read(p, 'heroHaloSize') - 1) * .4));
     const amount = read(p, 'lightBloomAmount') * 3 * (1 + .8 * peak) * bloomShare, weights = r.uWeights.value as number[];
@@ -800,17 +803,19 @@ export class MeridianRenderer {
 
   /**
    * Splits the list between the ring strip and the plain quad, so a dot never pays for a ring's geometry. Under the governor,
-   * glitch shards fade with the tear, and a fixed, seeded share of small nodes and dots fades out and is not drawn at all.
+   * Evolve's glitch shards fade with the tear, and its node voices thin by voice (their slots are fixed), fading out and then
+   * not drawn. Dense thins its nodes by element in the evaluator; Pulse, echoes, the hub and the phrase's point never thin.
    */
   private partition(list: DisplayList): void {
     const data = list.data, curves = this.curves.data, marks = this.marks.data, q = this.quality;
-    const shardsFrom = q.tear < 1 ? this.shardsFrom : -1, shardsTo = shardsFrom + GLITCH_SHARDS, thin = q.instanceScale < 1;
+    const evolve = this.shardsFrom >= 0, shardsFrom = evolve && q.tear < 1 ? this.shardsFrom : -1, shardsTo = shardsFrom + GLITCH_SHARDS;
+    const nodesFrom = evolve && q.instanceScale < 1 ? EVOLVE_NODES_FROM : -1, nodesTo = nodesFrom + NODE_VOICES;
     let c = 0, m = 0;
     for (let i = 0; i < list.count; i++) {
       const from = i * STRIDE, kind = data[from];
       let fade = 1;
       if (i >= shardsFrom && i < shardsTo) fade = q.tear;
-      else if (thin && (kind === PRIMITIVE.dot || kind === PRIMITIVE.square) && data[from + 3] < SMALL_MARK) fade = keepShare(markHash(i, data[from + 11]), q.instanceScale);
+      else if (i >= nodesFrom && i < nodesTo) fade = keepMark(i - nodesFrom, q.instanceScale);
       if (fade <= 0) continue;
       const curve = kind <= PRIMITIVE.arc, into = curve ? curves : marks, at = (curve ? c++ : m++) * STRIDE;
       for (let k = 0; k < STRIDE; k++) into[at + k] = data[from + k];
@@ -884,19 +889,6 @@ function tearNoise(seed: number, step: number, salt: number): number {
   let hash = Math.imul(seed ^ Math.imul(step + 1, 0x85ebca6b), 0xc2b2ae35) ^ Math.imul(salt, 0x27d4eb2f);
   hash = Math.imul(hash ^ (hash >>> 15), 0x2c1b3c6d);
   return (((hash ^ (hash >>> 13)) >>> 0) / 4294967296) * 97;
-}
-
-/** Nodes and dots smaller than this (in frame heights) may be let go by the governor; larger points, such as the phrase's point, never are. */
-const SMALL_MARK = .008;
-/** A fixed number in 0 to 1 for one mark, so the same marks go and come back as the governor moves. */
-function markHash(index: number, seed: number): number {
-  let h = Math.imul(index + 1, 0x9e3779b1) ^ Math.imul(Math.round(seed * 4096), 0x85ebca6b);
-  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d); h ^= h >>> 13;
-  return (h >>> 0) / 4294967296;
-}
-/** How much of a mark is kept at this share: marks fade over a narrow band rather than switching off. */
-function keepShare(hash: number, share: number): number {
-  return Math.max(0, Math.min(1, (share - hash) / .08 + 1));
 }
 
 function smoothRange(value: number, start: number, end: number): number {

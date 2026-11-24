@@ -10,7 +10,7 @@ import { StudioRenderer } from '../rendering/StudioRenderer';
 import type { Project } from '../shared/types';
 import { drawCommands, ringPx, shownOnWall, stageCommands, type DrawOptions } from './draw';
 import { borderColour, fadeKey } from './edge';
-import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
+import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, meridianFirst, needsPrepare, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
 import type { Scene } from './scenes';
@@ -126,6 +126,9 @@ export interface CompositorStats {
   meridianRecords?: number;
   /** The compositor's own work per drawn frame on the CPU, in ms, smoothed. */
   cpuMs?: number;
+  /** Since the wall started: graphics contexts lost (the stage's and the instruments'), and instruments started again from scratch. */
+  contextLosses?: number;
+  restarts?: number;
 }
 
 /** Runs each frame for each source, so it allocates nothing. */
@@ -164,8 +167,12 @@ export class MapCompositor {
   private readonly overLimit = new Set<string>();
   private governor: Governor = initialGovernor();
   private last: number | null = null;
-  /** Whether the last frame was drawn: Meridian's governor judges only back-to-back drawn frames. */
-  private drewLast = false;
+  /** Whether the last frame was playing (drawn, or skipped by Map's every-other-frame step): Meridian's governor is timed by these. */
+  private playedLast = false;
+  private contextLosses = 0;
+  /** A cost probe is drawing frames back to back: their intervals say nothing about the display, so no governor hears them. */
+  private probing = false;
+  private restarts = 0;
   private workMs = 0;
   private frameIndex = 0;
   private framesThisSecond = 0;
@@ -196,7 +203,7 @@ export class MapCompositor {
     this.canvas = canvas;
     this.gpu = new Gpu(canvas);
     // A lost context blanks the wall until Chromium gives it back; then every picture is made again.
-    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); });
+    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.contextLosses++; this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); });
     canvas.addEventListener('webglcontextrestored', () => {
       this.gpu.setUp();
       this.pictures.clear(); this.overlay = null; this.histories.clear();
@@ -344,8 +351,9 @@ export class MapCompositor {
     if (!this.frozen) this.fadeClock += seconds * 1000;
     const scale = GOVERNOR_SCALES[this.governor.level];
     const draw = !this.frozen && drawsThisFrame(this.governor.level, this.frameIndex);
-    // Meridian's own governor hears the wall's frame time (NaN, which it ignores, after an idle or frozen frame).
-    const paceMs = this.drewLast && !this.frozen ? seconds * 1000 : Number.NaN;
+    // Meridian's own governor hears every frame of a playing wall, including frames Map skips at its every-other-frame step
+    // (NaN, which it ignores, after an idle or frozen frame).
+    const paceMs = this.playedLast && !this.frozen && !this.probing ? seconds * 1000 : Number.NaN;
 
     this.overLimit.clear();
     let rendered = false;
@@ -378,6 +386,7 @@ export class MapCompositor {
         slot.phase = synced ?? advancePhase(slot.phase, seconds, slot.project, this.drawn.speed.get(source.id) ?? source.speed);
         slot.performanceDt += seconds;
       }
+      if (hasMeridian(slot.project)) slot.renderer.paceMeridian(paceMs);
       if (!draw) continue;
       // Drawn once, at the size of the largest place it lands on the stage.
       // Sized from the shapes as set, not as links move them: a zoom on the bass would otherwise resize the instrument many times a second.
@@ -385,7 +394,7 @@ export class MapCompositor {
       const meridian = hasMeridian(slot.project);
       const size = sourceSizeFor(users.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), meridian ? 1 : scale);
       try {
-        if (meridian) { slot.renderer.setPerformanceSignals(this.signals, slot.performanceDt); slot.performanceDt = 0; slot.renderer.paceMeridian(paceMs); }
+        if (meridian) { slot.renderer.setPerformanceSignals(this.signals, slot.performanceDt); slot.performanceDt = 0; }
         slot.renderer.render(withParams(slot.project, this.structureHold.apply(source.id, slot.project, this.drawn.params.get(source.id), slot.phase)), slot.phase, size.width, size.height, { signals: this.signals, now });
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);
         rendered = true;
@@ -416,12 +425,12 @@ export class MapCompositor {
     const easing = this.guardPolicy.on || this.limiterFade !== null;
     const drawn = this.dirty || rendered || running || staggering || easing || this.fades.size > 0 || this.glides.size > 0;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
-    this.drewLast = drawn && draw;
+    this.playedLast = !this.frozen && (drawn || !draw);
     this.frameIndex++;
     const work = performance.now() - started;
     if (drawn) this.workMs = this.workMs ? this.workMs * .95 + work * .05 : work;
     // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
-    if (!this.frozen && drawn) this.governor = governorStep(this.governor, frameCost(work, seconds * 1000));
+    if (!this.frozen && drawn) this.governor = meridianFirst(governorStep(this.governor, frameCost(work, seconds * 1000)), this.meridianReduction());
     this.framesThisSecond++;
     if (now - this.secondStarted >= 1000) { this.fps = this.framesThisSecond * 1000 / (now - this.secondStarted); this.framesThisSecond = 0; this.secondStarted = now; }
     return drawn;
@@ -447,7 +456,7 @@ export class MapCompositor {
       staggered: this.histories.size, delayed: this.delays.size,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
       meridian: Object.fromEntries([...this.slots].flatMap(([id, s]) => { const report = s.renderer?.meridianReport(); return report ? [[id, { ...report, phase: s.phase }]] : []; })),
-      meridianQuality: this.meridianQuality(), cpuMs: +this.workMs.toFixed(2),
+      meridianQuality: this.meridianQuality(), cpuMs: +this.workMs.toFixed(2), contextLosses: this.contextLosses, restarts: this.restarts,
       meridianRecords: [...this.slots.values()].reduce((n, s) => n + (s.renderer?.meridianRecords() ?? 0), 0),
       flashGuard: this.guardPolicy.present ? { failed: this.gpu.guardError, on: this.guardPolicy.on, warn: this.guardPolicy.warn, limiting: performance.now() < this.limitingUntil, area: this.gpu.limitedArea, cpuMs: this.guardCost } : null,
     };
@@ -460,6 +469,7 @@ export class MapCompositor {
   probeFrameCost(count = 24): { medianMs: number; worstMs: number } | null {
     if (this.lost || this.disposed) return null;
     const gl = this.gpu.gl, pixel = new Uint8Array(4), costs: number[] = [];
+    this.probing = true;
     for (let i = 0; i < count; i++) {
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
       const a = performance.now(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
@@ -468,8 +478,22 @@ export class MapCompositor {
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
       costs.push(Math.max(0, performance.now() - b - (b - a)));
     }
+    this.probing = false;
+    // The next real frame's interval includes the probe: it is not heard either.
+    this.playedLast = false;
     costs.sort((x, y) => x - y);
     return { medianMs: +costs[costs.length >> 1].toFixed(2), worstMs: +costs[costs.length - 1].toFixed(2) };
+  }
+
+  /** Whether Meridian on this wall still has detail of its own to give up before Map draws every other frame. */
+  private meridianReduction(): 'none' | 'reducing' | 'exhausted' {
+    let found = false;
+    for (const slot of this.slots.values()) {
+      if (!slot.renderer || !slot.project || !hasMeridian(slot.project)) continue;
+      found = true;
+      if (slot.renderer.meridianQuality().level < 3 - 1e-6) return 'reducing';
+    }
+    return found ? 'exhausted' : 'none';
   }
 
   /** The most reduced Meridian source on this wall, or null when none plays Meridian. */
@@ -576,10 +600,12 @@ export class MapCompositor {
     canvas.addEventListener('webglcontextlost', event => {
       event.preventDefault();
       if (this.slots.get(id) !== slot) return;
+      this.contextLosses++;
       slot.lost = true; slot.restoring = false;
       window.clearTimeout(slot.lostTimer);
       slot.lostTimer = window.setTimeout(() => {
         if (this.slots.get(id) !== slot || !slot.lost) return;
+        this.restarts++;
         this.release(id, slot);
         this.restartAt.set(id, performance.now() + RESTART_AFTER_MS);
       }, RESTORE_WAIT_MS);
@@ -592,7 +618,7 @@ export class MapCompositor {
       if (!slot.renderer || !project) return;
       slot.restoring = true;
       slot.renderer.prepare(project).then(() => { if (this.slots.get(id) === slot) { slot.restoring = false; this.dirty = true; } })
-        .catch(error => { if (this.slots.get(id) !== slot) return; slot.restoring = false; this.release(id, slot); this.restartAt.set(id, performance.now() + RESTART_AFTER_MS); slot.failed = String((error as Error)?.message ?? error); });
+        .catch(error => { if (this.slots.get(id) !== slot) return; slot.restoring = false; this.restarts++; this.release(id, slot); this.restartAt.set(id, performance.now() + RESTART_AFTER_MS); slot.failed = String((error as Error)?.message ?? error); });
     });
     try { slot.renderer = new StudioRenderer(canvas); }
     catch (error) { slot.failed = `This computer could not start an instrument: ${String((error as Error)?.message ?? error)}`; }

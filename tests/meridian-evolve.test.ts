@@ -588,3 +588,18 @@ test('the library leads with Evolve looks', () => {
   const looks = PRESETS.filter(p => p.kind === 'meridian');
   assert.ok(looks.slice(0, 10).every(p => p.params.scoreStyle === SCORE_STYLE_EVOLVE), 'first ten are Evolve');
 });
+
+test('node voices keep fixed slots in the list, so the governor can thin them by voice; the hub dot is outside them', async () => {
+  const { EVOLVE_NODES_FROM, NODE_VOICES, EVOLVE_ELEMENTS } = await import('../src/meridian/evolve');
+  const { PRIMITIVE } = await import('../src/meridian/types');
+  for (const seed of [1, 1729, 4242, 90210]) for (const density of [0, .16, .6, 1]) for (const t of [0, 7, 31, 55]) {
+    const list = new DisplayList(2000), p = params({ macroDensity: density, macroGlitch: .9 });
+    evaluateEvolve(seed, exactEvolveClock(phaseAt(t), 60, p, createEvolveClock()), p, list);
+    assert.ok(list.count >= EVOLVE_ELEMENTS, `${list.count} marks`);
+    for (let i = EVOLVE_NODES_FROM; i < EVOLVE_NODES_FROM + NODE_VOICES; i++) {
+      const kind = list.data[i * STRIDE];
+      assert.ok(kind === PRIMITIVE.dot || kind === PRIMITIVE.square, `slot ${i} is kind ${kind} (seed ${seed}, density ${density}, t ${t})`);
+    }
+    assert.equal(list.data[(EVOLVE_ELEMENTS - 1) * STRIDE], PRIMITIVE.dot, 'the hub dot is the last element');
+  }
+});

@@ -114,6 +114,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
           {live.meridian.limiterError ? <p className="live-status warn" role="alert">Flash limiter is not running ({live.meridian.limiterError}). The picture is shown unlimited: keep strobing moves off.</p>
             : live.meridian.limiterOn ? <p className="live-status">Flash limiter on</p> : null}
           <InstallationControls surface="live" display={s.display} />
+          {live.installationWaiting && <p className="live-status warn" role="status">{live.installationWaiting}</p>}
           {live.meridian.qualityReduced && <p className="live-status" role="status" title="Less bloom, tearing or small detail, to keep the output smooth. Lines stay sharp and the flash limiter is unchanged. It comes back after a few calm seconds.">Quality reduced</p>}
         </section>}
         <LiveLookControls s={s} update={live.update} reactFor={reactFor} onView={() => live.setView('art')} onClear={live.clear} />

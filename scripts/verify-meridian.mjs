@@ -990,15 +990,18 @@ try {
     };
     const out = {};
     for (const key of ['lightBloomAmount', 'lightLineGlow', 'lightCore']) {
-      const routed = await frames(make(key, true)), plain = await frames(make(key, false));
-      out[key] = { changes: count(routed.series), same: routed.raw.every((px, f) => px.every((v, i) => v === plain.raw[f][i])) };
+      const routed = await frames(make(key, true)), plain = await frames(make(key, false)), again = await frames(make(key, false));
+      const worst = (a, b) => { let w = 0; a.raw.forEach((px, f) => { for (let i = 0; i < px.length; i++) w = Math.max(w, Math.abs(px[i] - b.raw[f][i])); }); return w; };
+      // The same plain export twice: if even that differs, the pipeline is not exact here, and routed is held to the 3/255 limit.
+      const repeat = worst(plain, again), apart = worst(routed, plain);
+      out[key] = { changes: count(routed.series), same: apart === 0, plainRepeat: repeat, routedVsPlain: apart };
     }
     return out;
   });
   console.log('flash light controls (changes in the worst second)', JSON.stringify(report.flashLight));
   for (const [key, r] of Object.entries(report.flashLight)) {
     if (r.changes > 6) failures.push(`a ${key} Motion route shows ${r.changes} changes in a second on an Evolve export`);
-    if (!r.same) failures.push(`a saved ${key} Motion route still changes an Evolve export`);
+    if (r.plainRepeat === 0 ? !r.same : r.routedVsPlain > 3) failures.push(`a saved ${key} Motion route still changes an Evolve export (${JSON.stringify(r)})`);
   }
 
   report.governor = await page.evaluate(() => window.meridianQA.governorChecks());

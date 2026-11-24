@@ -40,6 +40,8 @@ const EASE_PLACE = 0.78, EASE_ARC = 0.69, EASE_LIGHT = 2.8, EASE_TURN = 0.66; //
 const UNSEEN = 0.012;
 const SWAY_RADIANS = 0.42, SWAY_PERIOD = 73; // A binary's slow sway about its shared centre.
 const SPOKE_LIST = RING_VOICES * ARC_SLOTS, NODE_LIST = SPOKE_LIST + SPOKE_VOICES * 2; // Where each kind of voice starts in the display list.
+/** Where Evolve's node voices sit in its list: one fixed slot per voice, so the governor can thin them by voice. */
+export const EVOLVE_NODES_FROM = NODE_LIST;
 const ZOOM_SHARE = 0.55; // How much of the on-screen move limit a Scale move in progress keeps for itself.
 const SCALE_SPEED_SMALL = 0.72, SCALE_SPEED_LARGE = 1.2; // Share of the Scale fader per second.
 const FOLD_SPEED = 0.72; // Far forms fold in towards a small Scale at this rate, a little behind the zoom.

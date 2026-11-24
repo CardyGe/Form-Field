@@ -1,3 +1,4 @@
+import { keepMark } from './governor';
 import type { DisplayList } from './display-list';
 import { subdivisionAt } from './rhythm';
 import { AXIS, COLLAPSE_STYLES, PHRASE_STATES, PRIMITIVE, type PerformanceState, type PhraseState, type Score, type ScoreElement, type ScoreForm } from './types';
@@ -82,7 +83,7 @@ const frame = {
   thin: 1, medium: LINE_MEDIUM, spacing: 0, arcShare: 0, dashes: 0, dashGap: 0.4, ticks: 0.5, tickLength: 1, counter: 1,
   drawOn: 0, wobble: 0, ringAlpha: 1,
   twinShare: 0, twinGap: 1.1, inner: 0, outerReach: 1, spokeOffset: 0, lengthJitter: 0, sweep: 1, retract: 0, endNodes: 0, spokeAlpha: 1,
-  nodeShape: 0, nodeGlow: LINE_GLOW, nodeJitter: 0, chase: 0, chasePattern: 0, snap: 0, nodeAccent: 0, twinkle: 0, nodeAlpha: 1,
+  nodeShape: 0, nodeGlow: LINE_GLOW, nodeJitter: 0, chase: 0, chasePattern: 0, snap: 0, nodeAccent: 0, twinkle: 0, nodeAlpha: 1, nodeShare: 1,
   heroPlace: 0.5, heroContract: 0, heroKick: 0, heroHalo: 1, heroFill: 0, heroPulse: 0, heroSplit: 0,
   accent: ACCENT_AS_COMPOSED, byAge: 0,
   alive: false, axis: AXIS, outer: 0.46, square: 0, negative: 0.5, travel: 0, centreX: 0, centreY: 0, twinX: 0, twinY: 0,
@@ -585,13 +586,15 @@ function drawElement(out: DisplayList, element: ScoreElement, index: number): vo
       break;
     }
     case 'node': {
+      const keep = keepMark(index, frame.nodeShare);
+      if (keep <= 0) break;
       const angle = (element.fixed ? element.angle : element.angle + spin) + frame.nodeJitter * (instanceSeed(frame.seed, index + 7919) - 0.5) * 6;
       const home = frame.snap > 0 && !element.fixed ? radius + (nearestRing(element.radius) * frame.breath - radius) * frame.snap : radius;
       const place = home + frame.nodeJitter * (instanceSeed(frame.seed, index + 104729) - 0.5);
       const size = element.length * frame.nodeSize * grow * (1 - fall);
       const twinkle = frame.twinkle > 0 ? 1 - frame.twinkle * (0.5 + 0.5 * Math.sin((frame.beat * (0.5 + seed) + seed) * TAU * 1.5)) : 1;
       const light = chaseLight(element, seed);
-      const alpha = fade * frame.nodeAlpha * twinkle * Math.min(light, 1) * (1 - frame.rhythmDepth * (1 - frame.nodePulse));
+      const alpha = fade * frame.nodeAlpha * twinkle * Math.min(light, 1) * (1 - frame.rhythmDepth * (1 - frame.nodePulse)) * keep;
       const shape = frame.nodeShape === 0 ? element.shape === 'square' : frame.nodeShape === 2;
       const kind = shape ? PRIMITIVE.square : PRIMITIVE.dot;
       const tint = frame.nodeAccent > 0 && instanceSeed(frame.seed, index + 1299709) < frame.nodeAccent ? 1 : colour;
@@ -634,9 +637,11 @@ function passOf(element: ScoreElement): number {
   return element.group === 'node' ? 2 : element.group === 'tick' ? 1 : 0;
 }
 
-export function evaluate(score: Score, position: PhrasePosition, perf: PerformanceState, params: Readonly<Record<string, number>>, out: DisplayList): void {
+/** `nodeShare` is the quality governor's share of nodes kept (live output only); nodes go by element, never by list position. */
+export function evaluate(score: Score, position: PhrasePosition, perf: PerformanceState, params: Readonly<Record<string, number>>, out: DisplayList, nodeShare = 1): void {
   out.clear();
   prepareFrame(score, position, perf, params);
+  frame.nodeShare = nodeShare;
   const elements = score.elements;
   frame.rings = 0;
   frame.hasSpokes = false;

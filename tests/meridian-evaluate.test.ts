@@ -247,3 +247,37 @@ test('the life marks answer their opacity controls and fade through the start of
   assert.ok(armLight(into) > armLight(end) * 0.4, 'it does not cut out at the boundary');
   assert.equal(armLight(gone), 0, 'it has gone by the middle of Collapse');
 });
+
+test('the governor thins Dense nodes by element, so the same nodes stay from frame to frame, and the point is never thinned', async () => {
+  const { MERIDIAN_DEFAULTS } = await import('../src/meridian/parameters');
+  const params = { ...MERIDIAN_DEFAULTS, nodeDensity: 1 }, score = compose(4, params);
+  const nodeCount = (list: DisplayList) => kinds(list).filter(k => k === PRIMITIVE.dot || k === PRIMITIVE.square).length;
+  const thinned = (position: PhrasePosition, share: number) => { const list = new DisplayList(); evaluate(score, position, PERF, params, list, share); return list; };
+  // Full share changes nothing.
+  for (const state of ['build', 'peak'] as const) {
+    const p = at(score, state, .5), a = new DisplayList(), b = thinned(p, 1);
+    evaluate(score, p, PERF, params, a);
+    assert.deepEqual(Array.from(b.data.subarray(0, b.count * STRIDE)), Array.from(a.data.subarray(0, a.count * STRIDE)));
+  }
+  // Which nodes go depends only on the element (keepMark of its index), never the list position, so it holds across frames.
+  for (let k = 0; k < 40; k++) {
+    const p = at(score, 'peak', .1 + k * .02), full = new DisplayList(), half = thinned(p, .5);
+    evaluate(score, p, PERF, params, full);
+    assert.ok(nodeCount(half) < nodeCount(full) * .8, `kept ${nodeCount(half)} of ${nodeCount(full)}`);
+  }
+  // The point at the end of Collapse is still there at the lowest share.
+  const end = at(score, 'rest', .02), full = new DisplayList(), half = thinned(end, .5);
+  evaluate(score, end, PERF, params, full);
+  assert.equal(half.count, full.count, 'the point and anything else of Rest is not thinned');
+});
+
+test('keepMark is fixed per identity and glides rather than switching', async () => {
+  const { keepMark } = await import('../src/meridian/governor');
+  for (let id = 0; id < 500; id++) {
+    assert.equal(keepMark(id, 1), 1);
+    let last = keepMark(id, 1);
+    for (let share = 1; share >= .5; share -= .01) { const k = keepMark(id, share); assert.ok(k <= last + 1e-9 && last - k <= .15, `id ${id} jumps at ${share}`); last = k; }
+  }
+  const kept = Array.from({ length: 2000 }, (_, id) => keepMark(id, .5) > 0).filter(Boolean).length;
+  assert.ok(kept > 900 && kept < 1250, `${kept} of 2000 kept at half`);
+});
