@@ -485,9 +485,11 @@ export class PerformService {
   private readStatus(): void {
     const audio = this.deps.clock.audio?.(), midi = this.deps.clock.midi?.();
     if (audio) this.audio = audio;
+    // Until the MIDImix itself is recognised (Task 16) no device here gives the controls their input, so a device coming
+    // or going never holds them: controllerLost() is for the device that actually sends the controls.
     if (!midi) return;
     if (midi.state === 'on' && midi.devices.length > 0) this.midi = 'connected';
-    else if (this.midi === 'connected') this.controllerLost();
+    else if (this.midi !== 'lost') this.midi = 'none';
   }
 
   private clipOf(zone: number): Clip | undefined {

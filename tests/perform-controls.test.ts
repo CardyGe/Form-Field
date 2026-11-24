@@ -106,14 +106,14 @@ test('after reconnect a fader takes over only when it crosses its held value', (
   let v = ready();
   v = applyControl(v, { kind: 'fader', strip: 2, value: 0.6 }, false).values;
   v = holdForReconnect(v);
-  v = applyControl(v, { kind: 'fader', strip: 2, value: 0.2 }, false).values;
+  v = applyControl(v, { kind: 'fader', strip: 2, value: 0.2, hardware: true }, false).values;
   assert.equal(v.faders[2], 0.6);
   assert.equal(v.held[2], true);
-  v = applyControl(v, { kind: 'fader', strip: 2, value: 0.7 }, false).values;
+  v = applyControl(v, { kind: 'fader', strip: 2, value: 0.7, hardware: true }, false).values;
   assert.equal(v.faders[2], 0.7);
   assert.equal(v.held[2], false);
   // once taken over it follows freely
-  v = applyControl(v, { kind: 'fader', strip: 2, value: 0.1 }, false).values;
+  v = applyControl(v, { kind: 'fader', strip: 2, value: 0.1, hardware: true }, false).values;
   assert.equal(v.faders[2], 0.1);
 });
 
@@ -122,13 +122,13 @@ test('a held knob and master cross the same way, from above too', () => {
   v = applyControl(v, { kind: 'knob', strip: 5, knob: 0, value: 0.3 }, false).values;
   v = applyControl(v, { kind: 'master', value: 0.5 }, false).values;
   v = holdForReconnect(v);
-  v = applyControl(v, { kind: 'knob', strip: 5, knob: 0, value: 0.9 }, false).values;
+  v = applyControl(v, { kind: 'knob', strip: 5, knob: 0, value: 0.9, hardware: true }, false).values;
   assert.equal(v.knobs[5][0], 0.3);
-  v = applyControl(v, { kind: 'knob', strip: 5, knob: 0, value: 0.2 }, false).values;
+  v = applyControl(v, { kind: 'knob', strip: 5, knob: 0, value: 0.2, hardware: true }, false).values;
   assert.equal(v.knobs[5][0], 0.2);
-  v = applyControl(v, { kind: 'master', value: 0.9 }, false).values;
+  v = applyControl(v, { kind: 'master', value: 0.9, hardware: true }, false).values;
   assert.equal(v.master, 0.5);
-  v = applyControl(v, { kind: 'master', value: 0.4 }, false).values;
+  v = applyControl(v, { kind: 'master', value: 0.4, hardware: true }, false).values;
   assert.equal(v.master, 0.4);
 });
 
@@ -136,8 +136,21 @@ test('a held fader that lands exactly on its value takes over', () => {
   let v = ready();
   v = applyControl(v, { kind: 'fader', strip: 0, value: 0.6 }, false).values;
   v = holdForReconnect(v);
-  v = applyControl(v, { kind: 'fader', strip: 0, value: 0.6 }, false).values;
+  v = applyControl(v, { kind: 'fader', strip: 0, value: 0.6, hardware: true }, false).values;
   assert.equal(v.held[0], false);
+});
+
+test('on-screen and keyboard positions never wait for a held value', () => {
+  let v = ready();
+  v = applyControl(v, { kind: 'fader', strip: 2, value: 0.6 }, false).values;
+  v = applyControl(v, { kind: 'master', value: 0.5 }, false).values;
+  v = holdForReconnect(v);
+  v = applyControl(v, { kind: 'fader', strip: 2, value: 0.2 }, false).values;
+  v = applyControl(v, { kind: 'knob', strip: 1, knob: 2, value: 0.9 }, false).values;
+  v = applyControl(v, { kind: 'master', value: 1 }, false).values;
+  assert.equal(v.faders[2], 0.2);
+  assert.equal(v.knobs[1][2], 0.9);
+  assert.equal(v.master, 1);
 });
 
 test('buttons still work while values are held', () => {

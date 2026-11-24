@@ -672,16 +672,49 @@ test('losing audio keeps the show running and reports it', () => {
   assert.ok(Math.abs(lastValues(r).zones[0].brightness - .5) < .01, 'the reaction eases to nothing');
 });
 
+test('a MIDI device leaving never freezes the on-screen controller (review I3)', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.state.midi = { state: 'on', devices: ['Some DJ controller'] };
+  r.frame();
+  r.service.control({ kind: 'fader', strip: 0, value: .5 });
+  r.state.midi = { state: 'on', devices: [] };
+  r.frame();
+  for (const value of [.55, .6, .7, .9, 1]) {
+    r.service.control({ kind: 'fader', strip: 0, value });
+    assert.equal(r.service.view().controls.faders[0], value, `the on-screen fader takes ${value}`);
+  }
+  r.state.midi = { state: 'on', devices: ['Some DJ controller'] };
+  r.frame();
+  r.service.control({ kind: 'fader', strip: 0, value: .95 });
+  r.service.control({ kind: 'master', value: .4 });
+  const view = r.service.view();
+  assert.equal(view.controls.faders[0], .95);
+  assert.equal(view.controls.master, .4);
+  assert.ok(!view.controls.held.some(Boolean), 'nothing is held');
+  assert.ok(!view.notices.some(n => /MIDImix lost/.test(n)), 'no MIDImix note for another device');
+});
+
+test('after a controller loss the on-screen controls still answer at once', () => {
+  const r = rig();
+  r.service.startShow(); r.ready();
+  r.service.control({ kind: 'fader', strip: 0, value: .5 });
+  r.service.controllerLost();
+  r.service.control({ kind: 'fader', strip: 0, value: .9 });
+  r.service.control({ kind: 'knob', strip: 1, knob: 0, value: .1 });
+  assert.equal(r.service.view().controls.faders[0], .9);
+  assert.equal(r.service.view().controls.knobs[1][0], .1);
+  // The hardware's own fader still has to cross its held value.
+  r.service.control({ kind: 'fader', strip: 2, value: .3, hardware: true });
+  assert.equal(r.service.view().controls.faders[2], 0);
+});
+
 test('a lost controller clears shift and bursts and holds every value', () => {
   const r = rig();
   r.service.startShow(); r.ready();
-  r.state.midi = { state: 'on', devices: ['MIDImix'] };
-  r.frame();
-  assert.equal(r.service.view().midi, 'connected');
   r.service.control({ kind: 'fader', strip: 0, value: .6 });
   r.service.control({ kind: 'solo', down: true });
-  r.state.midi = { state: 'on', devices: [] };
-  r.frame();
+  r.service.controllerLost();
   const view = r.service.view();
   assert.equal(view.midi, 'lost');
   assert.equal(view.shift, false);

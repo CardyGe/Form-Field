@@ -4,8 +4,12 @@
  * Pure: inputs are never mutated, and control positions are never saved anywhere.
  */
 
+/**
+ * `hardware`: the position came from the physical controller. Only those wait to cross a held value after the controller
+ * is lost: the on-screen controller and the keyboard always take their value at once.
+ */
 export type ControlEvent =
-  | { kind: 'knob'; strip: number; knob: 0 | 1 | 2; value: number } | { kind: 'fader'; strip: number; value: number } | { kind: 'master'; value: number }
+  | { kind: 'knob'; strip: number; knob: 0 | 1 | 2; value: number; hardware?: boolean } | { kind: 'fader'; strip: number; value: number; hardware?: boolean } | { kind: 'master'; value: number; hardware?: boolean }
   | { kind: 'amber' | 'red'; strip: number; down: boolean } | { kind: 'bankNext' | 'bankBack' | 'solo'; down: boolean }
   | { kind: 'sendAllStart' } | { kind: 'sendAllEnd' };
 
@@ -60,8 +64,10 @@ function cloneValues(v: ControlValues): ControlValues {
 }
 
 /** Whether a control's new position should be taken, updating the hold bookkeeping. */
-function takes(v: ControlValues, index: number, current: number, value: number): boolean {
+function takes(v: ControlValues, index: number, current: number, value: number, hardware: boolean): boolean {
   if (!v.held[index]) return true;
+  // The screen shows the value it moves, so it has nothing to cross. It leaves the hardware's hold as it was.
+  if (!hardware) return true;
   const prev = v.seen?.[index] ?? null;
   const crossed = value === current || (prev !== null && (prev - current) * (value - current) < 0);
   if (crossed) {
@@ -83,18 +89,18 @@ export function applyControl(v: ControlValues, e: ControlEvent, shift: boolean):
     case 'knob':
       if (validStrip(e.strip) && (e.knob === 0 || e.knob === 1 || e.knob === 2)) {
         const x = clamp01(e.value);
-        if (takes(values, KNOB_AT + e.strip * 3 + e.knob, values.knobs[e.strip][e.knob], x)) values.knobs[e.strip][e.knob] = x;
+        if (takes(values, KNOB_AT + e.strip * 3 + e.knob, values.knobs[e.strip][e.knob], x, e.hardware === true)) values.knobs[e.strip][e.knob] = x;
       }
       break;
     case 'fader':
       if (validStrip(e.strip)) {
         const x = clamp01(e.value);
-        if (takes(values, FADER_AT + e.strip, values.faders[e.strip], x)) values.faders[e.strip] = x;
+        if (takes(values, FADER_AT + e.strip, values.faders[e.strip], x, e.hardware === true)) values.faders[e.strip] = x;
       }
       break;
     case 'master': {
       const x = clamp01(e.value);
-      if (takes(values, MASTER_AT, values.master, x)) values.master = x;
+      if (takes(values, MASTER_AT, values.master, x, e.hardware === true)) values.master = x;
       break;
     }
     case 'solo':
