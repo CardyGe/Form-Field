@@ -202,7 +202,7 @@ export class Interactions {
 
   reset(): void {
     this.slotId.fill(-1); this.slotBody.fill(-1); this.oa.fill(0); this.charge.fill(0); this.cooldown.fill(0); this.releaseLock.fill(0);
-    this.linkAlpha.fill(0); this.merged.fill(0); this.mergeAmount.fill(0);
+    this.linkAlpha.fill(0); this.merged.fill(0); this.mergeAmount.fill(0); this.mergeShown.fill(0); this.crowding = 1;
     this.tAge.fill(Infinity); this.bAge.fill(Infinity); this.qKind.fill(0);
     this.wake.fill(0); this.inside.fill(0); this.nodeWake.fill(0); this.nodeBoost.fill(0);
     this.leanX.fill(0); this.leanY.fill(0);
@@ -399,13 +399,43 @@ export class Interactions {
     return null;
   }
 
+  /**
+   * In a crowd, every pair linked or merged is a web of lines. Each person keeps the links to their two nearest and one merge
+   * ring with their nearest merged partner, so eight people read as a constellation, not a pile of circles.
+   */
+  private rankPairs(): void {
+    let active = 0;
+    for (let s = 0; s < MAX_BODIES; s++) if (this.slotBody[s] >= 0) active++;
+    this.crowding = active > 2 ? Math.sqrt(2 / active) : 1;
+    for (let k = 0; k < PAIRS; k++) {
+      const s = PAIR_A[k], t = PAIR_B[k], d = Math.hypot(this.ox[s] - this.ox[t], this.oy[s] - this.oy[t]);
+      let nearerS = 0, nearerT = 0, mergedS = true, mergedT = true;
+      for (let j = 0; j < PAIRS; j++) {
+        if (j === k || this.slotBody[PAIR_A[j]] < 0 || this.slotBody[PAIR_B[j]] < 0) continue;
+        const e = Math.hypot(this.ox[PAIR_A[j]] - this.ox[PAIR_B[j]], this.oy[PAIR_A[j]] - this.oy[PAIR_B[j]]);
+        const touchesS = PAIR_A[j] === s || PAIR_B[j] === s, touchesT = PAIR_A[j] === t || PAIR_B[j] === t;
+        if (e < d) { if (touchesS) nearerS++; if (touchesT) nearerT++; }
+        if (this.mergeAmount[j] > this.mergeAmount[k] || (this.mergeAmount[j] === this.mergeAmount[k] && e < d)) { if (touchesS) mergedS = false; if (touchesT) mergedT = false; }
+      }
+      this.linkKept[k] = nearerS < 2 || nearerT < 2 ? 1 : 0;
+      this.mergeKept[k] = mergedS && mergedT ? 1 : 0;
+    }
+  }
+
+  private crowding = 1;
+  private readonly linkKept = new Uint8Array(PAIRS);
+  private readonly mergeKept = new Uint8Array(PAIRS);
+  private readonly mergeShown = new Float64Array(PAIRS);
+
   private links(step: number): number {
     const reach = this.v('liveLinkDistance'), on = this.v('liveConstellation');
     let links = 0;
+    this.rankPairs();
     for (let k = 0; k < PAIRS; k++) {
       const s = PAIR_A[k], t = PAIR_B[k];
       let target = 0;
-      if (this.slotBody[s] >= 0 && this.slotBody[t] >= 0 && this.oa[s] > 0.02 && this.oa[t] > 0.02) {
+      this.mergeShown[k] = toward(this.mergeShown[k], this.mergeKept[k], step * 1.5);
+      if (this.linkKept[k] && this.slotBody[s] >= 0 && this.slotBody[t] >= 0 && this.oa[s] > 0.02 && this.oa[t] > 0.02) {
         const d = Math.hypot(this.ox[s] - this.ox[t], this.oy[s] - this.oy[t]);
         target = on * smooth((reach - d) / (reach * 0.35)) * smooth((d - 0.03) / 0.05) * Math.min(this.oa[s], this.oa[t]) * (1 - 0.6 * this.mergeAmount[k]);
       }
@@ -558,8 +588,10 @@ export class Interactions {
     for (let s = 0; s < MAX_BODIES; s++) {
       const at = ORBIT_AT + s * ORBIT_MARKS, a = this.oa[s], x = this.ox[s], y = this.oy[s], r = this.or[s], c = this.charge[s] * chargeOn, turn = this.oturn[s];
       this.put(data, at, PRIMITIVE.ring, x, y, r, 0, 0.5, -1.3 * PX, 0.1 + 0.25 * c, 0, a, 0.31 + s * 0.01);
-      this.put(data, at + 1, PRIMITIVE.ring, x, y, r * 1.4, 0, 0.2, -0.9 * PX, 0.05, 0, a * 0.45, 0.41 + s * 0.01);
-      for (let q = 0; q < 4; q++) this.put(data, at + 2 + q, PRIMITIVE.arc, x, y, r * 1.75, wrapAngle(turn + q * TAU / 4), 0.8, -1 * PX, 0.06, 0.4, a * 0.5, 0.5 + q * 0.03);
+      // In a crowd the outer rings and arcs step back, so each person keeps one clear ring.
+      const outer = a * this.crowding;
+      this.put(data, at + 1, PRIMITIVE.ring, x, y, r * 1.4, 0, 0.2, -0.9 * PX, 0.05, 0, outer * 0.45, 0.41 + s * 0.01);
+      for (let q = 0; q < 4; q++) this.put(data, at + 2 + q, PRIMITIVE.arc, x, y, r * 1.75, wrapAngle(turn + q * TAU / 4), 0.8, -1 * PX, 0.06, 0.4, outer * 0.5, 0.5 + q * 0.03);
       this.put(data, at + 6, PRIMITIVE.dot, x, y, 0.0045, 0, 0, 0, 0.22, 0, a * 0.9, 0.62);
       const sweep = c * TAU;
       this.put(data, at + 7, PRIMITIVE.arc, x, y, r * 1.18, wrapAngle(Math.PI / 2 - sweep), Math.max(1e-4, sweep), -2 * PX, 0.2 + 0.45 * c, 1, a * (0.3 + 0.7 * c) * smooth(c / 0.05), 0.7);
@@ -575,7 +607,7 @@ export class Interactions {
       this.put(data, LINK_AT + k * LINK_MARKS, PRIMITIVE.segment, x0 + ux * inset, y0 + uy * inset, x1 - ux * inset, y1 - uy * inset, 0, -1.1 * PX, 0.08, 0, a, 0.2 + k * 0.001);
       this.put(data, LINK_AT + k * LINK_MARKS + 1, PRIMITIVE.dot, (x0 + x1) / 2, (y0 + y1) / 2, 0.004, 0, 0, 0, 0.25, 1, a, 0.6);
       // A merged pair shares one larger ring around both.
-      const m = this.mergeAmount[k] * merge * Math.min(this.oa[s], this.oa[t]) * 0.8;
+      const m = this.mergeAmount[k] * this.mergeShown[k] * merge * Math.min(this.oa[s], this.oa[t]) * 0.8;
       this.put(data, MERGE_AT + k, PRIMITIVE.ring, (x0 + x1) / 2, (y0 + y1) / 2, d / 2 + Math.max(this.or[s], this.or[t]) * 1.1, 0, 0.6, -1.6 * PX, 0.18, 0, m, 0.33);
     }
   }
