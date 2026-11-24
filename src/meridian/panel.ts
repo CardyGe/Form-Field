@@ -66,6 +66,10 @@ export const EVOLVE_INACTIVE: readonly string[] = [
 /** Whether this layer uses the sound input. Only a visible Evolve layer does, so no other keeps the microphone open. */
 export const listensToMusic = (layer: Layer): boolean => layer.visible && layer.kind === 'meridian' && Math.round(layer.params.scoreStyle ?? 2) === 2;
 
+/** Whether the Mark is drawn on this layer. Pulse and Dense open the final point into it during their Rest; Evolve never draws it. */
+export const markApplies = (layer: Layer): boolean => layer.kind === 'meridian' && Math.round(layer.params.scoreStyle ?? 2) !== 2;
+export const MARK_HINT = 'Pulse and Dense only. Import your own PNG: as each phrase rests, its final point opens into the Mark, then closes before the next Seed.';
+
 /** What the Motion tab may animate on a Meridian layer: macros and moves are played, not keyframed. */
 export const motionParameters = (definitions: readonly ParameterDefinition[]): ParameterDefinition[] => definitions.filter((d) => d.group !== PERFORMANCE_GROUP);
 

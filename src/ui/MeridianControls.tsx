@@ -4,7 +4,7 @@ import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Icon, Parameter } from './LayerControls';
 import { MACRO_KEYS, MERIDIAN_GROUPS, MERIDIAN_PARAMETERS, motionIgnored } from '../meridian/parameters';
 import { musicStatus } from '../meridian/music-status';
-import { EVOLVE_INACTIVE, applyLockedVariation, applyMorph, captureMorph, filterParameters, MAX_STORED_SEED, MERIDIAN_CHOICES, PANEL_PARAMETERS, performanceShortcut, KeyHolds, recallSeed, SEED_SLOTS, storeSeed, toggleGroupLock, type MoveKey, type PerformanceAction } from '../meridian/panel';
+import { EVOLVE_INACTIVE, applyLockedVariation, applyMorph, captureMorph, filterParameters, MARK_HINT, markApplies, MAX_STORED_SEED, MERIDIAN_CHOICES, PANEL_PARAMETERS, performanceShortcut, KeyHolds, recallSeed, SEED_SLOTS, storeSeed, toggleGroupLock, type MoveKey, type PerformanceAction } from '../meridian/panel';
 import { heldMoves } from '../meridian/held-moves';
 import { assertImportableImage, MAX_IMPORT_SIDE, meridianMark } from '../core/project';
 import './meridian.css';
@@ -201,7 +201,7 @@ async function readMark(file: File): Promise<NonNullable<NonNullable<Layer['meri
   return mark;
 }
 
-/** Off until a PNG is imported. The final point of each phrase then opens into it during Rest. */
+/** Off until a PNG is imported. Pulse and Dense only: Evolve never draws it, so there it shows only a stored Mark, to remove. */
 function MarkControl({ layer, edit, notify }: { layer: Layer; edit: (change: (l: Layer) => Layer) => void; notify: (message: string) => void }) {
   const input = useRef<HTMLInputElement>(null), mark = layer.meridian?.mark;
   const choose = async (file: File | undefined) => {
@@ -212,11 +212,13 @@ function MarkControl({ layer, edit, notify }: { layer: Layer; edit: (change: (l:
     } catch (e) { notify(e instanceof Error ? e.message.replace(/^Invalid project: mark /, 'This Mark ') : 'The Mark could not be imported.'); }
   };
   const remove = () => edit(l => { const { mark: _removed, ...state } = l.meridian ?? { locks: [] }; return { ...l, meridian: state }; });
+  const applies = markApplies(layer);
+  if (!applies && !mark) return null;
   return <>
-    <div className="m-heading"><span>Mark</span><small>{mark ? `${mark.width} × ${mark.height}` : 'Off'}</small></div>
+    <div className="m-heading" title={MARK_HINT}><span>Mark</span><small>{applies ? (mark ? `${mark.width} × ${mark.height}` : 'Off') : 'Pulse and Dense only'}</small></div>
     <input ref={input} hidden type="file" accept="image/png" aria-label="Mark PNG file" onChange={e => { void choose(e.target.files?.[0]); e.target.value = ''; }} />
     <div className="m-mark-row">
-      <button className={`m-capture m-mark ${mark ? 'is-filled' : ''}`} title="Import your own PNG. The last point of each phrase opens into it during Rest." onClick={() => input.current?.click()}>{mark ? 'Replace PNG' : 'Import PNG'}</button>
+      {applies && <button className={`m-capture m-mark ${mark ? 'is-filled' : ''}`} title={MARK_HINT} onClick={() => input.current?.click()}>{mark ? 'Replace PNG' : 'Import PNG'}</button>}
       {mark && <button className="m-capture m-mark" title="Turn the Mark off" onClick={remove}>Remove</button>}
     </div>
   </>;

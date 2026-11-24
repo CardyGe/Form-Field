@@ -213,3 +213,16 @@ test('Radial ratio above 1 overrides the seeded ratio; 0 to 1 keeps the seeded c
   assert.notEqual(zoneRings({ structureRadialRatio: 1.9 }), zoneRings({ structureRadialRatio: 1.1 }));
   for (const element of compose(4, { ...MERIDIAN_DEFAULTS, zones: 8, structureRadialRatio: 2.2 }).elements) assert.ok(Number.isFinite(element.radius));
 });
+
+test('the Mark is offered only where it is drawn: Pulse and Dense, never Evolve', async () => {
+  const { markApplies, MARK_HINT } = await import('../src/meridian/panel');
+  const at = (style: number): Layer => ({ ...meridian(), params: { ...meridian().params, scoreStyle: style } });
+  assert.equal(markApplies(at(2)), false, 'Evolve never draws the Mark');
+  assert.equal(markApplies(at(0)), true); assert.equal(markApplies(at(1)), true);
+  assert.equal(markApplies(meridian()), false, 'the default layer is Evolve');
+  assert.match(MARK_HINT, /Pulse and Dense only/);
+  const { readFileSync } = await import('node:fs');
+  const controls = readFileSync(new URL('../src/ui/MeridianControls.tsx', import.meta.url), 'utf8');
+  assert.ok(/markApplies\(layer\)/.test(controls), 'the panel uses the rule');
+  assert.ok(!/The last point of each phrase opens into it during Rest/.test(controls), 'the old phrase tooltip is gone');
+});

@@ -182,7 +182,11 @@ async function verifySurface(real, ui, qa, failures) {
   await morphSlider.fill('0');
   await ui.getByRole('button', { name: 'Play', exact: true }).click();
 
-  // Mark: off until a PNG is imported, and removable again.
+  // Mark: not offered on Evolve, which never draws it. On Pulse it is off until a PNG is imported, and removable again.
+  const markOnEvolve = await ui.getByLabel('Mark PNG file').count();
+  if (markOnEvolve !== 0) failures.push('the Mark is offered on Evolve, which never draws it');
+  const styleButton = name => ui.getByRole('group', { name: 'Style' }).getByRole('button', { name, exact: true });
+  await styleButton('Pulse').click();
   const markState = () => ui.locator('.m-heading', { hasText: 'Mark' }).locator('small').textContent();
   const markOff = await markState();
   const png = await qa.evaluate(async () => { const canvas = new OffscreenCanvas(24, 12); canvas.getContext('2d').fillRect(2, 2, 20, 8); return Array.from(new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer())); });
@@ -190,7 +194,8 @@ async function verifySurface(real, ui, qa, failures) {
   await ui.locator('.m-heading', { hasText: '24 × 12' }).waitFor();
   await ui.getByRole('button', { name: 'Remove', exact: true }).click();
   await ui.locator('.m-heading', { hasText: 'Off' }).waitFor();
-  result.mark = { startsOff: markOff === 'Off', importedAndRemoved: true };
+  await styleButton('Evolve').click();
+  result.mark = { hiddenOnEvolve: markOnEvolve === 0, startsOff: markOff === 'Off', importedAndRemoved: true };
   if (markOff !== 'Off') failures.push(`Mark did not start off (${markOff})`);
 
   await blur();
