@@ -104,11 +104,15 @@ const SOLID_CASES = [
   ['Kaleidoscope + To circle', { mirrorAmount: 1, mirrorMode: 3, polarAmount: 1, polarMode: 0 }],
 ];
 // Mirror or Polar with a later warp on top: the later move must not carry a read off the picture.
-const LATER_POSES = [DEFAULT_POSE, IN_FRAME_POSES[0], { x: .05, y: 0, scale: .85, rotation: .35 }];
+// The default transform and two poses centred in the frame, then poses pushed past it, where a moved read can cross the
+// frame's edge. A 4:1 Cover picture runs past the frame at every one of them.
+const LATER_POSES = [DEFAULT_POSE, IN_FRAME_POSES[0], { x: .05, y: 0, scale: .85, rotation: .35 }, ...OFF_FRAME_POSES];
 const LATER_WARPS = [
   ['Warp Noise .15', { bendAmount: .15, bendField: 1 }], ['Warp Waves .3 with fringe', { bendAmount: .3, bendField: 0, bendChroma: .5 }], ['Warp Plasma .3', { bendAmount: .3, bendField: 4 }],
   ['Liquid Swirl .4', { liquidAmount: .4, liquidStyle: 0 }], ['Liquid Flow .4 with trail', { liquidAmount: .4, liquidStyle: 1, liquidTrail: .6 }], ['Liquid Chaos .5', { liquidAmount: .5, liquidStyle: 4 }],
   ['Luma .3', { lumaWarpAmount: .3 }],
+  // Luma on top of an earlier push: its driver is read where that push put the pixel.
+  ['Warp Noise .15 + Luma .3', { bendAmount: .15, bendField: 1, lumaWarpAmount: .3 }], ['Liquid Swirl .4 + Luma .3', { liquidAmount: .4, liquidStyle: 0, lumaWarpAmount: .3 }],
 ];
 // A hard step: two neighbouring pixels inside the picture more than this far apart, of 255.
 const LATER_STEP = 64;
@@ -1701,36 +1705,37 @@ const CHECKS = [
   },
   {
     name: 'picture-later',
-    // Mirror or Polar on a bounded Image with Warp, Liquid or Luma on top. A smooth picture must stay lit, and a solid
-    // one must show no more hard steps inside it than with Mirror or Polar alone.
+    // Mirror or Polar on a bounded Image with Warp, Liquid or Luma on top, in the frame and running past it. A smooth
+    // picture must stay lit. A solid one and a busy one must each show no more hard steps inside the visible picture
+    // than with Mirror or Polar alone: the solid one shows a read that touched nothing, the busy one a read that jumped.
     run: async ({ page }) => {
       const rows = await page.evaluate(async ([images, poses, folds, laters, step, reported]) => {
         const q = window.wq, rows = [];
         const run = async (shape, width, height, fit, W, H, pose) => {
           const smooth = params => { const l = q.thinImage(shape, width, height, params, fit); l.transform = pose; return q.project([l]); };
           const solid = params => { const l = q.solidImage(shape, width, height, params, fit); l.transform = pose; return q.project([l]); };
+          const busy = params => { const l = q.busyImage(shape, width, height, params, fit); l.transform = pose; return q.project([l]); };
           const plain = q.litShare(await q.px(smooth({}), .9, W, H));
           if (plain < .005) return;
           const flat = await q.px(solid({}), .9, W, H), inside = new Uint8Array(W * H);
           let count = 0;
           for (let i = 0; i < W * H; i++) if (flat[i * 4 + 1] > 200) { inside[i] = 1; count++; }
-          // The share of inside pixels that sit on a hard step to an inside neighbour.
+          // The share of visible picture pixels that sit on a hard step to a neighbour also in the picture, on any channel.
           const steps = px => {
             let n = 0;
+            const far = (a, b) => Math.abs(px[a * 4] - px[b * 4]) > step || Math.abs(px[a * 4 + 1] - px[b * 4 + 1]) > step || Math.abs(px[a * 4 + 2] - px[b * 4 + 2]) > step;
             for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
               const i = y * W + x;
               if (!inside[i]) continue;
-              const v = px[i * 4 + 1];
-              if ((x + 1 < W && inside[i + 1] && Math.abs(v - px[(i + 1) * 4 + 1]) > step) || (y + 1 < H && inside[i + W] && Math.abs(v - px[(i + W) * 4 + 1]) > step)
-                || (x > 0 && inside[i - 1] && Math.abs(v - px[(i - 1) * 4 + 1]) > step) || (y > 0 && inside[i - W] && Math.abs(v - px[(i - W) * 4 + 1]) > step)) n++;
+              if ((x + 1 < W && inside[i + 1] && far(i, i + 1)) || (y + 1 < H && inside[i + W] && far(i, i + W)) || (x > 0 && inside[i - 1] && far(i, i - 1)) || (y > 0 && inside[i - W] && far(i, i - W))) n++;
             }
             return n / count;
           };
           for (const [fold, foldParams] of folds) {
-            const alone = steps(await q.px(solid(foldParams), .9, W, H));
+            const alone = steps(await q.px(solid(foldParams), .9, W, H)), busyAlone = steps(await q.px(busy(foldParams), .9, W, H));
             for (const [later, laterParams] of laters) {
               const params = { ...foldParams, ...laterParams };
-              rows.push({ name: `${fold} + ${later}`, shape, fit, W, H, x: pose.x, ratio: q.litShare(await q.px(smooth(params), .9, W, H)) / plain, alone, steps: steps(await q.px(solid(params), .9, W, H)) });
+              rows.push({ name: `${fold} + ${later}`, shape, fit, W, H, x: pose.x, ratio: q.litShare(await q.px(smooth(params), .9, W, H)) / plain, alone, steps: steps(await q.px(solid(params), .9, W, H)), busyAlone, busySteps: steps(await q.px(busy(params), .9, W, H)) });
             }
           }
         };
@@ -1741,7 +1746,93 @@ const CHECKS = [
       const label = r => `${r.name}, ${r.shape} ${r.fit}, ${r.W}x${r.H} at x ${r.x}`;
       const low = rows.reduce((a, r) => r.ratio < a.ratio ? r : a), under = rows.filter(r => r.ratio < OFF_FRAME_LIMIT);
       const stepped = rows.filter(r => r.steps > r.alone), most = rows.reduce((a, r) => r.steps - r.alone > a.steps - a.alone ? r : a);
-      return { ok: rows.length >= 288 && under.length === 0 && stepped.length === 0, detail: `${rows.length} cases; ${under.length} under ${OFF_FRAME_LIMIT}x plain, lowest ${low.ratio.toFixed(3)}x at ${label(low)}; ${stepped.length} with more hard steps than the fold alone (limit 0), most ${(most.steps * 100).toFixed(2)}% of the picture against ${(most.alone * 100).toFixed(2)}% alone at ${label(most)}` };
+      const jumped = rows.filter(r => r.busySteps > r.busyAlone), worst = rows.reduce((a, r) => r.busySteps - r.busyAlone > a.busySteps - a.busyAlone ? r : a);
+      // The busy picture is reported, not required: see later-steps-control. A later warp raises hard steps on busy detail
+      // with no picture rule in play, so this count cannot tell a torn read from the warp's own work. picture-hold can.
+      return { ok: rows.length >= 288 && under.length === 0 && stepped.length === 0, detail: `${rows.length} cases; ${under.length} under ${OFF_FRAME_LIMIT}x plain, lowest ${low.ratio.toFixed(3)}x at ${label(low)}; solid picture: ${stepped.length} with more hard steps than the fold alone (limit 0), most ${(most.steps * 100).toFixed(2)}% of the picture against ${(most.alone * 100).toFixed(2)}% alone at ${label(most)}; busy picture, report only: ${jumped.length} with more, of which ${jumped.filter(r => r.x === 0 || r.x === .18 || r.x === .05).length} at the default transform and the two poses centred in the frame; most ${(worst.busySteps * 100).toFixed(2)}% against ${(worst.busyAlone * 100).toFixed(2)}% alone at ${label(worst)}` };
+    },
+  },
+  {
+    name: 'later-steps-control',
+    // Report only. A full-frame Image, where the picture rule never runs: how often a later warp alone raises the share
+    // of hard steps over Mirror or Polar alone. This is why picture-later cannot require the busy picture's count.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([folds, laters, step]) => {
+        const q = window.wq, W = 480, H = 270, rows = [];
+        const steps = px => {
+          let n = 0;
+          const far = (a, b) => Math.abs(px[a * 4] - px[b * 4]) > step || Math.abs(px[a * 4 + 1] - px[b * 4 + 1]) > step || Math.abs(px[a * 4 + 2] - px[b * 4 + 2]) > step;
+          for (let y = 0; y < H - 1; y++) for (let x = 0; x < W - 1; x++) { const i = y * W + x; if (far(i, i + 1) || far(i, i + W)) n++; }
+          return n / (W * H);
+        };
+        for (const [kind, make] of [['smooth', p => q.smooth(p)], ['busy', p => q.rich(p)]]) for (const [fold, foldParams] of folds) {
+          const alone = steps(await q.px(q.project([make(foldParams)]), .9, W, H));
+          for (const [later, laterParams] of laters) rows.push({ kind, name: `${fold} + ${later}`, alone, steps: steps(await q.px(q.project([make({ ...foldParams, ...laterParams })]), .9, W, H)) });
+        }
+        return rows;
+      }, [MOVED_CASES, LATER_WARPS, LATER_STEP]);
+      const line = kind => { const g = rows.filter(r => r.kind === kind), more = g.filter(r => r.steps > r.alone), w = g.reduce((a, r) => r.steps - r.alone > a.steps - a.alone ? r : a); return `${kind} 16:9 picture: ${more.length} of ${g.length} cases with more hard steps than the fold alone, most ${(w.steps * 100).toFixed(2)}% against ${(w.alone * 100).toFixed(2)}% at ${w.name}`; };
+      return { ok: rows.length > 0, detail: `report only, full-frame Image at 480x270. ${line('smooth')}; ${line('busy')}` };
+    },
+  },
+  {
+    name: 'picture-driver',
+    // Luma on top of an earlier push, driven by this layer. On a solid picture the driver is the same everywhere, so
+    // Luma must move every held pixel by the same amount. A driver read past the picture finds nothing and breaks that.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([folds]) => {
+        const q = window.wq, W = 480, H = 270, rows = [];
+        // Square to the frame and level with its middle, so the picture's rectangle is known without the transform's maths.
+        for (const pose of [{ x: .1, y: 0, scale: .4, rotation: 0 }, { x: -.4, y: 0, scale: .8, rotation: 0 }]) {
+          const fill = (u, v) => Math.abs(u - .5 - pose.x) <= pose.scale / 2 && Math.abs(v - .5) <= pose.scale / 2 ? [1, 1, 1, 1] : [0, 0, 0, 0];
+          for (const [fold, foldParams] of folds) for (const [push, pushParams] of [['Warp Noise .15', { bendAmount: .15, bendField: 1 }], ['Warp Plasma .3', { bendAmount: .3, bendField: 4 }], ['Liquid Swirl .4', { liquidAmount: .4, liquidStyle: 0 }]]) {
+            const luma = { lumaWarpAmount: .3, lumaWarpAngle: 90 };
+            const before = q.probe('vec4(warped, 0., 1.)', { ...foldParams, ...pushParams }, W, H, fill, pose), after = q.probe('vec4(warped, 0., 1.)', { ...foldParams, ...pushParams, ...luma }, W, H, fill, pose);
+            const on = q.probe('vec4(pictureHold ? 1. : 0., 0., 0., 1.)', { ...foldParams, ...pushParams, ...luma }, W, H, fill, pose);
+            let held = 0, off = 0, least = Infinity, most = 0;
+            for (let i = 0; i < W * H; i++) {
+              if (on[i * 4] < .5) continue;
+              const move = Math.hypot((after[i * 4] - before[i * 4]) * W, (after[i * 4 + 1] - before[i * 4 + 1]) * H);
+              held++; least = Math.min(least, move); most = Math.max(most, move);
+            }
+            for (let i = 0; i < W * H; i++) if (on[i * 4] > .5 && Math.hypot((after[i * 4] - before[i * 4]) * W, (after[i * 4 + 1] - before[i * 4 + 1]) * H) < most - 2) off++;
+            rows.push({ name: `${fold} + ${push} + Luma`, x: pose.x, held: held / (W * H), off: held ? off / held : 0, least, most });
+          }
+        }
+        return rows;
+      }, [MOVED_CASES]);
+      const bad = rows.filter(r => r.off > 0), worst = rows.reduce((a, r) => r.off > a.off ? r : a);
+      return { ok: rows.length > 0 && rows.every(r => r.held > .005 && r.most > 10) && bad.length === 0, detail: `${rows.length} cases at 480x270, one pose in the frame and one past it; ${bad.length} where Luma moves some held pixel over 2 texels less than the rest (limit 0); most ${(worst.off * 100).toFixed(2)}% of held pixels at ${worst.name}, x ${worst.x}, where Luma's move runs from ${worst.least.toFixed(1)} to ${worst.most.toFixed(1)} texels; every case moves at least ${Math.min(...rows.map(r => r.most)).toFixed(1)}` };
+    },
+  },
+  {
+    name: 'picture-hold',
+    // The hold itself must never tear: it may fold or pin a pushed read, but two neighbouring pixels' reads must not end
+    // further apart than the later warp left them. Read from the shader, on Images in the frame and running past it.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([poses, folds, laters]) => {
+        const q = window.wq, W = 480, H = 270, rows = [];
+        for (const pose of poses) for (const [fold, foldParams] of folds) for (const [later, laterParams] of laters) {
+          const params = { ...foldParams, ...laterParams };
+          const at = q.probe('vec4(heldUv(warped), warped)', params, W, H, q.smoothFill, pose), on = q.probe('vec4(pictureHold ? 1. : 0., 0., 0., 1.)', params, W, H, q.smoothFill, pose);
+          let held = 0, torn = 0, widest = 0;
+          const gap = (a, b, o) => Math.hypot((at[a * 4 + o] - at[b * 4 + o]) * W, (at[a * 4 + o + 1] - at[b * 4 + o + 1]) * H);
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const i = y * W + x;
+            if (on[i * 4] < .5) continue;
+            held++;
+            let worst = 0;
+            if (x + 1 < W && on[(i + 1) * 4] > .5) worst = Math.max(worst, gap(i, i + 1, 0) - gap(i, i + 1, 2));
+            if (y + 1 < H && on[(i + W) * 4] > .5) worst = Math.max(worst, gap(i, i + W, 0) - gap(i, i + W, 2));
+            if (worst > 3) torn++;
+            widest = Math.max(widest, worst);
+          }
+          rows.push({ name: `${fold} + ${later}`, x: pose.x, held: held / (W * H), torn: held ? torn / held : 0, widest });
+        }
+        return rows;
+      }, [[...IN_FRAME_POSES, ...OFF_FRAME_POSES], MOVED_CASES, LATER_WARPS]);
+      const bad = rows.filter(r => r.torn > 0), worst = rows.reduce((a, r) => r.torn > a.torn ? r : a), widest = rows.reduce((a, r) => r.widest > a.widest ? r : a);
+      return { ok: rows.length > 0 && rows.every(r => r.held > .005) && bad.length === 0, detail: `${rows.length} cases at 480x270, 2 in-frame and 4 partly off-frame poses; ${bad.length} where the hold pulls neighbouring reads more than 3 texels further apart (limit 0); most ${(worst.torn * 100).toFixed(2)}% of held pixels at ${worst.name}, x ${worst.x}; widest ${widest.widest.toFixed(1)} texels at ${widest.name}, x ${widest.x}${bad.length ? `; by pose x: ${[...new Set(bad.map(r => r.x))].map(x => `${x}: ${bad.filter(r => r.x === x).length}`).join(', ')}` : ''}` };
     },
   },
   ...(previous ? [{
@@ -1990,6 +2081,10 @@ try {
     const solidUrls = {};
     for (const [shape, w, h] of [['1:1', 512, 512], ['4:1', 1024, 256], ['1:4', 256, 1024]]) solidUrls[shape] = await dataUrl(w, h, () => [255, 255, 255, 255]);
     const solidImage = (shape, width, height, params = {}, fit = 'contain') => { const l = image(solidUrls[shape], params, `solid-${width}x${height}`, width, height); l.image.fit = fit; return l; };
+    // Busy along the picture's long side and gentle across it, so even a small copy has no hard step of its own.
+    const busyFill = (w, h) => (x, y) => { const a = w > h ? x * h / w : y, b = w > h ? y : x * h / w * (h / w); return [Math.round(128 + 100 * Math.sin(30 * a + .4)), Math.round(128 + 100 * Math.cos(8 * b - .7)), Math.round(128 + 90 * Math.sin(22 * a + 6 * b)), 255]; };
+    const busyUrls = { '4:1': await dataUrl(1024, 256, busyFill(1024, 256)), '1:4': await dataUrl(256, 1024, busyFill(256, 1024)) };
+    const busyImage = (shape, width, height, params = {}, fit = 'contain') => { const l = image(busyUrls[shape], params, `busy-${width}x${height}`, width, height); l.image.fit = fit; return l; };
     const thinImage = (shape, width, height, params = {}, fit = 'cover') => { const l = image(thinUrls[shape], params, `thin-${width}x${height}`, width, height); l.image.fit = fit; return l; };
     const coverSquare = (params = {}) => { const l = image(squareUrl, params, 'square', 512, 512); l.image.fit = 'cover'; return l; };
     // Red marks the right half; green is busy everywhere, so a move shows even where red is flat.
@@ -2099,7 +2194,7 @@ try {
       if (kind === 'image') return image(posterUrl, params, 'poster');
       const l = m.applyPreset(m.createLayer(kind), m.PRESETS.find(p => p.kind === kind).id); l.id = `${kind}-proof`; Object.assign(l.params, params); return l;
     };
-    window.wq = { richUrl, smoothUrl, solidImage, thinImage, coverSquare, prior, litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
+    window.wq = { busyImage, richUrl, smoothUrl, solidImage, thinImage, coverSquare, prior, litShare, base, smoothFill, worst, probe, headUrl, brightCentre, discLayer, m, old, tinyUrl, renderer, image, soft, smooth, rich, rimmed, bars, halfRed, disc: discLayer, discZones, moving, feed, rampMove, checkerUrl, urlOf, project, pixels, shot, px, difference, same, highFrequency, loop, halved, edgeStats, linear };
   }, [!!baseline, !!previous]);
 
   for (const check of selected) {

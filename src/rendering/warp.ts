@@ -343,11 +343,13 @@ vec2 liquidUv(vec2 uv) {
 }
 
 vec2 mirrored(vec2 uv);
+vec2 heldUv(vec2 at);
 
 /** The driver at one position: the chosen channel in perceptual tone, rescaled above the threshold, then weighted by
  * coverage so a soft edge fades out. Colour is premultiplied, so it is made straight first. Uncovered pixels give 0. */
 float lumaRead(vec2 at) {
-  vec4 s = uLumaSource == 1 ? texture2D(uBelow, mirrored(at)) : texture2D(uSource, mirrored(at));
+  // This layer's driver is its picture, so under the picture rule it is read where the picture is read.
+  vec4 s = uLumaSource == 1 ? texture2D(uBelow, mirrored(at)) : texture2D(uSource, mirrored(heldUv(at)));
   if (s.a <= .001) return 0.;
   vec3 c = clamp(s.rgb / s.a, 0., 1.);
   float tone;
@@ -503,11 +505,15 @@ vec2 tapUv(vec2 at, vec2 offset) {
 /** The picture rule after a later warp. Mirror and Polar leave a pixel inside the picture with a safe read, or with
  * its own position: the last safe position. Warp, Liquid and Luma then move that read, and a colour fringe, a trail
  * sample or a filter tap moves it again, perhaps past the edge onto nothing. So with a later warp on, every position
- * the pixel reads is folded and held inside the picture once more, or falls back to the last safe position when it
- * would leave the frame. */
+ * the pixel reads is folded into the frame and held inside the picture once more, or falls back to the last safe
+ * position if it still leaves the frame. Luma's driver from this layer is read through the same hold. */
 vec2 heldUv(vec2 at) {
   if (!pictureHold) return at;
-  vec2 held = (uLayerInverse * vec3(safePicture(foldPicture((uLayerView * vec3(at, 1.)).xy)), 1.)).xy;
+  // Folded into the frame first: that is where the source is, and it keeps a read that crosses the frame's edge
+  // continuous with its neighbours. Folding into the picture can put it back past the frame when the picture runs off
+  // it, so both folds run twice; one pass still tore a picture lying mostly off the frame.
+  vec2 held = at;
+  for (int i = 0; i < 2; i++) held = (uLayerInverse * vec3(safePicture(foldPicture((uLayerView * vec3(mirrored(held), 1.)).xy)), 1.)).xy;
   return offFrame(held) ? readBase : held;
 }
 
