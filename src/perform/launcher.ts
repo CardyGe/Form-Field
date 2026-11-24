@@ -225,6 +225,8 @@ export function armList(s: LauncherState, set: PerformanceSet): string[] {
   // A queued scene's random rule is not chosen until it lands, so only a single known target can be armed for it.
   const followRow = pending ? (pending.followChoices?.length === 1 ? pending.followChoices[0] : null) : plannedFollow(s, set);
   const rowClips = (row: number | null) => row !== null && set.scenes[row] ? sceneCells(set, row).map(c => c.clipId) : [];
-  const nextRow = (pending?.sceneIndex ?? s.sceneIndex) + 1;
+  const after = (pending?.sceneIndex ?? s.sceneIndex) + 1;
+  // On the last row with nowhere to follow to, the likely next press is back to the top of the set.
+  const nextRow = after >= set.scenes.length && followRow === null ? 0 : after;
   return [...new Set([...queued, ...rowClips(followRow), ...rowClips(nextRow)])].filter(c => !s.playing.includes(c)).slice(0, MAX_ARMED);
 }

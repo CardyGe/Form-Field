@@ -29,6 +29,8 @@ const SCENES = 8, ZONES = 8, VIDEO_ZONE = 6, CEILING_ZONE = 7, BARS_PER_SCENE = 
 const WARM_UP_MIN = Math.min(5, MINUTES * .25), MAX_TREND_MB_PER_MIN = 2, MAX_MEDIAN_ERROR_FRAMES = 1;
 // A stall is a gap of 250 ms or more between wall frames. None after the first full pass through the set; at most 500 ms in it.
 const STALL_MS = 250, FIRST_PASS_LIMIT_MS = 500;
+// Reported, not a pass criterion: how a performer's jump to a far-away scene, one beat ahead, lands.
+const JUMP_EVERY_MIN = Math.max(2.5, MINUTES / 8);
 const RESTART_AT_MIN = Math.max(MINUTES - 3, MINUTES * .6);
 const BOXES = Array.from({ length: ZONES }, (_, i) => { const c = i % 4, r = i >> 2; return { x0: .02 + c * .245, y0: .05 + r * .47, x1: .02 + c * .245 + .225, y1: .05 + r * .47 + .42 }; });
 
@@ -51,11 +53,11 @@ await fs.writeFile(logFile, '');
 const say = async line => { const text = `${new Date().toISOString()} ${line}`; console.log(text); await fs.appendFile(logFile, `${text}\n`); };
 
 /** Runs in the wall page: frame times, the governor, every launch from the wall's own messages and reports, and lost contexts. */
-function installProbe({ boxes }) {
+function installProbe({ boxes, rowOf }) {
   const W = 96, H = 54, CAPTURE_BEFORE = 250, CAPTURE_AFTER = 750, MIN_FRAMES_AFTER = 4;
   const small = new OffscreenCanvas(W, H), reader = small.getContext('2d', { willReadFrequently: true });
   const stage = document.querySelector('canvas');
-  const soak = window.__soak = { intervals: new Float32Array(600000), probing: new Uint8Array(600000), long: [], stalls: [], count: 0, minutes: [], levels: [], levelMs: [0, 0, 0, 0], lost: [], failing: {}, landings: [], outcomes: { landed: 0, deferred: 0, cancelled: 0, endedByShow: 0, unresolved: 0 }, deferred: [], unresolved: [], launches: 0, offsets: {}, made: 0, released: 0, reports: 0, showOn: false, firstPassEndsAt: null, sceneLandings: 0 };
+  const soak = window.__soak = { intervals: new Float32Array(600000), probing: new Uint8Array(600000), over100: [], over50: 0, over50NearLaunch: 0, row: null, zoneLog: [], stalls: [], count: 0, minutes: [], levels: [], levelMs: [0, 0, 0, 0], lost: [], failing: {}, landings: [], outcomes: { landed: 0, deferred: 0, cancelled: 0, endedByShow: 0, unresolved: 0 }, deferred: [], unresolved: [], launches: 0, offsets: {}, made: 0, released: 0, reports: 0, showOn: false, firstPassEndsAt: null, sceneLandings: 0 };
   // A context given back on purpose (a look leaving the wall) is told apart from one the system took away.
   const given = new WeakSet(), wrapped = new WeakSet();
   const hook = proto => {
@@ -87,6 +89,9 @@ function installProbe({ boxes }) {
     callback(ts);
   });
 
+  // How much of a stall the page's own thread was busy for: little means the wait was outside the page.
+  soak.longTasks = [];
+  new PerformanceObserver(list => { for (const e of list.getEntries()) { soak.longTasks.push({ start: e.startTime, ms: e.duration }); if (soak.longTasks.length > 4000) soak.longTasks.splice(0, 1000); for (const st of soak.stalls) st.pageBusyMs = Math.round((st.pageBusyMs ?? 0) + Math.max(0, Math.min(st.atMs, e.startTime + e.duration) - Math.max(st.from, e.startTime))); } }).observe({ entryTypes: ['longtask'] });
   const pending = new Map();
   // Every report the wall makes, through a setter, so that two in one frame cannot hide a landing. The wall reports after it has drawn the frame.
   let stats = null, level = -1;
@@ -101,6 +106,9 @@ function installProbe({ boxes }) {
       const r = pending.get(l.launchId);
       if (!r) continue;
       for (const z of l.zones) if (!r.landed.has(z)) r.landed.set(z, { at: drawnAt, frame, atMs: r.atMs });
+      // Which scene is on the wall, so a slow frame can be put down to it.
+      const row = r.changes.map(c => rowOf[c.sourceId]).find(v => v !== undefined);
+      if (r.scene && l.zones.length && row !== undefined) soak.row = row;
       if (r.scene && !r.counted) { r.counted = true; if (++soak.sceneLandings === soak.firstPassScenes + 1) soak.firstPassEndsAt = performance.now(); }
     }
   } });
@@ -148,6 +156,7 @@ function installProbe({ boxes }) {
         continue;
       }
       const late = landing.at - r.firstAt;
+      soak.zoneLog.push({ id: r.id, zone: c.zone, lateMs: Math.round(late), deferred: late > r.barMs / 2 });
       if (late > r.barMs / 2) { soak.outcomes.deferred++; soak.deferred.push({ id: r.id, zone: c.zone, lateMs: Math.round(late) }); continue; }
       soak.outcomes.landed++;
       if (c.kind !== 'cut' || c.sourceId === null) continue;
@@ -163,8 +172,9 @@ function installProbe({ boxes }) {
       const d = ts - last;
       if (soak.count < soak.intervals.length) { soak.probing[soak.count] = wasCapturing ? 1 : 0; soak.intervals[soak.count++] = d; }
       if (level >= 0) soak.levelMs[level] += d;
-      if (d > 50 && soak.long.length < 2000) soak.long.push({ atS: Math.round(ts / 1000), ms: Math.round(d), nearLaunch: wasCapturing });
-      if (d >= 250 && soak.showOn) soak.stalls.push({ atMs: ts, atS: Math.round(ts / 1000), ms: Math.round(d), firstPass: soak.firstPassEndsAt === null || ts < soak.firstPassEndsAt });
+      if (d > 50) { soak.over50++; if (wasCapturing) soak.over50NearLaunch++; }
+      if (d > 100) soak.over100.push({ atS: Math.round(ts / 1000), ms: Math.round(d), scene: soak.row, nearLaunch: wasCapturing });
+      if (d >= 250 && soak.showOn) soak.stalls.push({ atMs: ts, atS: Math.round(ts / 1000), ms: Math.round(d), scene: soak.row, firstPass: soak.firstPassEndsAt === null || ts < soak.firstPassEndsAt, from: ts - d });
     }
     last = ts;
     if (!minuteStart) minuteStart = ts;
@@ -194,9 +204,12 @@ function installProbe({ boxes }) {
   raf(tick);
 }
 
-/** Runs in the studio page: presses the next scene's row one beat or so before every eighth bar, as an operator would. */
+/**
+ * Runs in the studio page: presses the next scene's row one beat or so before every eighth bar, as an operator would.
+ * A cold jump instead presses a scene three rows further on, one beat ahead, with no warning for the wall.
+ */
 function installScheduler({ scenes, barsPerScene }) {
-  const s = window.__schedule = { on: false, row: 0, last: null, presses: 0, lateAndShownWaiting: 0 };
+  const s = window.__schedule = { on: false, row: 0, last: null, presses: 0, lateAndShownWaiting: 0, jumpNext: false, jumps: [] };
   setInterval(() => {
     if (!s.on) return;
     const v = window.__studioTest.perform();
@@ -205,9 +218,12 @@ function installScheduler({ scenes, barsPerScene }) {
     if (v.launcher.queue.some(l => l.atMs < performance.timeOrigin + performance.now()) && v.waiting.length) s.lateAndShownWaiting++;
     const c = v.clock, beat = c.anchorBeat + (performance.timeOrigin + performance.now() - c.anchorMs) * c.bpm / 60000;
     const every = barsPerScene * 4, target = c.barOffset + Math.ceil((beat - c.barOffset) / every) * every;
-    if (target === s.last || target - beat > 1.5 || target - beat < .25) return;
-    document.querySelector(`[data-row="${s.row}"] .pf-scene`)?.click();
-    s.last = target; s.presses++; s.row = (s.row + 1) % scenes;
+    const jump = s.jumpNext;
+    if (target === s.last || target - beat > (jump ? 1 : 1.5) || target - beat < .25) return;
+    const row = jump ? (s.row + 3) % scenes : s.row;
+    document.querySelector(`[data-row="${row}"] .pf-scene`)?.click();
+    if (jump) { s.jumpNext = false; s.jumps.push({ row, id: window.__studioTest.perform().launcher.queue.find(l => l.sceneIndex === row)?.id ?? null }); }
+    s.last = target; s.presses++; s.row = (row + 1) % scenes;
   }, 25);
 }
 
@@ -303,7 +319,8 @@ try {
   wall.on('crash', () => note('wall', 'crashed'));
   wall.on('close', () => { if (!closing) note('wall', 'the wall window closed'); });
   await studio.getByRole('button', { name: 'Close projector' }).waitFor({ timeout: 10000 });
-  await wall.evaluate(installProbe, { boxes: BOXES });
+  const rowOf = await studio.evaluate(() => { const set = window.__studioTest.performSet(), out = {}; set.scenes.forEach((scene, row) => scene.cells.forEach(id => { const source = set.clips.find(c => c.id === id)?.sourceId; if (source && !source.startsWith('video-')) out[source] = row; })); return out; });
+  await wall.evaluate(installProbe, { boxes: BOXES, rowOf });
   await studio.evaluate(installScheduler, { scenes: SCENES, barsPerScene: BARS_PER_SCENE });
 
   const mix = path.join(mixDir, 'soak-mix.wav');
@@ -353,7 +370,7 @@ try {
     videoChecks.push({ min: round(minutesIn()), pace, ...r });
   };
   const SPEEDS = [{ knob: 1, pace: 2 }, { knob: .5, pace: 1 }, { knob: 0, pace: .5 }, { knob: .5, pace: 1 }];
-  let step = 0, nextStep = .5, nextMemory = 0, nextLog = 0, restarted = false;
+  let step = 0, nextStep = .5, nextMemory = 0, nextLog = 0, restarted = false, nextJump = JUMP_EVERY_MIN;
   while (minutesIn() < MINUTES) {
     const m = minutesIn();
     if (m >= nextMemory) { await sampleMemory(); nextMemory += 1 / 3; }
@@ -364,6 +381,7 @@ try {
       await checkVideo(s.pace);
       nextStep += .5;
     }
+    if (!restarted && m >= nextJump && m < RESTART_AT_MIN - .5) { await studio.evaluate(() => { window.__schedule.jumpNext = true; }); nextJump += JUMP_EVERY_MIN; }
     if (!restarted && m >= RESTART_AT_MIN) {
       restarted = true;
       // End show with the locked loop at 2x, then a fresh Start show.
@@ -398,23 +416,27 @@ try {
   await until(() => wall.evaluate(() => window.__soak.pending === 0), 45000, 'the last launches to settle');
 
   // ---- The results ----
-  const raw = await wall.evaluate(() => { const s = window.__soak; return { intervals: Array.from(s.intervals.subarray(0, s.count)), probing: Array.from(s.probing.subarray(0, s.count)), long: s.long, stalls: s.stalls, minutes: s.minutes, levels: s.levels, levelMs: s.levelMs, lost: s.lost, failing: s.failing, landings: s.landings, outcomes: s.outcomes, deferred: s.deferred, unresolved: s.unresolved, launches: s.launches, made: s.made, released: s.released, reports: s.reports, firstPassEndsAt: s.firstPassEndsAt }; });
+  const raw = await wall.evaluate(() => { const s = window.__soak; return { intervals: Array.from(s.intervals.subarray(0, s.count)), probing: Array.from(s.probing.subarray(0, s.count)), over100: s.over100, over50: s.over50, over50NearLaunch: s.over50NearLaunch, zoneLog: s.zoneLog, stalls: s.stalls, minutes: s.minutes, levels: s.levels, levelMs: s.levelMs, lost: s.lost, failing: s.failing, landings: s.landings, outcomes: s.outcomes, deferred: s.deferred, unresolved: s.unresolved, launches: s.launches, made: s.made, released: s.released, reports: s.reports, firstPassEndsAt: s.firstPassEndsAt }; });
   const presses = await studio.evaluate(() => window.__schedule.presses);
   const sorted = Float64Array.from(raw.intervals).sort();
   const worst1 = sorted.subarray(Math.floor(sorted.length * .99));
   // 1% low: the average rate of the slowest 1% of frames. Also given without the frames the launch probe reads back.
   const onePercentLow = list => { const s = Float64Array.from(list).sort(), w = s.subarray(Math.floor(s.length * .99)); return round(1000 / (w.reduce((a, b) => a + b, 0) / w.length), 1); };
+  const byScene = list => { const out = {}; for (const f of list) { const k = f.scene === null ? 'before the first scene' : `scene ${f.scene + 1}`, e = out[k] ??= { frames: 0, totalMs: 0, maxMs: 0 }; e.frames++; e.totalMs += f.ms; e.maxMs = Math.max(e.maxMs, f.ms); } return out; };
   const unprobed = raw.intervals.filter((_, i) => !raw.probing[i]), unprobedSorted = Float64Array.from(unprobed).sort();
-  record.frameRate = { frames: raw.intervals.length, medianFps: round(1000 / quantile(sorted, .5), 1), onePercentLowFps: round(1000 / (worst1.reduce((a, b) => a + b, 0) / worst1.length), 1), longestFrameMs: round(sorted.at(-1), 1), withoutProbeFrames: { frames: unprobed.length, medianFps: round(1000 / quantile(unprobedSorted, .5), 1), onePercentLowFps: onePercentLow(unprobed) }, framesOver50ms: raw.long.length, framesOver50msNearALaunch: raw.long.filter(l => l.nearLaunch).length, longFrames: raw.long.slice(0, 200), perMinuteFps: raw.minutes };
+  record.frameRate = { frames: raw.intervals.length, medianFps: round(1000 / quantile(sorted, .5), 1), onePercentLowFps: round(1000 / (worst1.reduce((a, b) => a + b, 0) / worst1.length), 1), longestFrameMs: round(sorted.at(-1), 1), withoutProbeFrames: { frames: unprobed.length, medianFps: round(1000 / quantile(unprobedSorted, .5), 1), onePercentLowFps: onePercentLow(unprobed) }, framesOver50ms: raw.over50, framesOver50msNearALaunch: raw.over50NearLaunch, framesOver100ms: raw.over100.length, over100msByScene: byScene(raw.over100), longFrames: raw.over100, perMinuteFps: raw.minutes };
   const count = list => { const out = {}; for (const v of list) out[v] = (out[v] ?? 0) + 1; return out; };
   const abs = list => list.map(Math.abs).sort((a, b) => a - b), landed = raw.landings, frameErrors = abs(landed.map(l => l.pixelFrames ?? l.landingFrames)), drawn = landed.map(l => l.drawnMs).sort((a, b) => a - b), byPicture = landed.filter(l => l.pixelFrames !== null);
   record.launchError = { howMeasured: 'every landing: frame of the wall report minus the first frame begun at or after atMs, confirmed from wall pixels where the two pictures differ; time is the end of the landing frame minus atMs', cutLandings: landed.length, confirmedByPixels: byPicture.length, notConfirmedByPixels: count(landed.filter(l => l.pixelFrames === null).map(l => l.why)), medianAbsFrames: quantile(frameErrors, .5), p95AbsFrames: quantile(frameErrors, .95), maxAbsFrames: frameErrors.at(-1) ?? null, framesHistogram: count(landed.map(l => l.pixelFrames ?? l.landingFrames)), landingFramesHistogram: count(landed.map(l => l.landingFrames)), medianDrawnMs: quantile(drawn, .5), p95DrawnMs: quantile(drawn, .95), maxDrawnMs: drawn.at(-1) ?? null };
   const firstPass = raw.stalls.filter(s => s.firstPass), later = raw.stalls.filter(s => !s.firstPass);
-  record.stalls = { limitAfterFirstPassMs: STALL_MS, firstPassLimitMs: FIRST_PASS_LIMIT_MS, firstPassEnded: raw.firstPassEndsAt !== null, firstPass: { count: firstPass.length, maxMs: firstPass.length ? Math.max(...firstPass.map(s => s.ms)) : 0, list: firstPass.map(s => ({ atS: s.atS, ms: s.ms })) }, afterFirstPass: { count: later.length, maxMs: later.length ? Math.max(...later.map(s => s.ms)) : 0, list: later.map(s => ({ atS: s.atS, ms: s.ms })) } };
+  record.stalls = { limitAfterFirstPassMs: STALL_MS, firstPassLimitMs: FIRST_PASS_LIMIT_MS, firstPassEnded: raw.firstPassEndsAt !== null, firstPass: { count: firstPass.length, maxMs: firstPass.length ? Math.max(...firstPass.map(s => s.ms)) : 0, list: firstPass.map(s => ({ atS: s.atS, ms: s.ms, scene: s.scene === null ? null : s.scene + 1, pageBusyMs: s.pageBusyMs ?? 0 })) }, afterFirstPass: { count: later.length, maxMs: later.length ? Math.max(...later.map(s => s.ms)) : 0, list: later.map(s => ({ atS: s.atS, ms: s.ms, scene: s.scene === null ? null : s.scene + 1, pageBusyMs: s.pageBusyMs ?? 0 })) } };
   const warm = memory.filter(p => p.min >= WARM_UP_MIN), trend = key => round(slope(warm.filter(p => p[key] !== null).map(p => [p.min, p[key]])));
   const first = warm[0], last = memory.at(-1);
   record.governor = { changes: raw.levels, secondsAtLevel: raw.levelMs.map(v => Math.round(v / 1000)) };
-  record.launches = { scenePresses: presses, checksWhileADeferredLookShowedAsWaiting: await studio.evaluate(() => window.__schedule.lateAndShownWaiting), wallLaunches: raw.launches, wallReports: raw.reports, zones: raw.outcomes, deferredDetail: raw.deferred.slice(0, 40), unresolvedDetail: raw.unresolved.slice(0, 40) };
+  record.launches = { scenePresses: presses, checksWhileADeferredLookShowedAsWaiting: await studio.evaluate(() => window.__schedule.lateAndShownWaiting), wallLaunches: raw.launches, wallReports: raw.reports, zones: raw.outcomes, deferredLaunches: new Set(raw.deferred.map(d => d.id.replace(':ceiling', ''))).size, maxDeferredLateMs: raw.deferred.length ? Math.max(...raw.deferred.map(d => d.lateMs)) : 0, medianDeferredLateMs: quantile(raw.deferred.map(d => d.lateMs).sort((a, b) => a - b), .5), deferredDetail: raw.deferred, unresolvedDetail: raw.unresolved };
+  const jumps = await studio.evaluate(() => window.__schedule.jumps);
+  const jumpDetail = jumps.map(j => { const zones = raw.zoneLog.filter(z => j.id !== null && z.id.replace(':ceiling', '') === j.id), late = zones.filter(z => z.deferred); return { row: j.row + 1, zones: zones.length, lateZones: late.length, maxLateMs: late.length ? Math.max(...late.map(z => z.lateMs)) : 0 }; });
+  record.coldJumps = { reportedNotAPassCriterion: true, how: 'a scene three rows past the next one, pressed about one beat before the bar', jumps: jumpDetail.length, zones: jumpDetail.reduce((a, j) => a + j.zones, 0), lateZones: jumpDetail.reduce((a, j) => a + j.lateZones, 0), maxLateMs: jumpDetail.length ? Math.max(...jumpDetail.map(j => j.maxLateMs)) : 0, detail: jumpDetail };
   record.contexts = { lost: raw.lost.length, detail: raw.lost.slice(0, 40), instrumentContextsMade: raw.made, givenBackOnPurpose: raw.released };
   record.failingSources = raw.failing;
   record.memoryMB = { warmUpMinutes: WARM_UP_MIN, start: memory[0], afterWarmUp: first, end: last, trendMBPerMinAfterWarmUp: { studio: trend('studio'), wall: trend('wall'), gpu: trend('gpu'), total: trend('total'), studioHeap: trend('studioHeap'), wallHeap: trend('wallHeap') }, samples: memory };

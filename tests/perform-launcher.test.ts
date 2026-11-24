@@ -251,6 +251,18 @@ test('retime moves queued launches to the corrected bar and recalculates fade mi
   assert.equal(landedScene.followAtBeat, 21);
 });
 
+test('armList on the last row: the first row with no follow target, and the follow target when there is one', () => {
+  const last = SET.scenes.length - 1;
+  const noFollow = editedSet(x => { for (const scene of x.scenes) scene.follow = null; });
+  const wrapped = armList(running(last, noFollow), noFollow);
+  const firstRow = noFollow.scenes[0].cells.filter((c, z): c is string => c !== null && !noFollow.zones[z].protected);
+  assert.ok(wrapped.length > 0 && wrapped.length <= 8);
+  assert.ok(wrapped.every(c => firstRow.includes(c)), `armed ${wrapped}`);
+  const toTwo = editedSet(x => { for (const scene of x.scenes) scene.follow = null; x.scenes[last].follow = { afterBars: 8, to: x.scenes[2].id }; });
+  const followed = armList(running(last, toTwo), toTwo), rowTwo = toTwo.scenes[2].cells.filter((c): c is string => c !== null);
+  assert.ok(followed.length > 0 && followed.every(c => rowTwo.includes(c)), `armed ${followed}`);
+});
+
 test('armList holds the next scene without queueing, and never more than 8', () => {
   const s = running(0);
   const list = armList(s, SET);

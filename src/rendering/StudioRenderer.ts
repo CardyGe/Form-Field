@@ -2,7 +2,7 @@ import { EmberSmokeAudio, usesEmberSmokeAudio, type SmokeAudioFrame } from '../r
 import type { Signals } from '../react/signals';
 import {FINISH_PARAMETERS} from '../core/finishing';
 import { InstrumentRenderer } from './InstrumentRenderer';
-import { ProgramGate, ProgramsCompiling, type LinkingProgram } from './program-gate';
+import { ProgramGate, ProgramsCompiling, retryWhenLinked, type LinkingProgram } from './program-gate';
 import { isInstrument } from '../core/instruments';
 import * as THREE from 'three';
 import { GraphicRenderer } from './GraphicRenderer';
@@ -206,6 +206,9 @@ export class StudioRenderer {
   private readonly fillLight = new THREE.DirectionalLight(0xc9d3ed, 1.35);
   private environment: THREE.WebGLRenderTarget | null = null;
   private readonly gate = new ProgramGate();
+  /** The prepare whose look must draw a whole frame before the gate closes, and the last prepare to finish. */
+  private holdFor: number | null = null;
+  private preparedRevision = 0;
   private readonly filmThickness: THREE.DataTexture;
   private readonly sculptureUniforms: Uniforms = {
     ...viewUniforms(),
@@ -432,9 +435,11 @@ export class StudioRenderer {
   }
 
   /** From now until a whole frame has been drawn, a shader still linking postpones the draw instead of blocking the page. */
-  holdFirstDraw(): void { this.gate.open(); }
-  /** A postponed draw is waiting on the driver: trying again now would do nothing. */
-  get linking(): boolean { return this.gate.linking; }
+  holdFirstDraw(): void { this.gate.open(); this.holdFor = this.prepareRevision + 1; }
+  /** A postponed draw is waiting on the driver, or on another look's link: trying again now would do nothing. */
+  get linking(): boolean { return this.gate.blocked; }
+  /** Still holding for a new look's first whole frame. */
+  get holding(): boolean { return this.gate.on; }
   /** Puts back what an abandoned frame may have left set, so the next attempt starts clean. */
   private abandon(state: { autoClear: boolean; clear: THREE.Color; alpha: number }): void {
     this.renderer.autoClear = state.autoClear;
@@ -491,6 +496,11 @@ export class StudioRenderer {
   async prepare(project: Project): Promise<void> {
     this.assertUsable();
     const revision = ++this.prepareRevision;
+    try { await this.prepareRevisionOf(project, revision); }
+    finally { if (revision === this.prepareRevision) this.preparedRevision = revision; }
+  }
+
+  private async prepareRevisionOf(project: Project, revision: number): Promise<void> {
     const required = new Set<string>();
     const pending: Promise<THREE.Texture>[] = [];
     for (const layer of project.layers) {
@@ -507,18 +517,16 @@ export class StudioRenderer {
     await Promise.all(pending);
     this.assertUsable();
     if (revision === this.prepareRevision) {
-      for (;;) {
+      const done = await retryWhenLinked(() => {
         const state = this.drawState();
         try {
           this.instruments.prepare(project,(m,t)=>this.draw(m,t),layer=>layer.mask.dataUrl?this.assets.get(this.assetKey(layer.mask.dataUrl,true))?.texture.image as CanvasImageSource|undefined:undefined);
-          break;
         } catch (error) {
-          if (!(error instanceof ProgramsCompiling)) throw error;
-          this.abandon(state);
-          while (this.gate.linking) { await new Promise(resolve => setTimeout(resolve, 8)); this.assertUsable(); }
-          if (revision !== this.prepareRevision) return;
+          if (error instanceof ProgramsCompiling) this.abandon(state);
+          throw error;
         }
-      }
+      }, this.gate, () => new Promise(resolve => setTimeout(resolve, 8)), () => { this.assertUsable(); return revision === this.prepareRevision; });
+      if (!done) return;
       for (const [key, asset] of this.assets) if (!required.has(key)) { asset.texture.dispose(); this.assets.delete(key); }
       if (!project.layers.some(layer => layer.kind === 'oil' && layer.visible)) this.releaseOilTargets();
       if (!project.layers.some(layer => layer.kind === 'graphic' && layer.visible)) {
@@ -1157,7 +1165,8 @@ export class StudioRenderer {
       if (canvasSize.x !== w || canvasSize.y !== h) this.renderer.setSize(w, h, false);
       this.display.uniforms.uImage.value = this.linearOutput.texture;
       this.draw(this.display, null);
-      this.gate.close();
+      // The look being replaced can go on drawing while the new one prepares: only the new one's first whole frame ends the hold.
+      if (this.holdFor === null || this.preparedRevision >= this.holdFor) { this.gate.close(); this.holdFor = null; }
     } catch (error) {
       if (state && error instanceof ProgramsCompiling) this.abandon(state);
       throw error;

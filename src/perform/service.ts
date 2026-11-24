@@ -24,7 +24,7 @@ export interface PerformView {
   armed: string[];
   /** Asked for and not ready yet (the amber dot). */
   waiting: string[];
-  /** Asked for and still not ready after a whole bar (the red dot). */
+  /** Asked for and still not ready after two whole bars (the red dot). */
   stuck: string[];
   notices: string[];
   /** Milliseconds each source took from being asked for to being ready (the first time). In memory only. */
@@ -40,6 +40,7 @@ export interface ClockLink {
 interface Deps { wall: WallLink; clock: ClockLink; show: () => ShowDocument; now: () => number; id: () => string; random: () => number; live?: () => LiveSettings | null }
 
 const MAX_ARMED = 8;
+const STUCK_AFTER_BARS = 2;
 const VALUES_EVERY_MS = 1000 / 30;
 const VIEW_EVERY_MS = 100;
 /** Queued this long before the bar, so the wall has it in time. */
@@ -271,7 +272,8 @@ export class PerformService {
     // A closed wall cannot be asked for anything, so nothing is loading or too heavy. The wait starts when it opens.
     const waiting = this.isRunning && this.deps.wall.isOpen() ? this.requested.filter(id => !this.wallArmed.includes(id)) : [];
     const barMs = BEATS_PER_BAR * 60000 / clock.bpm;
-    const stuck = waiting.filter(id => now - (this.requestedAt.get(id) ?? now) >= barMs);
+    // Looks start one at a time, so a full row can honestly take two bars.
+    const stuck = waiting.filter(id => now - (this.requestedAt.get(id) ?? now) >= STUCK_AFTER_BARS * barMs);
     const notices: string[] = [];
     if (this.isRunning) {
       if (['lost', 'missing', 'failed'].includes(this.audio.state)) notices.push('Audio lost. The show keeps running on the held tempo.');

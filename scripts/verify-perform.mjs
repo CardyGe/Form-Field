@@ -412,12 +412,16 @@ try {
     const back = (await view(studio)).launcher.previous[0];
     assert.ok(back, 'zone 1 has no previous clip');
     await studio.keyboard.down('Shift');
-    await until(async () => (await view(studio)).shift, 1000, 'Solo');
-    await studio.keyboard.press('Digit1');
-    await until(async () => (await view(studio)).launcher.queue.some(l => l.changes.some(c => c.zone === 0 && c.clipId === back)), 1000, 'Solo + Amber to queue the previous clip');
-    await studio.evaluate(() => window.dispatchEvent(new Event('blur')));
-    await until(async () => !(await view(studio)).shift, 1000, 'Solo to release');
-    await studio.keyboard.up('Shift');
+    try {
+      await until(async () => (await view(studio)).shift, 1000, 'Solo');
+      await studio.keyboard.press('Digit1');
+      await until(async () => (await view(studio)).launcher.queue.some(l => l.changes.some(c => c.zone === 0 && c.clipId === back)), 1000, 'Solo + Amber to queue the previous clip');
+      await studio.evaluate(() => window.dispatchEvent(new Event('blur')));
+      await until(async () => !(await view(studio)).shift, 1000, 'Solo to release');
+    } finally {
+      // Even if a step above failed, so a held Shift cannot fail the checks after this one.
+      await studio.keyboard.up('Shift');
+    }
   });
   await check('on-screen Solo latches, so one mouse can reach the shifted controls', async () => {
     const solo = studio.getByRole('button', { name: 'Solo', exact: true });

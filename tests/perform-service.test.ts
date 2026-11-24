@@ -531,14 +531,16 @@ test('the repair after a crossed landing arms its released source, lands, and le
 test('a repair whose source cannot get ready shows as stuck', () => {
   const { r, wall, fix } = crossedLanding();
   r.service.wallState({ armed: [] });
-  assert.deepEqual(r.service.view().waiting, ['b']);
+  // The repair comes first. Behind it is the top row, kept ready because this is the last row.
+  assert.equal(r.service.view().waiting[0], 'b');
   r.at(4000);
   assert.deepEqual(wall.step(id => id !== 'b' && wall.kept(id)), []);
   r.at(4300);
   r.frame();
-  assert.deepEqual(r.service.view().stuck, ['b'], 'the operator sees the red dot');
   assert.equal(lastLaunch(r).id, fix.id);
-  assert.equal(lastLaunch(r).atMs, 6000, 'and it tries again on the next bar');
+  assert.equal(lastLaunch(r).atMs, 6000, 'it tries again on the next bar');
+  r.at(8000);
+  assert.ok(r.service.view().stuck.includes('b'), 'and after two bars the operator sees the red dot');
 });
 
 test('a queued source another zone already plays is armed first, and at most eight are armed', () => {
@@ -612,7 +614,11 @@ test('queued sources are armed first, as source ids, and a source that never rea
   r.service.wallState({ armed: ['a'] });
   assert.deepEqual(r.service.view().waiting, ['b']);
   assert.deepEqual(r.service.view().stuck, []);
+  // One look at a time: a full row can honestly take two bars, so one bar is not yet "too heavy".
   r.at(1000 + BAR_MS);
+  r.frame();
+  assert.deepEqual(r.service.view().stuck, []);
+  r.at(1000 + BAR_MS * 2);
   r.frame();
   assert.deepEqual(r.service.view().stuck, ['b']);
   r.service.wallState({ armed: ['a', 'b'] });

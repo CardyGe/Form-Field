@@ -81,6 +81,13 @@ export function governorStep(g: Governor, frameMs: number): Governor {
 /** At the last level instruments are drawn every other frame; the shapes keep their last picture in between. */
 export const drawsThisFrame = (level: Governor['level'], frameIndex: number) => level < 3 || frameIndex % 2 === 0;
 
+/** The order sources are worked through in a frame: armed ones last and most urgent first, so a queued look gets the frame's one start before a look only kept ready for later. With nothing armed, the order is unchanged. */
+export function inStartOrder<T extends { id: string }>(sources: readonly T[], armed: readonly string[]): readonly T[] {
+  if (!armed.length) return sources;
+  const rest = sources.filter(s => !armed.includes(s.id));
+  return [...rest, ...armed.flatMap(id => sources.filter(s => s.id === id))];
+}
+
 /** Which renderer gives way to a source of this rank: the lowest rank below it, and among equals the longest unused. */
 export function rendererToEvict<T extends { rank: number; lastUsed: number }>(slots: Iterable<readonly [string, T]>, rank: number): readonly [string, T] | null {
   let least: readonly [string, T] | null = null;

@@ -11,7 +11,7 @@ import { ProgramsCompiling } from '../rendering/program-gate';
 import type { Project } from '../shared/types';
 import { drawCommands, ringPx, shownOnWall, stageCommands, type DrawOptions } from './draw';
 import { borderColour, fadeKey } from './edge';
-import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, freezeLeaving, governorStep, initialGovernor, GOVERNOR_SCALES, needsPrepare, rendererToEvict, shouldFade, type Governor, type Playing } from './playout';
+import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, freezeLeaving, governorStep, initialGovernor, GOVERNOR_SCALES, inStartOrder, needsPrepare, rendererToEvict, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, SPEED_RANGE, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
 import type { BlendKind } from '../perform/types';
@@ -622,7 +622,7 @@ export class MapCompositor {
     for (const [id, slot] of this.slots) slot.rank = wanted.get(id)?.rank ?? -1;
     // With no show and nothing armed there is no limit, and Map starts its looks as it always has.
     let starts = this.gentle ? 1 : Infinity, releasedWarm = false;
-    for (const source of this.show.sources) {
+    for (const source of inStartOrder(this.show.sources, this.armed)) {
       const project = this.projects.get(source.id);
       if (!project) continue;
       const want = wanted.get(source.id);
@@ -659,7 +659,9 @@ export class MapCompositor {
       // A drag while a restart is still being prepared: the newer settings wait for it, rather than restarting it again.
       else if (slot.pending && project !== slot.pending && project !== slot.project && !needsPrepare(slot.pending, project)) slot.latest = project;
       else if (project !== slot.project && project !== slot.pending && project !== slot.failedProject) { slot.latest = null; this.prepare(slot, project, !!source.followOutline); }
-      if (this.swaps.has(source.id)) {
+      // A new look still being held for its first whole frame starts its crossfade once that frame is drawn, below.
+      const swapAfterDraw = this.swaps.has(source.id) && slot.project === project && !!slot.renderer?.holding && draw;
+      if (this.swaps.has(source.id) && !swapAfterDraw) {
         if (slot.project === project) { this.settleSwap(source.id, 'started'); if (slot.texture) this.startSwap(source.id, slot.texture); }
         else if (slot.failedProject === project) {
           this.settleSwap(source.id, 'failed');
@@ -689,6 +691,7 @@ export class MapCompositor {
       const size = sourceSizeFor(places.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), scale);
       try {
         slot.renderer.render(withParams(slot.project, this.drawn.params.get(source.id)), slot.phase, size.width, size.height, { signals: this.signals, now });
+        if (swapAfterDraw) { this.settleSwap(source.id, 'started'); if (slot.texture) this.startSwap(source.id, slot.texture); }
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);
         slot.shown = slot.project;
         // A source drawn only to be ready changes nothing on the stage.

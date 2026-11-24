@@ -4,6 +4,8 @@ Run on 23 November 2026 with `npm run test:perform:soak` (30 minutes), on the `p
 
 **What this does and does not show.** These results are from this Mac, with a synthetic 128 BPM mix and no projector. They say nothing about a real room, a real projector or how well a real DJ mix is followed.
 
+**Not re-soaked.** The figures below come from the 30-minute run above. The fixes made after it were checked only with `npx tsc --noEmit`, `npm test` and `npm run test:perform`. They are: a prepare that yields while waiting, starts spent in armed order, the first row armed from the last row, two bars before "Too heavy", and holding the gate for a re-prepared look. The soak script's new cold-jump and per-scene frame records have not run in a full soak either. In a six-minute trial, one cold jump left 5 of its 7 zones up to 3.8 s late, and one of two short runs had a single 3.6 s first-pass stall that was not traced.
+
 ## Result
 
 All seven pass criteria were met. The wall no longer freezes while looks are made ready. Three shortfalls remain: **55 zone changes landed late**, the **1% low is 13.6 fps**, and **memory rose slightly over the run**, though within its limit.

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rendererToEvict } from '../src/map/playout';
-import { ProgramGate, ProgramsCompiling } from '../src/rendering/program-gate';
+import { inStartOrder, rendererToEvict } from '../src/map/playout';
+import { ProgramGate, ProgramsCompiling, retryWhenLinked } from '../src/rendering/program-gate';
 
 const program = (ready: boolean) => { const p = { ready, isReady: () => p.ready }; return p; };
 
@@ -47,6 +47,32 @@ test('only one renderer links at a time, and a program that never answers stops 
   now = 5001;
   assert.doesNotThrow(() => second.awaitTurn());
   first.close(); second.close();
+});
+
+test('work refused behind another renderer yields, and is not tried again until the turn is free', async () => {
+  const holder = new ProgramGate(), waiter = new ProgramGate(), link = program(false);
+  holder.open(); waiter.open();
+  assert.throws(() => holder.before([link]), ProgramsCompiling);
+  let attempts = 0, pauses = 0;
+  const done = await retryWhenLinked(() => { attempts++; waiter.awaitTurn(); }, waiter, async () => { pauses++; if (pauses === 25) link.ready = true; }, () => true);
+  assert.equal(done, true);
+  assert.equal(pauses, 25, 'it gave the page a turn while it waited');
+  assert.equal(attempts, 2, 'once refused, then once when the turn was free: its targets are not rebuilt meanwhile');
+  holder.close(); waiter.close();
+});
+
+test('work no longer wanted stops waiting, and other errors are not swallowed', async () => {
+  const gate = new ProgramGate();
+  gate.open();
+  assert.equal(await retryWhenLinked(() => gate.before([program(false)]), gate, async () => {}, () => false), false);
+  gate.close();
+  await assert.rejects(retryWhenLinked(() => { throw new Error('broken'); }, gate, async () => {}, () => true), /broken/);
+});
+
+test('a queued look gets the start before a look kept for later, whatever the order of the show', () => {
+  const sources = [{ id: 'next-row' }, { id: 'playing' }, { id: 'queued' }];
+  assert.deepEqual(inStartOrder(sources, ['queued', 'next-row']).map(s => s.id), ['playing', 'queued', 'next-row']);
+  assert.equal(inStartOrder(sources, []), sources, 'plain Map keeps its order');
 });
 
 test('a material is checked again after it changes', () => {

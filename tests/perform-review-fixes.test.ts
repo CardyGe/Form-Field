@@ -94,6 +94,8 @@ test('with the wall closed nothing counts as loading or too heavy, and the wait 
   assert.deepEqual(r.service.view().waiting, ['s1']);
   assert.deepEqual(r.service.view().stuck, [], 'the wait starts now, not when the look was first asked for');
   r.at(23000);
+  assert.deepEqual(r.service.view().stuck, [], 'one bar is not yet too heavy: looks start one at a time');
+  r.at(24000);
   assert.deepEqual(r.service.view().stuck, ['s1']);
 });
 

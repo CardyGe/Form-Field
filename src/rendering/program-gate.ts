@@ -22,6 +22,8 @@ export class ProgramGate {
   /** Off, as it is outside Perform, nothing is ever refused. */
   on = false;
   private waiting: LinkingProgram | null = null;
+  /** The last attempt was refused because another renderer holds the turn. */
+  private queued = false;
   private readonly linked = new WeakMap<object, number>();
 
   constructor(private readonly now: () => number = () => performance.now()) {}
@@ -33,13 +35,24 @@ export class ProgramGate {
     return true;
   }
   private endTurn(): void { if (turn?.gate === this) turn = null; }
-  /** Before an attempt: no point in redrawing the earlier passes while the same program is still linking. */
-  check(): void { if (this.linking) throw new ProgramsCompiling(); }
+  private otherHoldsTurn(): boolean {
+    if (!turn || turn.gate === this) return false;
+    if (!turn.gate.linking || this.now() - turn.since > TURN_LIMIT_MS) { turn = null; return false; }
+    return true;
+  }
+  /** Whether trying again now would only be refused: its own program is linking, or it is waiting behind another renderer's. */
+  get blocked(): boolean {
+    if (this.linking) return true;
+    if (this.queued && this.on && this.otherHoldsTurn()) return true;
+    this.queued = false;
+    return false;
+  }
+  /** Before an attempt: no point in redrawing the earlier passes while the same wait is still on. */
+  check(): void { if (this.blocked) throw new ProgramsCompiling(); }
   /** Before starting a link: refused while another renderer's program is linking. */
   awaitTurn(): void {
-    if (!this.on || !turn || turn.gate === this) return;
-    if (!turn.gate.linking) { turn = null; return; }
-    if (this.now() - turn.since > TURN_LIMIT_MS) { turn = null; return; }
+    if (!this.on || !this.otherHoldsTurn()) return;
+    this.queued = true;
     throw new ProgramsCompiling();
   }
   /** Whether these materials, as they are now, have already linked here, so nothing needs starting or checking. */
@@ -54,6 +67,22 @@ export class ProgramGate {
     }
   }
   remember(materials: readonly { version: number }[]): void { for (const m of materials) this.linked.set(m, m.version); }
-  open(): void { this.endTurn(); this.on = true; this.waiting = null; }
-  close(): void { this.endTurn(); this.on = false; this.waiting = null; }
+  open(): void { this.endTurn(); this.on = true; this.waiting = null; this.queued = false; }
+  close(): void { this.endTurn(); this.on = false; this.waiting = null; this.queued = false; }
+}
+
+/**
+ * Runs work that may be refused until it goes through. After a refusal it always gives the page a turn, and tries again
+ * only once the wait is over, so what the work builds is not built again and again meanwhile.
+ * False when `wanted` says the work is no longer needed.
+ */
+export async function retryWhenLinked(attempt: () => void, gate: ProgramGate, pause: () => Promise<void>, wanted: () => boolean): Promise<boolean> {
+  for (;;) {
+    try { attempt(); return true; }
+    catch (error) { if (!(error instanceof ProgramsCompiling)) throw error; }
+    do {
+      await pause();
+      if (!wanted()) return false;
+    } while (gate.blocked);
+  }
 }
