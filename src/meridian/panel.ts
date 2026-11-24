@@ -70,8 +70,8 @@ export const listensToMusic = (layer: Layer): boolean => layer.visible && layer.
 export const markApplies = (layer: Layer): boolean => layer.kind === 'meridian' && Math.round(layer.params.scoreStyle ?? 2) !== 2;
 export const MARK_HINT = 'Pulse and Dense only. Import your own PNG: as each phrase rests, its final point opens into the Mark, then closes before the next Seed.';
 
-/** What the Motion tab may animate on a Meridian layer: macros and moves are played, not keyframed. */
-export const motionParameters = (definitions: readonly ParameterDefinition[]): ParameterDefinition[] => definitions.filter((d) => d.group !== PERFORMANCE_GROUP);
+/** What the Motion tab may animate on a Meridian layer: macros and moves are played, not keyframed, and safety is set by hand. */
+export const motionParameters = (definitions: readonly ParameterDefinition[]): ParameterDefinition[] => definitions.filter((d) => d.group !== PERFORMANCE_GROUP && d.group !== 'Safety');
 
 export function toggleGroupLock(layer: Layer, group: string): Layer {
   const locks = layer.meridian?.locks ?? [];

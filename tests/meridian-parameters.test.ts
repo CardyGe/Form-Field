@@ -185,13 +185,13 @@ test('macros stay inside each range at both extremes', () => {
   }
 });
 
-test('every continuous parameter and move can be linked; the seeds cannot', () => {
+test('every continuous parameter and move can be linked; the seeds and the safety settings cannot', () => {
   const layer = createLayer('meridian');
   const show = { shapes: [], sources: [{ id: 'a', project: withLayer(layer) }] } as never;
   for (const d of MERIDIAN_PARAMETERS) {
-    const seed = d.key === 'seed' || d.key.startsWith('seedSlot');
+    const seed = d.key === 'seed' || d.key.startsWith('seedSlot') || d.group === 'Safety';
     assert.equal(canLinkParameter(layer, d.key), !seed, d.key);
-    if (d.step !== 1 || MERIDIAN_MOVES.includes(d.key as never)) assert.ok(targetRange(show, `source.a.param.0.${d.key}`), d.key);
+    if (!seed && (d.step !== 1 || MERIDIAN_MOVES.includes(d.key as never))) assert.ok(targetRange(show, `source.a.param.0.${d.key}`), d.key);
     if (seed) assert.equal(targetRange(show, `source.a.param.0.${d.key}`), null, d.key);
   }
   for (const key of MERIDIAN_MOVES) assert.ok(canLinkParameter(layer, key), key);
@@ -272,4 +272,26 @@ test('the Mark sits on the design origin, and takes the layer and design placeme
   near(toMark(toOutput(0, 0)[0], toOutput(0, 0)[1]), [0.5, 0.5]);
   near(toMark(toOutput(width / 2, 0)[0], toOutput(width / 2, 0)[1]), [1, 0.5]);
   near(toMark(toOutput(0, height / 2)[0], toOutput(0, height / 2)[1]), [0.5, 1]);
+});
+
+test('safety settings are never linked to a signal or animated by Motion', async () => {
+  const { MERIDIAN_PARAMETERS: all, MERIDIAN_UNLINKED: unlinked, motionIgnored: ignored } = await import('../src/meridian/parameters');
+  const { motionParameters } = await import('../src/meridian/panel');
+  const { canLinkParameter, targetOptions } = await import('../src/map/targets');
+  const { createLayer } = await import('../src/core/project');
+  const { evaluateLayer } = await import('../src/core/timeline');
+  const safety = all.filter(d => d.key.startsWith('safety')).map(d => d.key);
+  assert.deepEqual(safety, ['safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField']);
+  const layer = createLayer('meridian');
+  for (const key of safety) {
+    assert.ok(unlinked.includes(key), `${key} is unlinked`);
+    assert.equal(canLinkParameter(layer, key), false, key);
+    assert.ok(!motionParameters(all).some(d => d.key === key), `${key} is offered in Motion`);
+    assert.ok(ignored(layer, key), `${key} saved route still plays`);
+  }
+  const options = targetOptions({ shapes: [], sources: [{ id: 's', project: { name: 'M', layers: [layer] } } as never] });
+  assert.ok(!options.some(o => /\.safety/.test(o.target)), 'no safety link target in Map');
+  // A route saved in an older project never moves a safety value.
+  const routed = { ...layer, modulations: { safetyRedLimit: { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [] } } } as never;
+  assert.equal(evaluateLayer(routed, 0.25).params.safetyRedLimit, layer.params.safetyRedLimit);
 });

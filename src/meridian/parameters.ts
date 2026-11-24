@@ -7,15 +7,18 @@ export const PERFORMANCE_GROUP = 'Performance';
 
 export const MERIDIAN_MOVES = ['moveNext', 'moveHold', 'moveDrop', 'moveCollapse', 'moveMutate', 'moveReseed', 'moveBurst'] as const;
 export const MACRO_KEYS = ['macroDensity', 'macroTension', 'macroOrder', 'macroSpeed', 'macroWeight', 'macroGlitch', 'macroHeat', 'macroScale'] as const;
-/** The seed and the seed bank only change what the next phrase is, so they are never link targets. */
-export const MERIDIAN_UNLINKED: readonly string[] = ['seed', ...Array.from({ length: 8 }, (_, i) => `seedSlot${i}`)];
+/** Audience safety is set by hand and never follows a signal or a Motion route. */
+export const MERIDIAN_SAFETY: readonly string[] = ['safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField'];
+/** Never link targets: the seed and the seed bank choose the drawing, and the safety settings are set by hand. */
+export const MERIDIAN_UNLINKED: readonly string[] = ['seed', ...Array.from({ length: 8 }, (_, i) => `seedSlot${i}`), ...MERIDIAN_SAFETY];
 /** Never varied by the Variation tool: identity, show safety, output flags, the performer's macro positions and one-shot actions. */
-export const MERIDIAN_FIXED: readonly string[] = [...MERIDIAN_UNLINKED, 'scoreStyle', 'scoreEvolution', 'scoreHoldShape', 'scoreBpm', 'scorePulseBars', 'scoreLoopPhrase', 'moveRecall', 'glitchSeed', 'safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField', 'outputMono', 'outputTransparent', ...MACRO_KEYS];
+export const MERIDIAN_FIXED: readonly string[] = [...MERIDIAN_UNLINKED, 'scoreStyle', 'scoreEvolution', 'scoreHoldShape', 'scoreBpm', 'scorePulseBars', 'scoreLoopPhrase', 'moveRecall', 'glitchSeed', 'outputMono', 'outputTransparent', ...MACRO_KEYS];
 
 /** On Evolve these are driven by the music through Flash Guard's path. A fast Motion route on them could strobe an export, so saved routes are ignored, not deleted. */
 export const EVOLVE_NO_MOTION: readonly string[] = ['lightBloomAmount', 'lightLineGlow', 'lightCore'];
+/** Saved Motion routes that never play: the safety settings on every style, and the light the music drives on Evolve. */
 export const motionIgnored = (layer: { kind: string; params: Readonly<Record<string, number>> }, key: string): boolean =>
-  layer.kind === 'meridian' && Math.round(layer.params.scoreStyle ?? 2) === 2 && EVOLVE_NO_MOTION.includes(key);
+  layer.kind === 'meridian' && (MERIDIAN_SAFETY.includes(key) || Math.round(layer.params.scoreStyle ?? 2) === 2 && EVOLVE_NO_MOTION.includes(key));
 
 type Section = ParameterDefinition['section'];
 const SECTION: Record<string, Section> = {
