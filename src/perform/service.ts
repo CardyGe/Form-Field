@@ -15,7 +15,7 @@ import { linkedZones, zoneShapes, type ZonePicture } from './resolve';
 import { bandSignal, breathValue, BURST_TIMES, reactionSpeed, stepReaction, unit, zoneBrightness, type ReactionState } from './reaction';
 import { dueFollow } from './sequence';
 import { beatAt, LATE_GRACE_MS, launchPhaseOffset, msAtBeat, nextBoundary, type ClockSnapshot } from './timing';
-import { BEATS_PER_BAR, ZONE_COUNT, type Clip } from './types';
+import { BEATS_PER_BAR, STUCK_AFTER_BARS, ZONE_COUNT, type Clip } from './types';
 import { MAX_WALL_LAUNCHES, type PerformValues, type WallLaunch } from './wall-perform';
 
 export interface PerformView {
@@ -42,7 +42,6 @@ export interface ClockLink {
 interface Deps { wall: WallLink; clock: ClockLink; show: () => ShowDocument; now: () => number; id: () => string; random: () => number; live?: () => LiveSettings | null }
 
 const MAX_ARMED = 8;
-const STUCK_AFTER_BARS = 2;
 const VALUES_EVERY_MS = 1000 / 30;
 const VIEW_EVERY_MS = 100;
 /** Queued this long before the bar, so the wall has it in time. */

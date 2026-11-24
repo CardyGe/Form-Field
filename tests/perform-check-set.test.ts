@@ -78,16 +78,19 @@ test('a malformed scene naming more than 8 looks is an error (guards hand-edited
   assert.equal(messages(room()).some(x => /looks at once/.test(x.message)), false);
 });
 
-test('a clip that takes longer than one bar to get ready is flagged, with the bar set by the tempo', () => {
+test('a clip that takes longer than two bars to get ready is flagged, as the red dot is, with the bar set by the tempo', () => {
   const show = room();
-  const r = messages(show, { prepareMs: { c1: 2500, c2: 100 } });
+  const r = messages(show, { prepareMs: { c1: 4500, c2: 100 } });
   assert.equal(r.filter(x => /too long to get ready/.test(x.message)).length, 1);
   const hit = r.find(x => /too long to get ready/.test(x.message))!;
   assert.equal(hit.zone, 0); assert.match(hit.message, /c1/);
-  assert.equal(messages(show, { prepareMs: { c1: 2500 }, bpm: 60 }).some(x => /too long/.test(x.message)), false);
-  assert.equal(messages(show, { prepareMs: { c1: 2000 } }).some(x => /too long/.test(x.message)), true);
-  assert.equal(messages(show, { prepareMs: { c1: 1800 } }).some(x => /too long/.test(x.message)), false);
-  assert.equal(messages(show, { prepareMs: { c1: 2000 }, bpm: 128 }).some(x => /too long/.test(x.message)), true);
+  assert.match(hit.message, /more than two bars/);
+  assert.equal(messages(show, { prepareMs: { c1: 4500 }, bpm: 60 }).some(x => /too long/.test(x.message)), false);
+  // Two bars: 3750 ms at the default 128 BPM, 4000 ms at 120.
+  assert.equal(messages(show, { prepareMs: { c1: 3800 } }).some(x => /too long/.test(x.message)), true);
+  assert.equal(messages(show, { prepareMs: { c1: 3700 } }).some(x => /too long/.test(x.message)), false);
+  assert.equal(messages(show, { prepareMs: { c1: 3800 }, bpm: 120 }).some(x => /too long/.test(x.message)), false);
+  assert.equal(messages(show, { prepareMs: { c1: 4100 }, bpm: 120 }).some(x => /too long/.test(x.message)), true);
 });
 
 test('a ceiling clip using Texture Cuts or Feedback Glitch is a warning naming the zone', () => {

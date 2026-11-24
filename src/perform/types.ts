@@ -2,6 +2,8 @@
 export const ZONE_COUNT = 8;
 export const MAX_PERFORM_SCENES = 16;
 export const BEATS_PER_BAR = 4;
+/** Looks start one at a time, so a full row can honestly take two bars: longer than this, a look is stuck. */
+export const STUCK_AFTER_BARS = 2;
 
 export type Quantize = '1/4' | '1/2' | '1bar' | '2bar' | '4bar';
 export type BlendKind = 'cut' | 'fade' | 'dip' | 'dissolve';

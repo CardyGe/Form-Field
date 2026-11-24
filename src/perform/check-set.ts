@@ -1,7 +1,7 @@
 /** Perform: Check Set. Reads the show and lists what is likely to go wrong, in plain English. It never changes anything. */
 import { isShapeShown, type ShowDocument } from '../map/show';
 import { zoneShapes } from './resolve';
-import { BEATS_PER_BAR, type Clip } from './types';
+import { BEATS_PER_BAR, STUCK_AFTER_BARS, type Clip } from './types';
 
 export interface CheckResult { level: 'error' | 'warning'; zone: number | null; message: string }
 export interface CheckStats {
@@ -59,9 +59,10 @@ export function checkSet(show: ShowDocument, stats: CheckStats = {}): CheckResul
   const barMs = BEATS_PER_BAR * 60000 / (stats.bpm && stats.bpm > 0 ? stats.bpm : DEFAULT_BPM);
   for (const [clipId, ms] of Object.entries(stats.prepareMs ?? {})) {
     const clip = clipById.get(clipId);
-    if (!clip || !(ms > barMs)) continue;
+    // The same two bars after which the Perform grid shows a look as stuck (the red dot).
+    if (!clip || !(ms > STUCK_AFTER_BARS * barMs)) continue;
     const zone = set.zones.findIndex((_, z) => clipsIn(z).some(c => c.id === clipId));
-    out.push({ level: 'warning', zone: zone >= 0 ? zone : null, message: `${clip.name} takes too long to get ready (${(ms / 1000).toFixed(1)} s, more than one bar), so it may miss its launch. Pick a lighter look.` });
+    out.push({ level: 'warning', zone: zone >= 0 ? zone : null, message: `${clip.name} takes too long to get ready (${(ms / 1000).toFixed(1)} s, more than two bars), so it may miss its launch. Pick a lighter look.` });
   }
 
   set.zones.forEach((zone, i) => {
