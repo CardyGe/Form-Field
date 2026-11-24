@@ -699,7 +699,13 @@ export class MapCompositor {
         // A source drawn only to be ready changes nothing on the stage.
         if (!waiting) rendered = true;
         if (slot.failedProject === null) slot.failed = null;
-      } catch (error) { if (!(error instanceof ProgramsCompiling)) slot.failed = String((error as Error)?.message ?? error); }
+      } catch (error) {
+        if (!(error instanceof ProgramsCompiling)) {
+          slot.failed = String((error as Error)?.message ?? error);
+          // A held new look whose draw really fails would otherwise never answer its Apply.
+          if (swapAfterDraw) this.settleSwap(source.id, 'failed');
+        }
+      }
     }
 
     // Each video's newest frame, once for every shape that plays it.
@@ -746,7 +752,8 @@ export class MapCompositor {
     return {
       fps: Math.round(this.fps), level: this.governor.level,
       failing: [
-        ...[...this.slots].filter(([, s]) => s.failed).map(([id, s]) => ({ id, reason: s.failed! })),
+        // Capped, so one long error cannot push the whole report (and Perform's landings with it) over its size limit.
+        ...[...this.slots].filter(([, s]) => s.failed).map(([id, s]) => ({ id, reason: s.failed!.length > 200 ? `${s.failed!.slice(0, 199)}…` : s.failed! })),
         ...[...this.overLimit].map(id => ({ id, reason: `more than ${MAX_LIVE_INSTRUMENTS} instruments are playing at once` })),
         ...[...this.restartAt.keys()].filter(id => !this.slots.has(id)).map(id => ({ id, reason: 'the graphics card stopped this instrument; it will start again' })),
         ...(this.lost ? [{ id: 'stage', reason: 'the graphics card reset the projector picture; it will come back by itself' }] : []),

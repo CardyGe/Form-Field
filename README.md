@@ -488,6 +488,8 @@ Projects embed imported images and masks. Autosave writes are atomic, debounced 
 
 Export jobs retain an immutable project snapshot, frame checksums and high-precision masters. **Stop safely** retains completed frames. Recoverable jobs appear in Export after interruption or restart. Resume reconciles cached files and refuses to mix frames from a different renderer build. Keep the same app version to resume an unfinished job.
 
+Map shows with a Perform set are saved as show version 9. Opened in an older build, a version 9 show loses its Perform set on that build's next autosave, and a show from a newer version opens here without its set; keep a copy before moving shows between builds.
+
 The default destination is `~/Documents/Form & Field Exports`. Each job has its own folder. A 4K frame cache can consume several gigabytes per loop; finished caches are retained deliberately. Remove a completed job's directory in Finder when its masters are no longer needed. Do not remove the cache of a job you intend to resume.
 
 ## Current limits
