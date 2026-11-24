@@ -491,3 +491,5 @@ a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .live-starts .text-button { justify-content: flex-start; border: 1px solid #3a3a3a; }
 .live-starts .text-button.on { border-color: var(--accent); color: var(--ink); }
 .live-control input[type="range"]:disabled { opacity: .35; }
+.live-starts.meridian-moves { flex-direction: row; flex-wrap: wrap; }
+.live-starts.meridian-moves .text-button { flex: 1 1 30%; justify-content: center; }

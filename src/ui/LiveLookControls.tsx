@@ -12,6 +12,7 @@ import { rampHex } from '../live/colour';
 import type { ReactivityEngine } from '../react/engine';
 import type { MeterStore } from '../react/meter';
 import { ACID_DRIP, CANDY, CYAN_YELLOW, ELECTRIC, HOT_SIGNAL, LIME_VIOLET, NEON_STRATA, POP_PORTAL, SOLAR } from '../core/palettes';
+import { MeridianLiveControls } from './MeridianLiveControls';
 
 const POSE_CONTROLS: SignalKey[] = ['poseEcho', 'poseCount', 'poseSpacing', 'poseFill'];
 const PALETTES: [string, string[]][] = [['Hot Signal', HOT_SIGNAL], ['Neon Strata', NEON_STRATA], ['Acid Drip', ACID_DRIP], ['Pop Portal', POP_PORTAL],
@@ -112,7 +113,8 @@ export function LiveLookControls({ s, update, reactFor, onView = () => {}, onCle
           <details><summary>Cutout and detail</summary>{SIGNAL_CONTROLS.filter(c => ['maskThreshold','maskSoftness','focus','blockSize','mix'].includes(c.key)).map(c => <Slider key={c.key} label={c.label} value={s.signal[c.key]} min={c.min} max={c.max} step={c.step} onChange={value => setSignal({ [c.key]: value })} react={reactFor(`live.signal.${c.key}`)} />)}</details>
           <label className="live-check"><input aria-label="Hold frame memory" type="checkbox" checked={s.signal.hold} onChange={e => setSignal({ hold: e.target.checked })} />Hold frame memory<small>Stops new frames and poses from being captured. Movement still bends the frame memory.</small></label>
           <p className="live-note">Depth relief uses brightness as a depth map. Depth focus chooses the brightness plane that stays in place.</p>
-        </> : smoke ? <>
+        </> : s.look === 'meridian' ? <MeridianLiveControls s={s} update={update} reactFor={reactFor} />
+        : smoke ? <>
           <p className="live-note">People are made of smoke. Moving tears it off them.</p>
           <div className="live-starts" role="group" aria-label="Start from">{SMOKE_STARTS.map(start =>
             <button key={start.id} className={`text-button ${Object.entries(start.values).every(([k, v]) => s.smoke[k as keyof typeof start.values] === v) ? 'on' : ''}`} onClick={() => setSmoke({ ...start.values })}>{start.label}</button>)}</div>

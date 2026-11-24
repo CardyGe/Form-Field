@@ -18,7 +18,7 @@ export default function LiveOutput() {
     let latest = validateLiveSettings(null);
     // The camera and person finding, reported to the operator: on every camera change and once a second.
     let source: import('../live/source').SourceState = { status: 'idle' };
-    const report = () => { const { people, roomCaptured } = stage.peopleReport(); bridge.sendState({ ...source, ...(people ? { people } : {}), roomCaptured }); };
+    const report = () => { const { people, roomCaptured } = stage.peopleReport(), meridian = stage.meridianReadout(); bridge.sendState({ ...source, ...(people ? { people } : {}), ...(meridian ? { meridian } : {}), roomCaptured }); };
     stage.onState = state => { source = state; report(); };
     const reporting = setInterval(report, 1000);
     const off = bridge.onMessage(message => {

@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Stage } from '../live/Stage';
-import { chooseDisplay, defaultLiveSettings, validateLiveSettings, type LiveSettings } from '../live/settings';
+import { chooseDisplay, defaultLiveSettings, MERIDIAN_LIVE_MOVES, validateLiveSettings, type LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import { reactivity, type ReactivityEngine } from '../react/engine';
 import { MeterStore } from '../react/meter';
 
 export interface Display { id: number; label: string; primary: boolean }
+/** What Meridian Live tells the operator: words and counts, never a picture. */
+export interface MeridianReadout { status: string; bodies: number; limiterOn: boolean; limiterError: string | null }
+/** What Meridian hears when it follows the music: the same signals Map and the Studio give it. */
+const MERIDIAN_SIGNALS = ['audio.level', 'audio.bass', 'audio.mids', 'audio.highs', 'beat.pulse', 'tempo.beat', 'tempo.phase', 'tempo.bpm', 'tempo.external'];
+const followsMusic = (s: LiveSettings | null): boolean => s?.look === 'meridian' && s.meridian.liveMusic >= .5;
 
 /**
  * Everything the Live screen does. While the artwork window is closed the
@@ -25,6 +30,7 @@ export function useLive(onError: (message: string) => void) {
   const [blackout, setBlackoutState] = useState(false);
   const [view, setView] = useState<'art' | 'tracking' | 'people'>('art');
   const [people, setPeople] = useState<{ status: PeopleStatus | null; roomCaptured: boolean }>({ status: null, roomCaptured: false });
+  const [meridian, setMeridian] = useState<MeridianReadout | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [fps, setFps] = useState(0);
   const [preview, setPreview] = useState<string | null>(null);
@@ -46,6 +52,8 @@ export function useLive(onError: (message: string) => void) {
       if (cancelled) return;
       const next = validateLiveSettings(saved);
       next.display = chooseDisplay(found, next.display);
+      // A move held when the app last closed is let go.
+      for (const key of MERIDIAN_LIVE_MOVES) next.meridian[key] = 0;
       setAccess(granted); setDisplays(found); setSettings(next);
     })();
     return () => { cancelled = true; };
@@ -70,7 +78,7 @@ export function useLive(onError: (message: string) => void) {
         bridge.send({ type: 'blackout', on: now.blackout });
       }
     });
-    const offState = bridge.onState(({ people: status, roomCaptured, ...state }) => { setSourceState(state as SourceState); setPeople({ status: status ?? null, roomCaptured: roomCaptured === true }); });
+    const offState = bridge.onState(({ people: status, roomCaptured, meridian: readout, ...state }) => { setSourceState(state as SourceState); setPeople({ status: status ?? null, roomCaptured: roomCaptured === true }); setMeridian(readMeridian(readout)); });
     const offDisplays = bridge.onDisplaysChanged(() => void refreshDisplays());
     let url: string | null = null;
     const offPreview = bridge.onPreview((jpeg, rate) => {
@@ -98,8 +106,8 @@ export function useLive(onError: (message: string) => void) {
     made.renderer.blackout = now.blackout;
     if (now.settings) made.apply(now.settings, now.file);
     const timer = setInterval(() => setFps(made.renderer.stats().fps), 1000);
-    const peopleTimer = setInterval(() => { const r = made.peopleReport(); setPeople({ status: r.people, roomCaptured: r.roomCaptured }); }, 500);
-    return () => { clearInterval(timer); clearInterval(peopleTimer); stage.current = null; made.dispose(); setSourceState({ status: 'idle' }); };
+    const peopleTimer = setInterval(() => { const r = made.peopleReport(); setPeople({ status: r.people, roomCaptured: r.roomCaptured }); setMeridian(made.meridianReadout()); }, 500);
+    return () => { clearInterval(timer); clearInterval(peopleTimer); stage.current = null; made.dispose(); setSourceState({ status: 'idle' }); setMeridian(null); };
   }, [canvas, ready, outputOpen]);
 
   // Every change goes to whichever side is drawing, and is saved shortly after.
@@ -117,12 +125,13 @@ export function useLive(onError: (message: string) => void) {
 
   // Sound, the beat, tempo and MIDI: heard only while a link needs them or the operator has the sound panel open.
   const links = settings?.links ?? [];
-  const reacts = links.some(l => l.on);
+  const music = followsMusic(settings);
+  const reacts = links.some(l => l.on) || music;
   const [panelOpen, setPanelOpen] = useState(false);
   const [engine, setEngine] = useState<ReactivityEngine | null>(null);
   const meter = useMemo(() => new MeterStore(), []);
   useEffect(() => { if ((reacts || panelOpen) && !engine) setEngine(reactivity()); }, [reacts, panelOpen, engine]);
-  const usedInputs = [...new Set(links.map(l => l.input))].sort().join(' ');
+  const usedInputs = [...new Set([...links.map(l => l.input), ...(music ? MERIDIAN_SIGNALS : [])])].sort().join(' ');
   // Read as they are now, so opening the panel or the output, or a new link, never interrupts the links on screen.
   const listening = useRef({ panelOpen, outputOpen, reacts, usedInputs });
   listening.current = { panelOpen, outputOpen, reacts, usedInputs };
@@ -160,6 +169,13 @@ export function useLive(onError: (message: string) => void) {
   const chooseFile = (chosen: File) => { setFile(chosen); update(s => ({ ...s, source: { kind: 'file', deviceId: s.source.deviceId } })); };
 
   return { settings: settings ?? defaultLiveSettings(), ready, access, update, sourceState, cameras, displays, outputOpen, blackout, setBlackout, clear,
-    openOutput, closeOutput, view, setView, people, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge,
+    openOutput, closeOutput, view, setView, people, meridian, captureRoom, fps, preview, setCanvas, file, chooseFile, retry, desktop: !!bridge,
     engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen };
+}
+
+/** A readout from the artwork window, checked: it crosses a process boundary. */
+function readMeridian(value: unknown): MeridianReadout | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  return typeof v.status === 'string' && typeof v.bodies === 'number' ? { status: v.status.slice(0, 80), bodies: v.bodies, limiterOn: v.limiterOn === true, limiterError: typeof v.limiterError === 'string' ? v.limiterError.slice(0, 200) : null } : null;
 }

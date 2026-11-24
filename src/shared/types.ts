@@ -173,7 +173,7 @@ export interface StudioBridge {
 /** Sent from the studio window to the artwork window. */
 export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' } | { type: 'signals'; signals: Record<string, number> };
 /** What the artwork window reports: its camera, and person finding when the look uses it. */
-export type LiveReport = SourceState & { people?: PeopleStatus; roomCaptured?: boolean };
+export type LiveReport = SourceState & { people?: PeopleStatus; roomCaptured?: boolean; /** Meridian Live: words and counts, never a picture. */ meridian?: { status: string; bodies: number; limiterOn: boolean; limiterError: string | null } };
 export interface LiveBridge {
   /** The saved settings as stored, or null. Pass the result through validateLiveSettings. */
   loadSettings(): Promise<unknown>;
