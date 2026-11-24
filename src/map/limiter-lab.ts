@@ -13,7 +13,7 @@ const WHITE: Colour = [1, 1, 1], RED: Colour = [1, 0, 0];
 const RATCHET = [0, 1, .009, 1, .018, 1];
 
 /** A drawn pattern. `shape` 0 is the whole wall; `invert` swaps the two halves of the pattern, otherwise the lit half goes to black. */
-interface Spec { shape: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; size: number; offset: number; invert: boolean; colour: Colour; blackout?: boolean; bpm?: number; band?: 'antiphase' | 'staggered'; ratchet?: boolean; lines?: { count: number; width: number; speed: number }; patch?: boolean; comb?: number; ramp?: { amp: number; hz: number; grid: 0 | 3 | 4 }; shake?: 5 | 6; texture?: { scale: number; speed: number; grain: number } }
+interface Spec { shape: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; size: number; offset: number; invert: boolean; colour: Colour; blackout?: boolean; bpm?: number; band?: 'antiphase' | 'staggered'; ratchet?: boolean; lines?: { count: number; width: number; speed: number }; patch?: boolean; comb?: number; ramp?: { amp: number; hz: number; grid: 0 | 3 | 4 }; shake?: 5 | 6; texture?: { scale: number; speed: number; grain: number }; flip?: { hz: number; phase: number } }
 /** `calm` patterns must come through byte for byte; every other non-beat pattern must be held within the limit. */
 export interface LabCase { name: string; fps: number; spec: Spec; control: boolean; beat: boolean; calm?: boolean; busy?: boolean }
 export interface LabResult { worst: number; together: number; peak: number; swing: number; redWorst: number; redTogether: number; blackFrames: number; litInBlack: number; sum: number; mean: number }
@@ -59,6 +59,10 @@ export function labCases(): LabCase[] {
   // Elements of 2 px shaken by 1 px. Only the exact 1 px line case above is an accepted limit.
   for (const [name, shake] of [['2 px bars every 4 px', 5], ['2 px checker', 6]] as [string, 5 | 6][]) for (const fps of [30, 60, 120])
     add(`shake: ${name}, 1 px, ${fps} fps`, { ...combBase, shake }, fps, true);
+  // Just over three flashes a second, starting from the pattern itself: a pixel that starts bright can make seven changes on three rises.
+  for (const [shapeName, shape, size] of [['checker', 1, 20], ['stripes', 2, 40]] as [string, 1 | 2, number][])
+    for (const hz of [3.1, 3.3, 3.5, 3.7, 3.9]) for (const at of [0, .25, .5, .75]) for (const fps of [30, 60, 120])
+      add(`edge rate: ${shapeName} inverting ${size} px +13, ${hz} Hz, phase ${at}, ${fps} fps`, { shape, size, offset: 13, invert: true, colour: WHITE, flip: { hz, phase: at } }, fps, at === 0 || at === .5);
   // Moving detail, like video or a dense instrument: reported as the share of its light the limiter keeps.
   const busy = (name: string, spec: Partial<Spec>) => out.push({ name: `busy: ${name}`, fps: 60, spec: { ...combBase, ...spec }, control: true, beat: false, busy: true });
   busy('1 px noise scrolling 2 px a frame', { texture: { scale: 1, speed: 2, grain: 0 } });
@@ -186,6 +190,8 @@ function drawFrame(gl: WebGL2RenderingContext, painter: Painter, spec: Spec, fra
     const { amp, hz, grid } = spec.ramp, at = ((t * hz) % 1 + 1) % 1, value = amp * (1 - Math.abs(2 * at - 1)), encoded = value <= .0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - .055;
     gl.clearColor(encoded, encoded, encoded, 1); gl.clear(gl.COLOR_BUFFER_BIT);
     if (grid) painter.draw({ ...spec, shape: grid }, true);
+  } else if (spec.flip) {
+    painter.draw(spec, phase(t + spec.flip.phase / spec.flip.hz, spec.flip.hz));
   } else if (spec.texture) {
     const { scale, speed, grain } = spec.texture;
     painter.draw({ ...spec, shape: 7, size: scale, offset: Math.floor(frame * speed) }, true, grain, frame % 977);
@@ -206,8 +212,9 @@ function play(gpu: Gpu, painter: Painter, item: LabCase, limited: boolean, bytes
   const gl = gpu.gl, { fps, spec } = item, frames = fps * SECONDS, light = new Counter(.1, .8, LIGHT_LIMIT), red = new Counter(.0625, 2, RED_LIMIT);
   const lightValues = new Float32Array(POINTS), redValues = new Float32Array(POINTS);
   let peak = 0, low = Infinity, blackFrames = 0, litInBlack = 0, sum = 0, total = 0, counted = 0;
-  // Starts from black, as a show does.
+  // Starts from black, as a show does, unless the pattern says otherwise.
   gpu.begin();
+  if (spec.flip) drawFrame(gl, painter, spec, 0, fps); // These start from their own first picture, so half the wall starts bright.
   if (limited) gpu.limitStage(0, 1, true);
   for (let f = 0; f < frames; f++) {
     gpu.begin();

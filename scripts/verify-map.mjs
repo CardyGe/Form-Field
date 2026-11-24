@@ -1432,7 +1432,7 @@ try {
   await check('fine checkers and stripes, offsets, red, Blackout, slow ramps under a grid, 1 and 2 px shakes, frame rates and legal beats hold on the real limiter shaders, counted on output pixels', async () => {
     const lab = await output.evaluate(() => window.__mapLimiterLab());
     meridianReport.limiterLab = Object.fromEntries(Object.entries(lab).map(([name, r]) => [name, { fps: r.fps, rawWorst: r.raw?.worst ?? null, rawTogether: r.raw ? +r.raw.together.toFixed(3) : null, worst: r.limited.worst, together: +r.limited.together.toFixed(3), peak: +r.limited.peak.toFixed(3), swing: +r.limited.swing.toFixed(3), redRaw: r.raw?.redWorst ?? null, red: r.limited.redWorst, redTogether: +r.limited.redTogether.toFixed(3), litInBlack: r.limited.litInBlack, blackFrames: r.limited.blackFrames, untouched: r.calm ? r.raw.sum === r.limited.sum : undefined, kept: r.busy ? +(r.limited.mean / r.raw.mean).toFixed(3) : undefined }]));
-    assert.ok(Object.keys(lab).length >= 230, `only ${Object.keys(lab).length} patterns ran`);
+    assert.ok(Object.keys(lab).length >= 350, `only ${Object.keys(lab).length} patterns ran`);
     for (const [name, r] of Object.entries(lab)) {
       if (r.busy) {
         // Soft moving detail that is not flashing keeps its light. High-contrast fine detail really does exceed the limit at each pixel, and is recorded.
@@ -1445,7 +1445,8 @@ try {
         assert.ok(r.limited.swing >= .05, `${name}: no visible beat (swing ${r.limited.swing})`);
         continue;
       }
-      if (r.raw) assert.ok(r.raw.worst > 6 || r.raw.redWorst > 4, `${name}: the control does not flash (${r.raw.worst})`);
+      // Patterns just over the limit may land on exactly six changes at a low frame rate, so their controls are reported only.
+      if (r.raw && !name.startsWith('edge rate')) assert.ok(r.raw.worst > 6 || r.raw.redWorst > 4, `${name}: the control does not flash (${r.raw.worst})`);
       assert.ok(r.limited.together < .25, `${name}: ${(r.limited.together * 100).toFixed(1)}% of the wall over the limit, worst ${r.limited.worst}`);
       assert.ok(r.limited.redTogether < .25, `${name}: ${(r.limited.redTogether * 100).toFixed(1)}% of the wall over the red limit, worst ${r.limited.redWorst}`);
       assert.equal(r.limited.litInBlack, 0, `${name}: light during Blackout`);
