@@ -31,7 +31,8 @@ import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
-import { cellColourFragment, cellGrid, tileFragment, tilesActive } from './tiles';
+import { CHAR_SETS, cellColourFragment, cellGrid, tileFragment, tilesActive } from './tiles';
+import { GLYPH_PX, GLYPH_SPREAD, buildGlyphAtlas } from './glyph-atlas';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -285,12 +286,19 @@ export class StudioRenderer {
   private tileTarget: THREE.WebGLRenderTarget | null = null;
   private readonly cellColour = material(cellColourFragment, {
     uSource: { value: null }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) }, uRows: { value: 1 },
+    uOrigin: { value: new THREE.Vector2() },
   });
+  /** Characters: each set's glyphs, drawn on first use and kept until the tile targets are released. */
+  private readonly glyphTextures = new Map<string, { texture: THREE.DataTexture; count: number; columns: number }>();
   private readonly tile = material(tileFragment, {
     uSource: { value: null }, uCells: { value: null }, uGrid: { value: new THREE.Vector2(1, 1) }, uCellsSize: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) },
     uCellPx: { value: new THREE.Vector2(1, 1) }, uSeed: { value: 0 }, uPhase: { value: 0 },
     uLedAmount: { value: 0 }, uLedDot: { value: .75 }, uLedShape: { value: 0 }, uLedBrightness: { value: 1.5 }, uLedDead: { value: 0 },
     uLedScan: { value: 0 }, uLedFlicker: { value: 0 }, uLedCycles: { value: 10 }, uLedGapOn: { value: 1 }, uLedGap: { value: new THREE.Color() },
+    uGlyphs: { value: null }, uCharGrid: { value: new THREE.Vector2(1, 1) }, uCharCellUv: { value: new THREE.Vector2(1, 1) }, uCharCellPx: { value: new THREE.Vector2(1, 1) },
+    uCharOrigin: { value: 0 }, uCharAmount: { value: 0 }, uCharCount: { value: 2 }, uCharColumns: { value: 2 }, uCharGlyphPx: { value: GLYPH_PX }, uCharSpread: { value: GLYPH_SPREAD },
+    uCharContrast: { value: 1 }, uCharInkOn: { value: 0 }, uCharGapOn: { value: 1 }, uCharSwaps: { value: 0 }, uCharSwapChance: { value: 0 },
+    uCharInk: { value: new THREE.Color() }, uCharGap: { value: new THREE.Color() },
   });
   /** This frame's loop length in seconds, so LED flicker keeps its pace on long and short loops. */
   private loopSeconds = 10;
@@ -1324,44 +1332,94 @@ export class StudioRenderer {
   tileSource(original: Layer, layer: Layer, source: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
     if (!tilesActive(original)) return source;
     // A modulated amount can rest at zero, where there is nothing to do.
-    const led = Math.min(1, Math.max(0, number(layer, 'ledAmount', 0)));
-    if (led <= 0) return source;
-    const grid = cellGrid(width, height, number(layer, 'ledSize', 10));
+    const led = Math.min(1, Math.max(0, number(layer, 'ledAmount', 0))), chars = Math.min(1, Math.max(0, number(layer, 'charAmount', 0)));
+    if (led <= 0 && chars <= 0) return source;
+    const ledGrid = cellGrid(width, height, number(layer, 'ledSize', 10)), charGrid = cellGrid(width, height, number(layer, 'charSize', 16));
+    // LED cells sit at the target's left edge and character cells to their right.
+    const ledCols = led > 0 ? ledGrid.cols : 0, charCols = chars > 0 ? charGrid.cols : 0;
+    const rows = Math.max(led > 0 ? ledGrid.rows : 0, chars > 0 ? charGrid.rows : 0);
     if (!this.tileCells) {
       this.tileCells = target();
       this.tileCells.texture.minFilter = this.tileCells.texture.magFilter = THREE.NearestFilter;
     }
     const cells = this.tileCells;
-    // Grow only: layers at different pitches share the target, each drawing into its corner of it.
-    if (cells.width < grid.cols || cells.height < grid.rows) cells.setSize(Math.max(cells.width, grid.cols), Math.max(cells.height, grid.rows));
-    cells.viewport.set(0, 0, grid.cols, grid.rows);
+    // Grow only: layers at different sizes share the target, each drawing into its corner of it.
+    if (cells.width < ledCols + charCols || cells.height < rows) cells.setSize(Math.max(cells.width, ledCols + charCols), Math.max(cells.height, rows));
     const c = this.cellColour.uniforms;
     c.uSource.value = source; (c.uSourceSize.value as THREE.Vector2).set(width, height);
-    (c.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]); c.uRows.value = grid.rows;
-    this.draw(this.cellColour, cells);
+    const average = (grid: ReturnType<typeof cellGrid>, origin: number) => {
+      cells.viewport.set(origin, 0, grid.cols, grid.rows);
+      (c.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]); c.uRows.value = grid.rows;
+      (c.uOrigin.value as THREE.Vector2).set(origin, 0);
+      // A clear empties the whole target, so the second grid must not clear the first.
+      if (origin > 0) this.drawOnto(this.cellColour, cells); else this.draw(this.cellColour, cells);
+    };
+    if (led > 0) average(ledGrid, 0);
+    if (chars > 0) average(charGrid, ledCols);
     this.tileTarget ??= target();
     const output = this.tileTarget;
     if (output.width !== width || output.height !== height) output.setSize(width, height);
     setWrap(output, this.tiling);
     const u = this.tile.uniforms;
     u.uSource.value = source; u.uCells.value = cells.texture;
-    (u.uGrid.value as THREE.Vector2).set(grid.cols, grid.rows);
     (u.uCellsSize.value as THREE.Vector2).set(cells.width, cells.height);
-    (u.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]);
-    (u.uCellPx.value as THREE.Vector2).set(grid.cellUv[0] * width, grid.cellUv[1] * height);
     // Wrapped to 0..1000: a negative seed would make the shader's unsigned hash input undefined.
     u.uSeed.value = ((number(layer, 'seed', 0) % 1000) + 1000) % 1000; u.uPhase.value = phase;
-    u.uLedAmount.value = led; u.uLedDot.value = number(layer, 'ledDot', .75);
-    u.uLedShape.value = Math.round(number(layer, 'ledShape', 0)); u.uLedBrightness.value = Math.max(0, number(layer, 'ledBrightness', 1.5));
-    u.uLedDead.value = number(layer, 'ledDead', 0); u.uLedScan.value = number(layer, 'ledScan', 0);
-    u.uLedFlicker.value = number(layer, 'ledFlicker', 0);
-    // About one shimmer a second, as whole cycles per loop.
-    u.uLedCycles.value = Math.max(1, Math.round(this.loopSeconds));
-    const gaps = Math.round(number(layer, 'ledGaps', 1));
-    u.uLedGapOn.value = Number(gaps >= 1);
-    (u.uLedGap.value as THREE.Color).set(gaps >= 2 ? layer.palette[gaps - 2] ?? DEFAULT_PALETTE[gaps - 2] : '#000000');
+    // Background fill: 0 Transparent, 1 Black, then the layer's palette swatches.
+    const fill = (key: string, on: { value: unknown }, colour: { value: unknown }) => {
+      const gaps = Math.round(number(layer, key, 1));
+      on.value = Number(gaps >= 1);
+      (colour.value as THREE.Color).set(gaps >= 2 ? layer.palette[gaps - 2] ?? DEFAULT_PALETTE[gaps - 2] : '#000000');
+    };
+    u.uLedAmount.value = led;
+    if (led > 0) {
+      (u.uGrid.value as THREE.Vector2).set(ledGrid.cols, ledGrid.rows);
+      (u.uCellUv.value as THREE.Vector2).set(ledGrid.cellUv[0], ledGrid.cellUv[1]);
+      (u.uCellPx.value as THREE.Vector2).set(ledGrid.cellUv[0] * width, ledGrid.cellUv[1] * height);
+      u.uLedDot.value = number(layer, 'ledDot', .75);
+      u.uLedShape.value = Math.round(number(layer, 'ledShape', 0)); u.uLedBrightness.value = Math.max(0, number(layer, 'ledBrightness', 1.5));
+      u.uLedDead.value = number(layer, 'ledDead', 0); u.uLedScan.value = number(layer, 'ledScan', 0);
+      u.uLedFlicker.value = number(layer, 'ledFlicker', 0);
+      // About one shimmer a second, as whole cycles per loop.
+      u.uLedCycles.value = Math.max(1, Math.round(this.loopSeconds));
+      fill('ledGaps', u.uLedGapOn, u.uLedGap);
+    }
+    u.uCharAmount.value = chars;
+    if (chars > 0) {
+      const set = CHAR_SETS[Math.min(CHAR_SETS.length - 1, Math.max(0, Math.round(number(layer, 'charSet', 0))))], glyphs = this.glyphTexture(set.glyphs);
+      u.uGlyphs.value = glyphs.texture; u.uCharCount.value = glyphs.count; u.uCharColumns.value = glyphs.columns;
+      (u.uCharGrid.value as THREE.Vector2).set(charGrid.cols, charGrid.rows); u.uCharOrigin.value = ledCols;
+      (u.uCharCellUv.value as THREE.Vector2).set(charGrid.cellUv[0], charGrid.cellUv[1]);
+      (u.uCharCellPx.value as THREE.Vector2).set(charGrid.cellUv[0] * width, charGrid.cellUv[1] * height);
+      u.uCharContrast.value = number(layer, 'charContrast', 1);
+      // 0 Layer colour, 1 Palette ink: swatch 1..6 of the layer's palette.
+      const inkOn = Math.round(number(layer, 'charColour', 0)) === 1, ink = Math.min(6, Math.max(1, Math.round(number(layer, 'charInk', 1)))) - 1;
+      u.uCharInkOn.value = Number(inkOn); (u.uCharInk.value as THREE.Color).set(layer.palette[ink] ?? DEFAULT_PALETTE[ink]);
+      fill('charGaps', u.uCharGapOn, u.uCharGap);
+      u.uCharSwaps.value = Math.max(0, Math.round(number(layer, 'charSwaps', 0))); u.uCharSwapChance.value = Math.min(1, Math.max(0, number(layer, 'charSwapChance', .05)));
+    }
     this.draw(this.tile, output);
     return output.texture;
+  }
+
+  /** A character set's glyphs as edge distances, one channel, built once and kept until the tile targets go. */
+  private glyphTexture(glyphs: string): { texture: THREE.DataTexture; count: number; columns: number } {
+    let entry = this.glyphTextures.get(glyphs);
+    if (!entry) {
+      const atlas = buildGlyphAtlas(glyphs, GLYPH_PX);
+      // Half floats, which every WebGL2 device filters; the distances need far less precision than they give.
+      const texture = new THREE.DataTexture(Uint16Array.from(atlas.field, v => THREE.DataUtils.toHalfFloat(v)), atlas.width, atlas.height, THREE.RedFormat, THREE.HalfFloatType);
+      texture.minFilter = texture.magFilter = THREE.LinearFilter; texture.generateMipmaps = false;
+      texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping; texture.needsUpdate = true;
+      entry = { texture, count: Array.from(glyphs).length, columns: atlas.columns };
+      this.glyphTextures.set(glyphs, entry);
+    }
+    return entry;
+  }
+
+  private releaseGlyphs(): void {
+    for (const entry of this.glyphTextures.values()) entry.texture.dispose();
+    this.glyphTextures.clear(); this.tile.uniforms.uGlyphs.value = null;
   }
 
   /**
@@ -1747,7 +1805,7 @@ export class StudioRenderer {
     if (this.lensTarget && !project.layers.some(layer => layer.visible && lensActive(layer))) { this.lensTarget.dispose(); this.lensTarget = null; }
     if (this.warpTarget && !project.layers.some(layer => layer.visible && warpActive(layer))) { this.warpTarget.dispose(); this.warpTarget = null; }
     if ((this.tileTarget || this.tileCells) && !project.layers.some(layer => layer.visible && tilesActive(layer))) {
-      this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null;
+      this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs();
       this.tile.uniforms.uSource.value = this.tile.uniforms.uCells.value = this.cellColour.uniforms.uSource.value = null;
     }
   }
@@ -1909,7 +1967,7 @@ export class StudioRenderer {
     this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.warpTarget?.dispose(); this.warpTarget = null; this.warp.dispose();
-    this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.tile.dispose(); this.cellColour.dispose();
+    this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs(); this.tile.dispose(); this.cellColour.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();

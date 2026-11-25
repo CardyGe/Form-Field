@@ -1,5 +1,5 @@
 // Real Electron/WebGL checks for the material tile finishes (LED wall, and later Characters and Tiles).
-// Run: node scripts/verify-tiles.mjs --baseline=<checkout of the commit before them> [--only=neutral,cell,led]
+// Run: node scripts/verify-tiles.mjs --baseline=<checkout of the commit before them> [--only=neutral,cell,led,char]
 // --only takes comma-separated name prefixes. Each check prints one PASS or FAIL
 // line, and any failure makes the exit code non-zero. Output goes to work/tiles.
 //
@@ -27,6 +27,7 @@ const loopVerdict = (r, limit = .1) => ({
   detail: `0/TAU ${r.literal ? 'match' : 'differ'}, seam ${r.seam.toFixed(4)} (limit ${limit})`,
 });
 const NO_LED = 'LED wall does not change the render. ';
+const NO_CHAR = 'Characters do not change the render. ';
 
 const CHECKS = [
   {
@@ -287,6 +288,212 @@ const CHECKS = [
       return { ok, detail: `${r.moved <= 1 ? NO_LED : ''}seek ${r.same ? 'byte-identical' : 'differs'}; against echo tiled once ${r.toOnce.toFixed(3)} (limit 2), tiled twice ${r.toTwice.toFixed(3)}, moved ${r.moved.toFixed(2)}` };
     },
   },
+  {
+    name: 'char-sets',
+    // Each set must change the render. On a black-to-white ramp, each column of cells is matched to the glyph a flat
+    // grey of that glyph's tone draws: columns must run from the empty glyph to the full one, in order, using every glyph.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, plain = await q.px(q.project([q.smooth()])), shots = [], sets = [];
+        const W = 960, H = 540, size = 40, cell = 20, row = 10, cols = W / cell;
+        const block = (px, c) => { const out = []; for (let y = row * cell; y < (row + 1) * cell; y++) for (let x = c * cell; x < (c + 1) * cell; x++) out.push(px[(y * W + x) * 4 + 3]); return out; };
+        const far = (a, b) => a.reduce((s, v, i) => s + Math.abs(v - b[i]), 0);
+        for (let s = 0; s < q.m.CHAR_SETS.length; s++) {
+          shots.push(await q.px(q.project([q.smooth({ charAmount: 1, charSet: s })])));
+          const ink = { charAmount: 1, charSet: s, charSize: size, charColour: 1, charInk: 1, charGaps: 0 };
+          const n = Array.from(q.m.CHAR_SETS[s].glyphs).length, refs = [];
+          for (let i = 0; i < n; i++) refs.push(block(await q.px(q.exact(q.project([await q.grey(i / (n - 1), ink)], true))), cols / 2));
+          const ramp = await q.px(q.exact(q.project([q.ramp(ink)], true))), order = [];
+          for (let c = 0; c < cols; c++) { const b = block(ramp, c); let best = 0; for (let i = 1; i < n; i++) if (far(b, refs[i]) < far(b, refs[best])) best = i; order.push(best); }
+          const first = block(ramp, 0), last = block(ramp, cols - 1);
+          sets.push({
+            moved: q.difference(plain, shots[s]), n, order: [...new Set(order)].join(''),
+            inOrder: order.every((v, i) => i === 0 || v >= order[i - 1]), every: new Set(order).size === n,
+            empty: first.every(v => v === 0), full: far(last, refs[n - 1]) / last.length, refsInk: refs.map(b => b.filter(v => v > 128).length),
+          });
+        }
+        let closest = Infinity;
+        for (let a = 0; a < shots.length; a++) for (let b = a + 1; b < shots.length; b++) closest = Math.min(closest, q.difference(shots[a], shots[b]));
+        return { sets, closest };
+      });
+      const names = ['Density', 'Blocks', 'Binary', 'Dots'];
+      const ok = r.closest > 1 && r.sets.every(s => s.moved > 3 && s.inOrder && s.every && s.empty && s.full < 2 && s.order.startsWith('0') && s.order.endsWith(String(s.n - 1)));
+      return { ok, detail: `${r.sets.some(s => s.moved <= 3) ? NO_CHAR : ''}${r.sets.map((s, i) => `${names[i]}: against plain ${s.moved.toFixed(2)}, ramp glyphs ${s.order} (${s.inOrder ? 'in order' : 'OUT OF ORDER'}, ${s.every ? 'all used' : 'some missing'}), first cell ${s.empty ? 'empty' : 'not empty'}, last cell off the full glyph by ${s.full.toFixed(2)}/255`).join('; ')}; closest pair of sets ${r.closest.toFixed(2)} (limit 1)` };
+    },
+  },
+  {
+    name: 'char-sharp',
+    // White under '1' glyphs on black at a 3840-wide export. Along each row, pixels between dark (<10%) and lit
+    // (>90%) are the edge; a blurred or stair-stepped glyph has wider edges.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, W = 3840, H = 2160;
+        const px = await q.px(q.exact(q.project([q.white({ charAmount: 1, charSize: 48, charSet: 2, charGaps: 1 })])), .9, W, H);
+        const widths = [];
+        for (let y = 0; y < H; y += 3) {
+          let last = null, mids = 0;
+          for (let x = 0; x < W; x++) {
+            const v = px[(y * W + x) * 4], k = v < 26 ? 0 : v > 229 ? 2 : 1;
+            if (k === 1) { mids++; continue; }
+            if (last !== null && last !== k) widths.push(mids);
+            last = k; mids = 0;
+          }
+        }
+        widths.sort((a, b) => a - b);
+        return { edges: widths.length, mean: widths.reduce((s, v) => s + v, 0) / Math.max(1, widths.length), p90: widths[Math.floor(widths.length * .9)] ?? 0 };
+      });
+      return { ok: r.edges > 1000 && r.mean <= 1.5, detail: `${r.edges} edges crossed, mean edge width ${r.mean.toFixed(3)} px (limit 1.5), 90th percentile ${r.p90} px` };
+    },
+  },
+  {
+    name: 'char-upright',
+    // '1' glyphs at a 3840x2160 export with 64-pixel cells, one output pixel per stored glyph pixel. A cell's lit
+    // pixels must match the stored glyph as drawn, not turned upside down or mirrored.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, W = 3840, H = 2160, px = 64, atlas = q.m.buildGlyphAtlas(q.m.CHAR_SETS[2].glyphs, px);
+        const shot = await q.px(q.exact(q.project([q.white({ charAmount: 1, charSize: 32, charSet: 2, charGaps: 1 })])), .9, W, H);
+        const glyph = (x, y) => atlas.field[y * atlas.width + 2 * px + x] > .5;
+        const score = flip => {
+          let same = 0;
+          for (let y = 0; y < px; y++) for (let x = 0; x < px; x++) {
+            const lit = shot[((10 * px + y) * W + 20 * px + x) * 4] > 128;
+            if (lit === glyph(flip.x ? px - 1 - x : x, flip.y ? px - 1 - y : y)) same++;
+          }
+          return same / (px * px);
+        };
+        return { upright: score({}), upsideDown: score({ y: true }), mirrored: score({ x: true }) };
+      });
+      const ok = r.upright > .98 && r.upright > r.upsideDown + .02 && r.upright > r.mirrored + .02;
+      return { ok, detail: `cell pixels matching the glyph as drawn ${(r.upright * 100).toFixed(1)}% (over 98%), upside down ${(r.upsideDown * 100).toFixed(1)}%, mirrored ${(r.mirrored * 100).toFixed(1)}%` };
+    },
+  },
+  {
+    name: 'char-scale',
+    // The same character size for a 960 preview and a 3840 export, averaged down 4x4 in linear light.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.tq, rows = [];
+        for (const [set, size] of [[0, 16], [0, 8], [1, 24], [3, 48], [2, 4]]) {
+          const p = q.exact(q.project([q.smooth({ charAmount: 1, charSet: set, charSize: size })]));
+          const small = await q.px(p, .9, 960, 540), big = await q.px(p, .9, 3840, 2160);
+          rows.push({ set, size, mean: q.difference(small, q.linearDown(big, 960, 540, 4)), moved: q.difference(small, await q.px(q.exact(q.project([q.smooth()])))) });
+        }
+        return rows;
+      });
+      const names = ['Density', 'Blocks', 'Binary', 'Dots'];
+      return { ok: rows.every(r => r.mean < 3 && r.moved > 3), detail: `${rows.some(r => r.moved <= 3) ? NO_CHAR : ''}${rows.map(r => `${names[r.set]} size ${r.size}: ${r.mean.toFixed(3)}`).join(', ')} (limit 3/255)` };
+    },
+  },
+  {
+    name: 'char-colour',
+    // Transparent background, so glyph pixels carry their colour unmixed. Fully covered glyph pixels must hold their
+    // cell's mean colour (Layer colour) or the chosen swatch (Palette ink).
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, W = 960, H = 540, cell = 10, chars = { charAmount: 1, charSize: 20, charGaps: 0 };
+        const plain = await q.px(q.exact(q.project([q.smooth()], true)));
+        const toLinear = v => { v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; };
+        const toByte = v => 255 * (v <= .0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - .055);
+        const mean = (cx, cy) => [0, 1, 2].map(k => { let s = 0; for (let y = cy * cell; y < (cy + 1) * cell; y++) for (let x = cx * cell; x < (cx + 1) * cell; x++) s += toLinear(plain[(y * W + x) * 4 + k]); return toByte(s / cell / cell); });
+        const means = []; for (let cy = 0; cy < H / cell; cy++) for (let cx = 0; cx < W / cell; cx++) means.push(mean(cx, cy));
+        const layer = await q.px(q.exact(q.project([q.smooth(chars)], true)));
+        let solid = 0, kept = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4; if (layer[i + 3] < 250) continue;
+          solid++; const want = means[Math.floor(y / cell) * (W / cell) + Math.floor(x / cell)];
+          if ([0, 1, 2].every(k => Math.abs(layer[i + k] - want[k]) <= 3)) kept++;
+        }
+        const inkLayer = q.smooth({ ...chars, charColour: 1, charInk: 3 }), swatch = inkLayer.palette[2], target = [1, 3, 5].map(i => parseInt(swatch.slice(i, i + 2), 16));
+        const ink = await q.px(q.exact(q.project([inkLayer], true)));
+        let inked = 0, matched = 0;
+        for (let i = 0; i < ink.length; i += 4) { if (ink[i + 3] < 250) continue; inked++; if ([0, 1, 2].every(k => Math.abs(ink[i + k] - target[k]) <= 2)) matched++; }
+        return { solid, kept: kept / Math.max(1, solid), inked, matched: matched / Math.max(1, inked), swatch };
+      });
+      const pct = v => `${(v * 100).toFixed(2)}%`;
+      const ok = r.solid > 1000 && r.kept >= .99 && r.inked > 1000 && r.matched >= .995;
+      return { ok, detail: `${r.solid <= 1000 ? NO_CHAR : ''}Layer colour: ${pct(r.kept)} of ${r.solid} solid glyph pixels hold their cell's colour within 3/255 (limit 99%); Palette ink Colour 3 (${r.swatch}): ${pct(r.matched)} of ${r.inked} hold it within 2/255 (limit 99.5%)` };
+    },
+  },
+  {
+    name: 'char-swaps',
+    // White under '@' glyphs: a cell that swaps shows another glyph. Eight swaps a loop, so slots are .785 wide,
+    // centred on multiples of TAU/8: .6 and 1.0 share slot 1, 1.6 is slot 2 and 3.9 slot 5.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, W = 960, H = 540, cell = 10, base = { charAmount: 1, charSize: 20, charGaps: 1 };
+        const still = q.exact(q.project([q.white({ ...base, charSwaps: 8, charSwapChance: .2 })]));
+        const none = await q.px(q.exact(q.project([q.white(base)])), .6);
+        const changed = (a, b) => {
+          let n = 0, total = 0;
+          for (let cy = 0; cy < H / cell; cy++) for (let cx = 0; cx < W / cell; cx++) {
+            total++;
+            let moved = false;
+            for (let y = cy * cell; y < (cy + 1) * cell && !moved; y++) for (let x = cx * cell; x < (cx + 1) * cell; x++) { const i = (y * W + x) * 4; if (Math.abs(a[i] - b[i]) > 40) { moved = true; break; } }
+            if (moved) n++;
+          }
+          return n / total;
+        };
+        const a = await q.shot(still, .6), b = await q.shot(still, 1.0), c = await q.shot(still, 1.6), d = await q.shot(still, 3.9);
+        const [pa, pc, pd] = await Promise.all([a, c, d].map(q.pixels));
+        return { shares: [changed(none, pa), changed(none, pc), changed(none, pd)], held: q.same(a, b), between: changed(pa, pc), loop: await q.loop(still) };
+      });
+      const loop = loopVerdict(r.loop);
+      const ok = r.shares.every(s => Math.abs(s - .2) <= .03) && r.held && r.between > .1 && loop.ok;
+      return { ok, detail: `${r.shares.every(s => s === 0) ? 'Swaps do not change the render. ' : ''}glyphs swapped at three slots ${r.shares.map(s => `${(s * 100).toFixed(1)}%`).join(', ')} (limit 20 ± 3); ${r.held ? 'held' : 'NOT held'} within a slot; ${(r.between * 100).toFixed(1)}% of cells change between two slots (over 10%); ${loop.detail}` };
+    },
+  },
+  {
+    name: 'char-fonts',
+    // Every glyph must draw something, and not the box the system draws for a character no font has.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, px = 64, missing = q.m.buildGlyphAtlas('\u{10FFFD}', px).field, bad = [];
+        let count = 0;
+        for (const set of q.m.CHAR_SETS) {
+          const glyphs = Array.from(set.glyphs), atlas = q.m.buildGlyphAtlas(set.glyphs, px);
+          glyphs.forEach((glyph, index) => {
+            let ink = 0, off = 0;
+            for (let y = 0; y < px; y++) for (let x = 0; x < px; x++) {
+              const v = atlas.field[y * atlas.width + index * px + x];
+              if (v > .5) ink++;
+              off += Math.abs(v - missing[y * px + x]);
+            }
+            count++;
+            const blank = ink === 0, tofu = off / (px * px) < .01;
+            if (glyph === ' ' ? !blank : blank || tofu) bad.push(`${set.name} '${glyph}'${blank ? ' empty' : ''}${tofu ? ' missing from the font' : ''}`);
+          });
+        }
+        return { count, bad, missingInk: Array.from(missing).filter(v => v > .5).length };
+      });
+      return { ok: r.bad.length === 0, detail: `${r.count} glyphs, ${r.bad.length ? `wrong: ${r.bad.join(', ')}` : 'every glyph but the space draws, none as the missing-character box'} (the box covers ${r.missingInk} texels)` };
+    },
+  },
+  {
+    name: 'char-engage',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, plain = await q.px(q.project([q.smooth()]));
+        return { tiny: q.difference(plain, await q.px(q.project([q.smooth({ charAmount: .001, charSet: 1, charGaps: 4 })]))), full: q.difference(plain, await q.px(q.project([q.smooth({ charAmount: 1 })]))) };
+      });
+      return { ok: r.tiny < 1 && r.full > 3, detail: `${r.full <= 3 ? NO_CHAR : ''}amount .001 against plain ${r.tiny.toFixed(4)} (limit 1); amount 1 ${r.full.toFixed(2)} (over 3)` };
+    },
+  },
+  {
+    name: 'char-stack',
+    // LED wall then Characters, each mixed over the result so far, both from the plain layer's cells at their own
+    // sizes. Characters at 1 hide the LEDs entirely; Characters at .001 leave the LED wall as it was.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, led = { ledAmount: 1, ledSize: 14 }, chars = { charAmount: 1, charSize: 22, charSet: 0 };
+        const shot = params => q.px(q.exact(q.project([q.smooth(params)])));
+        const ledAlone = await shot(led), charAlone = await shot(chars);
+        return { over: q.difference(charAlone, await shot({ ...led, ...chars })), under: q.difference(ledAlone, await shot({ ...led, ...chars, charAmount: .001 })), distinct: q.difference(ledAlone, charAlone) };
+      });
+      const ok = r.over < .5 && r.under < 1 && r.distinct > 3;
+      return { ok, detail: `LED and Characters at 1 against Characters alone ${r.over.toFixed(3)} (limit .5); Characters at .001 against LED alone ${r.under.toFixed(3)} (limit 1); the two looks differ by ${r.distinct.toFixed(2)}` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -301,7 +508,7 @@ export {DataTexture,RGBAFormat,FloatType,LinearFilter} from 'three';${extra}`, r
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
-await bundle(root, 'renderer.js', `\nexport {cellGrid} from './src/rendering/tiles';`);
+await bundle(root, 'renderer.js', `\nexport {cellGrid,CHAR_SETS} from './src/rendering/tiles';\nexport {buildGlyphAtlas} from './src/rendering/glyph-atlas';`);
 if (baseline) await bundle(path.resolve(baseline), 'baseline.js');
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
@@ -346,6 +553,16 @@ try {
     // The smooth picture over the right half of the frame only.
     const rightSmoothUrl = await dataUrl(960, 540, (x, y) => x < 0 ? [0, 0, 0, 0] : [Math.round(128 + 90 * Math.sin(3.1 * x + .4)), Math.round(128 + 90 * Math.cos(4.3 * y - .7)), Math.round(128 + 70 * Math.sin(2.2 * x + 3.7 * y)), 255]);
     const rightSmooth = (params = {}) => image(rightSmoothUrl, params, 'right-smooth');
+    // Black at the left edge of the frame to white at the right, even in encoded values.
+    const rampUrl = await dataUrl(960, 540, x => { const v = Math.round(255 * Math.min(1, Math.max(0, (x + 960 / 540 / 2) / (960 / 540)))); return [v, v, v, 255]; });
+    const rampLayer = (params = {}) => image(rampUrl, params, 'ramp');
+    // A flat grey whose encoded value is `value` (0-1). Small, since it is flat.
+    const greys = new Map();
+    const grey = async (value, params = {}) => {
+      const v = Math.round(255 * value);
+      if (!greys.has(v)) greys.set(v, await dataUrl(96, 54, () => [v, v, v, 255]));
+      return image(greys.get(v), params, `grey-${v}`, 96, 54);
+    };
     // An animated source that closes its loop.
     const moving = (params = {}) => { const l = m.applyPreset(m.createLayer('surface'), m.PRESETS.find(p => p.kind === 'surface').id); l.id = 'moving-proof'; Object.assign(l.params, params); return l; };
     const project = (layers, transparent = false) => { const p = m.createProject(); p.id = 'tiles-proof'; p.layers = layers; p.background = '#000000'; p.transparent = transparent; return p; };
@@ -404,7 +621,7 @@ try {
       renderer.renderer.readRenderTargetPixels(target, 0, 0, W, H, raw);
       return Float32Array.from(raw, fromHalf);
     };
-    window.tq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, half, rightSmooth, moving, project, exact, pixels, shot, px, difference, same, loop, litShare, linearDown, texels, readHalf };
+    window.tq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, half, rightSmooth, ramp: rampLayer, grey, moving, project, exact, pixels, shot, px, difference, same, loop, litShare, linearDown, texels, readHalf };
   }, !!baseline);
 
   for (const check of selected) {

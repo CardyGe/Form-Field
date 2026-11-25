@@ -84,6 +84,8 @@ precision highp float;
 uniform sampler2D uSource;
 uniform vec2 uSourceSize, uCellUv;
 uniform float uRows;
+// Where this grid starts in the shared cell target, in cells.
+uniform vec2 uOrigin;
 void axisTaps(float a, float b, float size, out float at[8], out float weight[8]) {
   a = clamp(a, 0., size); b = clamp(b, 0., size);
   float first = floor(a);
@@ -103,7 +105,7 @@ void axisTaps(float a, float b, float size, out float at[8], out float weight[8]
   }
 }
 void main() {
-  vec2 cell = floor(gl_FragCoord.xy);
+  vec2 cell = floor(gl_FragCoord.xy) - uOrigin;
   float row = uRows - 1. - cell.y;
   float ax[8], wx[8], ay[8], wy[8];
   axisTaps(cell.x * uCellUv.x * uSourceSize.x, (cell.x + 1.) * uCellUv.x * uSourceSize.x, uSourceSize.x, ax, wx);
@@ -123,7 +125,8 @@ void main() {
 }`;
 
 /**
- * Tile pass: rebuilds the layer from its cells. Each stage reads its cell's
+ * Tile pass: rebuilds the layer from its cells. LED wall and Characters each
+ * have their own grid in the shared cell target. Each stage reads its cell's
  * colour with nearest filtering at the cell centre; the result is blended
  * with the plain layer by the stage's amount. Light is never clamped, so
  * bright emitters reach Glow and keep over-range values.
@@ -137,9 +140,19 @@ uniform vec2 uGrid, uCellsSize, uCellUv, uCellPx;
 uniform float uSeed, uPhase;
 uniform float uLedAmount, uLedDot, uLedShape, uLedBrightness, uLedDead, uLedScan, uLedFlicker, uLedCycles, uLedGapOn;
 uniform vec3 uLedGap;
+// Characters have their own grid, stored to the right of the LED cells in the shared target.
+uniform sampler2D uGlyphs;
+uniform vec2 uCharGrid, uCharCellUv, uCharCellPx;
+uniform float uCharOrigin, uCharAmount, uCharCount, uCharColumns, uCharGlyphPx, uCharSpread, uCharContrast, uCharInkOn, uCharGapOn, uCharSwaps, uCharSwapChance;
+uniform vec3 uCharInk, uCharGap;
 const float TAU = 6.28318530718;
 
-vec4 cellColour(vec2 cell) { return texture2D(uCells, vec2(cell.x + .5, uGrid.y - cell.y - .5) / uCellsSize); }
+// A grid's cell, counted from the frame's top-left; cells past the grid read its nearest edge cell.
+vec4 cellAt(vec2 cell, vec2 grid, float origin) {
+  cell = clamp(cell, vec2(0.), grid - 1.);
+  return texture2D(uCells, vec2(origin + cell.x + .5, grid.y - cell.y - .5) / uCellsSize);
+}
+vec4 cellColour(vec2 cell) { return cellAt(cell, uGrid, 0.); }
 
 // A seeded random number for a cell, the same on every frame.
 float cellRandom(vec2 cell, uint salt) {
@@ -213,8 +226,47 @@ vec4 ledStage(vec2 uv) {
   return sum + vec4(uLedGap, 1.) * uLedGapOn * gap;
 }
 
+// Perceptual tone of a premultiplied linear colour: its luminance, encoded as the display would.
+float tone(vec4 c) {
+  float y = max(0., dot(c.rgb / max(c.a, 1e-4), vec3(.2126, .7152, .0722)));
+  return y <= .0031308 ? 12.92 * y : 1.055 * pow(y, 1. / 2.4) - .055;
+}
+
+// The glyph a cell shows: its tone after contrast, or now and then a seeded other glyph. Swaps hold for a
+// slot of the loop; slots are centred on whole fractions of it, so the loop's end and start share slot 0.
+float glyphFor(vec2 cell, vec4 c) {
+  float t = clamp((tone(c) - .5) * uCharContrast + .5, 0., 1.), glyph = floor(t * (uCharCount - 1.) + .5);
+  if (uCharSwaps > 0.) {
+    float slot = mod(floor(uPhase / TAU * uCharSwaps + .5), uCharSwaps);
+    vec2 key = cell + vec2(0., 4096. * (slot + 1.));
+    if (cellRandom(key, 5u) < uCharSwapChance) glyph = mod(glyph + 1. + floor(cellRandom(key, 6u) * (uCharCount - 1.)), uCharCount);
+  }
+  return glyph;
+}
+
+vec4 charStage(vec2 uv) {
+  vec2 f = vec2(uv.x, 1. - uv.y) / uCharCellUv;
+  // Stored glyph pixels per output pixel, and the edge value's change across one of the 4x4 samples below.
+  float texels = max(fwidth(f.x) * uCharGlyphPx, fwidth(f.y) * uCharGlyphPx), ramp = max(texels / (2. * uCharSpread) / 4., 1e-4);
+  vec4 sum = vec4(0.);
+  for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
+    // Samples spread evenly over the pixel, so glyphs smaller than a pixel keep their true area.
+    vec2 at = f + (vec2(i, j) - 1.5) * .25 / uCharCellPx, cell = clamp(floor(at), vec2(0.), uCharGrid - 1.);
+    vec4 c = cellAt(cell, uCharGrid, uCharOrigin);
+    // Inside the glyph's own square, half a stored pixel from its sides, so neighbours never bleed in.
+    vec2 inGlyph = clamp(fract(at), .5 / uCharGlyphPx, 1. - .5 / uCharGlyphPx);
+    float field = texture2D(uGlyphs, vec2((glyphFor(cell, c) + inGlyph.x) / uCharColumns, inGlyph.y)).r;
+    float cover = clamp((field - .5) / ramp + .5, 0., 1.);
+    vec3 ink = uCharInkOn > .5 ? uCharInk * c.a : c.rgb;
+    sum += vec4(ink, c.a) * cover + vec4(uCharGap, 1.) * uCharGapOn * c.a * (1. - cover);
+  }
+  return sum / 16.;
+}
+
 void main() {
   vec4 result = texture2D(uSource, vUv);
+  // LED wall first, then Characters over it; each is built from the plain layer's cells.
   if (uLedAmount > 0.) result = mix(result, ledStage(vUv), uLedAmount);
+  if (uCharAmount > 0.) result = mix(result, charStage(vUv), uCharAmount);
   gl_FragColor = result;
 }`;
