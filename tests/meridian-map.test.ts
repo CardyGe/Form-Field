@@ -124,7 +124,7 @@ test('Map shows the guard state and any limiter error of a Live playing Meridian
   const guarded = policy(meridian()), off = policy(meridian(2, { safetyFlashGuard: 0 }));
   assert.deepEqual(mapGuardStatus(guarded, false, { limiting: true, failed: false }, null), { warning: null, limiting: true });
   assert.equal(mapGuardStatus(guarded, false, { limiting: false, failed: true }, null).warning, 'Flash limiter unavailable: only the basic wall limiter is running');
-  assert.equal(mapGuardStatus(off, false, calm, null).warning, 'Flash guard is off: only the basic wall limiter is running');
+  assert.equal(mapGuardStatus(off, false, calm, null).warning, 'Meridian flash guard is off: only the basic wall limiter is running');
   const { readFileSync } = await import('node:fs');
   assert.ok(/mapGuardStatus\(/.test(readFileSync(new URL('../src/ui/MapPanel.tsx', import.meta.url), 'utf8')), 'the footer uses the rule');
 });

@@ -1379,7 +1379,7 @@ try {
     // The baseline has no limiter at all: Meridian's guard is off in this show and the always-on limiter is switched off.
     const off = await unlimited(async () => { await sleep(800); return captureFlashes(4000); });
     assert.ok(off.flashes >= 4, `the check is not strobing without any limiter: ${JSON.stringify(off)}`);
-    assert.match(await studio.locator('.map-flash-guard').textContent(), /Flash guard is off/);
+    assert.match(await studio.locator('.map-flash-guard').textContent(), /Meridian flash guard is off/);
     // Counted from before the strobe starts, so the guard's first second, when it has no rhythm to go on, is included.
     await clearStage(); await sleep(700);
     const counting = captureFlashes(10000);
@@ -1396,7 +1396,7 @@ try {
     assert.ok(steady.step <= off.step + .02, `the guard made a harder step (${off.step} to ${steady.step})`);
     const stats = await meridianStats(s => s.flashGuard?.limiting, 'the guard did not report limiting');
     meridianReport.strobeWallLimiter = stats.wallLimiter;
-    await studio.locator('.map-flash-guard', { hasText: 'Flash guard: limiting' }).waitFor({ timeout: 4000 });
+    await studio.locator('.map-flash-guard', { hasText: 'Meridian flash guard: limiting' }).waitFor({ timeout: 4000 });
     const edge = await sample(output, [[.01, .5], [.99, .5], [.5, .01], [.5, .99]]);
     assert.ok(edge.colours.every(p => near(p, BLACK, 0)), `the dim touched the bent stage's outside: ${JSON.stringify(edge.colours)}`);
     await studio.getByRole('button', { name: 'Blackout', exact: true }).click(); await sleep(300);
@@ -1556,8 +1556,8 @@ try {
     // The area guard is the first limiter on a show without Meridian; switched off here, the always-on limiter must hold the strobe alone.
     const areaGuard = async on => {
       if (!on) studio.once('dialog', d => d.accept());
-      await studio.getByRole('button', { name: on ? 'Flash guard OFF' : 'Flash guard on', exact: true }).click();
-      await studio.getByRole('button', { name: on ? 'Flash guard on' : 'Flash guard OFF', exact: true }).waitFor();
+      await studio.getByRole('button', { name: on ? 'Output guard OFF' : 'Output guard on', exact: true }).click();
+      await studio.getByRole('button', { name: on ? 'Output guard on' : 'Output guard OFF', exact: true }).waitFor();
     };
     try {
       await areaGuard(false);
