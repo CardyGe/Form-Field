@@ -19,7 +19,7 @@
 | At least half the pixels true black in trough frames | 51.9% |
 | Two exports of one frame identical; no jump at the loop | Identical. Loop seam 7.7, smaller than an ordinary frame step of 8.1 |
 | Flash screen, all schemes, 200/1,000/1,500 nits, 2 px grid, at or under 25% | Worst 17.5% (Toxic Violet at 1,500 nits); red at most 12.0% |
-| 4K p99 at or under 11.7 ms | **Not proven** (see Known limits) |
+| 4K p99 at or under 11.7 ms | 8.9 ms median, 9.2 ms p99 on an idle machine (smoke adds about 0.1 ms) |
 | Context recovery, unit tests, interaction suite, Map check | All pass (20/20 looks, 1,631 tests, interaction, 69/69 Map) |
 | Styles clearly different on a contact sheet the owner approves | Sheets sent 25 November |
 
@@ -38,7 +38,7 @@ Each with what it costs if it was the wrong call.
 
 ## Known limits
 
-- **4K speed is unproven.** On a busy machine (another Electron app open, load 6.5), Ember with its smoke switched off already took 14.8 ms median and 17.2 ms p99. The smoke added 0.5 ms median and 1.3 ms p99. It needs a run on an idle machine: `node scripts/verify-ember-smoke.mjs --perf`.
+- **4K speed depends on what else is running.** With two other copies of the app open, Ember took 15.3 ms median and 18.5 ms p99 and missed the target. With them closed it took 8.9 ms median and 9.2 ms p99. Close other GPU-heavy apps before a show.
 - **Long loop exports start slowly.** The first export frame simulates the smoke up to that point: 0.5 s for a 10 s loop, 1.4 s for 60 s, and 12.4 s for the 600 s maximum. Later frames are quick.
 - `writeEmberPoints` in `scope-ember.ts` is no longer used by Ember and can be removed.
 
