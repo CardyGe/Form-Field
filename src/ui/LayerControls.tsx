@@ -11,6 +11,7 @@ import { kaleidoscopeInput } from '../rendering/feedback';
 import { KALEIDOSCOPE_MORPHS, KALEIDOSCOPE_MOTIFS, KALEIDOSCOPE_OWN_KEYS, KALEIDOSCOPE_SOURCES, KALEIDOSCOPE_SYMMETRIES, kaleidoscopeDrawsMotif, kaleidoscopeHidden } from './kaleidoscope-controls';
 import { INSTRUMENTS, isInstrument } from '../core/instruments';
 import { GRAPHIC_FAMILIES, GRAPHIC_VARIANTS, GRAPHIC_LOOKS } from '../core/graphics';
+import { EMBER_SMOKE_ORIGINS, EMBER_SMOKE_STYLES } from '../rendering/ember-fluid-model';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -24,7 +25,7 @@ export const coloringModes = ['Palette', 'Duotone', 'Contours'];
 export const mirrorModes = ['Original', 'Flip horizontal', 'Flip vertical', 'Flip both'];
 export const gradingKeys = ['saturation', 'hue', 'exposure',...FINISH_KEYS];
 export const graphicChoiceKeys = ['profile', 'fill', 'sweep', 'corners'];
-export const choiceKeys = ['scopeMode','simulationQuality','flowMode','inkMode','reliefMode','phrase','style', 'variant', 'form', 'quality', 'radial', 'colorMode', 'mirror', 'substrate', 'mode', 'gateMode', 'autoTravel', 'seed'];
+export const choiceKeys = ['scopeMode','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','style', 'variant', 'form', 'quality', 'radial', 'colorMode', 'mirror', 'substrate', 'mode', 'gateMode', 'autoTravel', 'seed'];
 export const super8ControlGroups: [string, string[]][] = [
   ['Paint geometry', ['scale', 'steps', 'coverage', 'erosion', 'rotation']],
   ['Paint texture', ['texture', 'textureScale', 'roughness', 'bleed', 'emulsion']],
@@ -219,6 +220,8 @@ export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscope
         {selected.kind === 'fractal' && <ChoiceParameter label="Coloring" name="Fractal coloring" options={coloringModes} value={selected.params.colorMode} onChange={colorMode => edit(l => ({ ...l, params: { ...l.params, colorMode } }))} />}
         {scopeMode && <ChoiceParameter label="Oscilloscope mode" name="Oscilloscope mode" options={SCOPE_MODES} value={selected.params.scopeMode ?? 0} disabled={scopeLocked}
           onChange={scopeMode => edit(l => ({ ...l, params: { ...l.params, scopeMode } }))} />}
+        {isEmber && <ChoiceParameter label="Smoke style" name="Smoke style" options={[...EMBER_SMOKE_STYLES]} value={selected.params.emberSmokeStyle ?? 1} disabled={scopeLocked} onChange={emberSmokeStyle => edit(l => ({ ...l, params: { ...l.params, emberSmokeStyle } }))} />}
+        {isEmber && <ChoiceParameter label="Smoke source" name="Smoke source" options={[...EMBER_SMOKE_ORIGINS]} value={selected.params.emberSmokeOrigin ?? 0} disabled={scopeLocked} onChange={emberSmokeOrigin => edit(l => ({ ...l, params: { ...l.params, emberSmokeOrigin } }))} />}
         {isEmber && scopeAudioSlot}
         {selected.kind === 'super8' && <div className="super8-options"><ChoiceParameter label="Mode" name="Super 8 mode" options={SUPER8_MODES} value={selected.params.mode} onChange={mode => edit(l => ({ ...l, params: { ...l.params, mode } }))} /><ChoiceParameter label="Substrate" name="Super 8 substrate" options={['Transparent cutout', 'Painted paper']} value={selected.params.substrate} onChange={substrate => edit(l => ({ ...l, params: { ...l.params, substrate } }))} /><ChoiceParameter label="Projector view" name="Super 8 projector view" options={['Full canvas', 'Rounded gate', 'Film strip']} value={selected.params.gateMode} onChange={gateMode => edit(l => ({ ...l, params: { ...l.params, gateMode } }))} /><p>Paint holds at the film frame rate. Frame advance and shutter move between exposures. Reel turns scroll the strip; Full canvas fills the output without a border.</p></div>}
         {isInstrument(selected.kind) && selected.params.reliefMode !== 2 && <ChoiceParameter label="Motion phrase" name="Motion phrase" options={['Steady travel','Gather and release','Drift and settle']} value={selected.params.phrase} onChange={phrase=>edit(l=>({...l,params:{...l.params,phrase}}))}/>}

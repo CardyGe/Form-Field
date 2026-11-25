@@ -4,7 +4,6 @@ import { SCOPE_FIGURES, SCOPE_PLAIN, scopeWave, scopeCurve, scopeDash, scopeFigu
 import { PRESETS, applyPreset, createLayer, createProject, parameterDefinitions, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 
 import { emberPhrase, SCOPE_POINT_STRIDE, writeEmberPoints } from '../src/rendering/scope-ember';
-import { emberSmokeFrame } from '../src/rendering/scope-ember-smoke';
 import { EmberSmokeAudio } from '../src/react/ember-smoke';
 
 const TAU = Math.PI * 2;
@@ -240,22 +239,6 @@ test('Older Ember layers pick up smoke defaults, and Classic hides the smoke con
   assert.equal(validateProject({ ...createProject(), layers: [updated] }).layers[0].params.emberSmoke, 0);
 });
 
-test('Ember smoke keeps the same launch direction as puffs age and fades across the loop seam', () => {
-  const at = (phase: number) => emberSmokeFrame(phase, 5, 1729);
-  assert.deepEqual(at(0), at(TAU));
-  const last = at(TAU - 1e-6), first = at(0);
-  assert.ok(first.puffs.some(puff => puff.gain > .1), 'smoke survives the seam');
-  for (let i = 0; i < first.puffs.length; i++) {
-    const a = last.puffs[i], b = first.puffs[i];
-    assert.ok(Math.abs(a.gain - b.gain) < 1e-4);
-    if (b.gain > .1) {
-      assert.ok(Math.hypot(a.x - b.x, a.y - b.y) < 1e-5);
-      assert.ok(b.age > a.age, 'puffs continue travelling across the seam');
-    }
-  }
-  assert.notDeepEqual(at(0).puffs, at(TAU / 5).puffs, 'launch directions vary by phrase');
-});
-
 test('live Ember smoke emits once per detected beat and ages after the input goes quiet', () => {
   const smoke = new EmberSmokeAudio();
   const heard = { 'audio.bass': .72, 'audio.highs': .62, 'beat.pulse': 1, 'beat.count': 1 };
@@ -266,12 +249,6 @@ test('live Ember smoke emits once per detected beat and ages after the input goe
   const later = smoke.advance({ ...heard, 'beat.pulse': .8 }, 117);
   assert.equal(later.beats.length, 1);
   assert.ok(later.beats[0].age > .09);
-  const older = emberSmokeFrame(0, 5, 1729, .55, later);
-  const authored = emberSmokeFrame(0, 5, 1729);
-  assert.deepEqual(older.puffs.slice(0, authored.puffs.length), authored.puffs);
-  assert.equal(older.puffs.length, authored.puffs.length + 1);
-  assert.ok(older.puffs.at(-1)!.gain > 0);
-  assert.deepEqual(emberSmokeFrame(0, 5, 1729, .55, later, 0), authored);
   for (let ms = 217; ms <= 2817; ms += 100) smoke.advance({}, ms);
   const quiet = smoke.advance({}, 2917);
   assert.equal(quiet.beats.length, 0);

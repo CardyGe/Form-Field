@@ -320,6 +320,7 @@ export class StudioRenderer {
     this.feedbackStates.clear();
     this.releaseOilTargets();
     this.instruments.resetGpuHistory();
+    this.scope?.resetGpuHistory();
     this.smokeClouds?.resetGpuHistory();
     // The studio light was drawn on the lost context: it is made again the next time a sculpture needs it.
     this.environment?.dispose(); this.environment = null; this.sculptureScene.environment = null;
@@ -672,6 +673,7 @@ export class StudioRenderer {
       if (!done) return;
       for (const [key, asset] of this.assets) if (!required.has(key)) { asset.texture.dispose(); this.assets.delete(key); }
       if (!project.layers.some(layer => layer.kind === 'oil' && layer.visible)) this.releaseOilTargets();
+      this.scope?.keepEmberLayers(new Set(project.layers.filter(layer => layer.kind === 'scope' && layer.visible && layer.params.scopeMode === 1).map(layer => layer.id)));
       this.smokeClouds?.keep(new Set(project.layers.filter(layer => layer.kind === 'smokecloud' && layer.visible).map(layer => layer.id)));
       if (!project.layers.some(layer => layer.kind === 'graphic' && layer.visible)) {
         this.graphicSource?.dispose(); this.graphicSource = null;
@@ -908,7 +910,7 @@ export class StudioRenderer {
       return this.drawOil(layer, original, phase);
     } else if (layer.kind === 'scope') {
       this.scope ??= new ScopeRenderer();
-      this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t), smokeAudio);
+      this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t), smokeAudio, { exact: this.exactFeedback, playing: this.previewPlaying, duration });
     } else if (layer.kind === 'smokecloud') {
       this.smokeClouds ??= new SmokeCloudRenderer();
       this.smokeClouds.draw(this.renderer, layer, original, localPhase, this.width, this.height, this.source, smokeAudio, { exact: this.exactFeedback, playing: this.previewPlaying, duration });
@@ -1648,7 +1650,7 @@ export class StudioRenderer {
   /** True while a paused preview is still refining a feedback history. */
   needsRefresh(): boolean {
     for (const state of this.feedbackStates.values()) if (state.settle) return true;
-    return this.smokeClouds?.needsRefresh() ?? false;
+    return (this.scope?.needsRefresh() ?? false) || (this.smokeClouds?.needsRefresh() ?? false);
   }
 
   private disposeFeedback(state: FeedbackState): void {
