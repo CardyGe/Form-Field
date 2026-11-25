@@ -190,7 +190,7 @@ const OUTPUT: Row[] = [
   ['outputTransparent', 'Transparent background', 0, 1, 1, 0, 'Leaves out the black so Meridian can sit over other layers.'],
 ];
 const SAFETY: Row[] = [
-  ['safetyFlashGuard', 'Flash guard', 0, 1, 1, 1, 'Keeps large bright flashes within safe limits. Leave this on for an audience.'],
+  ['safetyFlashGuard', 'Meridian flash guard', 0, 1, 1, 1, 'Keeps large bright flashes within safe limits. Leave this on for an audience.'],
   ['safetyMaxFlashes', 'Flashes per second', 1, 3, 1, 3, 'The most large bright flashes allowed in a second.'],
   ['safetyRedLimit', 'Red limit', 0, 1, 0.01, 0.5, 'How much strongly saturated red is allowed in a flash. Lower is gentler.'],
   ['safetyFullField', 'Full-field limit', 0, 1, 0.01, 0.5, 'How much of the frame counts as a flash. Lower is stricter. Above the middle it stays at the 25% safety line.'],

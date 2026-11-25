@@ -51,6 +51,6 @@ export function mapGuardStatus(policy: WallGuardPolicy, liveMeridian: boolean, w
   const liveFailed = liveMeridian && !!live?.error;
   const warning = policy.on && wall.failed ? 'Flash limiter unavailable: only the basic wall limiter is running'
     : liveFailed ? 'Flash limiter unavailable on Live: only the basic wall limiter covers Meridian Live'
-    : policy.warn ? (policy.on ? 'Flash guard is off on one Meridian layer' : 'Flash guard is off: only the basic wall limiter is running') : null;
+    : policy.warn ? (policy.on ? 'Meridian flash guard is off on one layer' : 'Meridian flash guard is off: only the basic wall limiter is running') : null;
   return { warning, limiting: (policy.on && wall.limiting) || (liveMeridian && !!live?.limiting) };
 }

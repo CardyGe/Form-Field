@@ -264,6 +264,12 @@ fieldset.layer-controls:disabled { opacity: .55; }
 .map-actions .text-button, .map-actions .primary-button { white-space: nowrap; flex-shrink: 0; }
 .map-actions .divider { margin: 0 2px; flex-shrink: 0; }
 .map-actions .live-inline select { max-width: 200px; min-width: 0; text-overflow: ellipsis; }
+/* Between that and a wide screen, the less-used buttons show their icon only (the name stays in the tooltip and for screen
+   readers), so Blackout, Freeze, Undo and Redo always stay on screen with the projector picker. */
+@media (max-width: 1680px) {
+  .map-actions .text-button.compact { font-size: 0; gap: 0; padding: 6px 7px; }
+  .map-actions .live-inline select { max-width: 150px; }
+}
 /* As the window narrows the labels go, as in Studio, and the buttons keep their icons and tooltips. */
 @media (max-width: 1360px) {
   .map-shell .brand > div:nth-child(2) { display: none; }

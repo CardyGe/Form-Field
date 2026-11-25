@@ -271,10 +271,10 @@ function MusicBlock({ slot }: { slot: ReactNode }) {
 /** Turning the guard off takes a second, deliberate press. */
 function FlashGuardControl({ value, onChange }: { value: number; onChange: (n: number) => void }) {
   const [asking, setAsking] = useState(false), on = value >= .5;
-  if (!on) return <div className="m-guard is-off"><strong>Flash guard is off</strong><button className="m-capture" onClick={() => onChange(1)}>Turn on</button></div>;
-  if (asking) return <div className="m-guard" role="alertdialog" aria-label="Turn off Flash guard?"><span>Meridian will no longer limit large bright flashes. Exports and the Studio preview have no other limiter; a Map wall and the Live output keep only a basic whole-picture limiter. This can harm people with photosensitive epilepsy.</span>
+  if (!on) return <div className="m-guard is-off"><strong>Meridian flash guard is off</strong><button className="m-capture" onClick={() => onChange(1)}>Turn on</button></div>;
+  if (asking) return <div className="m-guard" role="alertdialog" aria-label="Turn off Meridian flash guard?"><span>Meridian will no longer limit large bright flashes. Exports and the Studio preview have no other limiter; a Map wall and the Live output keep only a basic whole-picture limiter. This can harm people with photosensitive epilepsy.</span>
     <button className="m-capture" onClick={() => setAsking(false)}>Keep on</button><button className="m-capture" onClick={() => { setAsking(false); onChange(0); }}>Turn off</button></div>;
-  return <div className="m-guard"><span>Flash guard on</span><button className="m-capture" onClick={() => setAsking(true)}>Turn off…</button></div>;
+  return <div className="m-guard"><span>Meridian flash guard on</span><button className="m-capture" onClick={() => setAsking(true)}>Turn off…</button></div>;
 }
 
 export function MeridianControls({ layer, edit, performance, notify, onAnimateKey, onStart, onEnd, soundSlot }: {
