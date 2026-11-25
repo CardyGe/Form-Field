@@ -29,14 +29,14 @@ function rig(show = makeShow(), open = true) {
   const sent: MapMessage[] = [];
   const log: string[] = [];
   let now = 1000, barOffset = 0, next = 0, frame: ((s: Signals) => void) | null = null;
-  const state = { audio: { state: 'on', label: 'x' } as AudioStatus, midi: { state: 'off' } as MidiStatus, open };
+  const state = { audio: { state: 'on', label: 'x' } as AudioStatus, midi: { state: 'off' } as MidiStatus, open, clock: 'locked' as ClockSnapshot['state'] };
   const wall: WallLink = {
     send: m => { sent.push(m); log.push(m.type); },
     isOpen: () => state.open,
     sendWholeShow: () => { log.push('wholeShow'); },
   };
   const clock: ClockLink & { audio(): AudioStatus; midi(): MidiStatus } = {
-    snapshot: (): ClockSnapshot => ({ anchorMs: 0, anchorBeat: 0, bpm: 120, state: 'locked', barOffset }),
+    snapshot: (): ClockSnapshot => ({ anchorMs: 0, anchorBeat: 0, bpm: 120, state: state.clock, barOffset }),
     begin: () => { log.push('clock.begin'); },
     end: () => { log.push('clock.end'); },
     tap: () => { log.push('clock.tap'); },
@@ -730,6 +730,27 @@ test('the signals sent during a show carry the tempo and only what the show uses
   r.service.startShow();
   r.frame({ 'tempo.beat': 3, 'tempo.phase': .5, 'tempo.bpm': 128, 'audio.bass': .4 });
   assert.deepEqual(r.ofType('signals').at(-1)!.signals, { 'tempo.beat': 3, 'tempo.phase': .5, 'tempo.bpm': 128 });
+});
+
+test('during a show Meridian on the wall hears its sound, and whether the tempo stands on its own', () => {
+  const show = makeShow();
+  show.sources[0].project = { layers: [{ kind: 'meridian', visible: true, params: {} }] } as unknown as ShowDocument['sources'][number]['project'];
+  const r = rig(show);
+  r.service.startShow();
+  r.frame({ 'tempo.beat': 3, 'tempo.phase': .5, 'tempo.bpm': 128, 'audio.bass': .4, 'midi.cc.1': .2 });
+  // Following the music: the tempo does not stand on its own.
+  assert.deepEqual(r.ofType('signals').at(-1)!.signals, { 'tempo.beat': 3, 'tempo.phase': .5, 'tempo.bpm': 128, 'audio.bass': .4 });
+  // MIDI clock leading, or the operator's tap: it does.
+  r.state.clock = 'manual';
+  r.frame({ 'tempo.beat': 4, 'tempo.phase': 0, 'tempo.bpm': 128 });
+  assert.equal(r.ofType('signals').at(-1)!.signals['tempo.external'], 1);
+});
+
+test('a show without Meridian never sends whether the tempo stands on its own', () => {
+  const r = rig();
+  r.service.startShow();
+  r.frame({ 'tempo.beat': 3, 'tempo.phase': .5, 'tempo.bpm': 128 });
+  assert.equal('tempo.external' in r.ofType('signals').at(-1)!.signals, false);
 });
 
 test('the clock adapter reads the tempo clock in the shared time base', () => {

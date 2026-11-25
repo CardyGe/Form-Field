@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Stage } from '../live/Stage';
 import { validateLiveSettings } from '../live/settings';
 import { acceptSignals } from '../react/signals';
+import { setInstallation } from '../meridian/installation-state';
 
 const PREVIEW = [480, 270] as const;
 const PREVIEW_EVERY_MS = 100;
@@ -18,7 +19,7 @@ export default function LiveOutput() {
     let latest = validateLiveSettings(null);
     // The camera and person finding, reported to the operator: on every camera change and once a second.
     let source: import('../live/source').SourceState = { status: 'idle' };
-    const report = () => { const { people, roomCaptured } = stage.peopleReport(); bridge.sendState({ ...source, ...(people ? { people } : {}), roomCaptured }); };
+    const report = () => { const { people, roomCaptured } = stage.peopleReport(), meridian = stage.meridianReadout(); bridge.sendState({ ...source, ...(people ? { people } : {}), ...(meridian ? { meridian } : {}), roomCaptured }); };
     stage.onState = state => { source = state; report(); };
     const reporting = setInterval(report, 1000);
     const off = bridge.onMessage(message => {
@@ -28,6 +29,7 @@ export default function LiveOutput() {
       else if (message.type === 'retry') stage.retry(latest);
       else if (message.type === 'signals') { if (acceptSignals(message.signals)) stage.renderer.signals = message.signals; }
       else if (message.type === 'captureRoom') { stage.renderer.captureRoom(); setTimeout(report, 200); }
+      else if (message.type === 'installation') setInstallation(message);
     });
     // A small picture for the operator, taken straight after a frame is drawn, ten times a second.
     const small = new OffscreenCanvas(...PREVIEW), context = small.getContext('2d')!;

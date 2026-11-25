@@ -387,8 +387,11 @@ export class PerformService {
   }
 
   private sendSignals(): void {
-    const used = wallInputs(this.deps.show(), this.deps.live?.() ?? null, true);
-    this.send({ type: 'signals', signals: Object.fromEntries(Object.entries(this.signals).filter(([k]) => used.has(k))) });
+    const show = this.deps.show(), used = wallInputs(show, this.deps.live?.() ?? null, true);
+    // Meridian on the wall keeps the beat on its own while the show's tempo stands on its own (MIDI clock or the operator's
+    // tap), as Map tells it outside a show. Only a show that plays Meridian asks for it.
+    const signals = used.has('tempo.external') && this.deps.clock.snapshot(this.deps.now()).state === 'manual' ? { ...this.signals, 'tempo.external': 1 } : this.signals;
+    this.send({ type: 'signals', signals: Object.fromEntries(Object.entries(signals).filter(([k]) => used.has(k))) });
   }
 
   // ---- The queue ----

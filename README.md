@@ -2,6 +2,16 @@
 
 A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.17 alpha.
 
+## What's new: Meridian (alpha)
+
+- **Meridian (alpha):** a generative artwork and live instrument. Its default style, **Evolve**, is one calm, continuous structure of mostly white rings, arcs and spokes that slowly morphs through 15 forms and never resets. **Pulse** and **Dense** remain selectable. Treat it as alpha until feedback from its first party is in.
+- **Play it:** 8 macros (Density, Tension, Chaos, Speed, Weight, Glitch, Heat, Scale), Evolution, Hold shape, moves on keys N, H, D, C, M, R and 1-8, seed slots, A/B morph, searchable lockable groups and 10 Evolve presets.
+- **Music and Map:** the light follows audio bands and a smoothed beat, and the test beat is available. Meridian plays on mapped shapes, and moves work through Map links and MIDI learn.
+- **Meridian Live:** reacts to people (orbit, constellation, merge, throw, conduct and more). The camera picture never reaches the output.
+- **Flash guard:** on by default whenever a show contains Meridian, and it covers other instruments on that wall. The Meridian panel shows "Flash guard on"; turning it off needs confirmation, and the Map footer warns while it is off. Turning it off does not leave the wall unlimited: a basic whole-picture flash limiter runs on every wall and on the Live output, after Meridian's guard, but it is much coarser. It is not a certified photosensitivity test.
+- **Hardening:** a quality governor, recovery after graphics resets, an installation mode with autopilot, a text-only fault log, and a soak tool. See `docs/meridian-show-checklist.md` and `reports/Meridian soak.md`.
+- **Not yet tested:** no real projector, camera, room lighting, DJ audio or MIDI hardware, and no 12-hour run on the show Mac. A crashed wall is not reopened automatically.
+
 ## What's new in 0.17
 
 - **Map:** a new screen for projection mapping. Switch to **Map** in the header, draw shapes and drag their corners to fit the surfaces in the room, using a room photo, Snap, a test grid and Identify. The artwork shows on a projector while the controls stay on your screen, with Blackout.

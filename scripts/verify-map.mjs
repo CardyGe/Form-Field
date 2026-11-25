@@ -1199,6 +1199,433 @@ try {
     await studio.getByRole('region', { name: 'Map' }).waitFor();
   });
 
+  // ---- Meridian on the wall: music, moves and Wall Flash Guard ----
+  execFileSync(path.join(root, 'node_modules/.bin/tsx'), [path.join(root, 'scripts/meridian-map-show.ts'), out]);
+  const openFile = async name => {
+    await clearStage();
+    await nextPick(path.join(out, `meridian-${name}.formshow`));
+    await studio.getByTitle('Open a show file; it replaces the shapes here').click();
+    await studio.waitForFunction(() => document.querySelectorAll('.map-shape-list li:not(.map-group-row)').length > 0, null, { timeout: 8000 });
+  };
+  const meridianStats = async (test, what, ms = 12000) => {
+    const until = Date.now() + ms; let s;
+    while (Date.now() < until) { s = await output.evaluate(() => window.__mapStats); if (s && test(s)) return s; await sleep(150); }
+    throw new Error(`${what}: ${JSON.stringify({ meridian: s?.meridian, flashGuard: s?.flashGuard, failing: s?.failing })}`);
+  };
+  // Real wall pixels, every drawn frame, read as linear light and counted with the same rule as the export checks.
+  const captureFlashes = (ms, step = .1) => output.evaluate(async ([ms, step]) => {
+    const c = document.querySelector('canvas'), w = 160, h = 90, cols = 32, rows = 18, small = new OffscreenCanvas(w, h), x = small.getContext('2d', { willReadFrequently: true });
+    x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+    const linear = v => { const n = v / 255; return n <= .04045 ? n / 12.92 : ((n + .055) / 1.055) ** 2.4; }, table = Float32Array.from({ length: 256 }, (_, i) => linear(i));
+    const series = [], times = [], started = performance.now();
+    await new Promise(done => { const tick = now => {
+      x.drawImage(c, 0, 0, w, h);
+      const d = x.getImageData(0, 0, w, h).data, cells = new Float32Array(cols * rows), per = (w / cols) * (h / rows);
+      for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) { const at = (py * w + px) * 4; cells[Math.floor(py / h * rows) * cols + Math.floor(px / w * cols)] += (.2126 * table[d[at]] + .7152 * table[d[at + 1]] + .0722 * table[d[at + 2]]) / per; }
+      series.push(cells); times.push(now);
+      if (now - started < ms) requestAnimationFrame(tick); else done();
+    }; requestAnimationFrame(tick); });
+    const anchor = Float32Array.from(series[0]), way = new Int8Array(cols * rows), events = [];
+    let last = 0, biggest = 0, rise = 0, riseArea = 0, peak = 0, top = 0, bottom = Infinity;
+    for (const v of series) { let sum = 0; for (let i = 0; i < v.length; i++) sum += v[i]; sum /= v.length; top = Math.max(top, sum); bottom = Math.min(bottom, sum); }
+    for (let f = 1; f < series.length; f++) {
+      const v = series[f]; let up = 0, down = 0, jumped = 0;
+      for (let i = 0; i < v.length; i++) {
+        if (v[i] - series[f - 1][i] >= .15) jumped++;
+        biggest = Math.max(biggest, Math.abs(v[i] - series[f - 1][i])); rise = Math.max(rise, v[i] - series[f - 1][i]); peak = Math.max(peak, v[i]);
+        if (way[i] === 1 && v[i] > anchor[i]) anchor[i] = v[i]; if (way[i] === -1 && v[i] < anchor[i]) anchor[i] = v[i];
+        if (way[i] >= 0 && v[i] <= anchor[i] - step && v[i] < .8) { way[i] = -1; anchor[i] = v[i]; down++; }
+        else if (way[i] <= 0 && v[i] >= anchor[i] + step && anchor[i] < .8) { way[i] = 1; anchor[i] = v[i]; up++; }
+      }
+      riseArea = Math.max(riseArea, jumped / v.length);
+      const rose = up / v.length > .25, fell = down / v.length > .25;
+      if (rose && fell) { events.push(times[f]); last = 0; } else if (rose && last !== 1) { events.push(times[f]); last = 1; } else if (fell && last !== -1) { events.push(times[f]); last = -1; }
+    }
+    let worst = 0; for (let i = 0; i < events.length; i++) { let n = 0; for (let k = i; k < events.length && events[k] < events[i] + 1000; k++) n++; worst = Math.max(worst, n); }
+    return { changes: worst, flashes: Math.ceil(worst / 2), frames: series.length, fps: Math.round(series.length / ((times.at(-1) - times[0]) / 1000)), step: +biggest.toFixed(3), rise: +rise.toFixed(3), riseArea: +riseArea.toFixed(3), peak: +peak.toFixed(3), swing: +(top - bottom).toFixed(3) };
+  }, [ms, step]);
+  const meridianReport = {};
+  // The always-on wall flash limiter runs on every show. Only an unlimited baseline is filmed with it off, through a hook
+  // that exists only in the check window; it is always switched back on.
+  const wallLimiter = on => output.evaluate(on => window.__mapWallLimiter(on), on);
+  const unlimited = async run => { await wallLimiter(false); try { return await run(); } finally { await wallLimiter(true); } };
+  // An earlier check closed the projector window with Escape.
+  if (!app.windows().some(w => /#map-output/.test(w.url()))) {
+    const opened = app.waitForEvent('window', { timeout: 15000 });
+    await studio.getByRole('button', { name: 'Open output' }).click();
+    output = await opened;
+    await output.waitForURL(/#map-output/);
+    await output.waitForSelector('canvas');
+    await studio.getByRole('button', { name: 'Close output' }).waitFor({ timeout: 10000 });
+    output.on('pageerror', e => errors.push(String(e)));
+  }
+
+  await check('Meridian plays on the real wall, reacts to the test beat, and the operator window alone holds the sound input', async () => {
+    await openFile('calm');
+    await reactReady();
+    await meridianStats(s => s.meridian?.ev?.frames > 30 && s.meridian?.ev2 && s.meridian?.ev3, 'Evolve is not playing on the wall');
+    const before = await output.evaluate(() => window.__mapStats.prepares);
+    await react('testBeat', true);
+    const heard = await meridianStats(s => s.meridian?.ev?.status === 'locked' && s.meridian.ev.wave > .01, 'the Conductor did not lock to the test beat', 20000);
+    const after = await output.evaluate(() => window.__mapStats.prepares);
+    assert.deepEqual(after, before, 'signals made a source prepare again');
+    const inputs = await output.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput' && d.label).length);
+    assert.equal(inputs, 0, 'the wall window can see a labelled audio input');
+    const refused = await output.evaluate(async () => { try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(t => t.stop()); return false; } catch { return true; } });
+    assert.ok(refused, 'the wall window was given the microphone');
+    meridianReport.heard = heard.meridian.ev;
+  });
+
+  await check('proof picture: Evolve on several mapped shapes, reacting to the test beat', async () => {
+    await sleep(1500);
+    const shot = await sample(output, [[.18, .3]]);
+    await fs.mkdir(path.join(root, 'work/meridian'), { recursive: true });
+    await fs.writeFile(path.join(root, 'work/meridian/map-wall.png'), Buffer.from(shot.png, 'base64'));
+    const lit = await output.evaluate(() => { const c = document.querySelector('canvas'), o = new OffscreenCanvas(480, 270), x = o.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0, 480, 270); const d = x.getImageData(0, 0, 480, 270).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 90) n++; return n / (d.length / 4); });
+    assert.ok(lit > .004, `the wall is nearly empty (${lit})`);
+    meridianReport.proofLit = +lit.toFixed(4);
+  });
+
+  await check('two shapes sharing a source show the same picture', async () => {
+    const same = await output.evaluate(() => {
+      const c = document.querySelector('canvas'), o = new OffscreenCanvas(c.width, c.height), x = o.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0);
+      const box = (fx, fy, fw, fh) => x.getImageData(Math.round(fx * c.width), Math.round(fy * c.height), Math.round(fw * c.width), Math.round(fh * c.height)).data;
+      const a = box(60 / 1920, 60 / 1080, 600 / 1920, 540 / 1080), b = box(720 / 1920, 60 / 1080, 600 / 1920, 540 / 1080); let far = 0, lit = 0;
+      for (let i = 0; i < a.length; i += 4) { if (a[i] + a[i + 1] + a[i + 2] > 30) lit++; if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 36) far++; }
+      return { far: far / (a.length / 4), lit: lit / (a.length / 4) };
+    });
+    assert.ok(same.lit > .005, `nothing is lit (${same.lit})`);
+    assert.ok(same.far < .01, `${(same.far * 100).toFixed(2)} % of the pixels differ`);
+    meridianReport.shared = same;
+  });
+
+  await check('a calm Evolve wall is not dimmed by either limiter, with the test beat playing', async () => {
+    await wallLimiter(true);
+    const seen = [];
+    for (let i = 0; i < 16; i++) { const s = await output.evaluate(() => window.__mapStats.flashGuard); seen.push(s); await sleep(500); }
+    assert.ok(seen.every(s => s?.on), 'the guard is not on');
+    assert.ok(seen.every(s => !s.limiting && s.area < .2), `limited: ${JSON.stringify(seen.at(-1))}`);
+    const untouched = await output.evaluate(() => window.__mapGuardProbe());
+    assert.equal(untouched?.changedBytes, 0, `the limiter changed a calm picture: ${JSON.stringify(untouched)}`);
+    assert.equal(await studio.locator('.map-flash-guard').count(), 0, 'a calm wall says it is limiting');
+    // The always-on limiter, stacked after Meridian's guard, never corrected the calm wall: its output pass is then exact.
+    const wall = await output.evaluate(() => window.__mapStats.wallLimiter);
+    assert.ok(wall?.on && wall.lowestGain === 1 && wall.lowestRedScale === 1, `the always-on limiter dimmed a calm wall: ${JSON.stringify(wall)}`);
+    // A whole 1080p wall frame with both limiters, and with the always-on one off, for the cost of stacking them.
+    const both = await output.evaluate(() => window.__mapProbeFrame());
+    const guardOnly = await unlimited(() => output.evaluate(() => window.__mapProbeFrame()));
+    meridianReport.calm = { changedBytes: untouched.changedBytes, wallLowestGain: wall.lowestGain, wallLowestRedScale: wall.lowestRedScale, gpuMedianMs: untouched.medianMs, gpuWorstMs: untouched.worstMs, cpuMs: seen.at(-1).cpuMs, fps: (await output.evaluate(() => window.__mapStats.fps)), frame1080: { bothLimiters: both, guardOnly } };
+  });
+
+  await check('a whole graphics card reset: Evolve is back on the wall within 3 s, where it was, and the limiter is on again', async () => {
+    const picture = () => output.evaluate(() => { const c = document.querySelector('canvas'), o = new OffscreenCanvas(160, 90), x = o.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0, 160, 90); const d = x.getImageData(0, 0, 160, 90).data, l = new Float32Array(160 * 90); let lit = 0; for (let i = 0; i < l.length; i++) { l[i] = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 765; if (l[i] > .12) lit++; } return { l: Array.from(l), lit: lit / l.length }; });
+    const differ = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
+    const before = await picture();
+    await sleep(2500);
+    const drift = differ(before.l, (await picture()).l); // how far the wall moves by itself in 2.5 s
+    const start = await picture(), framesBefore = (await output.evaluate(() => window.__mapStats.meridian.ev)).frames;
+    const lost = output.evaluate(() => window.__mapLoseAll(400));
+    const started = Date.now(); let back = null, darkest = 1;
+    await lost;
+    const near = Math.max(drift * 2.5, .01);
+    while (Date.now() - started < 8000) { const p = await picture(); darkest = Math.min(darkest, p.lit); if (Date.now() - started > 450 && p.lit > start.lit * .5 && differ(start.l, p.l) <= near) { back = { ms: Date.now() - started, p }; break; } await sleep(100); }
+    assert.ok(back, `the wall did not come back near where it was within 8 s (darkest lit ${darkest})`);
+    await sleep(1600);
+    const after = await output.evaluate(() => window.__mapStats);
+    const moved = differ(start.l, back.p.l);
+    meridianReport.reset = { backMs: back.ms, moved: +moved.toFixed(4), drift: +drift.toFixed(4), darkestLit: +darkest.toFixed(4), framesBefore, framesAfter: after.meridian.ev.frames, guard: after.flashGuard, failing: after.failing };
+    assert.ok(back.ms <= 3000, `back after ${back.ms} ms`);
+    assert.ok(after.meridian.ev.frames > framesBefore, `Evolve started again rather than carrying on: ${framesBefore} → ${after.meridian.ev.frames}`);
+    assert.ok(after.flashGuard?.on && after.flashGuard.failed === null, `guard after the reset: ${JSON.stringify(after.flashGuard)}`);
+  });
+
+  await check('a MIDI note fires Drop once and Hold once through their links', async () => {
+    const before = (await output.evaluate(() => window.__mapStats.meridian.ev));
+    await react('midi', [0x90, 60, 127]); await sleep(1300);
+    await react('midi', [0x80, 60, 0]); await sleep(1300);
+    const dropped = await meridianStats(s => s.meridian.ev.drops === before.drops + 1, 'Drop did not fire exactly once', 4000);
+    await react('midi', [0x90, 62, 127]); await sleep(1300);
+    await react('midi', [0x80, 62, 0]); await sleep(1300);
+    const held = await meridianStats(s => s.meridian.ev.holds === before.holds + 1, 'Hold did not fire exactly once', 4000);
+    assert.equal(held.meridian.ev.drops, dropped.meridian.ev.drops);
+  });
+
+  await check('Freeze holds the Conductor and evolution; a scene of the same source does not jump it; Blackout wins', async () => {
+    const freeze = studio.getByRole('button', { name: 'Freeze', exact: true });
+    await freeze.click(); await sleep(1300);
+    const a = (await output.evaluate(() => window.__mapStats.meridian.ev)); await sleep(1500);
+    const b = (await output.evaluate(() => window.__mapStats.meridian.ev));
+    assert.equal(b.beats, a.beats, 'the Conductor moved under Freeze'); assert.equal(b.phase, a.phase, 'evolution moved under Freeze');
+    await freeze.click(); await sleep(1300);
+    const c = (await output.evaluate(() => window.__mapStats.meridian.ev));
+    assert.ok(c.beats > b.beats && c.beats - b.beats < 8, `after Freeze the beat went from ${b.beats} to ${c.beats}`);
+    const prepares = await output.evaluate(() => window.__mapStats.prepares);
+    const add = studio.getByRole('button', { name: '+ Scene' });
+    await add.click(); await add.click(); await sleep(1500);
+    const d = (await output.evaluate(() => window.__mapStats.meridian.ev));
+    assert.deepEqual(await output.evaluate(() => window.__mapStats.prepares), prepares, 'a scene change prepared the source again');
+    assert.ok(d.beats > c.beats && d.frames > c.frames, 'the source stopped at the scene change');
+    const blackout = studio.getByRole('button', { name: 'Blackout', exact: true });
+    await blackout.click(); await sleep(400);
+    const dark = await sample(output, [[.18, .3], [.5, .8]]);
+    assert.ok(dark.grid.every(p => near(p, BLACK, 0)), 'Blackout left light on the wall');
+    await blackout.click(); await sleep(300);
+    await react('testBeat', false);
+  });
+
+  await check('a mixed Dense, Pulse and Evolve strobe is brought within the limit in real wall pixels, inside the stage corners', async () => {
+    await openFile('strobe-off');
+    await meridianStats(s => s.meridian?.dense && s.meridian?.pulse && s.meridian?.evolve?.frames > 10, 'the strobe show is not playing');
+    // The baseline has no limiter at all: Meridian's guard is off in this show and the always-on limiter is switched off.
+    const off = await unlimited(async () => { await sleep(800); return captureFlashes(4000); });
+    assert.ok(off.flashes >= 4, `the check is not strobing without any limiter: ${JSON.stringify(off)}`);
+    assert.match(await studio.locator('.map-flash-guard').textContent(), /Flash guard is off/);
+    // Counted from before the strobe starts, so the guard's first second, when it has no rhythm to go on, is included.
+    await clearStage(); await sleep(700);
+    const counting = captureFlashes(10000);
+    await openFile('strobe-on');
+    await meridianStats(s => s.meridian?.dense && s.meridian?.pulse && s.meridian?.evolve?.frames > 10 && s.flashGuard?.on, 'the guarded strobe show is not playing');
+    const on = await counting;
+    assert.ok(on.flashes <= 3, `${on.flashes} flashes a second reach the wall with the guard on: ${JSON.stringify(on)}`);
+    // The onset count above holds the show's own first bright frame, which no guard can know is coming. Whether the dim
+    // itself adds a harder step is judged once the strobe is under way, as it is in the unguarded capture.
+    const steady = await captureFlashes(4000);
+    assert.ok(steady.flashes <= 3, `${steady.flashes} flashes a second once under way: ${JSON.stringify(steady)}`);
+    // Content under the flash area passes by design, so the first frame is judged by how much of the wall jumps at once.
+    assert.ok(on.riseArea < .25, `the first bright frame reached the wall over the flash area: ${JSON.stringify(on)}`);
+    assert.ok(steady.step <= off.step + .02, `the guard made a harder step (${off.step} to ${steady.step})`);
+    const stats = await meridianStats(s => s.flashGuard?.limiting, 'the guard did not report limiting');
+    meridianReport.strobeWallLimiter = stats.wallLimiter;
+    await studio.locator('.map-flash-guard', { hasText: 'Flash guard: limiting' }).waitFor({ timeout: 4000 });
+    const edge = await sample(output, [[.01, .5], [.99, .5], [.5, .01], [.5, .99]]);
+    assert.ok(edge.colours.every(p => near(p, BLACK, 0)), `the dim touched the bent stage's outside: ${JSON.stringify(edge.colours)}`);
+    await studio.getByRole('button', { name: 'Blackout', exact: true }).click(); await sleep(300);
+    const dark = await sample(output, [[.2, .5], [.5, .5], [.8, .5]]);
+    assert.ok(dark.colours.every(p => near(p, BLACK, 0)), 'Blackout did not win over the guard');
+    await studio.getByRole('button', { name: 'Blackout', exact: true }).click();
+    meridianReport.measureCost = await output.evaluate(() => window.__mapGuardProbe());
+    meridianReport.strobe = { off, onset: on, steady, area: stats.flashGuard.area, cpuMs: stats.flashGuard.cpuMs, wallFps: stats.fps, level: stats.level };
+  });
+
+  // Drives the wash shape from the studio window as a real controller would: bursts of pulses, then a gap.
+  const playBursts = pattern => studio.evaluate(({ pulses, hz, gap }) => {
+    const start = performance.now(), burst = pulses / hz, cycle = burst + gap; let last = -1;
+    clearInterval(window.__burst);
+    window.__burst = setInterval(() => {
+      const t = ((performance.now() - start) / 1000) % cycle, on = t < burst && (t * hz) % 1 < .5 ? 1 : 0;
+      if (on !== last) { last = on; window.__studioTest.react.midi([0xb0, 21, on ? 127 : 0]); }
+    }, 2);
+  }, pattern);
+  const stopBursts = async () => { await studio.evaluate(() => clearInterval(window.__burst)); await react('midi', [0xb0, 21, 0]); };
+  const BURSTS = [{ pulses: 5, hz: 15, gap: .5 }, { pulses: 4, hz: 10, gap: .5 }, { pulses: 3, hz: 10, gap: .35 }, { pulses: 3, hz: 5, gap: .35 }, { pulses: 40, hz: 5, gap: 0 }, { pulses: 80, hz: 10, gap: 0 }, { pulses: 120, hz: 15, gap: 0 }];
+
+  await check('repeated bursts stay within the limit in real wall pixels, from their first burst', async () => {
+    await openFile('burst-off');
+    await reactReady();
+    await meridianStats(s => s.meridian?.ev?.frames > 10, 'the burst show is not playing');
+    // Filmed with no limiter at all, as the strobe baseline is.
+    const raw = await unlimited(async () => { await playBursts(BURSTS[3]); await sleep(500); try { return await captureFlashes(4000); } finally { await stopBursts(); } });
+    assert.ok(raw.changes > 6, `the check is not over the limit without any limiter: ${JSON.stringify(raw)}`);
+    meridianReport.bursts = { raw };
+    await openFile('burst-on');
+    await meridianStats(s => s.meridian?.ev?.frames > 10 && s.flashGuard?.on, 'the guarded burst show is not playing');
+    for (const pattern of BURSTS) {
+      await stopBursts(); await sleep(1600);
+      const counting = captureFlashes(8000);
+      await playBursts(pattern);
+      const seen = await counting;
+      await stopBursts();
+      meridianReport.bursts[`${pattern.pulses}x${pattern.hz}Hz/${pattern.gap}s`] = seen;
+      assert.ok(seen.changes <= 6, `${JSON.stringify(pattern)}: ${JSON.stringify(seen)}`);
+      assert.ok(seen.rise <= .18, `the first bright frame got through: ${JSON.stringify(seen)}`);
+    }
+    // Left and right halves in antiphase at 5 Hz, on their own two controls.
+    await openFile('halves');
+    await meridianStats(s => s.meridian?.ev?.frames > 10 && s.flashGuard?.on, 'the halves show is not playing');
+    await studio.evaluate(() => { const start = performance.now(); let last = -1; clearInterval(window.__burst); window.__burst = setInterval(() => { const on = ((performance.now() - start) / 1000 * 5) % 1 < .5 ? 1 : 0; if (on !== last) { last = on; window.__studioTest.react.midi([0xb0, 21, on ? 127 : 0]); window.__studioTest.react.midi([0xb0, 22, on ? 0 : 127]); } }, 2); });
+    await sleep(500);
+    const halves = await captureFlashes(5000);
+    await stopBursts(); await react('midi', [0xb0, 22, 0]);
+    meridianReport.bursts.antiphase = halves;
+    assert.ok(halves.changes <= 6, `antiphase halves: ${JSON.stringify(halves)}`);
+    // Legal fast beats stay visible: never pinned dark.
+    await openFile('burst-on');
+    await meridianStats(s => s.meridian?.ev?.frames > 10 && s.flashGuard?.on, 'the beat show is not playing');
+    meridianReport.beats = {};
+    for (const bpm of [120, 128, 140, 150, 160, 174]) {
+      await sleep(600);
+      await studio.evaluate(bpm => { const start = performance.now(), period = 60 / bpm; let last = -1; clearInterval(window.__burst); window.__burst = setInterval(() => { const on = ((performance.now() - start) / 1000) % period < .12 ? 1 : 0; if (on !== last) { last = on; window.__studioTest.react.midi([0xb0, 21, on ? 127 : 0]); } }, 2); }, bpm);
+      await sleep(800);
+      const beat = await captureFlashes(4000);
+      await stopBursts();
+      meridianReport.beats[bpm] = { changes: beat.changes, peak: beat.peak, swing: beat.swing };
+      assert.ok(beat.changes <= 6, `${bpm} BPM: ${JSON.stringify(beat)}`);
+      assert.ok(beat.swing >= .05, `${bpm} BPM has no visible beat: ${JSON.stringify(beat)}`);
+    }
+  });
+
+  await check('fine checkers and stripes, offsets, red, Blackout, slow ramps under a grid, 1 and 2 px shakes, frame rates and legal beats hold on the real limiter shaders, counted on output pixels', async () => {
+    const lab = await output.evaluate(() => window.__mapLimiterLab());
+    meridianReport.limiterLab = Object.fromEntries(Object.entries(lab).map(([name, r]) => [name, { fps: r.fps, rawWorst: r.raw?.worst ?? null, rawTogether: r.raw ? +r.raw.together.toFixed(3) : null, worst: r.limited.worst, together: +r.limited.together.toFixed(3), peak: +r.limited.peak.toFixed(3), swing: +r.limited.swing.toFixed(3), redRaw: r.raw?.redWorst ?? null, red: r.limited.redWorst, redTogether: +r.limited.redTogether.toFixed(3), litInBlack: r.limited.litInBlack, blackFrames: r.limited.blackFrames, untouched: r.calm ? r.raw.sum === r.limited.sum : undefined, kept: r.busy ? +(r.limited.mean / r.raw.mean).toFixed(3) : undefined }]));
+    assert.ok(Object.keys(lab).length >= 350, `only ${Object.keys(lab).length} patterns ran`);
+    for (const [name, r] of Object.entries(lab)) {
+      if (r.busy) {
+        // Soft moving detail that is not flashing keeps its light. High-contrast fine detail really does exceed the limit at each pixel, and is recorded.
+        if (/soft (8|24) px texture scrolling/.test(name)) assert.ok(r.limited.mean / r.raw.mean >= .9, `${name}: pinned to ${(r.limited.mean / r.raw.mean * 100).toFixed(0)}% of its light`);
+        continue;
+      }
+      if (r.calm) { assert.equal(r.limited.sum, r.raw.sum, `${name}: the limiter changed calm content`); continue; }
+      if (r.beat) {
+        assert.ok(r.limited.worst <= 6, `${name}: ${r.limited.worst} changes`);
+        assert.ok(r.limited.swing >= .05, `${name}: no visible beat (swing ${r.limited.swing})`);
+        continue;
+      }
+      // Patterns just over the limit may land on exactly six changes at a low frame rate, so their controls are reported only.
+      if (r.raw && !name.startsWith('edge rate')) assert.ok(r.raw.worst > 6 || r.raw.redWorst > 4, `${name}: the control does not flash (${r.raw.worst})`);
+      assert.ok(r.limited.together < .25, `${name}: ${(r.limited.together * 100).toFixed(1)}% of the wall over the limit, worst ${r.limited.worst}`);
+      assert.ok(r.limited.redTogether < .25, `${name}: ${(r.limited.redTogether * 100).toFixed(1)}% of the wall over the red limit, worst ${r.limited.redWorst}`);
+      assert.equal(r.limited.litInBlack, 0, `${name}: light during Blackout`);
+    }
+  });
+
+  await check('Blackout hammered over a bright frozen wall is counted and limited, and still goes black at once', async () => {
+    await stopBursts(); await react('midi', [0xb0, 21, 127]);
+    await sleep(1600);
+    const freeze = studio.getByRole('button', { name: 'Freeze', exact: true }), blackout = studio.getByRole('button', { name: 'Blackout', exact: true });
+    await freeze.click(); await sleep(300);
+    const counting = captureFlashes(5000);
+    await studio.evaluate(() => { const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Blackout'); let n = 0; window.__hammer = setInterval(() => { if (n++ < 40) b.click(); else clearInterval(window.__hammer); }, 100); });
+    const seen = await counting;
+    await studio.evaluate(() => clearInterval(window.__hammer));
+    meridianReport.frozenBlackout = seen;
+    assert.ok(seen.changes <= 6, `hammered Blackout under Freeze: ${JSON.stringify(seen)}`);
+    if (await blackout.getAttribute('aria-pressed') === 'true') { await blackout.click(); await sleep(200); }
+    await blackout.click(); await sleep(150);
+    const dark = await sample(output, [[.2, .2], [.8, .8]]);
+    assert.ok(dark.colours.every(p => near(p, BLACK, 0)), `Blackout under Freeze left ${JSON.stringify(dark.colours)}`);
+    await blackout.click(); await freeze.click(); await react('midi', [0xb0, 21, 0]);
+  });
+
+  await check('after the wall\'s graphics card resets, the shared limiter is built again and still holds hammered Blackout', async () => {
+    const lost = await output.evaluate(async () => {
+      const canvas = document.querySelector('canvas'), gl = canvas.getContext('webgl2'), ext = gl.getExtension('WEBGL_lose_context');
+      const restored = new Promise(r => canvas.addEventListener('webglcontextrestored', r, { once: true }));
+      ext.loseContext(); await new Promise(r => setTimeout(r, 400)); ext.restoreContext(); await restored;
+      return true;
+    });
+    assert.ok(lost);
+    await sleep(1600);
+    const guard = await output.evaluate(() => window.__mapStats.flashGuard);
+    assert.ok(guard?.on && guard.failed === null, `guard after the reset: ${JSON.stringify(guard)}`);
+    const freeze = studio.getByRole('button', { name: 'Freeze', exact: true }), blackout = studio.getByRole('button', { name: 'Blackout', exact: true });
+    await react('midi', [0xb0, 21, 127]); await sleep(1600);
+    await freeze.click(); await sleep(300);
+    const counting = captureFlashes(5000);
+    await studio.evaluate(() => { const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Blackout'); let n = 0; window.__hammer = setInterval(() => { if (n++ < 40) b.click(); else clearInterval(window.__hammer); }, 100); });
+    const seen = await counting;
+    await studio.evaluate(() => clearInterval(window.__hammer));
+    meridianReport.frozenBlackoutAfterReset = seen;
+    assert.ok(seen.changes <= 6, `hammered Blackout after the reset: ${JSON.stringify(seen)}`);
+    if (await blackout.getAttribute('aria-pressed') === 'true') { await blackout.click(); await sleep(200); }
+    await freeze.click(); await react('midi', [0xb0, 21, 0]);
+  });
+
+  await check('reopening the same show ends a linked Reseed, but a scene change keeps it', async () => {
+    await openFile('calm');
+    await meridianStats(s => s.meridian?.ev?.frames > 10, 'the show is not playing');
+    await react('midi', [0x90, 64, 127]); await sleep(400); await react('midi', [0x80, 64, 0]);
+    await meridianStats(s => s.meridian.ev.linkedSeed, 'Reseed did not take');
+    const add = studio.getByRole('button', { name: '+ Scene' });
+    await add.click(); await add.click(); await sleep(1300);
+    assert.equal((await output.evaluate(() => window.__mapStats.meridian.ev)).linkedSeed, true, 'a scene change ended the Reseed');
+    const framesBefore = (await output.evaluate(() => window.__mapStats.meridian.ev)).frames;
+    await nextPick(path.join(out, 'meridian-calm.formshow'));
+    studio.once('dialog', d => d.accept());
+    await studio.getByTitle('Open a show file; it replaces the shapes here').click();
+    const after = await meridianStats(s => s.meridian?.ev && !s.meridian.ev.linkedSeed, 'the Reseed survived reopening the show');
+    assert.ok(after.meridian.ev.frames > framesBefore, 'the source restarted instead of carrying on');
+  });
+
+  await check('a show with no Meridian has no Meridian guard, strobes without a limiter, and the always-on limiter holds it', async () => {
+    await openFile('plain');
+    await reactReady();
+    await meridianStats(s => s.flashGuard === null, 'the guard is present in a show without Meridian');
+    const timer = await studio.evaluate(() => { let on = false; window.__plainStrobe = setInterval(() => { on = !on; window.__studioTest.react.midi([0xb0, 20, on ? 127 : 0]); }, 100); return true; });
+    assert.ok(timer);
+    let raw, seen, wall;
+    try {
+      raw = await unlimited(async () => { await sleep(600); return captureFlashes(3000); });
+      await wallLimiter(true);
+      await sleep(1500);
+      seen = await captureFlashes(3000);
+      wall = await output.evaluate(() => window.__mapStats.wallLimiter);
+    } finally { await studio.evaluate(() => clearInterval(window.__plainStrobe)); }
+    assert.ok(raw.flashes >= 4, `the plain strobe did not run without a limiter: ${JSON.stringify(raw)}`);
+    assert.ok(wall.on && (wall.lowestGain < 1 || wall.lowestRedScale < 1), `the always-on limiter did not act: ${JSON.stringify(wall)}`);
+    assert.ok(seen.flashes <= 3, `the always-on limiter let the plain strobe through: ${JSON.stringify(seen)}`);
+    // A steady full-white shape comes back exactly white once the limiter has let go.
+    await react('midi', [0xb0, 20, 127]);
+    await meridianStats(s => s.wallLimiter?.gain === 1 && s.wallLimiter?.redScale === 1, 'the always-on limiter did not let go of a steady picture', 15000);
+    await sleep(300);
+    const full = await sample(output, [[.5, .5]]);
+    assert.deepEqual(full.colours[0], [255, 255, 255], 'a full-brightness white shape is not exactly white');
+    assert.equal((await output.evaluate(() => window.__mapStats.flashGuard)), null);
+    assert.equal(await studio.locator('.map-flash-guard').count(), 0);
+    meridianReport.plain = { unlimited: raw, limited: seen, wall };
+    await react('midi', [0xb0, 20, 0]);
+    await clearStage();
+  });
+  await check('a show with no Meridian (Oil and Liquid) comes back from lost graphics contexts: never black, never frozen, no guard', async () => {
+    await openFile('oil-liquid');
+    await meridianStats(s => s.flashGuard === null && s.failing.length === 0 && s.prepares?.oil >= 1 && s.prepares?.liquid >= 1, 'Oil and Liquid are not playing');
+    // Mean light and a small picture of each half, so a frozen half shows up even while the other moves.
+    const picture = () => output.evaluate(() => {
+      const c = document.querySelector('canvas'), o = new OffscreenCanvas(160, 90), x = o.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0, 160, 90);
+      const d = x.getImageData(0, 0, 160, 90).data, halves = [[], []], mean = [0, 0];
+      for (let py = 9; py < 81; py++) for (let px = 0; px < 160; px++) { if (px > 74 && px < 86) continue; const side = px < 80 ? 0 : 1, at = (py * 160 + px) * 4, v = (d[at] + d[at + 1] + d[at + 2]) / 765; halves[side].push(v); mean[side] += v; }
+      return { halves, mean: mean.map((m, i) => m / halves[i].length) };
+    });
+    const differ = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
+    await sleep(2500);
+    const moving = async label => {
+      const a = await picture(); await sleep(1000); const b = await picture();
+      const moved = [differ(a.halves[0], b.halves[0]), differ(a.halves[1], b.halves[1])];
+      assert.ok(moved.every(m => m > 1e-4), `${label}: a half is frozen (${moved.map(m => m.toFixed(5)).join(', ')})`);
+      return { moved, mean: b.mean };
+    };
+    const before = await moving('before');
+    assert.ok(before.mean.every(m => m > .01), `Oil and Liquid are dark before the reset: ${before.mean}`);
+    const statsBefore = await output.evaluate(() => window.__mapStats);
+    // Each instrument loses its graphics context; the wall's own stays. Their shapes hold the last picture meanwhile.
+    const lost = output.evaluate(() => window.__mapLoseAll(400, true));
+    const started = Date.now(); let darkest = [1, 1];
+    while (Date.now() - started < 3000) { const p = await picture(); darkest = darkest.map((d, i) => Math.min(d, p.mean[i] / before.mean[i])); await sleep(80); }
+    await lost;
+    await sleep(1200);
+    const afterInstruments = await moving('after the instruments came back');
+    const statsInstruments = await output.evaluate(() => window.__mapStats);
+    assert.ok(darkest.every(d => d > .4), `a half went dark while its instrument was lost (darkest ${darkest.map(d => d.toFixed(3)).join(', ')} of its light)`);
+    assert.ok(statsInstruments.contextLosses >= statsBefore.contextLosses + 2, `the instruments did not lose their contexts: ${statsBefore.contextLosses} → ${statsInstruments.contextLosses}`);
+    assert.deepEqual(statsInstruments.failing, [], 'an instrument failed after the reset');
+    assert.equal(statsInstruments.flashGuard, null, 'a guard appeared in a show without Meridian');
+    // A whole graphics card reset, the stage too: back and moving within 3 s.
+    const whole = output.evaluate(() => window.__mapLoseAll(400));
+    const wholeStart = Date.now(); let back = null;
+    await whole;
+    while (Date.now() - wholeStart < 8000) { const p = await picture(); if (p.mean.every((m, i) => m > before.mean[i] * .5)) { back = Date.now() - wholeStart; break; } await sleep(100); }
+    assert.ok(back !== null && back <= 3000, `the wall was not back within 3 s of a whole reset (${back} ms)`);
+    await sleep(1200);
+    const afterWhole = await moving('after a whole reset');
+    const statsWhole = await output.evaluate(() => window.__mapStats);
+    assert.deepEqual(statsWhole.failing, [], 'an instrument failed after the whole reset');
+    assert.equal(statsWhole.flashGuard, null);
+    assert.equal(await studio.locator('.map-flash-guard').count(), 0);
+    meridianReport.nonMeridianReset = { darkestShare: darkest.map(d => +d.toFixed(3)), before, afterInstruments, wholeBackMs: back, afterWhole, contextLosses: statsWhole.contextLosses, restarts: statsWhole.restarts };
+    await clearStage();
+  });
+  await fs.writeFile(path.join(out, 'meridian-wall-report.json'), JSON.stringify(meridianReport, null, 2));
+  console.log('meridian wall', JSON.stringify(meridianReport));
+
   await check('no page errors', async () => { assert.deepEqual(errors, []); });
 } catch (error) {
   results.push(`FAIL  setup\n      ${String(error.stack || error).split('\n').slice(0, 3).join(' | ')}`);

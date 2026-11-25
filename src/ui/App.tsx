@@ -6,7 +6,7 @@ import { supportsPrint } from '../rendering/print-screen';
 import { INSTRUMENTS, isInstrument, PROJECTION_LOOK_IDS } from '../core/instruments';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from 'react';
 import type { ExportFormat, Supersample, ExportJob, ExportProgress, Layer, LayerKind, Modulation, ParameterDefinition, Project, StudioStatus } from '../shared/types';
-import { applyPreset, createLayer, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FRACTAL_FAMILIES, FRACTAL_VARIANTS, FRACTAL_PROJECTION_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported } from '../core/project';
+import { applyPreset, assertImportableImage, createLayer, MAX_IMPORT_SIDE, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FRACTAL_FAMILIES, FRACTAL_VARIANTS, FRACTAL_PROJECTION_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported } from '../core/project';
 import { frameCount, phaseAtFrame, sampleModulation } from '../core/timeline';
 import { isEvolving } from '../core/playback';
 import { SurfaceEditor } from './SurfaceEditor';
@@ -22,6 +22,7 @@ import oilThumb from './assets/oil.png';
 import liquidThumb from './assets/liquid.png';
 import smokeCloudThumb from './assets/smokecloud.png';
 import scopeThumb from './assets/scope.png';
+import meridianThumb from './assets/meridian.png';
 import super8Thumb from './assets/super8.png';
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import { Preview } from './Preview';
@@ -37,7 +38,11 @@ import { performService } from '../perform/service';
 import { projectForStudioSave, stashStudio, type ShapeEdit } from './studio-edit';
 import MapPanel from './MapPanel';
 import PerformPanel from './PerformPanel';
+import { MeridianControls, useMeridianPerformance } from './MeridianControls';
+import { listensToMusic, motionParameters } from '../meridian/panel';
+import { motionIgnored } from '../meridian/parameters';
 import { sameCanvasValues } from '../core/canvas-interaction';
+import { loadInstallation } from './installation';
 
 const TAU = Math.PI * 2;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -136,6 +141,7 @@ const instrumentCatalogue = [
   { kind: 'liquid', name: 'Liquid Light', caption: 'Oil droplets · dye · projector', image: liquidThumb, label: 'Add liquid light' },
   { kind: 'scope', name: 'Oscilloscope', caption: 'Glowing line · signal · beam', image: scopeThumb, label: 'Add oscilloscope' },
   { kind: 'smokecloud', name: 'Smoke Cloud', caption: 'Fluid smoke · fine points · ring', image: smokeCloudThumb, label: 'Add smoke cloud' },
+  { kind: 'meridian', name: 'Meridian', caption: 'Rings · spokes · living light', image: meridianThumb, label: 'Add Meridian' },
   { kind: 'graphic', name: 'Graphic Patterns', caption: 'Waves · circles · tiles · paths', image: graphicThumb, label: 'Add graphic patterns' },
   ...INSTRUMENTS.map(info => ({ kind: info.kind, name: info.name, caption: info.description, image: projectionThumbnails[`./assets/projection/${startingLooks[info.kind]}.png`]??instrumentThumbnails[`./assets/instruments/${info.kind}.png`], label: `Add ${info.name}` })),
 ] satisfies {kind: LayerKind; name: string; caption: string; image: string; label: string}[];
@@ -169,17 +175,21 @@ export default function App() {
   const [playing, setPlaying] = useState(true), phase = useRef(0), rendererRef = useRef<StudioRenderer | null>(null);
   /** Live is a separate screen over the studio; the studio pauses underneath it. */
   const [mode, setMode] = useState<'studio' | 'live' | 'map' | 'perform'>('studio');
+  // Installation mode: launched with it on, the app goes straight to the show it ran last (Map or Live), which opens its output.
+  useEffect(() => { void loadInstallation().then(settings => { if (settings?.on) setMode(settings.surface); }); }, []);
   const [emberSound, setEmberSound] = useState<ReactivityEngine | null>(null);
   const emberMeters = useMemo(() => new MeterStore(), []);
   const hasEmber = project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1);
+  const hasMeridian = project.layers.some(listensToMusic);
+  const flashGuardOff = project.layers.some(l => l.visible && l.kind === 'meridian' && (l.params.safetyFlashGuard ?? 1) < .5);
   useEffect(() => {
-    if (!emberSound || mode !== 'studio' || !hasEmber) return;
+    if (!emberSound || mode !== 'studio' || !(hasEmber || hasMeridian)) return;
     let shown = 0;
     return emberSound.subscribe(signals => {
       const now = performance.now();
       if (now - shown > 100) { shown = now; emberMeters.set(signals); }
     });
-  }, [emberSound, emberMeters, mode, hasEmber]);
+  }, [emberSound, emberMeters, mode, hasEmber, hasMeridian]);
   /** A Map shape's composition being edited here. Studio's own project is set aside meanwhile, and saved, not this one. */
   const [shapeEdit, setShapeEdit] = useState<ShapeEdit | null>(null);
   const shapeEditRef = useRef<ShapeEdit | null>(null);
@@ -195,9 +205,9 @@ export default function App() {
   const selected = project.layers.find(l => l.id === selectedId) ?? project.layers[0];
   const allDefinitions = selected ? parameterDefinitions(selected.kind) : [];
   const definitions = selected ? visibleParameterDefinitions(selected) : [];
-  const selectedModKey = modKey === 'opacity' || modKey.startsWith('transform.') || definitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation) || (selected?.modulations[modKey] && allDefinitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation)) ? modKey : definitions.find(d => d.step !== 1 && !d.preparation)?.key ?? 'opacity';
+  const selectedModKey = modKey === 'opacity' || modKey.startsWith('transform.') || motionParameters(definitions).some(d => d.key === modKey && d.step !== 1 && !d.preparation && !d.structural) || (selected?.modulations[modKey] && allDefinitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation)) ? modKey : motionParameters(definitions).find(d => d.step !== 1 && !d.preparation && !d.structural)?.key ?? 'opacity';
   const modulation = selected?.modulations[selectedModKey];
-  const effectivePresetFilter = presetFilter === 'selected' ? selected?.kind === 'surface' || selected?.kind === 'fractal' || selected?.kind === 'graphic' ? `${selected.kind}-${Math.round(selected.params.style ?? 0)}` : selected?.kind === 'sculpture' ? `sculpture-${Math.round(selected.params.form ?? 0)}` : selected && ['oil', 'liquid', 'scope', 'super8'].includes(selected.kind) ? selected.kind : selected && isInstrument(selected.kind) ? selected.kind : 'all' : presetFilter;
+  const effectivePresetFilter = presetFilter === 'selected' ? selected?.kind === 'surface' || selected?.kind === 'fractal' || selected?.kind === 'graphic' ? `${selected.kind}-${Math.round(selected.params.style ?? 0)}` : selected?.kind === 'sculpture' ? `sculpture-${Math.round(selected.params.form ?? 0)}` : selected && ['oil', 'liquid', 'scope', 'super8', 'meridian'].includes(selected.kind) ? selected.kind : selected && isInstrument(selected.kind) ? selected.kind : 'all' : presetFilter;
   const visiblePresets = PRESETS.filter(preset => effectivePresetFilter === 'projection' && PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'fractal-projection' && FRACTAL_PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'flat' && FLAT_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'all' || preset.kind === effectivePresetFilter || `${preset.kind}-${preset.kind === 'sculpture' ? preset.params.form : preset.params.style}` === effectivePresetFilter);
   const searchedFinishes = FINISH_LOOKS.filter(f => `${f.name} ${f.description}`.toLowerCase().includes(libraryQuery));
   const searchedPresets = visiblePresets.filter(p => `${p.name} ${p.description} ${kindLabels[p.kind]}`.toLowerCase().includes(libraryQuery));
@@ -231,6 +241,7 @@ export default function App() {
   }, [notify]);
   const edit = (fn: (p: Project) => Project) => replace(fn(projectRef.current));
   const editLayer = (fn: (l: Layer) => Layer, id = selected?.id) => { if (id) edit(p => { const layers=p.layers.map(l=>{if(l.id!==id)return l;const next=fn(l);if(next.surface?.source==='mask'&&next.mask.kind!=='image')delete next.surface;return next;}); return {...p,schemaVersion:layers.some(l=>l.surface||Object.values(l.modulations).some(m=>m.range))?2:p.schemaVersion,layers}; }); };
+  const meridianPerformance = useMeridianPerformance({ layer: selected, enabled: mode === 'studio' && !exportOpen, edit: (change, id) => editLayer(change, id), notify });
   const beginGesture = () => { if (!gesture.current) { history.current.push(projectRef.current); history.current = history.current.slice(-80); future.current = []; gesture.current = true; } };
   const endGesture = () => { gesture.current = false; setHistoryRevision(n => n + 1); };
   const undo = () => { const prev = history.current.pop(); if (prev) { future.current.push(projectRef.current); replace(prev, false); } };
@@ -245,13 +256,13 @@ export default function App() {
   // Recorded like any edit, so Undo brings the previous composition back.
   const newProject = async () => { try {
     const next = createProject();
-    replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath('');
+    rendererRef.current?.resetMeridianPerformance(); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath('');
     await window.studio?.forgetProjectPath();
     notify('New composition. Undo brings the previous one back.');
   } catch (e) { reportError(String(e)); } };
   const open = async () => { try {
-    if (window.studio) { const result = await window.studio.openProject(); if (result.project) { const next = validateProject(result.project); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath(result.path ?? ''); } }
-    else { const input = document.createElement('input'); input.type = 'file'; input.accept = '.formfield,.json'; input.onchange = async () => { try { const file = input.files?.[0]; if (file) { const next = validateProject(JSON.parse(await file.text())); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; } } catch (e) { reportError(String(e)); } }; input.click(); }
+    if (window.studio) { const result = await window.studio.openProject(); if (result.project) { const next = validateProject(result.project); rendererRef.current?.resetMeridianPerformance(); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath(result.path ?? ''); } }
+    else { const input = document.createElement('input'); input.type = 'file'; input.accept = '.formfield,.json'; input.onchange = async () => { try { const file = input.files?.[0]; if (file) { const next = validateProject(JSON.parse(await file.text())); rendererRef.current?.resetMeridianPerformance(); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; } } catch (e) { reportError(String(e)); } }; input.click(); }
   } catch (e) { reportError(String(e)); } };
 
   useEffect(() => { let alive = true; startupTask.current = (async () => {
@@ -265,14 +276,14 @@ export default function App() {
         if (restored.status === 'fulfilled') {
           // Not while a Map shape is being edited: the restored project is Studio's own, not the shape's.
           if (restored.value && history.current.length === 0 && !shapeEditRef.current) {
-            try { const next = validateProject(restored.value); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); }
+            try { const next = validateProject(restored.value); rendererRef.current?.resetMeridianPerformance(); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); }
             catch (error) { issues.push(`Project recovery: ${String(error)}. The previous autosave is retained in the application recovery folder.`); }
           }
         } else issues.push(`Project recovery: ${String(restored.reason)}. The previous autosave is retained in the application recovery folder.`);
         if (issues.length) reportError(issues.join('\n'));
       } else {
         const text = localStorage.getItem('formfield-autosave');
-        if (text && history.current.length === 0) { const next = validateProject(JSON.parse(text)); if (alive) { replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); } }
+        if (text && history.current.length === 0) { const next = validateProject(JSON.parse(text)); if (alive) { rendererRef.current?.resetMeridianPerformance(); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); } }
       }
     } catch (e) { if (alive) reportError(`Recovery: ${String(e)}`); }
     finally { if (alive) setReady(true); }
@@ -435,11 +446,10 @@ export default function App() {
   const importImage = async (file: File | undefined, asMask = false) => {
     if (!file) return;
     try {
-      if (!['image/png', 'image/jpeg'].includes(file.type)) throw new Error('Choose a PNG or JPEG image.');
-      if (file.size > 12 * 1024 * 1024) throw new Error('Choose an image smaller than 12 MB.');
+      assertImportableImage(file);
       const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('Image could not be read.')); reader.readAsDataURL(file); });
       const image = await new Promise<HTMLImageElement>((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error('Image could not be decoded.')); image.src = dataUrl; });
-      if (image.naturalWidth > 8192 || image.naturalHeight > 8192) throw new Error('Images must be no larger than 8192 pixels on either side.');
+      if (image.naturalWidth > MAX_IMPORT_SIDE || image.naturalHeight > MAX_IMPORT_SIDE) throw new Error('Images must be no larger than 8192 pixels on either side.');
       if (asMask) { const next = { ...projectRef.current, layers: projectRef.current.layers.map(l => l.id === selected?.id ? { ...l, mask: { ...l.mask, kind: 'image' as const, dataUrl } } : l) }; replace(validateProject(next)); }
       else { if (projectRef.current.layers.length >= 4) throw new Error('Remove a layer before importing another image.'); const layer = createLayer('image'); layer.name = (file.name.replace(/\.[^.]+$/, '') || 'Imported image').slice(0, 60); layer.image = { name: file.name.slice(0, 240), dataUrl, width: image.naturalWidth, height: image.naturalHeight, fit: 'contain' }; replace(validateProject({ ...projectRef.current, layers: [...projectRef.current.layers, layer] })); setSelectedId(layer.id); }
     } catch (e) { reportError(String(e)); }
@@ -544,7 +554,7 @@ export default function App() {
       <div className="workspace-tools"><button ref={workspace.libraryButton} className={`workspace-tool ${workspace.libraryOpen ? 'active' : ''}`} aria-label="Open library" aria-expanded={workspace.libraryOpen} aria-controls="library-drawer" popoverTarget="library-drawer" title="Library · B"><Icon name="library" size={16}/><span>Library</span></button><button ref={workspace.layersButton} className={`workspace-tool ${workspace.layersExpanded ? 'active' : ''}`} aria-label="Toggle layer list" aria-expanded={workspace.layersExpanded} aria-controls="layer-panel" onClick={workspace.toggleLayers} disabled={workspace.focusMode} title="Layers · L"><Icon name="layers" size={16}/></button><span className="viewer-meta">{project.width} × {project.height}<span> · {Number((project.fps.num / project.fps.den).toFixed(2))} fps</span></span></div>
       <div className="viewer-options"><span className="live-badge"><i />{exporting ? 'Exporting' : playing ? 'Playing' : 'Paused'}</span><button className={checker ? 'selected-tool' : ''} title="Toggle transparency checker" aria-pressed={checker} onClick={() => setChecker(v => !v)}><Icon name="grid" size={15} /></button><button ref={workspace.inspectorButton} className={`workspace-tool ${workspace.inspectorOpen && !workspace.focusMode ? 'active' : ''}`} aria-label="Toggle inspector" aria-expanded={workspace.inspectorOpen && !workspace.focusMode} aria-controls="inspector-panel" onClick={workspace.toggleInspector} disabled={workspace.focusMode} title="Inspector · I"><Icon name="inspector" size={16}/></button><button ref={workspace.focusButton} className="workspace-tool focus-toggle" aria-label={workspace.focusMode ? 'Exit focus mode' : 'Focus preview'} aria-pressed={workspace.focusMode} onClick={workspace.toggleFocus} title={workspace.focusMode ? 'Exit focus · F or Esc' : 'Focus preview · F'}><Icon name="focus" size={16}/><span>{workspace.focusMode ? 'Exit focus' : 'Focus'}</span></button></div>
     </div>
-      <div className="preview-stage"><Preview tiled={tiledView && !!project.tileEdges} project={project} playing={playing && !exporting && mode === 'studio'} phase={phase} rendererRef={rendererRef} smokeSound={emberSound} onError={previewError} onEnded={()=>setPlaying(false)} checker={checker} layer={selected} locks={locks} blocked={exporting || exportOpen || !ready} onChange={(layer, record) => {
+      <div className="preview-stage">{flashGuardOff && <div className="m-flash-warning" role="alert">Flash guard is off</div>}<Preview tiled={tiledView && !!project.tileEdges} project={project} playing={playing && !exporting && mode === 'studio'} phase={phase} rendererRef={rendererRef} smokeSound={emberSound} onError={previewError} onEnded={()=>setPlaying(false)} checker={checker} layer={selected} locks={locks} blocked={exporting || exportOpen || !ready} onChange={(layer, record) => {
         const current = projectRef.current;
         const before = current.layers.find(l => l.id === layer.id);
         if (before && !sameCanvasValues(before, layer)) replace({ ...current, layers: current.layers.map(l => l.id === layer.id ? layer : l) }, record);
@@ -568,14 +578,15 @@ export default function App() {
             <ReactDevices audioOnly engine={emberSound} meter={emberMeters} onStart={() => setEmberSound(reactivity())} />
             <p className="muted-text">The input drives playback. Exports use the repeating smoke phrase.</p>
           </details>}
+          parametersSlot={selected.kind === 'meridian' ? <MeridianControls soundSlot={<ReactDevices audioOnly engine={emberSound} meter={emberMeters} onStart={() => setEmberSound(reactivity())} />} layer={selected} edit={editLayer} performance={meridianPerformance} notify={notify} onAnimateKey={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} /> : undefined}
           imageSlot={<>{selected.kind === 'image' && <div className="image-settings">{selected.image ? <img src={selected.image.dataUrl} alt={selected.image.name} /> : <p>Import a PNG or JPEG to begin.</p>}<label>Image fit<select aria-label="Image fit" value={selected.image?.fit ?? 'contain'} onChange={e => editLayer(l => ({ ...l, image: l.image ? { ...l.image, fit: e.target.value as 'contain' | 'cover' } : undefined }))}><option value="contain">Contain</option><option value="cover">Cover</option></select></label><ChoiceParameter label="Mirror" name="Image mirror" options={mirrorModes} value={selected.params.mirror} onChange={mirror => editLayer(l => ({ ...l, params: { ...l.params, mirror } }))} /></div>}</>} surfaceSlot={<>{isInstrument(selected.kind)&&<SurfaceEditor layer={selected} onChange={surface=>editLayer(l=>{const next={...l};if(surface)next.surface=surface;else delete next.surface;return next;})} onStart={beginGesture} onEnd={endGesture}/>}</>} />
       </> : tab === 'Motion' ? <>
         <p className="motion-help">Animate a parameter over the {isEvolving(project)?'clip':'loop'}.</p>
-        <label className="stacked-label">Parameter<select aria-label="Motion parameter" value={selectedModKey} onChange={e => setModKey(e.target.value)}>{definitions.filter(d => d.step !== 1 && !d.preparation).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}{!definitions.some(d => d.key === selectedModKey) && allDefinitions.some(d => d.key === selectedModKey) && <option value={selectedModKey}>{allDefinitions.find(d => d.key === selectedModKey)!.label} · other family</option>}<option value="opacity">Layer opacity</option><optgroup label="Layer transform"><option value="transform.x">Horizontal</option><option value="transform.y">Vertical</option><option value="transform.scale">Size</option><option value="transform.rotation">Rotation</option></optgroup></select></label>
+        <label className="stacked-label">Parameter<select aria-label="Motion parameter" value={selectedModKey} onChange={e => setModKey(e.target.value)}>{motionParameters(definitions).filter(d => d.step !== 1 && !d.preparation && !d.structural && !(selected && motionIgnored(selected, d.key))).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}{!motionParameters(definitions).some(d => d.key === selectedModKey) && allDefinitions.some(d => d.key === selectedModKey) && <option value={selectedModKey}>{allDefinitions.find(d => d.key === selectedModKey)!.label} · other family</option>}<option value="opacity">Layer opacity</option><optgroup label="Layer transform"><option value="transform.x">Horizontal</option><option value="transform.y">Vertical</option><option value="transform.scale">Size</option><option value="transform.rotation">Rotation</option></optgroup></select></label>
         <label className="stacked-label">Motion source<select aria-label="Motion source" value={modulation?.kind ?? 'off'} onChange={e => changeMod(e.target.value === 'off' ? undefined : { ...(modulation ?? defaultMod(e.target.value as Modulation['kind'])), kind: e.target.value as Modulation['kind'] })}><option value="off">Off</option><option value="sine">Sine</option><option value="pulse">Pulse</option><option value="noise">Smooth noise</option><option value="keyframes">Keyframes</option></select></label>
         {modulation ? <>{!modulation.range&&<Parameter definition={{ key: 'amount', label: 'Depth', min: 0, max: 1, step: .01, default: .2, section: 'Motion' }} value={modulation.amount} animated={false} onChange={n => changeMod({ ...modulation, amount: n })} onStart={beginGesture} onEnd={endGesture} />}<Parameter definition={{ key: 'cycles', label: 'Cycles per loop', min: 1, max: 8, step: 1, default: 1, section: 'Motion' }} value={modulation.cycles} animated={false} onChange={n => changeMod({ ...modulation, cycles: n })} onStart={beginGesture} onEnd={endGesture} /><Parameter definition={{ key: 'phase', label: 'Phase offset', min: 0, max: 1, step: .01, default: 0, section: 'Motion' }} value={modulation.phase} animated={false} onChange={n => changeMod({ ...modulation, phase: n })} onStart={beginGesture} onEnd={endGesture} />{modulation.kind === 'keyframes' && <KeyframeCurve mod={modulation} onChange={changeMod} onStart={beginGesture} onEnd={endGesture} />}<button className="wide-button" onClick={() => changeMod(undefined)}>Remove animation</button></> : <div className="empty-note"><Icon name="wave" size={28} /><p>Choose a motion source.</p></div>}
         {modulation && <section className="control-section"><label className="stacked-label">Animation range<select aria-label="Animation range" value={modulation.range?'endpoints':'offset'} onChange={e=>{if(e.target.value==='offset'){const {range,...rest}=modulation;changeMod(rest);}else{const d=allDefinitions.find(d=>d.key===selectedModKey),bounds=d?[d.min,d.max]:selectedModKey==='opacity'?[0,1]:selectedModKey==='transform.scale'?[.05,8]:selectedModKey==='transform.rotation'?[-TAU,TAU]:[-2,2];changeMod({...modulation,range:{min:bounds[0],max:bounds[1]}});}}}><option value="offset">Offset from base</option><option value="endpoints">Smooth between endpoints</option></select></label>{modulation.range&&<div className="endpoint-controls">{(['min','max'] as const).map(key=><label key={key}>{key==='min'?'Lower endpoint':'Upper endpoint'}<input type="number" aria-label={key==='min'?'Lower endpoint':'Upper endpoint'} step="any" value={modulation.range![key]} onChange={e=>{const n=Number(e.target.value),d=allDefinitions.find(d=>d.key===selectedModKey),bounds=d?[d.min,d.max]:selectedModKey==='opacity'?[0,1]:selectedModKey==='transform.scale'?[.05,8]:selectedModKey==='transform.rotation'?[-TAU,TAU]:[-2,2];if(Number.isFinite(n)&&n>=bounds[0]&&n<=bounds[1]&&(key==='min'?n<modulation.range!.max:n>modulation.range!.min))changeMod({...modulation,range:{...modulation.range!,[key]:n}});}}/></label>)}</div>}<p className="motion-help">Endpoints define the full movement without clipping at the control limits. Depth applies to offset routes.</p></section>}
-        <section className="control-section"><h3>Active routes</h3>{Object.entries(selected.modulations).length ? Object.entries(selected.modulations).map(([key, mod]) => <button className="route-row" key={key} onClick={() => setModKey(key)}><Icon name="wave" size={15} /><span>{allDefinitions.find(d => d.key === key)?.label ?? key}</span><small>{mod.kind} · {mod.cycles}×</small></button>) : <p className="muted-text">No parameter animations.</p>}</section>
+        <section className="control-section"><h3>Active routes</h3>{Object.entries(selected.modulations).length ? Object.entries(selected.modulations).map(([key, mod]) => <button className="route-row" key={key} onClick={() => setModKey(key)}><Icon name="wave" size={15} /><span>{allDefinitions.find(d => d.key === key)?.label ?? key}</span><small>{motionIgnored(selected, key) ? 'Not used on Evolve' : `${mod.kind} · ${mod.cycles}×`}</small></button>) : <p className="muted-text">No parameter animations.</p>}</section>
       </> : <>
         <FinishSections hasLayerBelow={visibleBelow(project.layers, selected.id)} layer={selected} definitions={definitions} edit={editLayer} animate={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} open={finishOpen} onOpen={setFinishOpen} layerPanels={[
           { id: 'transform', label: 'Transform', summary: selected.transform.x || selected.transform.y || selected.transform.rotation || selected.transform.scale !== 1 ? 'Moved' : '', on: !!(selected.transform.x || selected.transform.y || selected.transform.rotation || selected.transform.scale !== 1), content: <>{([{ key: 'x', label: 'Horizontal', min: -2, max: 2, step: .01, default: 0 }, { key: 'y', label: 'Vertical', min: -2, max: 2, step: .01, default: 0 }, { key: 'scale', label: 'Size', min: .05, max: 8, step: .01, default: 1 }, { key: 'rotation', label: 'Rotation', min: -Math.PI, max: Math.PI, step: .01, default: 0 }] as const).map(d => <Parameter key={d.key} definition={{ ...d, section: 'Shape' }} value={selected.transform[d.key]} animated={!!selected.modulations[`transform.${d.key}`]} onChange={n => editLayer(l => ({ ...l, transform: { ...l.transform, [d.key]: n } }))} onAnimate={() => { setModKey(`transform.${d.key}`); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />)}</> },

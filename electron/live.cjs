@@ -55,7 +55,7 @@ const path = require('node:path');
 
 const MESSAGE_LIMIT = 16 * 1024;
 const PREVIEW_LIMIT = 512 * 1024;
-const MESSAGE_TYPES = new Set(['settings', 'blackout', 'clear', 'retry', 'captureRoom', 'signals']);
+const MESSAGE_TYPES = new Set(['settings', 'blackout', 'clear', 'retry', 'captureRoom', 'signals', 'installation']);
 const PEOPLE_STATES = new Set(['loading', 'running', 'failed', 'behind']);
 const SOURCE_STATES = new Set(['idle', 'starting', 'running', 'refused', 'none', 'lost', 'error']);
 const plain = value => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -103,7 +103,7 @@ function pickDisplay(displays, id) {
  * `closeOtherOutput()` closes Map's artwork window before Live opens its own.
  * `open(window)` loads the app page into the artwork window with the hash #live-output.
  */
-function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSaveBlocker, settingsFile, preload, studio, open, closeOtherOutput }) {
+function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSaveBlocker, settingsFile, preload, studio, open, closeOtherOutput, allowChecks = true }) {
   let output = null;
   const alive = window => !!window && !window.isDestroyed();
   const fromStudio = event => alive(studio()) && event.sender === studio().webContents && event.senderFrame === studio().webContents.mainFrame;
@@ -134,7 +134,8 @@ function setupLive({ BrowserWindow, ipcMain, screen, systemPreferences, powerSav
     if (closeOtherOutput) closeOtherOutput();
     closeOutput();
     // The scripted checks open the artwork as an ordinary window so they do not take over the screen.
-    const windowed = process.env.STUDIO_LIVE_TEST_WINDOW === '1';
+    // Never in a packaged app: the check window carries the scripted checks' hooks.
+    const windowed = allowChecks && process.env.STUDIO_LIVE_TEST_WINDOW === '1';
     const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, title: 'Form & Field Live', windowed });
     output = window;
     window.on('closed', () => {

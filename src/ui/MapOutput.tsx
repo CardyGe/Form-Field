@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { MapCompositor, MAX_ARMED, type ShapeBlend, type SwapResult } from '../map/compositor';
 import { performDraw } from '../perform/wall-values';
 import { isShapeShown, LIVE_SOURCE_ID, STAGE_SIZE } from '../map/show';
-import { applyMapMessage, initialWall, swapOutcome } from '../map/wall';
+import { applyMapMessage, fitWallReport, initialWall, swapOutcome } from '../map/wall';
 import { overlayShow, type ZonePicture } from '../perform/resolve';
-import { stepWallPerform, type WallPerform } from '../perform/wall-perform';
+import { isPerformMessage, stepWallPerform, type WallPerform } from '../perform/wall-perform';
+import { setInstallation } from '../meridian/installation-state';
 import PreviewWorker from '../map/preview-worker?worker&inline';
 
 /** At most five previews a second, and only after the wall has changed. */
@@ -76,7 +77,7 @@ export default function MapOutput() {
         const { id, revision } = message as { id: string; revision: number };
         if (outcome === 'swap') compositor.crossfadeNext(id, revision); else swapResults.push({ id, revision, result: outcome });
       }
-      if (typeof kind === 'string' && kind.startsWith('perform')) {
+      if (isPerformMessage(kind)) {
         // A refused message, or one for a show that is not running, changes nothing.
         if (state.perform === before) return;
         if (kind === 'performStart') { ending = null; awaitingShow = state.show.shapes.length === 0; compositor.setArmed(new Set()); apply(HANDOVER_FADE_MS); }
@@ -99,6 +100,8 @@ export default function MapOutput() {
       if (kind === 'liveCaptureRoom') { compositor.liveCaptureRoom(); return; }
       if (kind === 'liveRetry') { compositor.liveRetry(); return; }
       if (kind === 'videoRetry') { compositor.videoRetry(); return; }
+      if (kind === 'performanceReset') { compositor.resetPerformance(); return; }
+      if (kind === 'installation') { setInstallation(message); return; }
       // A show carrying a fade time is a scene switch, crossfading over the scene's time.
       const fadeMs = (message as { fadeMs?: unknown }).fadeMs;
       if (kind === 'show' && awaitingShow) { awaitingShow = false; apply(HANDOVER_FADE_MS, true); return; }
@@ -121,7 +124,7 @@ export default function MapOutput() {
       sentArmed = (stats.armed ?? []).join('\n');
       // For scripted checks: what the compositor reports, read from the page.
       (window as unknown as { __mapStats?: unknown }).__mapStats = stats;
-      bridge.sendState(stats);
+      bridge.sendState(fitWallReport(stats));
     };
     encoder.onmessage = (event: MessageEvent<ArrayBuffer | null>) => { busy = false; if (event.data) bridge.sendPreview(event.data); };
     const tick = (now: number) => {
@@ -164,6 +167,14 @@ export default function MapOutput() {
       if (compositor.requestPreview()) { sentPicture = now; busy = true; reading = true; changed = false; }
     };
     raf = requestAnimationFrame(tick);
+    // For the scripted checks only, in their own test window. A real wall never has these.
+    if (bridge.checks) {
+      (window as unknown as { __mapGuardProbe?: () => unknown }).__mapGuardProbe = () => compositor.probeGuardCost();
+      (window as unknown as { __mapLimiterLab?: (only?: string) => Promise<unknown> }).__mapLimiterLab = only => import('../map/limiter-lab').then(lab => lab.runLimiterLab(only));
+      (window as unknown as { __mapLoseAll?: (ms: number, instrumentsOnly?: boolean) => Promise<void> }).__mapLoseAll = (ms, instrumentsOnly) => compositor.loseAllForCheck(ms, instrumentsOnly);
+      (window as unknown as { __mapProbeFrame?: () => unknown }).__mapProbeFrame = () => compositor.probeFrameCost();
+      (window as unknown as { __mapWallLimiter?: (on: boolean) => void }).__mapWallLimiter = on => compositor.setWallLimiterForCheck(on);
+    }
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') bridge.requestClose(); };
     window.addEventListener('keydown', key);
     bridge.ready();

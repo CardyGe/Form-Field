@@ -4,9 +4,25 @@ import { createRequire } from 'node:module';
 import { applyEdit } from '../src/map/editor';
 import { createShow, validateWireShow, type ShowDocument } from '../src/map/show';
 import { acceptMapMessage, toWire, sourcesToSend, wallInputs, MAP_MESSAGE_LIMIT, SOURCE_MESSAGE_LIMIT } from '../src/map/messages';
-import { applyMapMessage, initialWall } from '../src/map/wall';
+import { applyMapMessage, fitWallReport, initialWall, WALL_REPORT_LIMIT } from '../src/map/wall';
 
-const mainProcess = createRequire(import.meta.url)('../electron/map.cjs') as { acceptMapMessage: (value: unknown) => boolean };
+const mainProcess = createRequire(import.meta.url)('../electron/map.cjs') as { acceptMapMessage: (value: unknown) => boolean; acceptState: (value: unknown) => boolean };
+
+test('a wall report too big for the main process leaves out the check-only fields first, and one that fits is sent as it is', () => {
+  const small = { fps: 60, level: 0, failing: [], meridian: { a: { status: 'x' } } };
+  assert.equal(fitWallReport(small), small);
+  // Many Meridian sources during a Perform show, with a full step of landings.
+  const meridian = Object.fromEntries(Array.from({ length: 24 }, (_, i) => [`${'m'.repeat(60)}${i}`, { status: 'following the music', beats: 123.456789, wave: .123456789, frames: 123456, drops: 12, holds: 3, linkedSeed: false, phase: .123456789 }]));
+  const landed = Array.from({ length: 32 }, () => ({ launchId: 'x'.repeat(128), zones: [0, 1, 2, 3, 4, 5, 6, 7] }));
+  // Every source failing, each reason at the compositor's 200-character cap.
+  const failing = Array.from({ length: 24 }, (_, i) => ({ id: `${'f'.repeat(60)}${i}`, reason: 'r'.repeat(200) }));
+  const big = { fps: 60, level: 0, failing, landed, meridian, linked: { a: 1 }, meridianRecords: 24 };
+  assert.ok(JSON.stringify(big).length >= WALL_REPORT_LIMIT);
+  assert.equal(mainProcess.acceptState(big), false);
+  const fitted = fitWallReport(big);
+  assert.deepEqual(fitted, { fps: 60, level: 0, failing, landed });
+  assert.equal(mainProcess.acceptState(fitted), true);
+});
 
 function showWithInstruments(count = 2): ShowDocument {
   let show = createShow();
@@ -208,6 +224,7 @@ const PARITY: [string, unknown, boolean][] = [
   ['live capture room', { type: 'liveCaptureRoom' }, true],
   ['live retry', { type: 'liveRetry' }, true],
   ['video retry', { type: 'videoRetry' }, true],
+  ['performance reset', { type: 'performanceReset' }, true],
   ['unknown', { type: 'explode' }, false],
   ['null', null, false],
   ['array', [], false],
@@ -315,4 +332,27 @@ test('Ember preset smoke receives the live kick and bands on the wall without a 
   assert.ok(Object.keys(signals).every(key => inputs.has(key)));
   assert.ok(acceptMapMessage({type: 'signals', signals}));
   assert.ok(mainProcess.acceptMapMessage({type: 'signals', signals}));
+});
+
+test('the installation message is read the same by the main process and the wall', () => {
+  const cases: [unknown, boolean][] = [
+    [{ type: 'installation', autopilot: true, everyBeats: 32 }, true],
+    [{ type: 'installation', autopilot: false, everyBeats: 16 }, true],
+    [{ type: 'installation', autopilot: true, everyBeats: 128 }, true],
+    [{ type: 'installation', autopilot: true, everyBeats: 64.5 }, true],
+    [{ type: 'installation', autopilot: true, everyBeats: 15.99 }, false],
+    [{ type: 'installation', autopilot: true, everyBeats: 128.01 }, false],
+    [{ type: 'installation', autopilot: true, everyBeats: Number.NaN }, false],
+    [{ type: 'installation', autopilot: true, everyBeats: Infinity }, false],
+    [{ type: 'installation', autopilot: true, everyBeats: '32' }, false],
+    [{ type: 'installation', autopilot: 1, everyBeats: 32 }, false],
+    [{ type: 'installation', autopilot: 'true', everyBeats: 32 }, false],
+    [{ type: 'installation', everyBeats: 32 }, false],
+    [{ type: 'installation', autopilot: true }, false],
+    [{ type: 'installation' }, false],
+  ];
+  for (const [message, ok] of cases) {
+    assert.equal(acceptMapMessage(message), ok, `wall: ${JSON.stringify(message)}`);
+    assert.equal(mainProcess.acceptMapMessage(message), ok, `main: ${JSON.stringify(message)}`);
+  }
 });

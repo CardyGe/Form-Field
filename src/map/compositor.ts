@@ -11,7 +11,7 @@ import { ProgramsCompiling } from '../rendering/program-gate';
 import type { Project } from '../shared/types';
 import { drawCommands, ringPx, shownOnWall, stageCommands, type DrawOptions } from './draw';
 import { borderColour, fadeKey } from './edge';
-import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, freezeLeaving, governorStep, initialGovernor, GOVERNOR_SCALES, inStartOrder, needsPrepare, rendererToEvict, shouldFade, type Governor, type Playing } from './playout';
+import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, freezeLeaving, governorStep, initialGovernor, GOVERNOR_SCALES, inStartOrder, meridianFirst, needsPrepare, rendererToEvict, shouldFade, type Governor, type Playing } from './playout';
 import { isEvolving } from '../core/playback';
 import { LIVE_SOURCE_ID, SPEED_RANGE, STAGE_SIZE, usesLive, type FollowOutline, type Group, type Point, type Shape } from './show';
 import type { BlendKind } from '../perform/types';
@@ -31,12 +31,17 @@ import { FrameHistory } from './frameHistory';
 import { Modulator, tempoPhase, withParams, type Modulated } from './modulate';
 import type { Link } from '../react/links';
 import type { Signals } from '../react/signals';
+import { StructureHold } from '../meridian/structure-hold';
+import { guardBeforeCompositions, wallGuardPolicy, type WallGuardPolicy } from '../meridian/wall-guard';
+import { LIMITER, limiterScales, stepLimiterFade } from '../meridian/wall-limiter';
 import { borderPicture, borderRunPicture, coveragePicture, flatPatternPicture, outlinePath, patternPicture, type Box } from './coverage';
 
 /** What the compositor needs of a show: its shapes and groups, and each source's speed. Works for a stored show or the wall's. */
 export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: number; tempoSync?: number | null; followOutline?: FollowOutline | null }[]; groups: Group[]; links?: Link[];
   /** Live in Map: the wall is told whether the show uses Live; the operator screen has the scenes to work it out. */
   usesLive?: boolean; scenes?: Scene[];
+  /** The show holds a guarded Meridian layer: told to the wall with the show, before its compositions arrive. */
+  guardWall?: boolean;
   /** Stage 6: the videos shapes play. */
   videos?: VideoSource[] }
 
@@ -47,6 +52,8 @@ export interface PlayShow { shapes: Shape[]; sources: { id: string; speed: numbe
 export const MAX_LIVE_INSTRUMENTS = 24;
 /** After its graphics context is lost, a source waits this long before it is started again. */
 const RESTART_AFTER_MS = 5000;
+/** A lost source context that comes back within this long carries on in place, where it was; otherwise it is restarted. */
+const RESTORE_WAIT_MS = 2000;
 
 // ---- Perform ----
 /** How one shape takes its new look when a launch lands. */
@@ -90,6 +97,14 @@ interface Slot {
   keptWarm: boolean;
   /** Perform: last wanted by a running show, rather than by Map. */
   showLook: boolean;
+  /** Show time since this source last drew. It stands still under Freeze, so the Conductor does. */
+  performanceDt: number;
+  /** Its graphics context is lost and may come back: the shape holds its last picture, and the instrument keeps its place. */
+  lost: boolean;
+  /** Back from a lost context: its composition is being prepared again before it draws. */
+  restoring: boolean;
+  /** If the context has not come back by then, the source is let go and started again later. */
+  lostTimer: number;
 }
 
 /** A shape's crossfade from what it played before to what it plays now. start is set once the new content is ready. */
@@ -139,7 +154,7 @@ export interface CompositorStats {
   /** The stage's own graphics context was lost and is waiting to come back: the wall is black meanwhile. */
   contextLost: boolean;
   /** Live in Map: whether the show's Live runs (null: none, camera off). */
-  live?: { running: boolean; state: string; midimix?: { active: boolean; look: number | null; queued: number | null } | null } | null;
+  live?: { running: boolean; state: string; midimix?: { active: boolean; look: number | null; queued: number | null } | null; limiter?: { limiting: boolean; error: string | null } | null } | null;
   /** Stage 6: each video playing, by id: its state, and the beats a tempo loop plays as. */
   videos?: Record<string, { state: string; playsAs: number | null }>;
   linked?: Record<string, number>;
@@ -156,8 +171,25 @@ export interface CompositorStats {
   landed?: { launchId: string; zones: number[] }[];
   /** Perform: the source each zone draws now, or null where it draws black. The studio believes it over its own bookkeeping. */
   drawing?: (string | null)[];
+  /** Wall Flash Guard, for a show with Meridian: what it is doing and what it costs. */
+  /** For the scripted checks: each Meridian source's Conductor and moves. */
+  meridian?: Record<string, { status: string; beats: number; wave: number; frames: number; drops: number; holds: number; linkedSeed: boolean; phase: number }>;
+  /** The always-on wall flash limiter (every show): whether it runs, its correction now, and the lowest since a check last set it. */
+  wallLimiter?: { on: boolean; gain: number; redScale: number; lowestGain: number; lowestRedScale: number };
+  flashGuard?: { failed: string | null; on: boolean; warn: boolean; limiting: boolean; area: number; cpuMs: number } | null;
+  /** Meridian's quality governor on this wall: whether it is giving up bloom, tearing or small marks, and how far (0 to 3). */
+  meridianQuality?: { reduced: boolean; level: number } | null;
+  /** For the soak and the scripted checks: per-layer Meridian records held across all sources. */
+  meridianRecords?: number;
+  /** The compositor's own work per drawn frame on the CPU, in ms, smoothed. */
+  cpuMs?: number;
+  /** Since the wall started: graphics contexts lost (the stage's and the instruments'), and instruments started again from scratch. */
+  contextLosses?: number;
+  restarts?: number;
 }
 
+/** Runs each frame for each source, so it allocates nothing. */
+const hasMeridian = (project: Project): boolean => { for (let i = 0; i < project.layers.length; i++) if (project.layers[i].kind === 'meridian') return true; return false; };
 const kindsOf = (project: Project | null | undefined) => project ? project.layers.map(l => l.kind).join(',') : '';
 const rgb = (hex: string): [number, number, number] => [parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255, parseInt(hex.slice(5, 7), 16) / 255];
 const opaque = (hex: string): [number, number, number, number] => [...rgb(hex), 1];
@@ -185,7 +217,11 @@ export class MapCompositor {
   private readonly modulator = new Modulator();
   private signals: Signals = {};
   /** What is drawn this frame: the show with its links applied. */
-  private readonly flashLimiter = new FlashLimiter();
+  private flashLimiter = new FlashLimiter();
+  /** Scripted checks only: false switches off the always-on wall flash limiter, to film an unlimited baseline. */
+  private wallLimiterOn = true;
+  /** The lowest output gain and red scale the always-on limiter has applied since a check last set it, for the scripted checks. */
+  private wallLowest: FlashCorrection = { gain: 1, redScale: 1 };
   private flashCorrection: FlashCorrection = { gain: 1, redScale: 1 };
   private drawn: Modulated<PlayShow> = { show: this.show, opacity: new Map(), speed: new Map(), params: new Map() };
   /** The overlay (test grid, names, identify, crosshair, selection), drawn in 2D when it changes. */
@@ -196,6 +232,13 @@ export class MapCompositor {
   private readonly overLimit = new Set<string>();
   private governor: Governor = initialGovernor();
   private last: number | null = null;
+  /** Whether the last frame was playing (drawn, or skipped by Map's every-other-frame step): Meridian's governor is timed by these. */
+  private playedLast = false;
+  private contextLosses = 0;
+  /** A cost probe is drawing frames back to back: their intervals say nothing about the display, so no governor hears them. */
+  private probing = false;
+  private restarts = 0;
+  private workMs = 0;
   private frameIndex = 0;
   private framesThisSecond = 0;
   private secondStarted = 0;
@@ -228,6 +271,14 @@ export class MapCompositor {
    * at once) moves the fades only a little, so the wall comes up over its fade and never in one late step.
    */
   private settling = false;
+  private readonly structureHold = new StructureHold();
+  private guardPolicy: WallGuardPolicy = wallGuardPolicy([]);
+  private guardCost = 0;
+  private limiterAt: number | null = null;
+  /** The guard was switched off while limiting: how far the limit has eased away, 0 to 1. Null when it is not easing. */
+  private limiterFade: number | null = null;
+  private limitingUntil = 0;
+  private limiterHolds = { light: 1, red: 1 };
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
@@ -235,14 +286,15 @@ export class MapCompositor {
     this.canvas = canvas;
     this.gpu = new Gpu(canvas);
     // A lost context blanks the wall until Chromium gives it back; then every picture is made again.
-    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; for (const id of [...this.swaps.keys()]) this.settleSwap(id, 'lost'); this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); this.carried.clear(); this.carriedTempo.clear(); });
+    canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.lost = true; this.contextLosses++; for (const id of [...this.swaps.keys()]) this.settleSwap(id, 'lost'); this.live?.dispose(); this.live = null; this.liveTexture = null; for (const v of this.videoSlots.values()) v.dispose(); this.videoSlots.clear(); this.videoTextures.clear(); this.carried.clear(); this.carriedTempo.clear(); });
     canvas.addEventListener('webglcontextrestored', () => {
       this.gpu.setUp();
       this.pictures.clear(); this.overlay = null; this.histories.clear();
       for (const slot of this.slots.values()) slot.texture = null;
       // The old pictures were on the lost card: those fades end, and the shapes show what they play now.
       for (const [id, fade] of [...this.fades]) { if (fade.border && !fade.border.same) fade.border = undefined; if (typeof fade.from !== 'string') this.fades.delete(id); }
-      this.lost = false; this.dirty = true;
+      this.lost = false; this.dirty = true; this.limiterAt = null;
+      if (this.guardPolicy.on) this.primeLimiter();
       this.updateLive();
       this.updateVideos();
     });
@@ -276,6 +328,17 @@ export class MapCompositor {
     this.show = show;
     this.projects = this.played(show, projects);
     this.dirty = true;
+    const guardWasOn = this.guardPolicy.on;
+    this.guardPolicy = wallGuardPolicy(this.projects.values());
+    // The wall hears the show before its compositions: a guarded show is limited from its very first frame.
+    if (show.guardWall) this.guardPolicy = guardBeforeCompositions(this.guardPolicy);
+    this.limiterHolds = limiterScales(this.guardPolicy.settings);
+    // Turned off, or the last Meridian source left: the wall is exactly as drawn from the next frame.
+    if (guardWasOn && !this.guardPolicy.on) this.limiterFade ??= 0;
+    else if (this.guardPolicy.on && !guardWasOn) {
+      // Back on while the limit is still easing away: it carries on from where it is. Otherwise it starts from what the wall shows.
+      if (this.limiterFade === null) this.primeLimiter();
+    }
     // Fades start when a shape changes source, or its source changes instrument. The old picture is copied before
     // the old source is let go, so the shape holds it while the new one starts.
     for (const shape of show.shapes) {
@@ -331,7 +394,7 @@ export class MapCompositor {
     if (id === LIVE_SOURCE_ID) return !!this.live && !!this.liveTexture && (this.live.readiness === 'play' || this.live.readiness === 'hold');
     if (isVideoId(id)) return this.videoSlots.get(id)?.state === 'playing' && !!this.videoTextures.get(id);
     const slot = this.slots.get(id), project = this.projects.get(id);
-    return !!slot && !!project && !!slot.renderer && slot.project === project && slot.shown === project && !!slot.texture && slot.failedProject !== project;
+    return !!slot && !!project && !!slot.renderer && !slot.lost && !slot.restoring && slot.project === project && slot.shown === project && !!slot.texture && slot.failedProject !== project;
   }
   /** The armed sources that are ready. */
   armedIds(): string[] { return this.armed.filter(id => this.isReady(id)); }
@@ -586,6 +649,9 @@ export class MapCompositor {
     if (!this.frozen) this.fadeClock += (this.settling ? Math.min(seconds, SETTLING_STEP_S) : seconds) * 1000;
     const scale = GOVERNOR_SCALES[this.governor.level];
     const draw = !this.frozen && drawsThisFrame(this.governor.level, this.frameIndex);
+    // Meridian's own governor hears every frame of a playing wall, including frames Map skips at its every-other-frame step
+    // (NaN, which it ignores, after an idle or frozen frame).
+    const paceMs = this.playedLast && !this.frozen && !this.probing ? seconds * 1000 : Number.NaN;
 
     this.overLimit.clear();
     let rendered = false;
@@ -674,6 +740,8 @@ export class MapCompositor {
         }
       }
       if (!slot.project || !slot.renderer) continue;
+      // Lost or being prepared again after a reset: the shape holds its last picture and the clocks wait.
+      if (slot.lost || slot.restoring) continue;
       if (waiting && slot.shown === slot.project && slot.texture) continue;
       if (waiting) {
         // Its shaders are still linking, or another look has had this frame's first draw.
@@ -687,15 +755,21 @@ export class MapCompositor {
         // Perform: a loop of n beats at speed s plays as n / s beats; a speed of 0 holds it where it is.
         const synced = !source.tempoSync ? null : pace > 0 ? tempoPhase(performClock(this.signals, this.offsetOf(source.id), 1), source.tempoSync / pace) : slot.phase;
         slot.phase = synced ?? advancePhase(slot.phase, seconds, slot.project, (this.drawn.speed.get(source.id) ?? source.speed) * pace);
+        // Meridian's Conductor keeps real show time: Perform's speed moves its loop, never its own motion limits.
+        slot.performanceDt += seconds;
       }
+      if (hasMeridian(slot.project)) slot.renderer.paceMeridian(paceMs);
       if (!draw) continue;
       // Drawn once, at the size of the largest place it lands on the stage.
       // Sized from the shapes as set, not as links move them: a zoom on the bass would otherwise resize the instrument many times a second.
       // A source kept ready is not on a shape yet: it is sized for the largest shape there is, so it never has to grow when it lands.
       const places = waiting ? this.show.shapes.filter(s => !s.blocker) : [...users, ...(fading?.shapes ?? []).filter(s => !users.includes(s))];
-      const size = sourceSizeFor(places.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), scale);
+      // Meridian keeps its full size: smaller would soften its lines. Its own governor gives up bloom, tearing and small marks instead.
+      const meridian = hasMeridian(slot.project);
+      const size = sourceSizeFor(places.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), meridian ? 1 : scale);
       try {
-        slot.renderer.render(withParams(slot.project, this.drawn.params.get(source.id)), slot.phase, size.width, size.height, { signals: this.signals, now });
+        if (meridian) { slot.renderer.setPerformanceSignals(this.signals, slot.performanceDt); slot.performanceDt = 0; }
+        slot.renderer.render(withParams(slot.project, this.structureHold.apply(source.id, slot.project, this.drawn.params.get(source.id), slot.phase)), slot.phase, size.width, size.height, { signals: this.signals, now });
         if (swapAfterDraw) { this.settleSwap(source.id, 'started'); if (slot.texture) this.startSwap(source.id, slot.texture); }
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);
         slot.shown = slot.project;
@@ -743,14 +817,18 @@ export class MapCompositor {
     // A border run moves every frame (it holds with Freeze).
     const running = !this.frozen && this.show.shapes.some(s => s.border.run && s.border.width > 0 && !s.blocker && shownOnWall(this.show, s, this.options.solo));
     const staggering = this.keepHistories(show);
-    const drawn = this.dirty || rendered || running || staggering || this.fades.size > 0 || this.glides.size > 0 || this.easing !== null;
+    // The limiter may be holding light back from a still picture, under Freeze too, so a guarded wall is drawn every frame.
+    const guarding = this.guardPolicy.on || this.limiterFade !== null;
+    const drawn = this.dirty || rendered || running || staggering || guarding || this.fades.size > 0 || this.glides.size > 0 || this.easing !== null;
     if (this.settling && !this.easing && this.fades.size === 0 && this.glides.size === 0) this.settling = false;
     if (drawn) { this.composite(this.fadeClock); this.dirty = false; }
     this.limitFlashes(now, drawn);
+    this.playedLast = !this.frozen && (drawn || !draw);
     this.frameIndex++;
     const work = performance.now() - started;
+    if (drawn) this.workMs = this.workMs ? this.workMs * .95 + work * .05 : work;
     // The governor judges frames that draw; an idle frame says nothing about how heavy the show is.
-    if (!this.frozen && drawn) this.governor = governorStep(this.governor, frameCost(work, seconds * 1000));
+    if (!this.frozen && drawn) this.governor = meridianFirst(governorStep(this.governor, frameCost(work, seconds * 1000)), this.meridianReduction());
     this.framesThisSecond++;
     if (now - this.secondStarted >= 1000) { this.fps = this.framesThisSecond * 1000 / (now - this.secondStarted); this.framesThisSecond = 0; this.secondStarted = now; }
     return drawn;
@@ -758,14 +836,35 @@ export class MapCompositor {
 
   /** Reads the finished wall without waiting and corrects later frames. A correction that changes redraws the stage. */
   private limitFlashes(now: number, drawn: boolean): void {
+    if (!this.wallLimiterOn) return;
     for (let probe = this.gpu.collectFlashProbe(); probe; probe = this.gpu.collectFlashProbe()) {
       const next = this.flashLimiter.push(probe.pixels, FLASH_PROBE.width, FLASH_PROBE.height, probe.time);
       if (next.gain !== this.flashCorrection.gain || next.redScale !== this.flashCorrection.redScale) {
         this.flashCorrection = next; this.gpu.setOutputCorrection(next.gain, next.redScale); this.dirty = true;
+        this.wallLowest = { gain: Math.min(this.wallLowest.gain, next.gain), redScale: Math.min(this.wallLowest.redScale, next.redScale) };
       }
     }
     // Keeps reading while dimmed, including under Freeze, so a steady picture always recovers.
     if (drawn || this.flashCorrection.gain < 1 || this.flashCorrection.redScale < 1) this.gpu.requestFlashProbe(now / 1000);
+  }
+
+  private wallLimiterReport(): NonNullable<CompositorStats['wallLimiter']> {
+    return { on: this.wallLimiterOn, ...this.flashCorrection, lowestGain: this.wallLowest.gain, lowestRedScale: this.wallLowest.redScale };
+  }
+
+  /**
+   * For the scripted checks only (never reachable on a real wall): switches the always-on wall flash limiter off, so a check can
+   * film what a show does with no limiter at all, and back on. Off drops any correction at once; on starts from a fresh history.
+   * Every call starts the lowest-correction record again from the correction now.
+   */
+  setWallLimiterForCheck(on: boolean): void {
+    this.wallLowest = { ...this.flashCorrection };
+    if (on === this.wallLimiterOn) return;
+    this.wallLimiterOn = on;
+    this.flashLimiter = new FlashLimiter();
+    this.flashCorrection = { gain: 1, redScale: 1 }; this.wallLowest = { gain: 1, redScale: 1 };
+    this.gpu.setOutputCorrection(1, 1);
+    this.dirty = true;
   }
 
   stats(): CompositorStats {
@@ -781,7 +880,7 @@ export class MapCompositor {
       prepares: Object.fromEntries([...this.slots].map(([id, s]) => [id, s.prepares])),
       edgeBuilds: this.edgeBuilds,
       contextLost: this.lost,
-      live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status, midimix: this.live.midimix } : null,
+      live: this.live ? { running: this.live.state.status === 'running', state: this.live.state.status, midimix: this.live.midimix, limiter: this.live.limiter } : null,
       videos: Object.fromEntries([...this.videoSlots].map(([id, v]) => [id, { state: v.state, playsAs: v.playsAs }])),
       // For the scripted checks: the effect settings links are moving now, as drawn (source:layer:key → value).
       adjusted: this.adjusted,
@@ -789,7 +888,97 @@ export class MapCompositor {
       // Stage 7, for the scripted checks: sources keeping a history for Stagger, and shapes shown with a delay.
       staggered: this.histories.size, delayed: this.delays.size,
       linked: Object.fromEntries([...this.drawn.params].flatMap(([id, list]) => list.map(o => [`${id}:${o.layer}:${o.key}`, o.value])).slice(0, 16)),
+      meridian: Object.fromEntries([...this.slots].flatMap(([id, s]) => { const report = s.renderer?.meridianReport(); return report ? [[id, { ...report, phase: s.phase }]] : []; })),
+      meridianQuality: this.meridianQuality(), cpuMs: +this.workMs.toFixed(2), contextLosses: this.contextLosses, restarts: this.restarts,
+      meridianRecords: [...this.slots.values()].reduce((n, s) => n + (s.renderer?.meridianRecords() ?? 0), 0),
+      wallLimiter: this.wallLimiterReport(),
+      flashGuard: this.guardPolicy.present ? { failed: this.gpu.guardError, on: this.guardPolicy.on, warn: this.guardPolicy.warn, limiting: performance.now() < this.limitingUntil, area: this.gpu.limitedArea, cpuMs: this.guardCost } : null,
     };
+  }
+
+  /**
+   * For the soak and the scripted checks: the time of a whole drawn frame, CPU and graphics card together, each one waited for
+   * with a one-pixel read. The median and worst of `count`, net of an empty round trip.
+   */
+  probeFrameCost(count = 24): { medianMs: number; worstMs: number } | null {
+    if (this.lost || this.disposed) return null;
+    const gl = this.gpu.gl, pixel = new Uint8Array(4), costs: number[] = [];
+    this.probing = true;
+    for (let i = 0; i < count; i++) {
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      const a = performance.now(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      const b = performance.now();
+      this.dirty = true; this.frame(b);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      costs.push(Math.max(0, performance.now() - b - (b - a)));
+    }
+    this.probing = false;
+    // The next real frame's interval includes the probe: it is not heard either.
+    this.playedLast = false;
+    costs.sort((x, y) => x - y);
+    return { medianMs: +costs[costs.length >> 1].toFixed(2), worstMs: +costs[costs.length - 1].toFixed(2) };
+  }
+
+  /** Whether Meridian on this wall still has detail of its own to give up before Map draws every other frame. */
+  private meridianReduction(): 'none' | 'reducing' | 'exhausted' {
+    let found = false;
+    for (const slot of this.slots.values()) {
+      if (!slot.renderer || !slot.project || !hasMeridian(slot.project)) continue;
+      found = true;
+      if (slot.renderer.meridianQuality().level < 3 - 1e-6) return 'reducing';
+    }
+    return found ? 'exhausted' : 'none';
+  }
+
+  /** The most reduced Meridian source on this wall, or null when none plays Meridian. */
+  private meridianQuality(): { reduced: boolean; level: number } | null {
+    let found = false, reduced = false, level = 0;
+    for (const slot of this.slots.values()) {
+      if (!slot.renderer || !slot.project || !hasMeridian(slot.project)) continue;
+      const q = slot.renderer.meridianQuality();
+      found = true; reduced ||= q.reduced; level = Math.max(level, q.level);
+    }
+    return found ? { reduced, level } : null;
+  }
+
+  /**
+   * For the scripted checks: a whole graphics card reset, as macOS gives one. Every context this wall uses is lost (the stage and
+   * each instrument), and each is given back after `ms`. With `instrumentsOnly`, the stage keeps its context and only the
+   * instruments lose theirs, so their shapes hold the last picture.
+   */
+  loseAllForCheck(ms: number, instrumentsOnly = false): Promise<void> {
+    const contexts = [...(instrumentsOnly ? [] : [this.gpu.gl]), ...[...this.slots.values()].map(s => s.canvas.getContext('webgl2'))].map(gl => gl?.getExtension('WEBGL_lose_context')).filter((e): e is WEBGL_lose_context => !!e);
+    for (const e of contexts) e.loseContext();
+    return new Promise(done => window.setTimeout(() => { for (const e of contexts) e.restoreContext(); done(); }, ms));
+  }
+
+  /** A show was really loaded (not a scene change): what linked moves changed in the last one ends here. */
+  resetPerformance(): void { for (const slot of this.slots.values()) slot.renderer?.resetMeridianPerformance(); }
+
+  /**
+   * For the scripted checks: what one limiter frame costs the graphics card in ms, net of an empty round trip, and how many
+   * stage bytes it changes on the picture now showing. The limiter then starts afresh from the next picture.
+   */
+  probeGuardCost(): { medianMs: number; worstMs: number; changedBytes: number } | null {
+    if (this.lost || !this.guardPolicy.on) return null;
+    const gl = this.gpu.gl, costs: number[] = [], pixel = new Uint8Array(4), before = new Uint8Array(STAGE_SIZE.width * STAGE_SIZE.height * 4), after = new Uint8Array(before.length);
+    this.gpu.readStage(before);
+    if (!this.gpu.limitStage(0, 0, false)) return null;
+    this.gpu.readStage(after);
+    let changedBytes = 0;
+    for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) changedBytes++;
+    for (let i = 0; i < 40; i++) {
+      // Reading a pixel really waits for the graphics card; gl.finish does not in Chromium.
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      const a = performance.now(); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      const b = performance.now();
+      this.gpu.limitStage(0, 0, false);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      costs.push(Math.max(0, performance.now() - b - (b - a)));
+    }
+    this.primeLimiter();
+    costs.sort((x, y) => x - y);
+    return { medianMs: costs[costs.length >> 1], worstMs: costs[costs.length - 1], changedBytes };
   }
 
   dispose(): void {
@@ -807,6 +996,7 @@ export class MapCompositor {
 
   /** Lets a source go, and gives its graphics context back now rather than whenever it is garbage collected. */
   private release(id: string, slot: Slot): void {
+    window.clearTimeout(slot.lostTimer); slot.lost = false; slot.restoring = false;
     // Perform: a shape still blending away from this source holds its last picture as a still from here on.
     for (const fade of this.fades.values()) {
       if (fade.fromSource !== id) continue;
@@ -823,6 +1013,7 @@ export class MapCompositor {
     const gl = slot.canvas.getContext('webgl2') ?? slot.canvas.getContext('webgl');
     gl?.getExtension('WEBGL_lose_context')?.loseContext();
     this.slots.delete(id);
+    this.structureHold.forget(id);
   }
 
   private endFade(id: string): void {
@@ -852,14 +1043,32 @@ export class MapCompositor {
     }
     this.restartAt.delete(id);
     const canvas = document.createElement('canvas');
-    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0, shown: null, rank, lastUsed: now, keptWarm: false, showLook: false };
-    // A lost context (the graphics card reset, or too many contexts) drops the source: its shape plays its own fill
-    // rather than freezing on its last picture, and the source starts again after a pause.
+    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, texture: null, failed: null, failedProject: null, prepares: 0, shown: null, rank, lastUsed: now, keptWarm: false, showLook: false, performanceDt: 0, lost: false, restoring: false, lostTimer: 0 };
+    // A lost context: after a graphics card reset it usually comes back within a moment, and the instrument carries on where
+    // it was (its clocks and Meridian's phrase live outside the graphics card) while its shape holds the last picture. One that
+    // does not come back (too many contexts) drops the source: its shape plays its own fill, and the source starts again later.
     canvas.addEventListener('webglcontextlost', event => {
       event.preventDefault();
       if (this.slots.get(id) !== slot) return;
-      this.release(id, slot);
-      this.restartAt.set(id, performance.now() + RESTART_AFTER_MS);
+      this.contextLosses++;
+      slot.lost = true; slot.restoring = false;
+      window.clearTimeout(slot.lostTimer);
+      slot.lostTimer = window.setTimeout(() => {
+        if (this.slots.get(id) !== slot || !slot.lost) return;
+        this.restarts++;
+        this.release(id, slot);
+        this.restartAt.set(id, performance.now() + RESTART_AFTER_MS);
+      }, RESTORE_WAIT_MS);
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      if (this.slots.get(id) !== slot || !slot.lost) return;
+      window.clearTimeout(slot.lostTimer);
+      slot.lost = false;
+      const project = slot.project;
+      if (!slot.renderer || !project) return;
+      slot.restoring = true;
+      slot.renderer.prepare(project).then(() => { if (this.slots.get(id) === slot) { slot.restoring = false; this.dirty = true; } })
+        .catch(error => { if (this.slots.get(id) !== slot) return; slot.restoring = false; this.restarts++; this.release(id, slot); this.restartAt.set(id, performance.now() + RESTART_AFTER_MS); slot.failed = String((error as Error)?.message ?? error); });
     });
     try { slot.renderer = new StudioRenderer(canvas); }
     catch (error) { slot.failed = `This computer could not start an instrument: ${String((error as Error)?.message ?? error)}`; }
@@ -960,6 +1169,10 @@ export class MapCompositor {
           this.drawShape(brightness === shape.brightness ? shape : { ...shape, brightness }, now, alpha);
         }
       } else this.glides.clear();
+    }
+    // After the shapes and before the overlays and corners: the guard judges the finished picture, and never the operator's marks.
+    if (this.guardPolicy.on || this.limiterFade !== null) this.limitWall();
+    if (!this.options.blackout) {
       const overlay = this.overlayPicture();
       if (overlay) gpu.layer(overlay);
     }
@@ -968,6 +1181,32 @@ export class MapCompositor {
     // A fade on a shape that is not being drawn (hidden, a Blocker, test grid, blackout) has nothing to show: it ends,
     // so a still show stops being redrawn.
     for (const id of [...this.fades.keys()]) if (!this.drawnShapes.has(id)) this.endFade(id);
+  }
+
+  /**
+   * Starts the limiter from the picture the wall is showing now, still held in the stage (black if nothing was drawn yet), so
+   * the first frame of a newly guarded show is already limited. Changes nothing on the wall.
+   */
+  private primeLimiter(): void {
+    this.limiterAt = null;
+    if (!this.lost && !this.disposed) this.gpu.limitStage(0, 1, true);
+  }
+
+  /**
+   * One frame of the wall limiter, in the frame it limits. Blackout is black at once, and coming back from it goes through the
+   * limiter, so hammering it cannot strobe. Freeze keeps limiting. Switched off, the limit eases away in real time.
+   */
+  private limitWall(): void {
+    const started = performance.now(), dt = this.limiterAt === null ? 0 : Math.min(LIMITER.longestStep, Math.max(0, (started - this.limiterAt) / 1000));
+    this.limiterAt = started;
+    if (this.limiterFade !== null) {
+      // Switched back on part-way, the limit returns at the same pace rather than snapping on in one frame.
+      this.limiterFade = stepLimiterFade(this.limiterFade, dt, this.guardPolicy.on);
+      if (this.limiterFade === null && !this.guardPolicy.on) { this.limiterAt = null; return; }
+    }
+    if (!this.gpu.limitStage(dt, this.limiterFade ?? 0, false, this.limiterHolds)) this.limiterFade = null;
+    if (this.gpu.limitedArea >= LIMITER.trigger) this.limitingUntil = started + 1500;
+    this.guardCost = this.guardCost * .95 + (performance.now() - started) * .05;
   }
 
   /** The overlays drawn in 2D, and given to the graphics card only when they change. Null when there are none. */

@@ -79,10 +79,27 @@ export function applyMapMessage(state: WallState, value: unknown): WallState {
     case 'signals': return { ...state, signals: message.signals };
     case 'fade': return { ...state, fadeMs: message.ms };
     case 'liveSettings': return { ...state, live: message.settings === null ? null : validateLiveSettings(message.settings) };
-    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return state;
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': case 'installation': return state;
     case 'performStart': case 'performEnd': case 'performArm': case 'performLaunch': case 'performCancel': case 'performValues': {
       const perform = applyPerformMessage(state.perform, message);
       return perform === state.perform ? state : { ...state, perform };
     }
   }
+}
+
+/** The main process refuses a wall report of 16 KB or more (acceptState in electron/map.cjs). */
+export const WALL_REPORT_LIMIT = 16 * 1024;
+/** Report fields only the scripted checks read (from the wall's own page): the first to go when a report would be too big. */
+const CHECK_ONLY_REPORT_FIELDS = ['meridian', 'linked', 'meridianRecords'] as const;
+
+/**
+ * The report as sent to the studio. A busy wall (many Meridian sources during a Perform show, with landings and failures)
+ * could pass the main process's size limit, and a refused report would lose Perform's landings: the fields only the scripted
+ * checks read are left out first. A report that fits is sent exactly as it is.
+ */
+export function fitWallReport<T extends object>(report: T, limit = WALL_REPORT_LIMIT): T {
+  if (JSON.stringify(report).length < limit) return report;
+  const trimmed = { ...report } as Record<string, unknown>;
+  for (const key of CHECK_ONLY_REPORT_FIELDS) delete trimmed[key];
+  return trimmed as T;
 }

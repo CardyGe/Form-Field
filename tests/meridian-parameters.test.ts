@@ -1,0 +1,297 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { INSTRUMENT_KINDS } from '../src/core/instruments';
+import { applyPreset, assertImportableImage, createLayer, createProject, MAX_ASSET_BYTES, MAX_IMPORT_BYTES, meridianMark, parameterDefinitions, PRESETS, validateProject, varyLayer } from '../src/core/project';
+import { canLinkParameter, targetRange } from '../src/map/targets';
+import { compose, scoreQuality } from '../src/meridian/composer';
+import { applyMacros } from '../src/meridian/macros';
+import { markFromOutput } from '../src/meridian/mark-placement';
+import { MACRO_KEYS, MERIDIAN_DEFAULTS, MERIDIAN_GROUPS, MERIDIAN_MOVES, MERIDIAN_PARAMETERS } from '../src/meridian/parameters';
+import { sourceViewMatrix } from '../src/rendering/source-view';
+import type { Layer, Project } from '../src/shared/types';
+
+const byKey = new Map(MERIDIAN_PARAMETERS.map((d) => [d.key, d]));
+const withLayer = (layer: Layer): Project => ({ ...createProject(), layers: [layer] });
+const repaired = (mutate: (layer: Layer) => void): Layer => {
+  const layer = createLayer('meridian');
+  mutate(layer);
+  return validateProject(withLayer(layer)).layers[0];
+};
+const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+test('every group has parameters and all have descriptions', () => {
+  for (const group of MERIDIAN_GROUPS) assert.ok(MERIDIAN_PARAMETERS.some((d) => d.group === group), `${group} is empty`);
+  for (const d of MERIDIAN_PARAMETERS) {
+    assert.ok(d.description && d.description.length >= 20, `${d.key} needs a plain-language description`);
+    assert.ok(d.group === 'Performance' || MERIDIAN_GROUPS.includes(d.group as string), `${d.key} has an unknown group`);
+  }
+});
+
+test('there are more than 100 parameters', () => assert.ok(MERIDIAN_PARAMETERS.length > 100));
+
+test('keys are unique and defaults are in range', () => {
+  const all = parameterDefinitions('meridian');
+  assert.equal(new Set(all.map((d) => d.key)).size, all.length);
+  for (const d of all) {
+    assert.ok(d.min < d.max, d.key);
+    assert.ok(d.default >= d.min && d.default <= d.max, `${d.key} default`);
+    if (d.step === 1) assert.ok(Number.isInteger(d.default), `${d.key} integer default`);
+  }
+});
+
+test('the keys the composer and evaluator read exist with behaviour-preserving defaults', () => {
+  const expected: Record<string, number> = {
+    symmetry: 0, zones: 4, ringCount: 7, spokeCount: 12, nodeDensity: 0.5, latticeType: 0.35, scoreBars: 8,
+    ringWeight: 1, spokeWeight: 1, nodeSize: 1, heroWeight: 1, heroGlow: 1, glitchAmount: 1,
+    scoreDraw: 1, scoreBuild: 1, scoreCharge: 1, scorePeak: 1, scoreCollapse: 1, scoreRest: 1,
+  };
+  for (const [key, value] of Object.entries(expected)) assert.equal(byKey.get(key)?.default, value, key);
+  assert.equal(byKey.get('symmetry')?.max, 24);
+  assert.equal(byKey.get('scoreBars')?.min, 1);
+  assert.equal(byKey.get('scoreBars')?.max, 32);
+  assert.equal(byKey.get('scoreRepeat')?.max, 16);
+  assert.equal(byKey.get('scoreRepeat')?.step, 1);
+});
+
+test('structural parameters are marked, and drawing parameters are not', () => {
+  for (const key of ['symmetry', 'zones', 'ringCount', 'spokeCount', 'nodeDensity', 'latticeType', 'scoreBars', 'scoreRepeat', 'scoreDraw', 'scoreBuild', 'scoreCharge', 'scorePeak', 'scoreCollapse', 'scoreRest']) {
+    assert.equal(byKey.get(key)?.structural, true, key);
+  }
+  for (const key of ['ringWeight', 'glitchAmount', 'lightBloomAmount', 'macroDensity']) assert.ok(!byKey.get(key)?.structural, key);
+});
+
+test('moves are momentary, default to 0 and span 0 to 1; recall picks a slot', () => {
+  for (const key of MERIDIAN_MOVES) {
+    const d = byKey.get(key)!;
+    assert.deepEqual([d.momentary, d.default, d.min, d.max], [true, 0, 0, 1], key);
+  }
+  const recall = byKey.get('moveRecall')!;
+  assert.deepEqual([recall.momentary, recall.default, recall.min, recall.max, recall.step], [true, 0, 0, 8, 1]);
+  for (let slot = 0; slot < 8; slot++) {
+    const d = byKey.get(`seedSlot${slot}`)!;
+    assert.deepEqual([d.min, d.max, d.step], [0, 999999, 1]);
+  }
+});
+
+test('the composer reads the defaults without failing a limit', () => {
+  for (let seed = 0; seed < 30; seed++) assert.deepEqual(scoreQuality(compose(seed, MERIDIAN_DEFAULTS)).hardFailures, []);
+});
+
+test('a new layer validates', () => {
+  const layer = createLayer('meridian');
+  assert.equal(layer.kind, 'meridian');
+  assert.equal(validateProject(withLayer(layer)).layers[0].kind, 'meridian');
+  assert.equal(layer.palette.length, 6);
+});
+
+test('a project with missing or absurd Meridian values is repaired', () => {
+  const missing = createLayer('meridian');
+  delete missing.params.ringCount; delete missing.params.glitchAmount; delete missing.params.macroHeat;
+  const fixed = validateProject(withLayer(missing)).layers[0];
+  assert.equal(fixed.params.ringCount, 7);
+  assert.equal(fixed.params.glitchAmount, 1);
+  assert.equal(fixed.params.macroHeat, 0.5);
+
+  const absurd = repaired((l) => {
+    l.params.ringCount = 1e9; l.params.symmetry = -5; l.params.glitchAmount = NaN;
+    l.params.zones = 3.6; l.params.lightExposure = Infinity; l.params.scoreBars = 1e300;
+  });
+  assert.equal(absurd.params.ringCount, 32);
+  assert.equal(absurd.params.symmetry, 0);
+  assert.equal(absurd.params.glitchAmount, 1);
+  assert.equal(absurd.params.zones, 4);
+  assert.equal(absurd.params.lightExposure, 1);
+  assert.equal(absurd.params.scoreBars, 32);
+  for (const d of MERIDIAN_PARAMETERS) {
+    assert.ok(absurd.params[d.key] >= d.min && absurd.params[d.key] <= d.max, d.key);
+    if (d.step === 1) assert.ok(Number.isInteger(absurd.params[d.key]), d.key);
+  }
+});
+
+test('unknown parameters are still refused', () => {
+  const layer = createLayer('meridian');
+  layer.params.notAParameter = 1;
+  assert.throws(() => validateProject(withLayer(layer)), /notAParameter/);
+});
+
+test('malformed layer.meridian state is removed, valid state kept', () => {
+  const plain = repaired(() => undefined);
+  assert.ok(!('meridian' in plain));
+
+  const good = { locks: ['Rings', 'Glitch'], morphA: { ringCount: 5, glitchAmount: 2 }, morphB: { lightExposure: 1.5 }, mark: { dataUrl: PIXEL, width: 1, height: 1 } };
+  assert.deepEqual(repaired((l) => { l.meridian = structuredClone(good); }).meridian, good);
+
+  for (const bad of [null, 7, 'x', [], { locks: 'Rings' }, { locks: [1] }, { locks: ['Nonsense'] }, { locks: [], morphA: { ringCount: 'a' } }, { locks: [], morphA: { notAParameter: 1 } }, { locks: [], morphB: { ringCount: NaN } }, { locks: [], mark: { dataUrl: 'javascript:1', width: 1, height: 1 } }, { locks: [], mark: { dataUrl: PIXEL, width: 9, height: 9 } }]) {
+    const out = repaired((l) => { l.meridian = bad as never; });
+    assert.ok(!('meridian' in out) || (Array.isArray(out.meridian?.locks) && !out.meridian?.morphA?.notAParameter && !out.meridian?.mark?.dataUrl.startsWith('javascript')), JSON.stringify(bad));
+  }
+  assert.ok(!('meridian' in repaired((l) => { l.meridian = null as never; })));
+  assert.ok(!('meridian' in repaired((l) => { l.meridian = { locks: 'Rings' } as never; })));
+  assert.equal(repaired((l) => { l.meridian = { locks: ['Rings', 'Nonsense'], mark: { dataUrl: 'javascript:1', width: 1, height: 1 } } as never; }).meridian?.mark, undefined);
+  assert.deepEqual(repaired((l) => { l.meridian = { locks: ['Rings', 'Nonsense'] } as never; }).meridian?.locks, ['Rings']);
+});
+
+test('Meridian state is removed from other kinds', () => {
+  const image = createLayer('image');
+  image.meridian = { locks: [] };
+  assert.ok(!('meridian' in validateProject(withLayer(image)).layers[0]));
+});
+
+test('older projects are unchanged', () => {
+  for (const kind of ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', 'smokecloud', ...INSTRUMENT_KINDS] as const) {
+    const project = withLayer(createLayer(kind));
+    assert.deepEqual(validateProject(project), project, kind);
+  }
+  const project = withLayer(createLayer('meridian'));
+  assert.deepEqual(validateProject(project), project);
+});
+
+test('macros at neutral leave parameters unchanged', () => {
+  const params: Record<string, number> = { ...MERIDIAN_DEFAULTS, ringArcShare: 0.2, glitchAmount: 2.5 };
+  const out: Record<string, number> = {};
+  applyMacros(params, out);
+  assert.ok(Object.keys(out).length > 20);
+  for (const [key, value] of Object.entries(out)) assert.equal(value, params[key], key);
+});
+
+test('each macro moves its own parameters, and an unknown macro value is neutral', () => {
+  for (const macro of MACRO_KEYS) {
+    const lifted: Record<string, number> = {};
+    applyMacros({ ...MERIDIAN_DEFAULTS, [macro]: 1 }, lifted);
+    const moved = Object.keys(lifted).filter((key) => lifted[key] !== MERIDIAN_DEFAULTS[key]);
+    assert.ok(moved.length >= 3, `${macro} should move several parameters`);
+    const lowered: Record<string, number> = {};
+    applyMacros({ ...MERIDIAN_DEFAULTS, [macro]: 0 }, lowered);
+    assert.ok(moved.some((key) => lowered[key] !== lifted[key]), macro);
+    for (const bad of [NaN, Infinity, undefined as never]) {
+      const out: Record<string, number> = {};
+      applyMacros({ ...MERIDIAN_DEFAULTS, [macro]: bad }, out);
+      for (const [key, value] of Object.entries(out)) assert.equal(value, MERIDIAN_DEFAULTS[key], `${macro} ${key}`);
+    }
+  }
+});
+
+test('macros stay inside each range at both extremes', () => {
+  for (const edge of [0, 1, -3, 4]) for (const base of ['default', 'min', 'max'] as const) {
+    const params: Record<string, number> = {};
+    for (const d of MERIDIAN_PARAMETERS) params[d.key] = base === 'default' ? d.default : d[base];
+    for (const macro of MACRO_KEYS) params[macro] = edge;
+    const out: Record<string, number> = {};
+    applyMacros(params, out);
+    for (const [key, value] of Object.entries(out)) {
+      assert.ok(Number.isFinite(value), key);
+      assert.ok(value >= byKey.get(key)!.min && value <= byKey.get(key)!.max, `${key}=${value}`);
+    }
+  }
+});
+
+test('every continuous parameter and move can be linked; the seeds and the safety settings cannot', () => {
+  const layer = createLayer('meridian');
+  const show = { shapes: [], sources: [{ id: 'a', project: withLayer(layer) }] } as never;
+  for (const d of MERIDIAN_PARAMETERS) {
+    const seed = d.key === 'seed' || d.key.startsWith('seedSlot') || d.group === 'Safety';
+    assert.equal(canLinkParameter(layer, d.key), !seed, d.key);
+    if (!seed && (d.step !== 1 || MERIDIAN_MOVES.includes(d.key as never))) assert.ok(targetRange(show, `source.a.param.0.${d.key}`), d.key);
+    if (seed) assert.equal(targetRange(show, `source.a.param.0.${d.key}`), null, d.key);
+  }
+  for (const key of MERIDIAN_MOVES) assert.ok(canLinkParameter(layer, key), key);
+  const project = withLayer(layer);
+  const free = MERIDIAN_PARAMETERS.filter((d) => d.step !== 1).map((d) => d.key);
+  project.layers[0].modulations = Object.fromEntries(free.map((key) => [key, { kind: 'sine', cycles: 1, phase: 0, amount: 0.5, points: [] }])) as never;
+  assert.equal(Object.keys(validateProject(project).layers[0].modulations).length, free.length);
+});
+
+test('Variation never touches safety, output flags, macros, moves or seeds, and keeps integers whole', () => {
+  const layer = createLayer('meridian');
+  const frozen = MERIDIAN_PARAMETERS.filter((d) => d.group === 'Safety' || d.group === 'Performance' || d.key.startsWith('output') && d.step === 1 || d.key.startsWith('seedSlot') || d.key === 'glitchSeed').map((d) => d.key);
+  assert.ok(frozen.length >= 4 + 8 + 8 + 2);
+  const unlocked = { palette: false, structure: false, motion: false, material: false };
+  let moved = 0;
+  for (let entropy = 1; entropy <= 200; entropy++) {
+    const next = varyLayer(layer, 1, unlocked, entropy * 7919);
+    for (const key of frozen) assert.equal(next.params[key], layer.params[key], `${key} at entropy ${entropy}`);
+    for (const d of MERIDIAN_PARAMETERS) {
+      if (d.step === 1) assert.ok(Number.isInteger(next.params[d.key]), d.key);
+      assert.ok(next.params[d.key] >= d.min && next.params[d.key] <= d.max, d.key);
+      if (next.params[d.key] !== layer.params[d.key]) moved++;
+    }
+  }
+  assert.ok(moved > 0, 'variation should still change drawing parameters');
+});
+
+const meridianPresets = () => PRESETS.filter((preset) => preset.kind === 'meridian');
+
+test('the curated Meridian library has at least ten valid presets and none names the reference', () => {
+  const presets = meridianPresets();
+  assert.ok(presets.length >= 10, `${presets.length} presets`);
+  for (const preset of presets) {
+    assert.doesNotMatch(preset.name, /microlog/i);
+    const layer = applyPreset(createLayer('meridian'), preset.id);
+    assert.deepEqual(validateProject(withLayer(layer)).layers[0].params, layer.params, preset.id);
+    assert.equal(layer.params.seed, preset.params.seed, `${preset.id} keeps its composition`);
+  }
+});
+
+test('a Meridian preset keeps the seed bank and the Mark', () => {
+  const layer = createLayer('meridian');
+  layer.params.seedSlot3 = 77;
+  layer.meridian = { locks: [], mark: { dataUrl: PIXEL, width: 1, height: 1 } };
+  const next = applyPreset(layer, meridianPresets()[0].id);
+  assert.equal(next.params.seedSlot3, 77);
+  assert.equal(next.meridian?.mark?.dataUrl, PIXEL);
+});
+
+test('Mark is off by default', () => {
+  assert.equal(createLayer('meridian').meridian?.mark, undefined);
+  for (const preset of meridianPresets()) assert.equal(applyPreset(createLayer('meridian'), preset.id).meridian?.mark, undefined, preset.id);
+});
+
+test('Mark takes a valid PNG and refuses anything over the image limits', () => {
+  assert.deepEqual(meridianMark(PIXEL), { dataUrl: PIXEL, width: 1, height: 1 });
+  assert.throws(() => meridianMark(`data:image/png;base64,${'A'.repeat(Math.ceil(MAX_ASSET_BYTES / 3) * 4 + 4)}`), /20 MiB/);
+  assert.throws(() => meridianMark('data:image/jpeg;base64,/9j/2Q=='), /PNG/);
+  assert.throws(() => assertImportableImage({ type: 'image/png', size: MAX_IMPORT_BYTES + 1 }), /12 MB/);
+  assert.throws(() => assertImportableImage({ type: 'image/gif', size: 10 }), /PNG or JPEG/);
+  assert.doesNotThrow(() => assertImportableImage({ type: 'image/png', size: MAX_IMPORT_BYTES }));
+});
+
+test('the Mark sits on the design origin, and takes the layer and design placement', () => {
+  const transform = { x: 0.2, y: -0.15, scale: 0.6, rotation: 0.7 }, aspect = 16 / 9;
+  const view = sourceViewMatrix(transform, aspect).invert();
+  const e = view.elements, centreX = 0.08, centreY = -0.05, zoom = 1.3, rotation = 0.4, width = 0.6, height = 0.3;
+  const out = new Float64Array(9);
+  markFromOutput({ view: e, aspect, zoom, rotation, centreX, centreY, width, height }, out);
+  const toMark = (u: number, v: number) => [out[0] * u + out[3] * v + out[6], out[1] * u + out[4] * v + out[7]];
+  // Where the renderer's vertex shader puts the design's origin and a point one unit along it.
+  const toOutput = (x: number, y: number) => {
+    const qx = Math.cos(rotation) * zoom * x - Math.sin(rotation) * zoom * y, qy = Math.sin(rotation) * zoom * x + Math.cos(rotation) * zoom * y;
+    const u = (qx + centreX * aspect) / aspect + 0.5, v = qy + centreY + 0.5;
+    return [e[0] * u + e[3] * v + e[6], e[1] * u + e[4] * v + e[7]];
+  };
+  const near = (a: number[], b: number[]) => a.forEach((value, i) => assert.ok(Math.abs(value - b[i]) < 1e-9, `${a} against ${b}`));
+  near(toMark(toOutput(0, 0)[0], toOutput(0, 0)[1]), [0.5, 0.5]);
+  near(toMark(toOutput(width / 2, 0)[0], toOutput(width / 2, 0)[1]), [1, 0.5]);
+  near(toMark(toOutput(0, height / 2)[0], toOutput(0, height / 2)[1]), [0.5, 1]);
+});
+
+test('safety settings are never linked to a signal or animated by Motion', async () => {
+  const { MERIDIAN_PARAMETERS: all, MERIDIAN_UNLINKED: unlinked, motionIgnored: ignored } = await import('../src/meridian/parameters');
+  const { motionParameters } = await import('../src/meridian/panel');
+  const { canLinkParameter, targetOptions } = await import('../src/map/targets');
+  const { createLayer } = await import('../src/core/project');
+  const { evaluateLayer } = await import('../src/core/timeline');
+  const safety = all.filter(d => d.key.startsWith('safety')).map(d => d.key);
+  assert.deepEqual(safety, ['safetyFlashGuard', 'safetyMaxFlashes', 'safetyRedLimit', 'safetyFullField']);
+  const layer = createLayer('meridian');
+  for (const key of safety) {
+    assert.ok(unlinked.includes(key), `${key} is unlinked`);
+    assert.equal(canLinkParameter(layer, key), false, key);
+    assert.ok(!motionParameters(all).some(d => d.key === key), `${key} is offered in Motion`);
+    assert.ok(ignored(layer, key), `${key} saved route still plays`);
+  }
+  const options = targetOptions({ shapes: [], sources: [{ id: 's', project: { name: 'M', layers: [layer] } } as never] });
+  assert.ok(!options.some(o => /\.safety/.test(o.target)), 'no safety link target in Map');
+  // A route saved in an older project never moves a safety value.
+  const routed = { ...layer, modulations: { safetyRedLimit: { kind: 'sine', cycles: 1, phase: 0, amount: 1, points: [] } } } as never;
+  assert.equal(evaluateLayer(routed, 0.25).params.safetyRedLimit, layer.params.safetyRedLimit);
+});

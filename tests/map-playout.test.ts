@@ -100,3 +100,16 @@ test('frameCost: the work of a frame, or how late it came when the screen missed
   assert.equal(frameCost(20, 16.7), 20);
   assert.equal(frameCost(5, 900), 5);    // a stall (hidden window) is not a slow frame
 });
+
+test('on a Meridian show, Map does not halve the frame rate until Meridian has given up everything it can', async () => {
+  const { meridianFirst } = await import('../src/map/playout');
+  let g = initialGovernor();
+  for (let i = 0; i < 400; i++) g = meridianFirst(governorStep(g, 40), 'reducing');
+  assert.equal(g.level, 2, 'held at level 2 while Meridian is still reducing');
+  for (let i = 0; i < 400; i++) g = meridianFirst(governorStep(g, 40), 'exhausted');
+  assert.equal(g.level, 3, 'once Meridian is at its floor, Map may draw every other frame');
+  let plain = initialGovernor();
+  for (let i = 0; i < 400; i++) plain = meridianFirst(governorStep(plain, 40), 'none');
+  assert.equal(plain.level, 3, 'shows without Meridian are as before');
+  assert.equal(meridianFirst(g, 'none'), g, 'no copy when nothing changes');
+});

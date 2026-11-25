@@ -11,6 +11,13 @@ export interface WallPerform { active: boolean; zones: ZonePicture[]; armed: str
 /** The most launches the wall holds, and lands in one step. The same as LANDED_LIMIT in electron/map.cjs, so a landed report is never refused. */
 export const MAX_WALL_LAUNCHES = 32;
 
+/**
+ * Perform's own wall messages, by exact name. Never a prefix test: Meridian's `performanceReset` also begins "perform",
+ * and is not Perform's.
+ */
+export const PERFORM_WALL_MESSAGES: ReadonlySet<string> = new Set(['performStart', 'performEnd', 'performArm', 'performLaunch', 'performCancel', 'performValues'] satisfies MapMessage['type'][]);
+export const isPerformMessage = (kind: unknown): boolean => typeof kind === 'string' && PERFORM_WALL_MESSAGES.has(kind);
+
 export const initialWallPerform = (): WallPerform => ({ active: false, zones: [], armed: [], launches: [], values: null, phaseOffsets: {} });
 
 /** The next Perform state for a message. Until a show starts, only performStart does anything, so a late message cannot wake the overlay. */

@@ -103,7 +103,8 @@ function acceptMapMessage(value) {
     case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
     case 'fade': return finite(value.ms) && value.ms >= 0 && value.ms <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, 16 * 1024);
-    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': return true;
+    case 'installation': return typeof value.autopilot === 'boolean' && finite(value.everyBeats) && value.everyBeats >= 16 && value.everyBeats <= 128;
     case 'performStart': return everyZone(value.zones, acceptPicture) && acceptOffsets(value.phaseOffsets);
     case 'performEnd': return true;
     case 'performArm': return listOf(value.sourceIds, PERFORM_ARMED_LIMIT, performId);
@@ -121,7 +122,7 @@ const FILTERS = [{ name: 'Form & Field Map show', extensions: ['formshow'] }];
  * `open(window)` loads the app page into the output window with the hash #map-output;
  * `closeLiveOutput()` closes Live's output window. Map never holds Live's window.
  */
-function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath, preload, studio, open, closeLiveOutput, videoFiles }) {
+function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath, preload, studio, open, closeLiveOutput, videoFiles, allowChecks = true }) {
   let output = null;
   let showPath = null;
   // Every write, and the autosave read, goes through one queue, so two saves never overlap
@@ -188,7 +189,8 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     if (!display) throw new Error('That display is no longer connected.');
     if (closeLiveOutput) closeLiveOutput();
     closeOutput();
-    const windowed = process.env.STUDIO_LIVE_TEST_WINDOW === '1';
+    // Never in a packaged app: the check window carries the scripted checks' hooks.
+    const windowed = allowChecks && process.env.STUDIO_LIVE_TEST_WINDOW === '1';
     // On the screen the controls are on, full screen would hide them: open an ordinary window there instead.
     const framed = !windowed && sameScreenAsStudio(display);
     const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, title: 'Form & Field Map', windowed, framed });

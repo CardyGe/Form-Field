@@ -27,7 +27,8 @@ export class Stage {
     const stage = this;
     this.renderer = new LiveRenderer(canvas, { get element() { return stage.active?.element ?? null; }, get frameId() { return stage.active?.frameId ?? 0; } }, () => {
       const pattern = stage.pattern;
-      return pattern?.audience ? new TestMaskProvider(() => pattern) : new WorkerMaskProvider();
+      // The synthetic people of the rehearsal patterns are found by the stand-in model, which knows their shapes.
+      return pattern?.audience || pattern?.crowd ? new TestMaskProvider(() => pattern) : new WorkerMaskProvider();
     }, options);
     this.camera.onState = state => { if (this.active === this.camera || state.status !== 'idle') this.onState(state); };
     const tick = (now: number) => {
@@ -37,7 +38,7 @@ export class Stage {
       this.raf = requestAnimationFrame(tick);
     };
     // Read-only status for the scripted checks and for support: never any picture.
-    window.__studioTest = { ...window.__studioTest, livePeople: () => this.renderer.peopleDiagnostics(), liveDrawn: () => this.renderer.drawn,
+    window.__studioTest = { ...window.__studioTest, livePeople: () => this.renderer.peopleDiagnostics(), liveDrawn: () => this.renderer.drawn, liveMeridian: () => this.renderer.meridianReport(),
       liveFrames: { mark: () => { this.gaps = []; }, read: () => frameStats(this.gaps) } };
     this.raf = requestAnimationFrame(tick);
     this.renderer.start();
@@ -71,6 +72,8 @@ export class Stage {
     pattern.audience = relief && !pattern.volley;
     pattern.figure = settings.look === 'signal' || settings.look === 'smoke';
     pattern.signalDemo = settings.look === 'signal';
+    // Meridian rehearses with a crowd: people walking in, standing still, crossing and moving together.
+    if (settings.look === 'meridian') pattern.crowd ??= 'demo'; else pattern.crowd = null;
   }
 
   /** Opens the current source again, for example after a camera was reconnected. */
@@ -82,6 +85,12 @@ export class Stage {
   peopleReport(): { people: PeopleStatus | null; roomCaptured: boolean } {
     const d = this.renderer.peopleDiagnostics();
     return { people: usesPeople(this.renderer.settings) ? d.status as PeopleStatus : null, roomCaptured: this.renderer.roomCaptured };
+  }
+
+  /** Meridian's word for the operator: who is there, the camera, and the flash limiter. Null for other looks. */
+  meridianReadout(): { status: string; bodies: number; limiterOn: boolean; limiterError: string | null; qualityReduced: boolean } | null {
+    const r = this.renderer.meridianReport();
+    return r ? { status: r.status, bodies: r.bodies, limiterOn: r.limiter.on, limiterError: r.limiter.error, qualityReduced: r.qualityReduced } : null;
   }
 
   dispose(): void {

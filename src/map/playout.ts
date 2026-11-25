@@ -79,6 +79,15 @@ export function governorStep(g: Governor, frameMs: number): Governor {
 }
 
 /** At the last level instruments are drawn every other frame; the shapes keep their last picture in between. */
+/**
+ * On a show with Meridian, its own governor gives up bloom, tearing and small marks, which cost the picture less than drawing
+ * every other frame. So Map's last step (every other frame) waits until every Meridian source is at its floor ('exhausted').
+ * Before that Map stays at most at level 2, which only draws other instruments smaller.
+ */
+export function meridianFirst(g: Governor, meridian: 'none' | 'reducing' | 'exhausted'): Governor {
+  return meridian === 'reducing' && g.level === 3 ? { level: 2, slow: 0, fast: 0 } : g;
+}
+
 export const drawsThisFrame = (level: Governor['level'], frameIndex: number) => level < 3 || frameIndex % 2 === 0;
 
 /** The order sources are worked through in a frame: armed ones last and most urgent first, so a queued look gets the frame's one start before a look only kept ready for later. With nothing armed, the order is unchanged. */
