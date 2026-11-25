@@ -193,6 +193,7 @@ export class StudioRenderer {
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
+  private previewPlaying = true;
   private readonly sculptureScene = new THREE.Scene();
   private readonly sculptureCamera = new THREE.PerspectiveCamera(40, 1, .1, 50);
   private readonly sculptureGeometry = new THREE.SphereGeometry(1, 320, 192);
@@ -226,6 +227,7 @@ export class StudioRenderer {
     this.feedbackStates.clear();
     this.releaseOilTargets();
     this.instruments.resetGpuHistory();
+    this.scope?.resetGpuHistory();
   };
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -484,6 +486,7 @@ export class StudioRenderer {
       this.instruments.prepare(project,(m,t)=>this.draw(m,t),layer=>layer.mask.dataUrl?this.assets.get(this.assetKey(layer.mask.dataUrl,true))?.texture.image as CanvasImageSource|undefined:undefined);
       for (const [key, asset] of this.assets) if (!required.has(key)) { asset.texture.dispose(); this.assets.delete(key); }
       if (!project.layers.some(layer => layer.kind === 'oil' && layer.visible)) this.releaseOilTargets();
+      this.scope?.keepEmberLayers(new Set(project.layers.filter(layer => layer.kind === 'scope' && layer.visible && layer.params.scopeMode === 1).map(layer => layer.id)));
       if (!project.layers.some(layer => layer.kind === 'graphic' && layer.visible)) {
         this.graphicSource?.dispose(); this.graphicSource = null;
       }
@@ -658,7 +661,7 @@ export class StudioRenderer {
       return this.drawOil(layer, original, phase);
     } else if (layer.kind === 'scope') {
       this.scope ??= new ScopeRenderer();
-      this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t), smokeAudio);
+      this.scope.draw(this.renderer, layer, localPhase, this.width, this.height, this.source, (m, t) => this.draw(m, t), smokeAudio, { exact: this.exactFeedback, playing: this.previewPlaying, duration });
     } else if (layer.kind === 'liquid') {
       const u = this.liquid.uniforms;
       u.uAspect.value = aspect; u.uPhase.value = localPhase;
@@ -1088,7 +1091,7 @@ export class StudioRenderer {
   /** True while a paused preview is still refining a feedback history. */
   needsRefresh(): boolean {
     for (const state of this.feedbackStates.values()) if (state.settle) return true;
-    return false;
+    return this.scope?.needsRefresh() ?? false;
   }
 
   private disposeFeedback(state: FeedbackState): void {
@@ -1102,8 +1105,9 @@ export class StudioRenderer {
     }
   }
 
-  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }): void {
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number }, playing = true): void {
     if (this.exporting) return;
+    this.previewPlaying = playing;
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();

@@ -52,16 +52,19 @@ const EMBER_PARAMETERS = [
   { ...parameter('emberTurbulence', 'Turbulence', 0, 1, .01, .58, 'Shape'), description: 'Bends the filaments and adds moving creases to the contours.' },
   { ...parameter('emberPulse', 'Pulse depth', 0, 1, .01, .72, 'Motion'), description: 'Increases the contrast in the movement and light between accents.' },
   { ...parameter('emberRings', 'Ring strength', 0, 1, .01, .62, 'Motion'), description: 'Sets the strength of the rings that travel out from the filament body.' },
-  { ...parameter('emberHeat', 'Heat', 0, 1, .01, .62, 'Material'), description: 'Brings orange and gold into the brightest filaments.' },
-  { ...parameter('emberSmoke', 'Smoke', 0, 1, .01, .70, 'Material'), description: 'Adds smoke that curls out of the filament body and thins between accents.' },
-  { ...parameter('emberSmokeSpread', 'Smoke spread', 0, 1, .01, .44, 'Motion'), advanced: true, description: 'Sets how far the smoke drifts from the bloom before dispersing.' },
-  { ...parameter('emberSmokeCurl', 'Smoke curl', 0, 1, .01, .67, 'Motion'), description: 'Controls how strongly the smoke rolls over itself.' },
-  { ...parameter('emberSmokeResponse', 'Smoke audio response', 0, 1, .01, .72, 'Motion'), description: 'Lets beats launch fresh plumes, bass add body and highs bring out fine wisps.' },
-  { ...parameter('emberSmokeLift', 'Smoke lift', -1, 1, .01, .26, 'Motion'), advanced: true, description: 'Adds upward or downward drift as the smoke ages.' },
-  { ...parameter('emberSmokeLife', 'Smoke persistence', 0, 1, .01, .55, 'Motion'), advanced: true, description: 'Sets how long the wake hangs before it thins.' },
-  { ...parameter('emberSmokeBody', 'Smoke thickness', 0, 1, .01, .61, 'Material'), description: 'Adds depth and hides some of the filaments behind denser smoke.' },
-  { ...parameter('emberSmokeDetail', 'Smoke detail', 0, 1, .01, .60, 'Material'), advanced: true, description: 'Reveals finer folds and ragged edges.' },
-  { ...parameter('emberSmokeLight', 'Smoke lighting', 0, 1, .01, .72, 'Material'), advanced: true, description: 'Sets how much the filaments light the surrounding smoke.' },
+  { ...parameter('emberHeat', 'Heat', 0, 1, .01, .82, 'Material'), description: 'Brings orange and gold into the brightest filaments.' },
+  { ...parameter('emberSmoke', 'Smoke', 0, 1, .01, .04, 'Material'), description: 'Adds smoke that curls out of the filament body and thins between accents.' },
+  { ...parameter('emberSparks', 'Sparks', 0, 1, .01, .6, 'Material'), description: 'Sets how much fine spark dust drifts across the black.' },
+  { ...parameter('emberSmokeStyle', 'Smoke style', 0, 4, 1, 1, 'Motion'), description: 'Chooses how the smoke moves: Wisps, Rolling, Billow, Plume or Storm.' },
+  { ...parameter('emberSmokeOrigin', 'Smoke source', 0, 3, 1, 0, 'Motion'), description: 'Chooses where smoke is released: Core, Ring, Filaments or Rising.' },
+  { ...parameter('emberSmokeSpread', 'Smoke spread', 0, 1, .01, .44, 'Motion'), description: 'Sets how hard each burst pushes the smoke outward.' },
+  { ...parameter('emberSmokeCurl', 'Smoke curl', 0, 1, .01, .67, 'Motion'), description: 'Controls how strongly the smoke swirls and rolls over itself.' },
+  { ...parameter('emberSmokeResponse', 'Smoke audio response', 0, 1, .01, .72, 'Motion'), description: 'Lets beats blast the smoke, bass add force and highs add fine turbulence.' },
+  { ...parameter('emberSmokeLift', 'Smoke lift', -1, 1, .01, .26, 'Motion'), description: 'Makes the smoke rise or sink.' },
+  { ...parameter('emberSmokeLife', 'Smoke persistence', 0, 1, .01, .55, 'Motion'), description: 'Sets how long the smoke hangs before it thins.' },
+  { ...parameter('emberSmokeBody', 'Smoke thickness', 0, 1, .01, .61, 'Material'), description: 'Sets the density of the smoke and how much it hides the filaments.' },
+  { ...parameter('emberSmokeDetail', 'Smoke detail', 0, 1, .01, .60, 'Material'), description: 'Moves the smoke from soft billows to fine, ragged wisps.' },
+  { ...parameter('emberSmokeLight', 'Smoke lighting', 0, 1, .01, .72, 'Material'), description: 'Sets how strongly the filaments light the smoke.' },
   { ...parameter('emberDensity', 'Filament density', 0, 1, .01, .62, 'Shape'), advanced: true, description: 'Fades more fine strands into the central body.' },
   { ...parameter('emberOuter', 'Outer contours', 0, 1, .01, .30, 'Shape'), advanced: true, description: 'Sets the strength of the broad traces around the frame.' },
   { ...parameter('emberPhrases', 'Phrases per loop', 1, 16, 1, 5, 'Motion'), advanced: true, description: 'Sets how many four-beat phrases play in one composition loop.' },
@@ -76,14 +79,24 @@ export function scopeParameterVisible(params: Layer['params'], key: string): boo
     : !EMBER_KEYS.has(key);
 }
 
-const EMBER_BASE = { scopeMode: 1, radius: .43, beamWidth: .51, intensity: 1.60, halo: .48, bloom: .43, bloomSize: .29, depthFade: .74, afterglow: .16 };
+const EMBER_BASE = { scopeMode: 1, radius: .43, beamWidth: .42, intensity: 1.75, halo: .3, bloom: .24, bloomSize: .2, depthFade: .5, afterglow: .16 };
 
 export const EMBER_PALETTES = [
   { id: 'ember-pulse', name: 'Ember Pulse', palette: ['#b90b14', '#820008', '#a30f03', '#ffd074', '#fa3e14', '#be261d'] },
   { id: 'ember-glacier', name: 'Glacier Vapour', palette: ['#6bf9fc', '#17718a', '#2466cd', '#e9fcff', '#35a7ff', '#4385b2'] },
   { id: 'ember-orchid', name: 'Orchid Static', palette: ['#f658ee', '#782c9e', '#6314cf', '#ffc8e7', '#a47dff', '#8f38ac'] },
-  { id: 'ember-acid', name: 'Acid Plume', palette: ['#bafa32', '#487018', '#53a60f', '#fff9a1', '#32ff8b', '#5e9c2a'] },
-  { id: 'ember-silver', name: 'Silver Ash', palette: ['#d4e5f3', '#626f83', '#8393ad', '#fbfdff', '#a5c2df', '#8594a9'] },
+  { id: 'ember-acid', name: 'Acid Plume', palette: ['#abe62e', '#426716', '#4c990e', '#fff9a1', '#2eeb80', '#569027'] },
+  { id: 'ember-silver', name: 'Silver Ash', palette: ['#c3d3e0', '#5a6679', '#79879f', '#fbfdff', '#98b2cd', '#7a889b'] },
+  { id: 'ember-solar', name: 'Solar Flare', palette: ['#ffb01f', '#8a3b00', '#b85a05', '#fff1b8', '#ff7a18', '#8f3a12'] },
+  { id: 'ember-toxic', name: 'Toxic Violet', palette: ['#b6ff2e', '#3f6b10', '#4d8f12', '#f6ffb0', '#6dff5a', '#7a2fd6'] },
+  { id: 'ember-deep-sea', name: 'Deep Sea', palette: ['#35e6ff', '#0d4f73', '#1257a8', '#dffbff', '#2fa8ff', '#2b2fa8'] },
+  { id: 'ember-neon-dusk', name: 'Neon Dusk', palette: ['#ff2fa3', '#7a0f55', '#b01a78', '#ffd1ec', '#ff5ec7', '#0fa89c'] },
+  { id: 'ember-blood-moon', name: 'Blood Moon', palette: ['#e0102a', '#6e0010', '#96041a', '#ffc4a8', '#ff3a2a', '#7c7a80'] },
+  { id: 'ember-arctic-fire', name: 'Arctic Fire', palette: ['#c9d4db', '#506d86', '#6d8fab', '#ffffff', '#9fc2db', '#db5b11'] },
+  { id: 'ember-copper', name: 'Copper Patina', palette: ['#e8874a', '#6e3518', '#9c4f24', '#ffdcb8', '#ffa862', '#2f9c86'] },
+  { id: 'ember-ultraviolet', name: 'Ultraviolet', palette: ['#8f4dff', '#3a1780', '#5a24b8', '#e3d1ff', '#b25cff', '#e0249c'] },
+  { id: 'ember-ink', name: 'Ink', palette: ['#f2f2f2', '#5a5a5a', '#7d7d7d', '#ffffff', '#c8c8c8', '#3a3a3e'] },
+  { id: 'ember-aurora', name: 'Aurora', palette: ['#3dff9a', '#0f6b4c', '#128a63', '#d9ffe9', '#4dffd8', '#8a3de0'] },
 ];
 
 const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
@@ -659,7 +672,7 @@ export function clampParameter(value: number, definition: ParameterDefinition): 
 }
 
 // Identity, coverage and Julia topology are deliberate composition choices.
-const VARIATION_FIXED = new Set(['scopeMode','emberPhrases','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
+const VARIATION_FIXED = new Set(['scopeMode','emberPhrases','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
 export type VariationLocks = { palette: boolean; structure: boolean; motion: boolean; material: boolean };
 
 /** Deterministic by default; UI entropy is independent of the locked film seed. */

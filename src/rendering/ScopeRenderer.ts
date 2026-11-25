@@ -3,12 +3,15 @@ import type { Layer } from '../shared/types';
 import { sourceViewMatrix } from './source-view';
 import { fullscreenVertex } from './shaders';
 import { BLOOM_HEIGHTS, BloomPyramid, bloomWeights, lightTarget } from './bloom';
-import { SCOPE_POINT_STRIDE as STRIDE, writeEmberPoints } from './scope-ember';
-import { EMBER_SMOKE_SOURCES, emberSmokeFragment, emberSmokeFrame } from './scope-ember-smoke';
+import { emberPhrase, SCOPE_POINT_STRIDE as STRIDE } from './scope-ember';
+import { EMBER_MAX_POINTS, writeEmberBurst } from './scope-ember-burst';
+import { EmberFluid } from './EmberFluid';
+import { emberFluidSettings } from './ember-fluid-model';
 import type { SmokeAudioFrame } from '../react/ember-smoke';
 import { SCOPE_WAVE, scopeDash, scopeLine, scopePerspective, scopeWave, type ScopeMotion, type ScopeShape } from './scope-curve';
 
 type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) => void;
+export interface ScopeTiming { exact: boolean; playing: boolean; duration: number }
 /** Line segments in the figure, and in the ring around it. */
 const SEGMENTS = 4096, RING = 256;
 const POINTS = SEGMENTS + 1 + RING + 1;
@@ -34,7 +37,7 @@ const DEFAULT_PALETTE = ['#ff2a8a', '#ff2060', '#ff8a00', '#ffffff', '#20e0ff', 
  *    apart for a colour fringe. Output is premultiplied.
  */
 export class ScopeRenderer {
-  private readonly points = new Float32Array(ALL_POINTS * STRIDE);
+  private readonly points = new Float32Array(Math.max(ALL_POINTS, EMBER_MAX_POINTS) * STRIDE);
   private readonly sphere = new Float32Array((SEGMENTS + 1) * 3);
   private readonly wave = new Float32Array(SCOPE_WAVE);
   private readonly ghostWave = new Float32Array(SCOPE_WAVE / 2);
@@ -45,17 +48,7 @@ export class ScopeRenderer {
   private readonly light = lightTarget(true);
   private readonly bloom = new BloomPyramid();
   private readonly smokeTarget = lightTarget();
-  private readonly smoke = new THREE.ShaderMaterial({
-    vertexShader: fullscreenVertex, fragmentShader: emberSmokeFragment,
-    uniforms: {
-      uView: { value: new THREE.Matrix3() }, uClock: { value: new THREE.Vector2() },
-      uAspect: { value: 1 }, uRadius: { value: 1 }, uSpread: { value: 0 },
-      uOpening: { value: 0 }, uSeed: { value: 0 }, uCurl: { value: 0 }, uLift: { value: 0 },
-      uDetail: { value: 0 }, uBass: { value: 0 },
-      uPuffs: { value: Array.from({ length: EMBER_SMOKE_SOURCES }, () => new THREE.Vector4()) },
-    },
-    depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
-  });
+  private readonly fluids = new Map<string, EmberFluid>();
   private readonly beam = new THREE.ShaderMaterial({
     vertexShader: /* glsl */`
       attribute vec4 aStart, aEnd; attribute float aMix;
@@ -129,12 +122,15 @@ export class ScopeRenderer {
             vec3 smoke=texture2D(uSmoke,vUv).rgb*uSmokeGain;
             float nearby=1.-exp(-(.62*tight+1.45*mids+.50*broad+.13*light.r));
             float lightLevel=uSmokeLighting*nearby;
-            float transmission=exp(-smoke.x*mix(.32,2.12,uSmokeBody));
-            vec3 scattered=uSmokeTint*(.24+lightLevel*.88)+uHot*(.15*lightLevel*uHeat);
+            float transmission=exp(-smoke.x*mix(.2,2.7,uSmokeBody));
+            // Smoke shows only where light reaches it, so smoke drifting into the dark fades out instead of forming a flat sheet.
+            vec3 scattered=uSmokeTint*(.06*smoothstep(.03,.2,nearby)+lightLevel*1.3)+uHot*(.15*lightLevel*uHeat);
             vec3 behind=(1.-exp(-smoke.y*1.24))*scattered*.51;
             vec3 inFront=(1.-transmission)*scattered;
             sum=(sum+behind)*transmission+inFront+smoke.z*scattered*(.27+.42*lightLevel);
           }
+          // The faintest tail of the glow is lifted black on a wall, so Ember's blacks stay black.
+          sum=max(sum-vec3(.0016),vec3(0.));
         }
         // Roll off towards 1 per channel: bright light loses its colour and burns white.
         vec3 c=1.-exp(-max(sum,0.));
@@ -211,42 +207,34 @@ export class ScopeRenderer {
     return length / SEGMENTS;
   }
 
-  private drawSmoke(p: Layer['params'], phase: number, view: THREE.Matrix3, radius: number, width: number, height: number, draw: Draw, audio?: SmokeAudioFrame): number {
-    const seed = p.seed ?? 1729, response = p.emberSmokeResponse;
-    const frame = emberSmokeFrame(phase, p.emberPhrases, seed, p.emberSmokeLife, audio, response);
-    const bass = (audio?.bass ?? 0) * response, highs = (audio?.highs ?? 0) * response;
-    const aspect = width / height;
-    const u = this.smoke.uniforms;
-    (u.uView.value as THREE.Matrix3).copy(view);
-    (u.uClock.value as THREE.Vector2).set(Math.cos(frame.clock), Math.sin(frame.clock));
-    u.uAspect.value = aspect; u.uRadius.value = radius; u.uSpread.value = p.emberSmokeSpread;
-    u.uOpening.value = Math.min(1, p.emberOpening * frame.opening * 1.65);
-    u.uSeed.value = (seed >>> 0) % 881 * .073;
-    u.uCurl.value = p.emberSmokeCurl;
-    u.uLift.value = p.emberSmokeLift;
-    u.uDetail.value = THREE.MathUtils.lerp(p.emberSmokeDetail, 1, highs);
-    u.uBass.value = bass;
-    (u.uPuffs.value as THREE.Vector4[]).forEach((slot, i) => {
-      const puff = frame.puffs[i];
-      if (puff) slot.set(puff.x, puff.y, puff.age, puff.gain);
-      else slot.set(0, 0, 0, 0);
-    });
+  private drawSmoke(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, view: THREE.Matrix3, radius: number, width: number, height: number, audio: SmokeAudioFrame | undefined, timing: ScopeTiming): number {
+    const p = layer.params, aspect = width / height;
+    let fluid = this.fluids.get(layer.id);
+    if (fluid && Math.abs(fluid.aspect - aspect) > .001) { fluid.dispose(); this.fluids.delete(layer.id); fluid = undefined; }
+    if (!fluid) { fluid = new EmberFluid(renderer, aspect); this.fluids.set(layer.id, fluid); }
     // The broad density field needs fewer samples than the fine beam geometry.
     const scale = Math.min(.5, 528 / Math.max(width, height));
-    const w = Math.max(1, Math.round(width * scale));
-    const h = Math.max(1, Math.round(height * scale));
+    const w = Math.max(1, Math.round(width * scale)), h = Math.max(1, Math.round(height * scale));
     if (this.smokeTarget.width !== w || this.smokeTarget.height !== h) this.smokeTarget.setSize(w, h);
-    draw(this.smoke, this.smokeTarget);
-    const exposure = 1 - p.emberPulse * (1 - frame.body) * (1 - p.emberRest);
-    const authored = .12 + .88 * exposure * exposure;
-    // Add light from active live plumes without tying their launch or age to the authored bar.
-    const live = (audio?.beats ?? []).reduce((peak, beat) => Math.max(peak, Math.exp(-2.6 * beat.age) * beat.strength), 0) * response;
-    return p.emberSmoke * (.32 + .37 * p.intensity) * Math.min(1.4, authored + bass * .39 + live * .57);
+    const clock = ((phase % TAU) + TAU) % TAU;
+    fluid.sample({ params: p, seconds: clock / TAU * timing.duration, loopSeconds: timing.duration, exact: timing.exact, playing: timing.playing, audio, view, radius, aspect }, this.smokeTarget);
+    const { body } = emberPhrase(clock, p.emberPhrases);
+    const exposure = 1 - p.emberPulse * (1 - body) * (1 - p.emberRest);
+    return (.62 + .3 * p.intensity) * (.45 + .55 * exposure * exposure);
   }
 
-  draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, audio?: SmokeAudioFrame): void {
+  /** A paused seek is still walking the smoke to its frame. */
+  needsRefresh(): boolean { for (const fluid of this.fluids.values()) if (fluid.pending) return true; return false; }
+
+  /** Frees the smoke of layers that are gone. */
+  keepEmberLayers(ids: ReadonlySet<string>): void { for (const [id, fluid] of this.fluids) if (!ids.has(id)) { fluid.dispose(); this.fluids.delete(id); } }
+
+  /** After a lost GPU context: the smoke was on it, so it starts again. */
+  resetGpuHistory(): void { for (const fluid of this.fluids.values()) fluid.dispose(); this.fluids.clear(); }
+
+  draw(renderer: THREE.WebGLRenderer, layer: Layer, phase: number, width: number, height: number, target: THREE.WebGLRenderTarget, draw: Draw, audio?: SmokeAudioFrame, timing: ScopeTiming = { exact: true, playing: false, duration: 10 }): void {
     const p = layer.params, aspect = width / height;
-    const ember = p.scopeMode === 1 ? writeEmberPoints(this.points, p, phase, aspect) : null;
+    const ember = p.scopeMode === 1 ? writeEmberBurst(this.points, p, phase, aspect) : null;
     const radius = ember?.radius ?? p.radius;
     let gain = p.intensity;
     if (ember) {
@@ -283,7 +271,7 @@ export class ScopeRenderer {
     (r.uCentre.value as THREE.Vector2).set(centre.x, centre.y);
     r.uAspect.value = aspect; r.uRadius.value = radius * layer.transform.scale; r.uFringe.value = ember ? 0 : p.fringe;
     r.uEmber.value = Number(!!ember); r.uHeat.value = ember?.heat ?? 0;
-    r.uSmokeGain.value = ember && p.emberSmoke > 0 ? this.drawSmoke(p, phase, view, radius, width, height, draw, audio) : 0;
+    r.uSmokeGain.value = ember && p.emberSmoke > 0 ? this.drawSmoke(renderer, layer, phase, view, radius, width, height, audio, timing) : 0;
     r.uSmoke.value = r.uSmokeGain.value > 0 ? this.smokeTarget.texture : null;
     if (r.uSmokeGain.value > 0) {
       const tint = r.uSmokeTint.value as THREE.Color;
@@ -291,13 +279,13 @@ export class ScopeRenderer {
       if (layer.palette[5] === '#000000') tint.copy(r.uHaloTint.value).lerp(r.uLine.value, .74);
       else tint.set(layer.palette[5]);
       r.uSmokeBody.value = p.emberSmokeBody;
-      r.uSmokeLighting.value = p.emberSmokeLight;
+      r.uSmokeLighting.value = emberFluidSettings(p).lighting;
     }
     draw(this.resolve, target);
   }
 
   dispose(): void {
     this.geometry.dispose(); this.beam.dispose(); this.bloom.dispose(); this.resolve.dispose(); this.light.dispose();
-    this.smoke.dispose(); this.smokeTarget.dispose();
+    this.smokeTarget.dispose(); this.resetGpuHistory();
   }
 }
