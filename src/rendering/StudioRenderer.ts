@@ -286,7 +286,7 @@ export class StudioRenderer {
   private tileTarget: THREE.WebGLRenderTarget | null = null;
   private readonly cellColour = material(cellColourFragment, {
     uSource: { value: null }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) }, uRows: { value: 1 },
-    uOrigin: { value: new THREE.Vector2() },
+    uOrigin: { value: new THREE.Vector2() }, uOddShift: { value: 0 },
   });
   /** Characters: each set's glyphs, drawn on first use and kept until the tile targets are released. */
   private readonly glyphTextures = new Map<string, { texture: THREE.DataTexture; count: number; columns: number }>();
@@ -299,6 +299,9 @@ export class StudioRenderer {
     uCharOrigin: { value: 0 }, uCharAmount: { value: 0 }, uCharCount: { value: 2 }, uCharColumns: { value: 2 }, uCharGlyphPx: { value: GLYPH_PX }, uCharSpread: { value: GLYPH_SPREAD },
     uCharContrast: { value: 1 }, uCharInkOn: { value: 0 }, uCharGapOn: { value: 1 }, uCharSwaps: { value: 0 }, uCharSwapChance: { value: 0 },
     uCharInk: { value: new THREE.Color() }, uCharGap: { value: new THREE.Color() },
+    uTileGrid: { value: new THREE.Vector2(1, 1) }, uTileCellUv: { value: new THREE.Vector2(1, 1) }, uTileCellPx: { value: new THREE.Vector2(1, 1) }, uTileLight: { value: new THREE.Vector2(-1, 0) },
+    uTileOrigin: { value: 0 }, uTileAmount: { value: 0 }, uTileStyle: { value: 0 }, uTileGrout: { value: .12 }, uTileRelief: { value: .5 }, uTileJitter: { value: .3 },
+    uTileGapOn: { value: 1 }, uTileGap: { value: new THREE.Color() },
   });
   /** This frame's loop length in seconds, so LED flicker keeps its pace on long and short loops. */
   private loopSeconds = 10;
@@ -1332,30 +1335,36 @@ export class StudioRenderer {
   tileSource(original: Layer, layer: Layer, source: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
     if (!tilesActive(original)) return source;
     // A modulated amount can rest at zero, where there is nothing to do.
-    const led = Math.min(1, Math.max(0, number(layer, 'ledAmount', 0))), chars = Math.min(1, Math.max(0, number(layer, 'charAmount', 0)));
-    if (led <= 0 && chars <= 0) return source;
+    const amount = (key: string) => Math.min(1, Math.max(0, number(layer, key, 0)));
+    const led = amount('ledAmount'), chars = amount('charAmount'), tiles = amount('tileAmount');
+    if (led <= 0 && chars <= 0 && tiles <= 0) return source;
     const ledGrid = cellGrid(width, height, number(layer, 'ledSize', 10)), charGrid = cellGrid(width, height, number(layer, 'charSize', 16));
-    // LED cells sit at the target's left edge and character cells to their right.
-    const ledCols = led > 0 ? ledGrid.cols : 0, charCols = chars > 0 ? charGrid.cols : 0;
-    const rows = Math.max(led > 0 ? ledGrid.rows : 0, chars > 0 ? charGrid.rows : 0);
+    const tileGrid = cellGrid(width, height, number(layer, 'tileSize', 18)), style = Math.min(2, Math.max(0, Math.round(number(layer, 'tileStyle', 0))));
+    // LED cells sit at the target's left edge, character cells to their right and tile cells after those. Tiles keep
+    // a spare column, so Brick's offset rows have a cell for the part brick at each end.
+    const ledCols = led > 0 ? ledGrid.cols : 0, charCols = chars > 0 ? charGrid.cols : 0, tileCols = tiles > 0 ? tileGrid.cols + 1 : 0;
+    const rows = Math.max(led > 0 ? ledGrid.rows : 0, chars > 0 ? charGrid.rows : 0, tiles > 0 ? tileGrid.rows : 0);
     if (!this.tileCells) {
       this.tileCells = target();
       this.tileCells.texture.minFilter = this.tileCells.texture.magFilter = THREE.NearestFilter;
     }
     const cells = this.tileCells;
     // Grow only: layers at different sizes share the target, each drawing into its corner of it.
-    if (cells.width < ledCols + charCols || cells.height < rows) cells.setSize(Math.max(cells.width, ledCols + charCols), Math.max(cells.height, rows));
+    const cols = ledCols + charCols + tileCols;
+    if (cells.width < cols || cells.height < rows) cells.setSize(Math.max(cells.width, cols), Math.max(cells.height, rows));
     const c = this.cellColour.uniforms;
     c.uSource.value = source; (c.uSourceSize.value as THREE.Vector2).set(width, height);
-    const average = (grid: ReturnType<typeof cellGrid>, origin: number) => {
-      cells.viewport.set(origin, 0, grid.cols, grid.rows);
+    const average = (grid: ReturnType<typeof cellGrid>, origin: number, columns = grid.cols, oddShift = 0) => {
+      cells.viewport.set(origin, 0, columns, grid.rows);
       (c.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]); c.uRows.value = grid.rows;
-      (c.uOrigin.value as THREE.Vector2).set(origin, 0);
+      (c.uOrigin.value as THREE.Vector2).set(origin, 0); c.uOddShift.value = oddShift;
       // A clear empties the whole target, so the second grid must not clear the first.
       if (origin > 0) this.drawOnto(this.cellColour, cells); else this.draw(this.cellColour, cells);
     };
     if (led > 0) average(ledGrid, 0);
     if (chars > 0) average(charGrid, ledCols);
+    // Brick's odd rows average the half-cell-offset footprint of each brick, so its colour is the brick's own.
+    if (tiles > 0) average(tileGrid, ledCols + charCols, tileCols, style === 1 ? .5 : 0);
     this.tileTarget ??= target();
     const output = this.tileTarget;
     if (output.width !== width || output.height !== height) output.setSize(width, height);
@@ -1397,6 +1406,19 @@ export class StudioRenderer {
       u.uCharInkOn.value = Number(inkOn); (u.uCharInk.value as THREE.Color).set(layer.palette[ink] ?? DEFAULT_PALETTE[ink]);
       fill('charGaps', u.uCharGapOn, u.uCharGap);
       u.uCharSwaps.value = Math.max(0, Math.round(number(layer, 'charSwaps', 0))); u.uCharSwapChance.value = Math.min(1, Math.max(0, number(layer, 'charSwapChance', .05)));
+    }
+    u.uTileAmount.value = tiles;
+    if (tiles > 0) {
+      (u.uTileGrid.value as THREE.Vector2).set(tileCols, tileGrid.rows); u.uTileOrigin.value = ledCols + charCols; u.uTileStyle.value = style;
+      (u.uTileCellUv.value as THREE.Vector2).set(tileGrid.cellUv[0], tileGrid.cellUv[1]);
+      (u.uTileCellPx.value as THREE.Vector2).set(tileGrid.cellUv[0] * width, tileGrid.cellUv[1] * height);
+      u.uTileGrout.value = Math.min(1, Math.max(0, number(layer, 'tileGrout', .12)));
+      u.uTileRelief.value = Math.min(1, Math.max(0, number(layer, 'tileRelief', .5)));
+      u.uTileJitter.value = Math.min(1, Math.max(0, number(layer, 'tileJitter', .3)));
+      // Light angle in degrees on screen: 0 from the right, counter-clockwise, 90 from the top. The shader's y runs down.
+      const angle = number(layer, 'tileLight', 135) * Math.PI / 180;
+      (u.uTileLight.value as THREE.Vector2).set(Math.cos(angle), -Math.sin(angle));
+      fill('tileGaps', u.uTileGapOn, u.uTileGap);
     }
     this.draw(this.tile, output);
     return output.texture;

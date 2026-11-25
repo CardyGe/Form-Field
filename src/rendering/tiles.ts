@@ -86,6 +86,8 @@ uniform vec2 uSourceSize, uCellUv;
 uniform float uRows;
 // Where this grid starts in the shared cell target, in cells.
 uniform vec2 uOrigin;
+// Cells moved left on odd rows (counted from the top), for Brick's half-cell offset.
+uniform float uOddShift;
 void axisTaps(float a, float b, float size, out float at[8], out float weight[8]) {
   a = clamp(a, 0., size); b = clamp(b, 0., size);
   float first = floor(a);
@@ -106,9 +108,9 @@ void axisTaps(float a, float b, float size, out float at[8], out float weight[8]
 }
 void main() {
   vec2 cell = floor(gl_FragCoord.xy) - uOrigin;
-  float row = uRows - 1. - cell.y;
+  float row = uRows - 1. - cell.y, x = cell.x - (mod(row, 2.) >= 1. ? uOddShift : 0.);
   float ax[8], wx[8], ay[8], wy[8];
-  axisTaps(cell.x * uCellUv.x * uSourceSize.x, (cell.x + 1.) * uCellUv.x * uSourceSize.x, uSourceSize.x, ax, wx);
+  axisTaps(x * uCellUv.x * uSourceSize.x, (x + 1.) * uCellUv.x * uSourceSize.x, uSourceSize.x, ax, wx);
   axisTaps((1. - (row + 1.) * uCellUv.y) * uSourceSize.y, (1. - row * uCellUv.y) * uSourceSize.y, uSourceSize.y, ay, wy);
   vec4 sum = vec4(0.);
   float total = 0.;
@@ -125,8 +127,8 @@ void main() {
 }`;
 
 /**
- * Tile pass: rebuilds the layer from its cells. LED wall and Characters each
- * have their own grid in the shared cell target. Each stage reads its cell's
+ * Tile pass: rebuilds the layer from its cells. LED wall, Characters and Tiles
+ * each have their own grid in the shared cell target, left to right. Each stage reads its cell's
  * colour with nearest filtering at the cell centre; the result is blended
  * with the plain layer by the stage's amount. Light is never clamped, so
  * bright emitters reach Glow and keep over-range values.
@@ -145,6 +147,11 @@ uniform sampler2D uGlyphs;
 uniform vec2 uCharGrid, uCharCellUv, uCharCellPx;
 uniform float uCharOrigin, uCharAmount, uCharCount, uCharColumns, uCharGlyphPx, uCharSpread, uCharContrast, uCharInkOn, uCharGapOn, uCharSwaps, uCharSwapChance;
 uniform vec3 uCharInk, uCharGap;
+// Tiles: a third grid, to the right of the character cells. Brick's grid has a spare column for its offset rows.
+// uTileLight points toward the light in pixel axes, y down.
+uniform vec2 uTileGrid, uTileCellUv, uTileCellPx, uTileLight;
+uniform float uTileOrigin, uTileAmount, uTileStyle, uTileGrout, uTileRelief, uTileJitter, uTileGapOn;
+uniform vec3 uTileGap;
 const float TAU = 6.28318530718;
 
 // A grid's cell, counted from the frame's top-left; cells past the grid read its nearest edge cell.
@@ -154,15 +161,16 @@ vec4 cellAt(vec2 cell, vec2 grid, float origin) {
 }
 vec4 cellColour(vec2 cell) { return cellAt(cell, uGrid, 0.); }
 
-// A seeded random number for a cell, the same on every frame.
-float cellRandom(vec2 cell, uint salt) {
+// Seeded random bits for a cell, the same on every frame.
+uvec3 cellHash(vec2 cell, uint salt) {
   uvec3 v = uvec3(uint(cell.x) + uint(fract(uSeed) * 65536.) * 4096u, uint(cell.y), uint(floor(uSeed)) * 8u + salt);
   v = v * 1664525u + 1013904223u;
   v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
   v ^= v >> 16u;
   v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-  return float(v.x) / 4294967296.;
+  return v;
 }
+float cellRandom(vec2 cell, uint salt) { return float(cellHash(cell, salt).x) / 4294967296.; }
 
 // How much of a one-pixel box at x lies inside [-half, half].
 float span(float x, float half_) { return clamp(min(x + .5, half_) - max(x - .5, -half_), 0., 1.); }
@@ -263,10 +271,101 @@ vec4 charStage(vec2 uv) {
   return sum / 16.;
 }
 
+// Light on a tile's surface. lean is the surface normal's tilt in pixel axes (y down), zero on a flat top. Relief 0
+// leaves the colour as it is; otherwise light never passes the cell's own colour, only shades it.
+vec3 tileNormal(vec2 lean) { return vec3(lean, sqrt(max(0., 1. - dot(lean, lean)))); }
+vec3 tileLightDir() { return normalize(vec3(uTileLight, 1.)); }
+float tileShade(vec2 lean) { return mix(1., .45 + .55 * max(dot(tileNormal(lean), tileLightDir()), 0.), uTileRelief); }
+
+// A tile under one sample: the cell that colours it, how much of the sample is grout, the surface's tilt, whether a
+// stud shades it, and its specular share.
+struct Tile { vec2 cell; float grout; vec2 lean; float shadow; float spec; };
+const float BEVEL = .12, TILT = .7;
+
+// A mosaic grid corner's seeded shift, in cells: up to Irregularity x .35 of a cell on each axis.
+vec2 cornerShift(vec2 corner) {
+  if (uTileJitter <= 0.) return vec2(0.);
+  uvec3 h = cellHash(corner + 8., 7u);
+  return uTileJitter * .35 * (2. * vec2(h.xy) / 4294967296. - 1.);
+}
+float cross2(vec2 a, vec2 b) { return a.x * b.y - a.y * b.x; }
+
+// Mosaic: quads between the moved grid corners. s is in cells from the frame's top-left, y down. Corners move under
+// half a cell, so the quad holding s is its own cell's or a neighbour's on the side of the cell s is nearer.
+Tile mosaic(vec2 s) {
+  vec2 c = floor(s), lo = c - vec2(fract(s.x) < .5 ? 1. : 0., fract(s.y) < .5 ? 1. : 0.), p = s * uTileCellPx;
+  vec2 k[9];
+  for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) { vec2 at = lo + vec2(i, j); k[j * 3 + i] = (at + cornerShift(at)) * uTileCellPx; }
+  float best = -1e9; vec2 owner = c, inward = vec2(0., 1.);
+  for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
+    // Corners clockwise on screen, so the inside of each edge is to its right in y-down axes.
+    vec2 q[4] = vec2[4](k[j * 3 + i], k[j * 3 + i + 1], k[j * 3 + i + 4], k[j * 3 + i + 3]);
+    float inside = 1e9; vec2 normal = vec2(0.);
+    for (int e = 0; e < 4; e++) {
+      vec2 a = q[e], edge = q[(e + 1) % 4] - a;
+      float len = max(length(edge), 1e-4), d = cross2(edge, p - a) / len;
+      if (d < inside) { inside = d; normal = vec2(-edge.y, edge.x) / len; }
+    }
+    if (inside > best) { best = inside; owner = lo + vec2(i, j); inward = normal; }
+  }
+  // Grout is a band centred on each edge; a sample is a quarter-pixel box, so its share is the box's overlap.
+  float half_ = .5 * uTileGrout * dot(abs(inward), uTileCellPx);
+  Tile t = Tile(owner, span(4. * best, 4. * half_), vec2(0.), 0., 0.);
+  if (best - half_ < BEVEL * min(uTileCellPx.x, uTileCellPx.y)) t.lean = -inward * TILT;
+  return t;
+}
+
+// Brick: odd rows move half a cell left, so their cells come from the offset footprint, with one more per row.
+// Each brick carries a round stud of radius .3 cell that casts a short shadow away from the light.
+Tile brick(vec2 s) {
+  float row = floor(s.y), x = s.x + (mod(row, 2.) >= 1. ? .5 : 0.);
+  vec2 l = (vec2(fract(x), fract(s.y)) - .5) * uTileCellPx, edge = .5 * uTileCellPx - abs(l);
+  bool side = edge.x < edge.y;
+  float inside = side ? edge.x : edge.y, half_ = .5 * uTileGrout * (side ? uTileCellPx.x : uTileCellPx.y), m = min(uTileCellPx.x, uTileCellPx.y);
+  Tile t = Tile(vec2(floor(x), row), span(4. * inside, 4. * half_), vec2(0.), 0., 0.);
+  float r = length(l), stud = .3 * m;
+  if (inside - half_ < BEVEL * m) t.lean = (side ? vec2(sign(l.x), 0.) : vec2(0., sign(l.y))) * TILT;
+  else if (r < stud && r > stud - .07 * m) t.lean = l / r * TILT;
+  else if (r >= stud && length(l + uTileLight * .1 * m) < stud) t.shadow = 1.;
+  return t;
+}
+
+// Beads: a ring per cell, outer radius .46 and inner .16 of a cell, round in cross-section, with a highlight.
+Tile beads(vec2 s) {
+  vec2 l = (fract(s) - .5) * uTileCellPx;
+  float m = min(uTileCellPx.x, uTileCellPx.y), r = length(l), outer = .46 * m, inner = .16 * m;
+  float ring = clamp((outer - r) * 4. + .5, 0., 1.) * clamp((r - inner) * 4. + .5, 0., 1.);
+  float u = clamp((r - .31 * m) / (.15 * m), -1., 1.);
+  Tile t = Tile(floor(s), 1. - ring, l / max(r, 1e-4) * u, 0., 0.);
+  vec3 n = tileNormal(t.lean);
+  t.spec = .85 * uTileRelief * pow(max(reflect(-tileLightDir(), n).z, 0.), 24.);
+  return t;
+}
+
+vec4 tileStage(vec2 uv) {
+  vec2 f = vec2(uv.x, 1. - uv.y) / uTileCellUv;
+  int style = int(uTileStyle + .5);
+  vec4 sum = vec4(0.);
+  for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
+    // Samples spread evenly over the pixel, so edges are filtered to one output pixel at any tile size.
+    vec2 s = f + (vec2(i, j) - 1.5) * .25 / uTileCellPx;
+    Tile t;
+    if (style == 0) t = mosaic(s); else if (style == 1) t = brick(s); else t = beads(s);
+    vec4 c = cellAt(t.cell, uTileGrid, uTileOrigin);
+    vec3 rgb = c.rgb * (t.shadow > 0. ? mix(1., .45, uTileRelief) : tileShade(t.lean));
+    // The highlight whitens toward the cell's brightest channel, so it never passes the source.
+    rgb = mix(rgb, vec3(max(max(c.r, c.g), c.b)), t.spec);
+    // Grout shows only where the layer has coverage.
+    sum += vec4(rgb, c.a) * (1. - t.grout) + vec4(uTileGap, 1.) * uTileGapOn * c.a * t.grout;
+  }
+  return sum / 16.;
+}
+
 void main() {
   vec4 result = texture2D(uSource, vUv);
-  // LED wall first, then Characters over it; each is built from the plain layer's cells.
+  // LED wall first, then Characters, then Tiles; each is built from the plain layer's cells.
   if (uLedAmount > 0.) result = mix(result, ledStage(vUv), uLedAmount);
   if (uCharAmount > 0.) result = mix(result, charStage(vUv), uCharAmount);
+  if (uTileAmount > 0.) result = mix(result, tileStage(vUv), uTileAmount);
   gl_FragColor = result;
 }`;

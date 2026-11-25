@@ -1,5 +1,5 @@
-// Real Electron/WebGL checks for the material tile finishes (LED wall, and later Characters and Tiles).
-// Run: node scripts/verify-tiles.mjs --baseline=<checkout of the commit before them> [--only=neutral,cell,led,char]
+// Real Electron/WebGL checks for the material tile finishes: LED wall, Characters and Tiles.
+// Run: node scripts/verify-tiles.mjs --baseline=<checkout of the commit before them> [--only=neutral,cell,led,char,tile]
 // --only takes comma-separated name prefixes. Each check prints one PASS or FAIL
 // line, and any failure makes the exit code non-zero. Output goes to work/tiles.
 //
@@ -28,6 +28,8 @@ const loopVerdict = (r, limit = .1) => ({
 });
 const NO_LED = 'LED wall does not change the render. ';
 const NO_CHAR = 'Characters do not change the render. ';
+const NO_TILE = 'Tiles do not change the render. ';
+const STYLES = ['Mosaic', 'Brick', 'Beads'];
 
 const CHECKS = [
   {
@@ -494,6 +496,247 @@ const CHECKS = [
       return { ok, detail: `LED and Characters at 1 against Characters alone ${r.over.toFixed(3)} (limit .5); Characters at .001 against LED alone ${r.under.toFixed(3)} (limit 1); the two looks differ by ${r.distinct.toFixed(2)}` };
     },
   },
+  {
+    name: 'tile-styles',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, plain = await q.px(q.project([q.smooth()])), shots = [];
+        for (let s = 0; s < 3; s++) shots.push(await q.px(q.project([q.smooth({ tileAmount: 1, tileStyle: s, tileSize: 24 })])));
+        const moved = shots.map(s => q.difference(plain, s));
+        let closest = Infinity;
+        for (let a = 0; a < 3; a++) for (let b = a + 1; b < 3; b++) closest = Math.min(closest, q.difference(shots[a], shots[b]));
+        return { moved, closest };
+      });
+      return { ok: r.moved.every(v => v > 3) && r.closest > 1, detail: `${r.moved.some(v => v <= 3) ? NO_TILE : ''}against plain ${r.moved.map((v, i) => `${STYLES[i]} ${v.toFixed(2)}`).join(', ')} (limit 3); closest pair ${r.closest.toFixed(2)} (limit 1)` };
+    },
+  },
+  {
+    name: 'tile-grout',
+    // White under black grout, relief 0 so tiles stay white. 30-pixel tiles at 960x540, a whole number across the frame.
+    // Grout share is measured in linear light, so pixels a tile edge crosses count by area.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.tq, rows = [];
+        for (const style of [0, 1]) for (const grout of [0, .3]) {
+          const px = await q.px(q.exact(q.project([q.white({ tileAmount: 1, tileStyle: style, tileSize: 60, tileGrout: grout, tileRelief: 0, tileJitter: 0, tileGaps: 1 })])));
+          let dark = 0, light = 0, n = 0;
+          for (let i = 0; i < px.length; i += 4) { n++; light += q.toLinear(px[i]); if (px[i] < 250) dark++; }
+          rows.push({ style, grout, share: 1 - light / n, dark: dark / n });
+        }
+        return rows;
+      });
+      const ok = rows.every(r => r.grout === 0 ? r.dark === 0 : Math.abs(r.share - .51) <= .08);
+      return { ok, detail: rows.map(r => `${STYLES[r.style]} width ${r.grout}: ${r.grout === 0 ? `${(r.dark * 100).toFixed(2)}% grout pixels (limit 0)` : `grout ${(r.share * 100).toFixed(1)}% (limit 51 ± 8)`}`).join('; ') };
+    },
+  },
+  {
+    name: 'tile-brick',
+    // White Brick, 30-pixel bricks, black grout, relief 1, light from the right. Along a line through each row, the dark
+    // grout columns of odd rows must sit half a brick from those of even rows. Around each brick's centre the stud's rim
+    // must be lit on its right, shaded on its left diagonals (a square stud of the same size has no rim there), and
+    // flat inside.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, W = 960, H = 540, cell = 30, rows = H / cell;
+        const px = await q.px(q.exact(q.project([q.white({ tileAmount: 1, tileStyle: 1, tileSize: 60, tileGrout: .2, tileRelief: 1, tileLight: 0, tileGaps: 1 })])));
+        const at = (x, y) => px[(Math.floor(y) * W + Math.floor(x)) * 4];
+        const phases = [];
+        for (let row = 0; row < rows; row++) {
+          let sx = 0, sy = 0;
+          const y = row * cell + 8;
+          for (let x = 0; x < W; x++) if (at(x, y) < 10) { const a = 2 * Math.PI * (x + .5) / cell; sx += Math.cos(a); sy += Math.sin(a); }
+          phases.push(((Math.atan2(sy, sx) / (2 * Math.PI) * cell) % cell + cell) % cell);
+        }
+        const off = phases.map(p => { const d = ((p - phases[0]) % cell + cell) % cell; return Math.min(d, cell - d); });
+        const wrong = off.filter((d, row) => Math.abs(d - (row % 2 ? cell / 2 : 0)) > 1).length;
+        let bricks = 0, round = 0;
+        const sample = (cx, cy, radius, angle) => at(cx + radius * Math.cos(angle), cy - radius * Math.sin(angle));
+        for (let row = 1; row < rows - 1; row++) for (let k = 1; k < W / cell - 1; k++) {
+          const cx = k * cell + (row % 2 ? 0 : cell / 2), cy = row * cell + cell / 2;
+          const top = at(cx, cy), inner = [0, 1, 2, 3, 4, 5, 6, 7].map(i => sample(cx, cy, 5, i * Math.PI / 4));
+          const lit = sample(cx, cy, 8, 0), shaded = [3, 5].map(i => sample(cx, cy, 8, i * Math.PI / 4));
+          bricks++;
+          if (lit > top + 10 && shaded.every(v => v < top - 20) && inner.every(v => Math.abs(v - top) <= 3)) round++;
+        }
+        return { phases: phases.map(p => p.toFixed(1)), wrong, round: round / bricks, bricks };
+      });
+      const ok = r.wrong === 0 && r.round >= .95;
+      return { ok, detail: `grout phase by row ${r.phases.slice(0, 4).join(', ')}…, ${r.wrong} rows not offset as expected (limit 0); ${(r.round * 100).toFixed(1)}% of ${r.bricks} bricks show a round stud lit from the right (limit 95%)` };
+    },
+  },
+  {
+    name: 'tile-cells',
+    // Brick cells: odd rows are offset by half a cell, so each odd-row cell must hold the exact area mean of the
+    // offset footprint, not the unshifted grid cell.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.tq, rows = [];
+        for (const [W, H, size] of [[960, 540, 20], [960, 540, 23.3], [1280, 720, 13.7]]) {
+          const value = (x, y) => [x / W, (y % 7) / 7, ((3 * x + y) % 5) / 5, 1];
+          const texture = q.texels(value, W, H), layer = q.smooth({ tileAmount: 1, tileStyle: 1, tileSize: size });
+          q.renderer.tileSource(layer, layer, texture, .9, W, H);
+          const grid = q.m.cellGrid(W, H, size), cols = grid.cols + 1, cells = q.readHalf(q.renderer.tileCells, cols, grid.rows);
+          texture.dispose();
+          let worst = 0;
+          for (let r = 0; r < grid.rows; r++) for (let c = 0; c < cols; c++) {
+            const shift = r % 2 ? .5 : 0;
+            const x0 = Math.max(0, Math.min(W, (c - shift) * grid.cellUv[0] * W)), x1 = Math.max(0, Math.min(W, (c + 1 - shift) * grid.cellUv[0] * W));
+            const y0 = Math.max(0, (1 - (r + 1) * grid.cellUv[1]) * H), y1 = Math.max(0, (1 - r * grid.cellUv[1]) * H);
+            if (x1 <= x0 || y1 <= y0) continue;
+            const sum = [0, 0, 0, 0]; let area = 0;
+            for (let y = Math.floor(y0); y < Math.ceil(y1); y++) for (let x = Math.floor(x0); x < Math.ceil(x1); x++) {
+              const w = (Math.min(x1, x + 1) - Math.max(x0, x)) * (Math.min(y1, y + 1) - Math.max(y0, y)), v = value(x, y);
+              for (let k = 0; k < 4; k++) sum[k] += w * v[k];
+              area += w;
+            }
+            const at = ((grid.rows - 1 - r) * cols + c) * 4;
+            for (let k = 0; k < 4; k++) worst = Math.max(worst, Math.abs(cells[at + k] - sum[k] / area));
+          }
+          rows.push({ W, H, size, worst: worst * 255 });
+        }
+        return rows;
+      });
+      return { ok: rows.every(r => r.worst < 2), detail: `${rows.map(r => `${r.W}x${r.H} size ${r.size}: worst ${r.worst.toFixed(3)}/255`).join('; ')} (limit 2/255)` };
+    },
+  },
+  {
+    name: 'tile-beads',
+    // 30-pixel beads at 960x540: the centre of every cell is the hole, the ring at .31 of a cell is the bead.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, W = 960, H = 540, cell = 30, beads = { tileAmount: 1, tileStyle: 2, tileSize: 60 };
+        const clear = await q.px(q.exact(q.project([q.white({ ...beads, tileGaps: 0 })], true)));
+        const black = await q.px(q.exact(q.project([q.white({ ...beads, tileGaps: 1 })], true)));
+        let cells = 0, clearHole = 0, blackHole = 0, ring = 0;
+        for (let cy = 0; cy < H / cell; cy++) for (let cx = 0; cx < W / cell; cx++) {
+          const x = cx * cell + 15, y = cy * cell + 15, c = (y * W + x) * 4, b = (y * W + x + 9) * 4;
+          cells++;
+          if (clear[c + 3] === 0) clearHole++;
+          if (black[c + 3] === 255 && black[c] + black[c + 1] + black[c + 2] === 0) blackHole++;
+          if (clear[b + 3] === 255 && clear[b] > 100) ring++;
+        }
+        return { cells, clear: clearHole / cells, black: blackHole / cells, ring: ring / cells };
+      });
+      const pct = v => `${(v * 100).toFixed(1)}%`;
+      return { ok: r.clear === 1 && r.black === 1 && r.ring === 1, detail: `${r.ring < 1 ? NO_TILE : ''}of ${r.cells} cells: transparent hole ${pct(r.clear)}, black hole with black grout ${pct(r.black)}, solid bead ring ${pct(r.ring)} (all must be 100%)` };
+    },
+  },
+  {
+    name: 'tile-light',
+    // Grey Mosaic, 30-pixel regular tiles, relief 1. The bevel band 11 pixels right, left, above and below each tile's
+    // centre. Light angle is in degrees, 0 from the right, counter-clockwise: 0 lights the right bevel, 180 the left,
+    // 90 the top.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, W = 960, H = 540, cell = 30, out = {};
+        for (const light of [0, 180, 90]) {
+          const px = await q.px(q.exact(q.project([await q.grey(.7, { tileAmount: 1, tileStyle: 0, tileSize: 60, tileGrout: .1, tileRelief: 1, tileJitter: 0, tileLight: light })])));
+          const at = (x, y) => px[(y * W + x) * 4];
+          let right = 0, left = 0, up = 0, down = 0, n = 0;
+          for (let cy = 0; cy < H / cell; cy++) for (let cx = 0; cx < W / cell; cx++) {
+            const x = cx * cell + 15, y = cy * cell + 15;
+            right += at(x + 11, y); left += at(x - 12, y); up += at(x, y - 12); down += at(x, y + 11); n++;
+          }
+          out[light] = { right: right / n, left: left / n, up: up / n, down: down / n };
+        }
+        return out;
+      });
+      const a = r[0], b = r[180], c = r[90];
+      const ok = a.right > a.left + 20 && b.left > b.right + 20 && c.up > c.down + 20;
+      return { ok, detail: `at 0 right ${a.right.toFixed(1)} vs left ${a.left.toFixed(1)}; at 180 right ${b.right.toFixed(1)} vs left ${b.left.toFixed(1)}; at 90 top ${c.up.toFixed(1)} vs bottom ${c.down.toFixed(1)} (lit side must lead by over 20)` };
+    },
+  },
+  {
+    name: 'tile-jitter',
+    // White Mosaic, 30-pixel tiles, black grout .15 wide. Pixels on the regular grid lines, away from corners, are grout
+    // for a regular grid and often not for an uneven one.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, W = 960, H = 540, cell = 30;
+        const params = jitter => ({ tileAmount: 1, tileStyle: 0, tileSize: 60, tileGrout: .15, tileRelief: 0, tileGaps: 1, tileJitter: jitter });
+        const onLines = px => {
+          let n = 0, dark = 0;
+          for (let k = 1; k < W / cell; k++) for (let y = 0; y < H; y++) {
+            if (y % cell < 10 || y % cell >= 20) continue;
+            for (const x of [k * cell - 1, k * cell]) { n++; if (px[(y * W + x) * 4] < 10) dark++; }
+          }
+          return dark / n;
+        };
+        const even = await q.px(q.exact(q.project([q.white(params(0))])));
+        const uneven = q.exact(q.project([q.white(params(.8))]));
+        const a = await q.shot(uneven, .9), b = await q.shot(uneven, 3.4);
+        return { even: onLines(even), uneven: onLines(await q.pixels(a)), stable: q.same(a, b) };
+      });
+      const pct = v => `${(v * 100).toFixed(1)}%`;
+      return { ok: r.even > .95 && r.uneven < .75 && r.stable, detail: `grid-line pixels that are grout: irregularity 0 ${pct(r.even)} (over 95%), .8 ${pct(r.uneven)} (under 75%); .8 ${r.stable ? 'byte-identical' : 'DIFFERS'} at another phase` };
+    },
+  },
+  {
+    name: 'tile-alpha',
+    // A layer coloured (200, 120, 60), opaque to x 300, fading to nothing at x 500. With 10-pixel tiles and grout wide
+    // enough to hold whole pixels, nothing may show
+    // two cells past the fade, grout must show inside it, and no straight colour may pass 200 by more than 2.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.tq, W = 960, H = 540, rows = [];
+        for (const style of [0, 1, 2]) for (const gaps of [0, 1]) {
+          const px = await q.px(q.exact(q.project([q.soft({ tileAmount: 1, tileStyle: style, tileSize: 20, tileGrout: .3, tileGaps: gaps, tileRelief: 1, tileJitter: 1 })], true)));
+          let outside = 0, over = 0, worst = 0, grout = 0;
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const i = (y * W + x) * 4, a = px[i + 3];
+            if (x >= 525 && a > 0) outside++;
+            if (a >= 32) { const m = Math.max(px[i], px[i + 1], px[i + 2]); worst = Math.max(worst, m); if (m > 202) over++; }
+            if (x < 280 && (gaps === 0 ? a === 0 : a === 255 && px[i] + px[i + 1] + px[i + 2] === 0)) grout++;
+          }
+          rows.push({ style, gaps, outside, over, worst, grout });
+        }
+        return rows;
+      });
+      const ok = rows.every(r => r.outside === 0 && r.over === 0 && r.grout > 1000);
+      return { ok, detail: `${rows.every(r => r.grout === 0) ? NO_TILE : ''}${rows.map(r => `${STYLES[r.style]} ${r.gaps ? 'black' : 'clear'}: ${r.outside} pixels past the fade, brightest ${r.worst}, ${r.over} over 202, ${r.grout} grout pixels inside`).join('; ')} (limits 0, 0, over 1000)` };
+    },
+  },
+  {
+    name: 'tile-scale',
+    // The same tile size for a 960 preview and a 3840 export, averaged down 4x4 in linear light.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.tq, rows = [];
+        for (const [style, size] of [[0, 18], [1, 18], [2, 18], [0, 6], [1, 4], [2, 3]]) {
+          const p = q.exact(q.project([q.smooth({ tileAmount: 1, tileStyle: style, tileSize: size })]));
+          const small = await q.px(p, .9, 960, 540), big = await q.px(p, .9, 3840, 2160);
+          rows.push({ style, size, mean: q.difference(small, q.linearDown(big, 960, 540, 4)), moved: q.difference(small, await q.px(q.exact(q.project([q.smooth()])))) });
+        }
+        return rows;
+      });
+      return { ok: rows.every(r => r.mean < 2 && r.moved > 3), detail: `${rows.some(r => r.moved <= 3) ? NO_TILE : ''}${rows.map(r => `${STYLES[r.style]} size ${r.size}: ${r.mean.toFixed(3)}`).join(', ')} (limit 2/255)` };
+    },
+  },
+  {
+    name: 'tile-engage',
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, plain = await q.px(q.project([q.smooth()]));
+        return { tiny: q.difference(plain, await q.px(q.project([q.smooth({ tileAmount: .001, tileStyle: 2, tileGaps: 4, tileRelief: 1 })]))), full: q.difference(plain, await q.px(q.project([q.smooth({ tileAmount: 1 })]))) };
+      });
+      return { ok: r.tiny < 1 && r.full > 3, detail: `${r.full <= 3 ? NO_TILE : ''}amount .001 against plain ${r.tiny.toFixed(4)} (limit 1); amount 1 ${r.full.toFixed(2)} (over 3)` };
+    },
+  },
+  {
+    name: 'tile-stack',
+    // LED wall, then Characters, then Tiles, each from the plain layer's cells in its own region of the shared target.
+    // Tiles at 1 hide the others; Tiles at .001 leave LED and Characters as they were.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, under = { ledAmount: 1, ledSize: 14, charAmount: .6, charSize: 22 }, tiles = { tileAmount: 1, tileStyle: 1, tileSize: 26 };
+        const shot = params => q.px(q.exact(q.project([q.smooth(params)])));
+        const underAlone = await shot(under), tilesAlone = await shot(tiles);
+        return { over: q.difference(tilesAlone, await shot({ ...under, ...tiles })), below: q.difference(underAlone, await shot({ ...under, ...tiles, tileAmount: .001 })), distinct: q.difference(underAlone, tilesAlone) };
+      });
+      const ok = r.over < .5 && r.below < 1 && r.distinct > 3;
+      return { ok, detail: `all three with Tiles at 1 against Tiles alone ${r.over.toFixed(3)} (limit .5); Tiles at .001 against LED and Characters ${r.below.toFixed(3)} (limit 1); the two looks differ by ${r.distinct.toFixed(2)}` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -553,6 +796,9 @@ try {
     // The smooth picture over the right half of the frame only.
     const rightSmoothUrl = await dataUrl(960, 540, (x, y) => x < 0 ? [0, 0, 0, 0] : [Math.round(128 + 90 * Math.sin(3.1 * x + .4)), Math.round(128 + 90 * Math.cos(4.3 * y - .7)), Math.round(128 + 70 * Math.sin(2.2 * x + 3.7 * y)), 255]);
     const rightSmooth = (params = {}) => image(rightSmoothUrl, params, 'right-smooth');
+    // (200, 120, 60), opaque to x 300 of 960, fading to nothing at x 500.
+    const softUrl = await dataUrl(960, 540, x => { const at = (x + 960 / 540 / 2) * 540; return [200, 120, 60, Math.round(255 * Math.min(1, Math.max(0, (500 - at) / 200)))]; });
+    const soft = (params = {}) => image(softUrl, params, 'soft');
     // Black at the left edge of the frame to white at the right, even in encoded values.
     const rampUrl = await dataUrl(960, 540, x => { const v = Math.round(255 * Math.min(1, Math.max(0, (x + 960 / 540 / 2) / (960 / 540)))); return [v, v, v, 255]; });
     const rampLayer = (params = {}) => image(rampUrl, params, 'ramp');
@@ -621,7 +867,7 @@ try {
       renderer.renderer.readRenderTargetPixels(target, 0, 0, W, H, raw);
       return Float32Array.from(raw, fromHalf);
     };
-    window.tq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, half, rightSmooth, ramp: rampLayer, grey, moving, project, exact, pixels, shot, px, difference, same, loop, litShare, linearDown, texels, readHalf };
+    window.tq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, half, rightSmooth, soft, toLinear, ramp: rampLayer, grey, moving, project, exact, pixels, shot, px, difference, same, loop, litShare, linearDown, texels, readHalf };
   }, !!baseline);
 
   for (const check of selected) {
