@@ -59,6 +59,8 @@ export class TestSource implements FrameSource {
   private clock = 0;
   private swayTime = 0;
   private standX = -1;
+  private manualPose: number[] | null = null;
+  private targetPose: number[] | null = null;
   private readonly context: CanvasRenderingContext2D;
 
   constructor(width = 640, height = 360) {
@@ -88,10 +90,21 @@ export class TestSource implements FrameSource {
   /** Simulated seconds since the source started. */
   get seconds(): number { return this.clock; }
 
+  /** Screen coordinates, 0–1 from the top left. Raising the pointer raises the arms. */
+  aim(x: number, y: number): void {
+    this.manualPose ??= demoPose(this.time);
+    const side = 2 * x - 1;
+    const arms = 1.6 - 2.4 * y;
+    this.targetPose = [side * .34, Math.max(0, y - .55) * .18,
+      arms + side * .38, arms - side * .38, .45 + side * .4, .45 - side * .4, .08 + .1 * y];
+  }
+
+  private currentPose(): number[] { return this.manualPose ?? demoPose(this.time); }
+
   /** The figure's centre in uv (origin bottom-left, not mirrored) and its height in uv. */
   figurePlace(): { x: number; y: number; height: number } {
     if (this.signalDemo) {
-      const [offset, crouch] = demoPose(this.time);
+      const [offset, crouch] = this.currentPose();
       return { x: .5 + offset, y: .48 - crouch, height: .7 };
     }
     const sway = this.standing ? Math.sin(this.swayTime * 2.4) * SWAY_PX / this.element.width : 0;
@@ -109,7 +122,7 @@ export class TestSource implements FrameSource {
     c.beginPath(); c.arc(cx, cy - u * .36, u * .09, 0, Math.PI * 2); c.fill();                       // head
     c.beginPath(); c.roundRect(cx - u * .13, cy - u * .26, u * .26, u * .42, u * .06); c.fill();      // body
     if (this.signalDemo) {
-      const [, crouch, leftAngle, rightAngle, leftBend, rightBend, spread] = demoPose(this.time);
+      const [, crouch, leftAngle, rightAngle, leftBend, rightBend, spread] = this.currentPose();
       c.save();
       c.strokeStyle = c.fillStyle;
       c.lineCap = 'round';
@@ -172,6 +185,11 @@ export class TestSource implements FrameSource {
     const frame = Math.floor(this.clock * TEST_FPS + 1e-6);
     if (frame === this.frameId) return;
     const elapsed = (frame - this.frameId) / TEST_FPS;
+    const { manualPose, targetPose } = this;
+    if (manualPose && targetPose) {
+      const follow = 1 - Math.exp(-elapsed / .055);
+      this.manualPose = manualPose.map((joint, index) => joint + (targetPose[index] - joint) * follow);
+    }
     if (this.figure && this.standing) { if (this.standX === -1) this.standX = .5 + .2 * Math.sin(this.time * 1.2); this.swayTime += elapsed; }
     else { this.standX = -1; if (this.moving) this.time += elapsed; }
     this.frameId = frame;

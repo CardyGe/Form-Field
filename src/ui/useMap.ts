@@ -77,6 +77,8 @@ interface Session {
   sentSources: Map<string, number>;
   /** The wall's switches, kept here so they survive leaving Map while the wall stays open. */
   blackout: boolean;
+  /** Not saved: every launch starts with the guard on. */
+  flashGuard: boolean;
   testGrid: boolean;
   freeze: boolean;
   /**
@@ -118,7 +120,7 @@ function mapSession(): Session {
   const bridge = window.studio?.map;
   const created: Session = {
     state: initialMapState(createShow()), loaded: false, saveFailed: false, onSaveResult: null,
-    outputOpen: false, sentSources: new Map(), blackout: false, testGrid: false, freeze: false, studioEdit: null, applied: new Map(), failedDrafts: [], onDraftFailed: null, onApplySettled: null, mounted: 0, wallFrame: null, onStudioWarning: null,
+    outputOpen: false, sentSources: new Map(), blackout: false, flashGuard: true, testGrid: false, freeze: false, studioEdit: null, applied: new Map(), failedDrafts: [], onDraftFailed: null, onApplySettled: null, mounted: 0, wallFrame: null, onStudioWarning: null,
     solo: { shapes: [], groups: [] }, snap: true, photoShown: true, live: null, wallHeld: false, onStateTidied: null,
     saver: autosaveSchedule<ShowDocument>(async show => {
       if (!bridge) return;
@@ -447,6 +449,7 @@ export function useMap(onError: (message: string) => void) {
   /** Goes up every time an output says it is ready, even one that reloaded while already open: it is sent everything. */
   const [outputEpoch, setOutputEpoch] = useState(0);
   const [blackout, setBlackoutState] = useState(kept.blackout);
+  const [flashGuard, setFlashGuardState] = useState(kept.flashGuard);
   const [testGrid, setTestGridState] = useState(kept.testGrid);
   const [freeze, setFreezeState] = useState(kept.freeze);
   /** How the wall is keeping up, as it reports once a second while the output is open. */
@@ -461,8 +464,8 @@ export function useMap(onError: (message: string) => void) {
   const [saveError, setSaveError] = useState<string | null>(kept.saveFailed ? SAVE_FAILED : null);
   const [wallPicture, setWallPicture] = useState<ImageBitmap | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const latest = useRef({ shown, blackout, testGrid, freeze });
-  latest.current = { shown, blackout, testGrid, freeze };
+  const latest = useRef({ shown, blackout, flashGuard, testGrid, freeze });
+  latest.current = { shown, blackout, flashGuard, testGrid, freeze };
   const saver = kept.saver;
 
   // The saved working show, once per window. A damaged file was already moved aside by the main process, so an empty show is fine.
@@ -596,6 +599,7 @@ export function useMap(onError: (message: string) => void) {
   useEffect(() => {
     if (!outputOpen || !bridge) return;
     sendNow({ type: 'blackout', on: latest.current.blackout });
+    sendNow({ type: 'flashGuard', on: latest.current.flashGuard });
     sendNow({ type: 'testGrid', on: latest.current.testGrid });
     sendNow({ type: 'freeze', on: latest.current.freeze });
     // Solo before the show, so the wall never paints one frame of the shapes solo hides.
@@ -671,6 +675,7 @@ export function useMap(onError: (message: string) => void) {
   useEffect(() => { setPerforming(performService().running); return performService().subscribe(v => setPerforming(v.running)); }, []);
 
   const setBlackout = (on: boolean) => { kept.blackout = on; setBlackoutState(on); if (outputOpen) bridge?.send({ type: 'blackout', on }); };
+  const setFlashGuard = (on: boolean) => { kept.flashGuard = on; setFlashGuardState(on); if (outputOpen) bridge?.send({ type: 'flashGuard', on }); };
   const setTestGrid = (on: boolean) => { kept.testGrid = on; setTestGridState(on); if (outputOpen) bridge?.send({ type: 'testGrid', on }); };
   /** Freeze holds the wall's picture: the instruments stop where they are. */
   const setFreeze = (on: boolean) => { kept.freeze = on; setFreezeState(on); if (outputOpen) bridge?.send({ type: 'freeze', on }); };
@@ -867,5 +872,5 @@ export function useMap(onError: (message: string) => void) {
   return { performing, currentRefusal: () => stateRef.current.refusal, currentShow: () => stateRef.current.show, live, updateLive: liveSettings.update, clearLive, captureLiveRoom, retryLive, retryVideos, onLiveAction, switchScene, stepScene, pendingFade, engine: engine, startEngine: (): ReactivityEngine => { const e = engine ?? reactivity(); if (!engine) setEngine(e); return e; }, signals: meter, onSignals, reactivityPanel: panelOpen, setReactivityPanel: setPanelOpen,
     show, shown, preview, setPreview, wallPicture, openShow, saveShowAs, saveError, notice, loaded, selectedId, selectedIds, selectedIndex, selectedRing, setSelection, selectMany, toggleSelected, identify, setSelectedId: (id: string | null) => setSelection(id), tool, setTool,
     solo, setSolo, soloed, snap, setSnap, photoShown, setPhotoShown, setLastRefusal, dispatch, undo, redo, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
-    lastRefusal, installationWaiting, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
+    lastRefusal, installationWaiting, sendWarning: sendWarning ?? sourceWarning, blackout, setBlackout, flashGuard, setFlashGuard, testGrid, setTestGrid, freeze, setFreeze, wallState, displays, display, setDisplay, outputOpen, openOutput, closeOutput, desktop: !!bridge };
 }

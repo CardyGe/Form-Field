@@ -49,6 +49,9 @@ These are my proposals, from what Greg chose and approved in Smoke:
 - **Return** runs from 0 to 1, with a default of 0.5:
   - **At 0,** shed specks drift away and fade over **Speck life**, and fresh specks keep forming the figure.
   - **At 1,** shed specks are pulled back to the person and rejoin the figure. A person who stands still reassembles within a few seconds.
+  - **In between,** Return is the share of shed specks that come back. At 0.5, about half return and half blow away. Each speck decides from its seed when it is shed, so moving the control changes the mix smoothly. *(My call.)*
+  - **Speck life applies only to specks blowing away.** A returning speck does not fade while a person is there to return to. *(My call.)*
+  - **With nobody to return to,** returning specks drift and fade over Speck life, as a figure does in Smoke when its person leaves, so the room clears by itself. If someone appears first, the specks still alive head for them. *(My call.)*
 - **Speck:** Dust (default), Sparks or Pixels, plus a **Speck size** control.
 - **Start from,** three points that set every behaviour control at once, so they look clearly different. *(My call, following Smoke's pattern.)*
   - **Sandstorm:** Return 0, fairly wild, a lot shed.
@@ -114,7 +117,8 @@ These are my proposals, from what Greg chose and approved in Smoke:
 ### Forever
 
 - On Forever, shed specks never fade, and the picture's edges keep them in, as Smoke's edges do.
-- Because the number of specks is fixed, the picture can never fill completely, so no fullness cap is needed.
+- **Figures always keep their specks.** Part of the fixed count is reserved for figures and cannot be shed into the room. When the rest are all out in the air, shedding stops until some return or Clear is pressed. The person never erodes away and nothing already in the air vanishes, matching Smoke's Forever, which stops adding once full. *(My call.)*
+- With nobody in the picture on Forever, shed specks stay and keep moving on the air until someone returns or Clear is pressed.
 
 ### Settings
 
@@ -142,7 +146,9 @@ Live settings gain `dust`, saved with the others and repaired field by field:
 - The three Speck kinds look measurably different: tails for Sparks, hard edges for Pixels.
 - A frame full of people or movement does not go white.
 - **Without person finding,** movement still sheds specks and the picture is not black.
-- **On Forever,** shed specks stay in the picture.
+- **At Return 0.5,** about half of a burst of shed specks comes back and the rest fade.
+- **At Return 1 with the person gone,** shed specks fade over Speck life and the room clears.
+- **On Forever,** shed specks stay in the picture. With continued movement at Return 0, shedding stops when the free specks run out, and the figure stays intact.
 - Clear empties the picture.
 - The camera picture never reaches the artwork: no Dust material receives the camera.
 - **Smoke and Paint are unchanged:** all their existing checks still pass.

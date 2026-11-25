@@ -6,14 +6,15 @@ import { ProgramGate, ProgramsCompiling, retryWhenLinked, type LinkingProgram } 
 import { isInstrument } from '../core/instruments';
 import * as THREE from 'three';
 import { GraphicRenderer } from './GraphicRenderer';
+import { KaleidoscopeRenderer, kaleidoscopeInputMode } from './KaleidoscopeRenderer';
 import { graphicRenderPlan } from './graphic-view';
 import { imageFit, sourceViewMatrix } from './source-view';
 import { EXRExporter, ZIP_COMPRESSION } from 'three/addons/exporters/EXRExporter.js';
 import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
-import { echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames } from './feedback';
+import { echoAppliedInSource, echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames, kaleidoscopeInput } from './feedback';
 import { channelSliceCounts, echoWeights, previewSliceScale, slicePhase, sliceWarpScale, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
 import { TIME_ECHO, TIME_MEDIAN, medianFramePlan, type MedianPlan, timeGatherFragment, timeMedianFragment, timeMode, timeTargetNeeds } from './time-stats';
-import { parameterDefinitions } from '../core/project';
+import { KALEIDOSCOPE_INPUT, parameterDefinitions } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
 import { fractalFragment } from './fractal';
@@ -35,6 +36,7 @@ import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid
 import { finiteEvolving } from '../core/playback';
 import { super8Fragment } from './super8';
 import { super8ProjectorFragment } from './super8-projector';
+import type { GpuTimer } from './gpu-timer';
 import { super8Clock, super8History, super8Transport, SUPER8_HISTORY } from './super8-motion';
 import { sculptureDeformation, sculptureDetail, createSculptureTorusGeometry } from './sculpture';
 import {
@@ -107,7 +109,7 @@ function material(fragmentShader: string, uniforms: Uniforms): THREE.ShaderMater
 /** Chromatic Field with the periodic TILE branch; see surface.ts. */
 function tiledSurfaceMaterial(): THREE.ShaderMaterial {
   const result = material(surfaceFragment, { ...surfaceUniforms(), uTile: { value: new THREE.Vector2() } });
-  result.defines = { TILE: '' };
+  result.defines = { TILE: '' }; result.name = 'tiledSurface';
   return result;
 }
 
@@ -143,6 +145,9 @@ function number(layer: Layer, key: string, fallback: number): number {
  * Only displayMaterial applies an output transfer function (sRGB) and 8-bit dither.
  * The EXR cache deliberately contains no transfer function or display metadata guess.
  */
+/** Longest a project's preparation waits for a shader compile. */
+const COMPILE_WAIT_MS = 15000;
+
 export class StudioRenderer {
   private emberAudio?: EmberSmokeAudio;
   /** Reused by render() to read the canvas size without allocating. */
@@ -157,6 +162,13 @@ export class StudioRenderer {
   private readonly fractalPreview = target();
   private readonly copy = material(`precision highp float;varying vec2 vUv;uniform sampler2D uImage;void main(){gl_FragColor=texture2D(uImage,vUv);}`, { uImage: { value: null } });
   private readonly graphics = new GraphicRenderer();
+  private kaleidoscope: KaleidoscopeRenderer | null = null;
+  /** A mip-mapped copy of the composite, held only while a visible Kaleidoscope folds the layer below. */
+  private belowCapture: THREE.WebGLRenderTarget | null = null;
+  /** The capture for the layer being drawn; null when there is nothing below it. */
+  private belowInput: THREE.Texture | null = null;
+  /** The previous output during a feedback step, for a source that folds its own echo. */
+  private feedbackHistory: THREE.Texture | null = null;
   private readonly instruments = new InstrumentRenderer();
   private readonly accumA = target();
   private readonly accumB = target();
@@ -298,6 +310,7 @@ export class StudioRenderer {
   private width = 1;
   private height = 1;
   private disposed = false;
+  private passTimer: GpuTimer | null = null;
   private exporting = false;
   private prepareRevision = 0;
 
@@ -632,12 +645,19 @@ export class StudioRenderer {
         required.add(this.assetKey(layer.meridian.mark.dataUrl, false));
         pending.push(this.loadAsset(layer.meridian.mark.dataUrl, false).promise);
       }
+      if (layer.kind === 'kaleidoscope' && layer.image) {
+        required.add(this.assetKey(layer.image.dataUrl, false));
+        // A picture that cannot be decoded leaves the layer on its motif.
+        pending.push(this.loadAsset(layer.image.dataUrl, false).promise.catch(() => this.fallback));
+      }
       if (layer.mask.kind === 'image' && layer.mask.dataUrl) {
         required.add(this.assetKey(layer.mask.dataUrl, true));
         pending.push(this.loadAsset(layer.mask.dataUrl, true).promise);
       }
     }
     await Promise.all(pending);
+    this.assertUsable();
+    if (revision === this.prepareRevision) await this.compileKaleidoscope(project);
     this.assertUsable();
     if (revision === this.prepareRevision) {
       const done = await retryWhenLinked(() => {
@@ -662,6 +682,27 @@ export class StudioRenderer {
     }
   }
 
+  /**
+   * Compiles the Kaleidoscope before its first draw, so a Map slot does not stall the shared wall loop.
+   * Only for projects that show one. The wait is capped: a slow driver falls back to compiling at first draw.
+   */
+  private async compileKaleidoscope(project: Project): Promise<void> {
+    const layer = project.layers.find(item => item.visible && item.kind === 'kaleidoscope');
+    if (!layer) return;
+    this.kaleidoscope ??= new KaleidoscopeRenderer();
+    const material = this.kaleidoscope.materialFor(layer);
+    const shown = this.quad.material, bound = this.renderer.getRenderTarget();
+    // The program depends on the output, so compile for the render target the layer draws into.
+    this.quad.material = material;
+    this.renderer.setRenderTarget(this.source);
+    let ready: Promise<unknown>;
+    try { ready = this.renderer.compileAsync(this.quadScene, this.quadCamera); }
+    finally { this.quad.material = shown; this.renderer.setRenderTarget(bound); }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([ready, new Promise(resolve => { timer = setTimeout(resolve, COMPILE_WAIT_MS); })]);
+    clearTimeout(timer);
+  }
+
   private resize(width: number, height: number): void {
     const limit = this.maxTargetSize;
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > limit || height > limit) {
@@ -675,7 +716,40 @@ export class StudioRenderer {
   private draw(mat: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget | null): void {
     this.quad.material = mat;
     this.renderer.setRenderTarget(output);
+    const timer = this.passTimer;
+    if (timer === null) { this.renderer.render(this.quadScene, this.quadCamera); return; }
+    // A material made after setPassTimer: look for it again once, then label it for good.
+    if (mat.name === '') { this.nameMaterials(); if (mat.name === '') mat.name = 'unnamed'; }
+    timer.begin(mat.name);
     this.renderer.render(this.quadScene, this.quadCamera);
+    timer.end();
+  }
+
+  /**
+   * Times every fullscreen pass by material name. Pass null to stop; with no timer draw pays one null check.
+   * Materials reachable from this object (fields, arrays, maps, helper objects, up to four levels deep)
+   * are named by their path. Any material that cannot be reached is labelled 'unnamed' and its passes
+   * are lumped together under that label.
+   */
+  setPassTimer(timer: GpuTimer | null): void {
+    if (timer !== null) this.nameMaterials();
+    this.passTimer = timer;
+  }
+
+  private nameMaterials(): void {
+    const seen = new Set<object>();
+    const visit = (value: unknown, path: string, depth: number): void => {
+      if (typeof value !== 'object' || value === null || seen.has(value)) return;
+      seen.add(value);
+      if (value instanceof THREE.ShaderMaterial) { if (value.name === '') value.name = path; return; }
+      if (depth >= 4 || value instanceof THREE.WebGLRenderer || value instanceof THREE.Texture
+        || value instanceof THREE.WebGLRenderTarget || value instanceof THREE.Object3D || value instanceof THREE.BufferGeometry
+        || value instanceof HTMLElement) return;
+      if (value instanceof Map) { for (const [k, v] of value) visit(v, `${path}.${String(k)}`, depth + 1); return; }
+      if (Array.isArray(value)) { value.forEach((v, i) => visit(v, `${path}[${i}]`, depth + 1)); return; }
+      for (const [k, v] of Object.entries(value)) visit(v, path ? `${path}.${k}` : k, depth + 1);
+    };
+    visit(this, '', 0);
   }
 
   /** Draws with blending onto what the target already holds. */
@@ -873,6 +947,8 @@ export class StudioRenderer {
       for (const [key, fallback] of Object.entries(FRACTAL_DEFAULTS)) {
         u[`u${key[0].toUpperCase()}${key.slice(1)}`].value = number(layer, key, fallback);
       }
+      // A whole number of palette trips per cycle, so the colour run closes with the loop.
+      u.uOffset.value = number(layer, 'offset', .2) + Math.round(number(layer, 'colorRun', 0)) * localPhase / TAU;
       if(number(layer,'colorMode',0)>0&&number(layer,'colorMix',1)>0)u.uExposure.value=1;
       // The live preview takes one fractal sample per pixel; Retina density
       // already oversamples it. Exports keep the chosen Render quality.
@@ -911,6 +987,18 @@ export class StudioRenderer {
         this.meridianRuntime.mark = held;
       } else this.meridianRuntime.mark = null;
       this.meridian.draw(this.renderer, layer, phase, this.width, this.height, this.source, this.drawPass, this.meridianRuntime);
+    } else if (layer.kind === 'kaleidoscope') {
+      this.kaleidoscope ??= new KaleidoscopeRenderer();
+      const asset = layer.image ? this.assets.get(this.assetKey(layer.image.dataUrl, false)) : undefined;
+      const picture = asset?.texture.image ? asset.texture : null;
+      // Inside a feedback step the ground follows the echo, so a modulated echo fades it rather than flashing it.
+      const folding = this.feedbackHistory !== null && kaleidoscopeInput(layer.params) === KALEIDOSCOPE_INPUT.feedback;
+      const mode = folding ? 'feedback' : kaleidoscopeInputMode(layer, { image: picture !== null, hasBelow: this.belowInput !== null });
+      this.kaleidoscope.draw({ layer, phase, width: this.width, height: this.height, target: this.source,
+        draw: (m, t) => this.draw(m, t), mode, imageFit: layer.image?.fit,
+        input: mode === 'image' ? picture : mode === 'below' ? this.belowInput : null,
+        history: mode === 'feedback' ? this.feedbackHistory : null,
+        imageAspect: mode === 'image' && layer.image ? layer.image.width / layer.image.height : aspect });
     } else {
       const u = this.sculptureUniforms;
       for(const [key,value] of Object.entries(SCULPTURE_SHAPE_DEFAULTS))u[`studio${key[0].toUpperCase()}${key.slice(1)}`].value=number(layer,key,value);
@@ -985,6 +1073,8 @@ export class StudioRenderer {
       this.meridian.beginComposition(project, wrapped, width, height, duration, this.exporting, this.meridianRuntime);
       break;
     }
+    this.releaseBelowCapture(project);
+    let hasBelow = false;
     for (const original of project.layers) {
       if (!original.visible) continue;
       // Feedback layers advance in whole loop frames: every frame of the
@@ -994,6 +1084,8 @@ export class StudioRenderer {
       const sourcePhase = this.sourcePhase(original, framePhase, duration);
       const layer = (original.kind === 'meridian' ? this.meridian?.evaluatedFor(original) : undefined) ?? evaluateLayer(original, sourcePhase);
       if (layer.opacity <= 0) continue;
+      this.belowInput = hasBelow && layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) === KALEIDOSCOPE_INPUT.below
+        ? this.captureBelow(below.texture) : null;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
@@ -1041,7 +1133,7 @@ export class StudioRenderer {
       u.uExposure.value=layer.kind==='fractal'&&(number(layer,'colorMode',0)===0||number(layer,'colorMix',1)===0)?1:number(layer,'exposure',1);
       u.uColorMode.value=layer.kind==='fractal'&&number(layer,'colorMix',1)>0?number(layer,'colorMode',0):0;
       u.uColorSteps.value=number(layer,'colorSteps',6);u.uColorMix.value=number(layer,'colorMix',1);
-      u.uColorOffset.value=number(layer,'offset',0);
+      u.uColorOffset.value=number(layer,'offset',0)+(layer.kind==='fractal'?Math.round(number(layer,'colorRun',0))*Math.max(1,Math.round(number(layer,'cycles',1)))*wrapped/TAU:0);
       u.uLoopPhase.value=wrapped;
       const gradeColors=u.uGradePalette.value as THREE.Color[];
       for(let i=0;i<6;i++)gradeColors[i].set(layer.palette[i]??DEFAULT_PALETTE[i]);
@@ -1053,12 +1145,33 @@ export class StudioRenderer {
       }
       this.draw(this.composite, next);
       [below, next] = [next, below];
+      hasBelow = true;
     }
+    this.belowInput = null;
     this.finish.uniforms.uImage.value = soleSource ?? below.texture;
     (this.finish.uniforms.uBackground.value as THREE.Color).set(project.background);
     this.finish.uniforms.uOpaque.value = project.transparent ? 0 : 1;
     this.finish.uniforms.uExactHighlights.value = project.highlights === 'exact' ? 1 : 0;
     this.draw(this.finish, this.linearOutput);
+  }
+
+  /** Copies the composite so far, so the Kaleidoscope never samples a target being written. */
+  private captureBelow(composite: THREE.Texture): THREE.Texture {
+    if (!this.belowCapture) {
+      this.belowCapture = target();
+      this.belowCapture.texture.generateMipmaps = true;
+      this.belowCapture.texture.minFilter = THREE.LinearMipmapLinearFilter;
+    }
+    if (this.belowCapture.width !== this.width || this.belowCapture.height !== this.height) this.belowCapture.setSize(this.width, this.height);
+    this.copy.uniforms.uImage.value = composite;
+    this.draw(this.copy, this.belowCapture);
+    return this.belowCapture.texture;
+  }
+
+  private releaseBelowCapture(project: Project): void {
+    if (!this.belowCapture) return;
+    if (project.layers.some(l => l.visible && l.kind === 'kaleidoscope' && kaleidoscopeInput(l.params) === KALEIDOSCOPE_INPUT.below)) return;
+    this.belowCapture.dispose(); this.belowCapture = null;
   }
 
   /**
@@ -1397,14 +1510,18 @@ export class StudioRenderer {
   /** One feedback step: the source at `phase` over the faded, transformed echo in `from`. */
   private feedbackStep(original: Layer, phase: number, total: number, duration: number, from: THREE.WebGLRenderTarget, to: THREE.WebGLRenderTarget): void {
     const layer = evaluateLayer(original, this.sourcePhase(original, phase, duration));
-    const source = slitActive(original) ? this.slitSource(original, phase, total, duration) : this.plainSource(original, phase, duration);
+    this.feedbackHistory = from.texture;
+    let source: THREE.Texture;
+    try { source = slitActive(original) ? this.slitSource(original, phase, total, duration) : this.plainSource(original, phase, duration); }
+    finally { this.feedbackHistory = null; }
     const p = echoSettings(layer, phase), u = this.feedback.uniforms;
     u.uSource.value = source; u.uPrevious.value = from.texture;
     u.uAspect.value = this.width / this.height;
     u.uZoom.value = p.echoZoom ?? 1;
     u.uRotate.value = (p.echoRotate ?? 0) * Math.PI / 180;
     (u.uDrift.value as THREE.Vector2).set(p.echoDriftX ?? 0, p.echoDriftY ?? 0);
-    u.uFade.value = echoFade(p);
+    // A source that folded its own echo already holds the previous frame.
+    u.uFade.value = echoAppliedInSource(layer) ? 0 : echoFade(p);
     u.uHue.value = (p.echoHue ?? 0) * Math.PI / 180;
     u.uWarp.value = p.echoMelt ?? 0;
     u.uMode.value = p.echoBlend ?? 0;
@@ -1705,6 +1822,7 @@ export class StudioRenderer {
     this.releaseOilTargets();
     this.graphicSource?.dispose(); this.graphicSource = null;
     this.super8Source?.dispose(); this.super8Source = null;
+    this.belowCapture?.dispose(); this.belowCapture = null;
     for (const state of this.feedbackStates.values()) this.disposeFeedback(state);
     this.slitTargets?.forEach(rt => rt.dispose()); this.slitTargets = null;
     this.slitDriverTarget?.dispose(); this.slitDriverTarget = null;
@@ -1725,6 +1843,7 @@ export class StudioRenderer {
     this.smokeClouds?.dispose(); this.smokeClouds = null;
     this.plainOver?.dispose(); this.plainOver = null;
     this.meridian?.dispose(); this.meridian = null;
+    this.kaleidoscope?.dispose(); this.kaleidoscope = null;
     this.sliceSource?.dispose(); this.sliceSource = null;
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();

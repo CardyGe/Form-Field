@@ -3,7 +3,7 @@ import type { LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import type { MapMessage } from '../map/messages';
-export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | 'smokecloud' | 'meridian' | InstrumentKind;
+export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | 'smokecloud' | 'meridian' | 'kaleidoscope' | InstrumentKind;
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'add' | 'source';
 export type ModulationKind = 'sine' | 'pulse' | 'noise' | 'keyframes';
 export interface KeyPoint { time: number; value: number }
@@ -173,7 +173,7 @@ export interface StudioBridge {
   installation?: InstallationBridge;
 }
 /** Sent from the studio window to the artwork window. */
-export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' } | { type: 'signals'; signals: Record<string, number> } | { type: 'installation'; autopilot: boolean; everyBeats: number };
+export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'flashGuard'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' } | { type: 'signals'; signals: Record<string, number> } | { type: 'installation'; autopilot: boolean; everyBeats: number };
 /** What the artwork window reports: its camera, and person finding when the look uses it. */
 export type LiveReport = SourceState & { people?: PeopleStatus; roomCaptured?: boolean; /** Meridian Live: words and counts, never a picture. */ meridian?: { status: string; bodies: number; limiterOn: boolean; limiterError: string | null; qualityReduced?: boolean } };
 /** Installation mode's saved settings, as the main process validates them. */

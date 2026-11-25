@@ -49,6 +49,8 @@ export class LiveSlot {
     // The Live screen's Blackout and setup views never reach Map's projector.
     this.stage.renderer.view = 'art';
     this.stage.renderer.blackout = false;
+    // The wall guards the finished stage, so Live is not limited twice.
+    this.stage.renderer.flashGuard = false;
     // A video file plays on the Live screen only. Here Live waits on the test pattern, unseen; its shapes play their fill.
     this.fileChosen = settings.source.kind === 'file';
     this.stage.apply(this.fileChosen ? { ...settings, source: { kind: 'test', deviceId: settings.source.deviceId } } : settings);

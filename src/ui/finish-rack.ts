@@ -5,7 +5,8 @@
 import { FEEDBACK_KEYS, GLOW_KEYS, GRADE_KEYS, GRADIENT_KEYS, KEY_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, PRINT_KEYS, SLIT_KEYS, SPLIT_KEYS, TOON_KEYS, WARP_KEYS } from '../core/finishing';
 import { supportsGlow } from '../rendering/bloom';
 import { GRADIENT_PALETTES, supportsLens } from '../rendering/colour-lens';
-import { supportsFeedback } from '../rendering/feedback';
+import { KALEIDOSCOPE_INPUT } from '../core/project';
+import { kaleidoscopeInput, supportsFeedback } from '../rendering/feedback';
 import { supportsPrint } from '../rendering/print-screen';
 import { SLIT_MODES, supportsSlitScan } from '../rendering/slitscan';
 import { LIQUID_STYLES, LUMA_SOURCES, MIRROR_MODES, POLAR_MODES, WARP_FIELDS, supportsWarp } from '../rendering/warp';
@@ -52,7 +53,9 @@ export const FINISH_EFFECTS: FinishEffect[] = [
 /** The effects this layer shows: supported, with at least one of their settings available. */
 export function finishEffectsFor(layer: Layer, definitions: readonly ParameterDefinition[]): FinishEffect[] {
   const available = new Set(definitions.map(d => d.key));
-  return FINISH_EFFECTS.filter(effect => effect.supported(layer) && effect.keys.some(key => available.has(key)));
+  // A Kaleidoscope on Layer below or Feedback manages its own echo, so the generic Feedback effect would do nothing.
+  const ownEcho = layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) >= KALEIDOSCOPE_INPUT.below;
+  return FINISH_EFFECTS.filter(effect => !(ownEcho && effect.id === 'feedback') && effect.supported(layer) && effect.keys.some(key => available.has(key)));
 }
 
 export function hasPower(effect: FinishEffect): boolean {

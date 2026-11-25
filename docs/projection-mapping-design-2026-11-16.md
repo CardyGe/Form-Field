@@ -1085,3 +1085,29 @@ A 16.7 ms frame is the budget for 60 frames per second. Every run stayed under 8
 - Lime Art Group review, on tracing in Resolume: https://limeartgroup.com/top-5-video-mapping-software/ (search summary; a vendor blog)
 
 Independent user complaints were hard to find; most comparison pages are written by vendors. The "struggle" column leans on forum posts and one review, and should be read as that.
+
+## Stage 4 results
+
+Built 21 November 2026 from the plan in `docs/superpowers/plans/2026-11-21-map-stage-4.md`. Decisions as planned: Pin by a triangle grid on Canvas 2D (no WebGL), pin corners from the shape's own four corners or a box, Across group and Across stage as windows on one picture, stage corners that re-pin the wall only, brightness and tint at composite time.
+
+**Built**
+
+- Pin: four corners take the picture with perspective (8 × 8 grid of triangles). A pin that folds over is refused and the last good one stays.
+- Across group and Across stage: the shape shows its part of a picture laid over its group or the whole stage.
+- Brightness (0 to 200 %) and tint (colour and amount), applied once over the picture so a crossfade is not darkened twice.
+- Stage corners: four projector positions, moved in projector pixels, re-pin the whole picture on the wall only. The operator screen is not warped, and outlines do not move.
+- Show file moves to version 4. Versions 1 to 3 open with fit, identity corners and full brightness, unrepaired.
+
+**Known limits, stage 4**
+
+- Share with… and Make separate are not built. A shape still plays its own source only.
+- Pin corners and stage corners are typed in the Details panel (pixels). Dragging them on the stage is not built.
+- Pin uses 8 × 8 triangles. Seams between triangles were not checked by eye on a projector.
+- Brightness above 100 % adds light rather than scaling it, so bright areas clip to white.
+- Stage corners warp the wall's whole picture each drawn frame when they are not the identity. The cost is in the measurement below.
+
+**Checked** (`npm run test:map`, 24 checks, 3 of them new; the pinned check failed once when the wall was slow to show the new pins and passed on the next two runs, so it is watched): a pinned shape projects inside its pinned corners only; brightness at 50 % halves the wall's picture; a moved projector corner re-pins the stage. Unit tests: `tests/map-placement.test.ts`, 16 checks. The three failing tests in the full `tests/*.test.ts` run are in the curated Library (`instruments` and presets), not Map. This stage did not touch those files; they have uncommitted changes in the working tree.
+
+**Measured** (`scripts/measure-map.mjs --pins`, 20 s, eight shapes, medium and heavy mixes): 120 fps, median 8.3 ms, p95 9 ms, no frame over 16.7 ms, governor at full size. This is no slower than stage 3's runs. Not yet run with `--edges` as well, and not on a quiet Mac.
+
+**Not shown.** Whether a grid pinned to an angled box face looks square on a real projector. That needs Greg, a projector and a box.

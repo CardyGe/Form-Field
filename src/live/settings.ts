@@ -18,7 +18,7 @@ import { SEED_SCHEME } from '../meridian/schemes';
 export interface Box { left: number; right: number; bottom: number; top: number }
 export type PaintKey = 'response' | 'strokeLength' | 'bristle' | 'spread' | 'fadeSeconds' | 'colourChange' | 'ground';
 export interface LiveControl<K extends string = PaintKey> { key: K; label: string; min: number; max: number; step: number; default: number; group?: string; description?: string }
-export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief', signal: 'Signal Melt', morphogen: 'Morphogen', meridian: 'Meridian' } as const;
+export const LOOK_LABELS = { paint: 'Paint', smoke: 'Smoke', relief: 'Relief', signal: 'Signal Melt', morphogen: 'Morphogen', meridian: 'Meridian', kaleidoscope: 'Kaleidoscope' } as const;
 export type LookKind = keyof typeof LOOK_LABELS;
 export type ReliefKey = 'depth' | 'reach' | 'settle' | 'lightAngle' | 'edgeLight';
 export const RELIEF_CONTROLS: LiveControl<ReliefKey>[] = [
@@ -111,8 +111,18 @@ export interface LiveSettings {
   morphogenCue: MorphogenCue;
   /** Meridian Live. `preset` is the Studio look it started from, whose other values it keeps. */
   meridian: MeridianLiveSettings;
+  /** group indexes SYMMETRY_GROUPS. spin is turns, and zoom is steps, per 8 seconds. */
+  kaleidoscope: { group: number; sectors: number; cell: number; spiral: boolean; spin: number; zoom: number };
   people: PeopleSettings;
 }
+
+export const KALEIDOSCOPE_LIVE = {
+  group: { min: 0, max: 4, default: 0 },
+  sectors: { min: 3, max: 24, default: 6 },
+  cell: { min: .1, max: 4, default: 1 },
+  spin: { min: -1, max: 1, default: .1 },
+  zoom: { min: -4, max: 4, default: 1 },
+};
 
 export const PAINT_CONTROLS: LiveControl[] = [
   { key: 'response', label: 'Movement response', min: 0, max: 3, step: .01, default: 1 },
@@ -199,6 +209,7 @@ export function defaultLiveSettings(): LiveSettings {
     morphogen: defaultMorphParams(),
     morphogenCue: defaultMorphogenCue(),
     meridian: defaultMeridian(),
+    kaleidoscope: { group: KALEIDOSCOPE_LIVE.group.default, sectors: KALEIDOSCOPE_LIVE.sectors.default, cell: KALEIDOSCOPE_LIVE.cell.default, spiral: false, spin: KALEIDOSCOPE_LIVE.spin.default, zoom: KALEIDOSCOPE_LIVE.zoom.default },
     people: { ignoreStillSeconds: IGNORE_STILL.default, useEmptyRoom: false },
     links: [],
   };
@@ -259,7 +270,8 @@ export function validateLiveSettings(value: unknown): LiveSettings {
   const b: Box = { left: ranged(box.left, 0, 1, 0), right: ranged(box.right, 0, 1, 1), bottom: ranged(box.bottom, 0, 1, 0), top: ranged(box.top, 0, 1, 1) };
   const isPalette = (p: unknown): p is string[] => Array.isArray(p) && p.length === 6 && p.every(c => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c));
   const palette = isPalette(v.palette) ? v.palette : d.palette;
-  const relief = record(v.relief), signal = record(v.signal), smoke = record(v.smoke), people = record(v.people);
+  const relief = record(v.relief), signal = record(v.signal), smoke = record(v.smoke), people = record(v.people), kaleidoscope = record(v.kaleidoscope);
+  const fold = (key: keyof typeof KALEIDOSCOPE_LIVE) => ranged(kaleidoscope[key], KALEIDOSCOPE_LIVE[key].min, KALEIDOSCOPE_LIVE[key].max, KALEIDOSCOPE_LIVE[key].default);
   const still = people.ignoreStillSeconds === null ? null : ranged(people.ignoreStillSeconds, IGNORE_STILL.min, IGNORE_STILL.max, IGNORE_STILL.default);
   return {
     version: 1,
@@ -272,7 +284,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     quality: v.quality === 720 ? 720 : 1080,
     paint: Object.fromEntries(PAINT_CONTROLS.map(c => [c.key, ranged(paint[c.key], c.min, c.max, c.default)])) as Record<PaintKey, number>,
     palette: [...palette],
-    look: v.look === 'smoke' || v.look === 'relief' || v.look === 'signal' || v.look === 'morphogen' || v.look === 'meridian' ? v.look : 'paint',
+    look: v.look === 'smoke' || v.look === 'relief' || v.look === 'signal' || v.look === 'morphogen' || v.look === 'meridian' || v.look === 'kaleidoscope' ? v.look : 'paint',
     reliefPresence: v.reliefPresence === true,
     reliefPalette: validateReliefPalette(v.reliefPalette),
     relief: {
@@ -288,6 +300,7 @@ export function validateLiveSettings(value: unknown): LiveSettings {
     morphogen: validateMorphParams(v.morphogen),
     morphogenCue: validateMorphogenCue(v.morphogenCue),
     meridian: validateMeridian(v.meridian, isPalette),
+    kaleidoscope: { group: Math.round(fold('group')), sectors: Math.round(fold('sectors')), cell: fold('cell'), spiral: kaleidoscope.spiral === true, spin: fold('spin'), zoom: fold('zoom') },
     people: { ignoreStillSeconds: still, useEmptyRoom: typeof people.useEmptyRoom === 'boolean' ? people.useEmptyRoom : false },
     links: readLiveLinks(v.links),
   };
@@ -299,7 +312,7 @@ export function chooseDisplay(displays: { id: number; primary: boolean }[], curr
   return (displays.find(d => !d.primary) ?? displays[0])?.id ?? null;
 }
 
-/** Paint and motion-only Relief run with optical flow alone; Signal finds people when it removes the background; Meridian always looks for people. */
+/** Paint, Kaleidoscope and motion-only Relief run with optical flow alone; Signal finds people when it removes the background; Meridian always looks for people. */
 export function usesPeople(settings: LiveSettings): boolean {
   return settings.look === 'smoke' || settings.look === 'meridian' || (settings.look === 'relief' && settings.reliefPresence) || (settings.look === 'signal' && settings.signal.removeBackground);
 }

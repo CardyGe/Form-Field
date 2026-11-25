@@ -6,7 +6,7 @@ const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
 test('the curated library keeps distinct presets on saturated palettes with a dark or light ground', () => {
-  assert.equal(PRESETS.length, 111 + FRACTAL_PROJECTION_LOOK_IDS.length + MERIDIAN_LOOKS.length);
+  assert.equal(PRESETS.length, 111 + 32 + FRACTAL_PROJECTION_LOOK_IDS.length + MERIDIAN_LOOKS.length);
   assert.equal(new Set(PRESETS.map(p=>p.id)).size, PRESETS.length);
   for (const preset of PRESETS) {
     const layer=applyPreset(createLayer(preset.kind),preset.id);

@@ -14,6 +14,7 @@ vec2 juliaBaseConstant() {
 }
 vec2 juliaConstant() {
   vec2 c=juliaBaseConstant()+uMorph*.014*vec2(cos(uPhase)-1.,sin(uPhase));
+  c+=uDance*vec2(.17*(cos(uPhase)-1.),.23*sin(uPhase)+.06*sin(2.*uPhase));
   if(uEvolution>0.){
     float progress=fract(uPhase/TAU);
     float open=fractalCue(progress,vec4(.06,.36,.51,.75));

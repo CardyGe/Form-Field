@@ -79,6 +79,8 @@ export class Stage {
   /** Opens the current source again, for example after a camera was reconnected. */
   retry(settings: LiveSettings, file: File | null = null): void { this.key = ''; this.apply(settings, file); }
 
+  aimDemo(x: number, y: number): void { this.pattern?.aim(x, y); }
+
   listCameras() { return this.camera.listCameras(); }
 
   /** Person finding as the operator sees it: status and whether the empty room is captured. */

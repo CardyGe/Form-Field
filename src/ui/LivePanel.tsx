@@ -1,3 +1,4 @@
+import { FlashGuardButton } from './FlashGuardButton';
 import { useRef, type ComponentProps, type ReactNode } from 'react';
 import { LiveLookControls, LiveReactSection, Slider, liveLinks } from './LiveLookControls';
 import { useLive } from './useLive';
@@ -54,6 +55,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
       {live.outputOpen ? <button className="primary-button" onClick={live.closeOutput}>Close output</button>
         : <button className="primary-button" disabled={!live.desktop || s.display === null || s.source.kind === 'file'} title={s.source.kind === 'file' ? 'Video files play in this preview only. Choose a camera or the test pattern to open the output.' : 'Show the artwork full screen on the chosen display · Esc closes it'} onClick={() => void live.openOutput()}>Open output</button>}
       <button className={`text-button live-toggle ${live.blackout ? 'on' : ''}`} aria-pressed={live.blackout} onClick={() => live.setBlackout(!live.blackout)}>Blackout</button>
+      <FlashGuardButton on={live.flashGuard} onChange={live.setFlashGuard} />
       <button className="text-button" onClick={live.clear}>Clear</button>
       <span className="live-fps" title="Frames per second">{live.fps ? `${Math.round(live.fps)} fps` : ''}</span>
     </div></header>

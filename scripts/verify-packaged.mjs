@@ -178,7 +178,7 @@ try {
 
   await page.getByRole('button', { name: 'Add fractal', exact: true }).click();
   const familyImages = new Set();
-  for (const name of ['Kaleidoscope', 'Julia Bloom', 'Mandelbox']) {
+  for (const name of ['Folded Lace', 'Julia Bloom', 'Mandelbox']) {
     await page.getByRole('button', { name, exact: true }).click();
     await page.waitForTimeout(500);
     familyImages.add(await digest());

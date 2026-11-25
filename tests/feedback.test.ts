@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { FINISH_LOOKS, FINISH_SHOWCASE_IDS, applyFinish, finishSupported, PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer } from '../src/core/project';
 import { FEEDBACK_KEYS } from '../src/core/finishing';
 import { phaseAtFrame } from '../src/core/timeline';
-import { feedbackActive, frameAtPhase, persistence, supportsFeedback, warmupFrames, MAX_PERSISTENCE } from '../src/rendering/feedback';
+import { echoAppliedInSource, echoFade, echoSettings, feedbackActive, frameAtPhase, historyFrames, persistence, supportsFeedback, warmupFrames, MAX_PERSISTENCE } from '../src/rendering/feedback';
+import { KALEIDOSCOPE_INPUT } from '../src/core/project';
 const unlocked = { palette: false, structure: false, motion: false, material: false };
 
 test('feedback is off by default and older projects migrate without it', () => {
@@ -80,4 +81,48 @@ test('variations never switch feedback on or change its blend and frame', () => 
       if (!(layer.params.echo > 0)) for (const key of FEEDBACK_KEYS) assert.equal(varied.params[key], layer.params[key], `${preset.id} hidden ${key}`);
     }
   }
+});
+
+const kaleidoscope = (input: number, params: Record<string, number> = {}) => {
+  const layer = createLayer('kaleidoscope');
+  Object.assign(layer.params, { input }, params);
+  return layer;
+};
+
+test('a Kaleidoscope on the feedback input runs the feedback history only while echo is up', () => {
+  assert.equal(feedbackActive(kaleidoscope(KALEIDOSCOPE_INPUT.feedback, { echo: .5 })), true);
+  assert.equal(feedbackActive(kaleidoscope(KALEIDOSCOPE_INPUT.feedback, { echo: 0 })), false);
+  assert.equal(echoAppliedInSource(kaleidoscope(KALEIDOSCOPE_INPUT.feedback, { echo: .5 })), true);
+  assert.equal(echoAppliedInSource(kaleidoscope(KALEIDOSCOPE_INPUT.feedback, { echo: 0 })), false);
+});
+
+test('echoAppliedInSource is false for every other input and kind', () => {
+  for (const input of [KALEIDOSCOPE_INPUT.motif, KALEIDOSCOPE_INPUT.image, KALEIDOSCOPE_INPUT.below]) {
+    assert.equal(echoAppliedInSource(kaleidoscope(input, { echo: .5 })), false, `input ${input}`);
+  }
+  for (const kind of ['surface', 'fractal', 'image', 'glitchtunnel', 'oil'] as const) {
+    const layer = createLayer(kind); layer.params.echo = .5; layer.params.input = KALEIDOSCOPE_INPUT.feedback;
+    assert.equal(echoAppliedInSource(layer), false, kind);
+  }
+});
+
+test('the layer-below input keeps no echo history, so its loop stays exact', () => {
+  assert.equal(feedbackActive(kaleidoscope(KALEIDOSCOPE_INPUT.below, { echo: .5 })), false);
+  const animated = kaleidoscope(KALEIDOSCOPE_INPUT.below);
+  animated.modulations.echo = { kind: 'sine', cycles: 1, phase: 0, amount: .2, points: [] };
+  assert.equal(feedbackActive(animated), false);
+  assert.equal(feedbackActive(kaleidoscope(KALEIDOSCOPE_INPUT.motif, { echo: .5 })), true, 'the generic echo still runs on the motif');
+  assert.equal(feedbackActive(kaleidoscope(KALEIDOSCOPE_INPUT.image, { echo: .5 })), true, 'and on an image');
+});
+
+test('on the feedback input the gain and warm-up follow persistence, even with held echo', () => {
+  const held = { echo: 1, echoKeep: 1, echoZoom: 1.02, echoRotate: 3, echoDriftX: .1, echoFrame: .4, echoWindow: .4 };
+  const layer = kaleidoscope(KALEIDOSCOPE_INPUT.feedback, held);
+  const settings = echoSettings(layer, 1);
+  assert.equal(echoFade(settings), persistence(layer), 'never the held gain of 1');
+  assert.ok(echoFade(settings) <= MAX_PERSISTENCE);
+  assert.equal(historyFrames(settings), warmupFrames(persistence(layer)));
+  for (const key of ['echoKeep', 'echoZoom', 'echoRotate', 'echoDriftX', 'echoFrame', 'echoWindow']) assert.equal(settings[key], undefined, key);
+  const generic = kaleidoscope(KALEIDOSCOPE_INPUT.motif, held);
+  assert.equal(echoFade(echoSettings(generic, 1)), 1, 'other inputs keep held echo');
 });

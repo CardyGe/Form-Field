@@ -95,6 +95,7 @@ function acceptMapMessage(value) {
     case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && value.fadeMs >= 0 && value.fadeMs <= 30000));
     case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && value.revision >= 0 && plain(value.project) && (value.crossfade === undefined || value.crossfade === true);
     case 'blackout':
+    case 'flashGuard':
     case 'testGrid':
     case 'freeze': return typeof value.on === 'boolean';
     case 'identify': return idOrNull(value.shapeId);

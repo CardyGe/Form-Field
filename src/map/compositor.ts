@@ -279,6 +279,8 @@ export class MapCompositor {
   private limiterFade: number | null = null;
   private limitingUntil = 0;
   private limiterHolds = { light: 1, red: 1 };
+  /** When the flash guard last stepped; null while it is off. */
+  private guardClock: number | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     canvas.width = STAGE_SIZE.width;
@@ -1176,8 +1178,14 @@ export class MapCompositor {
       const overlay = this.overlayPicture();
       if (overlay) gpu.layer(overlay);
     }
+    // The wall's last step. The operator's own screen and the test grid are not part of the show picture. One limiter at a
+    // time: while the wall limiter above is guarding a Meridian show (or easing away), the area guard stands aside.
+    const clock = performance.now();
+    const wallLimiting = this.guardPolicy.on || this.limiterFade !== null;
+    const guarded = !wallLimiting && this.options.flashGuard !== false && !this.options.operator && !this.options.blackout && !this.options.testGrid;
     // Perform's master level dims the whole stage, last of all before the corners; 1 without a show.
-    gpu.finish(this.corners, this.masterNow(now));
+    gpu.finish(this.corners, this.masterNow(now), guarded ? (this.guardClock === null ? 0 : (clock - this.guardClock) / 1000) : null);
+    this.guardClock = guarded ? clock : null;
     // A fade on a shape that is not being drawn (hidden, a Blocker, test grid, blackout) has nothing to show: it ends,
     // so a still show stops being redrawn.
     for (const id of [...this.fades.keys()]) if (!this.drawnShapes.has(id)) this.endFade(id);

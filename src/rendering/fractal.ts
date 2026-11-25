@@ -15,12 +15,35 @@ uniform float uAspect,uPhase,uSeed,uStyle,uScale,uDetail,uFold,uSymmetry,uTwist;
 uniform float uMorph,uTravel,uOffset,uRelief,uGlow,uContrast,uCameraYaw,uCameraPitch,uZoom;
 uniform float uVariant,uQuality,uDensity,uJuliaReal,uJuliaImag,uTrap,uLineWidth;
 uniform float uBoxScale,uBoxRadius,uRadial,uRoughness,uLightAngle,uExposure;
-uniform float uZoomFlight,uApproach,uOutside;
+uniform float uZoomFlight,uApproach,uFlySway,uOutside;
+uniform float uSwirl,uLens,uMelt,uDance,uNeon;
 uniform float uFocalX,uFocalY,uCutout,uReveal,uPassage,uDepth,uBank,uPosition,uAutoTravel,uAfterglow,uEvolution;
 // Extra magnification for Zoom flight; 1 leaves the plane unchanged.
 float gZoom=1.;
 const float TAU=6.28318530718;
 mat2 turn(float a) { float c=cos(a),s=sin(a);return mat2(c,-s,s,c); }
+// Screen-space swirl, roaming lens and melt. At zero they leave the picture untouched.
+vec2 fractalBend(vec2 p) {
+  float ph=uPhase;
+  if(uSwirl>0.) p=turn(uSwirl*(2.2+1.3*sin(ph))*exp(-1.4*dot(p,p)))*p;
+  if(uLens>0.) {
+    vec2 centre=.16*vec2(cos(ph),sin(2.*ph)),d=p-centre;
+    p=centre+d*(1.-uLens*.72*(.68+.32*sin(ph))*exp(-5.*dot(d,d)));
+  }
+  if(uMelt>0.) {
+    float sag=sin(5.*p.x+ph)+.5*sin(11.*p.x-2.*ph);
+    p+=uMelt*vec2(.035*sin(8.*p.y+ph),.13*sag*(.65+.35*sin(3.*p.y+ph)));
+  }
+  return p;
+}
+// A conservative widening of the line filter wherever the bend compresses the picture.
+float bendFootprint() {return 1.+.7*uSwirl+.6*uLens+.8*uMelt;}
+vec3 neonGrade(vec3 color) {
+  float level=max(color.r,max(color.g,color.b));
+  vec3 hue=pow(color/max(level,.0001),vec3(1.6));
+  float lit=smoothstep(.03,.62,level);
+  return hue*lit*lit*1.55+vec3(.55)*pow(lit,7.);
+}
 vec3 meanPalette() {return (uPalette[0]+uPalette[1]+uPalette[2]+uPalette[3]+uPalette[4]+uPalette[5])/6.;}
 vec3 pigment(float t,float aa) {
   float q=t*6.;
@@ -36,7 +59,7 @@ vec2 wedge(vec2 p) {
   return r*vec2(cos(angle),sin(angle));
 }
 vec2 fractalView(vec2 uv) {
-  return (sourceUV(uv)-.5-vec2(uFocalX,uFocalY))*vec2(uAspect,1.);
+  return fractalBend((sourceUV(uv)-.5-vec2(uFocalX,uFocalY))*vec2(uAspect,1.));
 }
 float legacyCameraMotion() {
   return 1.-smoothstep(0.,.30,uEvolution);
@@ -61,7 +84,7 @@ float planePixel() {
   // undefined higher-order derivatives when the material normal is evaluated.
   float tilt=.18*abs(tan(uCameraPitch));
   float gain=2.8*uScale/1.7/max(uZoom,.5)*gZoom;
-  return uViewScale*gain*1.414214*(1.+uAspect*tilt*.5)/(uResolution.y*pow(1.-tilt*.5,2.));
+  return bendFootprint()*uViewScale*gain*1.414214*(1.+uAspect*tilt*.5)/(uResolution.y*pow(1.-tilt*.5,2.));
 }
 vec3 glaze(vec3 color,float height,float weight) {
   vec2 g=vec2(dFdx(height),dFdy(height));
@@ -91,7 +114,7 @@ vec3 kaleidoscopeSample(vec2 offset) {
   vec3 color=uPalette[5]*.025,halo=vec3(0.);
   float pixel=planePixel();
   float growth=1.65+uFold*.52;
-  float angle=.24+uTwist*.5+.12*sin(seed)+uMorph*.065*sin(uPhase+seed);
+  float angle=.24+uTwist*.5+.12*sin(seed)+uMorph*.065*sin(uPhase+seed)+uDance*.42*sin(uPhase);
   for(int i=0;i<7;i++) {
     float levelIndex=float(i);
     float stageMix=1.,opening=0.;
@@ -207,6 +230,7 @@ void main() {
   if(pixel.a>0.) {
     vec3 color=pixel.rgb/pixel.a;
     color=max((color-.18)*mix(.65,1.65,uContrast)+.18,vec3(0.));
+    if(uNeon>0.)color=mix(color,neonGrade(color),uNeon);
     pixel.rgb=color*uExposure*pixel.a;
   }
   gl_FragColor=pixel;

@@ -1,8 +1,8 @@
 import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS, PRINT_KEYS, SPLIT_KEYS, GRADIENT_KEYS, GRADE_KEYS, KEY_KEYS, WARP_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, POLAR_KEYS, MIRROR_KEYS} from './finishing';
 import { isSimplePolygon } from './surface-layout';
 import { TIMING_PARAMETERS, TIMING_KEYS } from './timing';
-import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW } from './palettes';
-import { supportsFeedback } from '../rendering/feedback';
+import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW, LASER_GARDEN, ULTRAVIOLET, VAPOR, SUNSET_RAVE, DEEP_REEF, MOLTEN, PRISM, TOXIC, AURORA, BUBBLEGUM, ICE_FIRE, PSYCH_70S, ELECTRIC_LIME, BLOOD_ORANGE, MINT_MAGENTA, CRIMSON_TEAL } from './palettes';
+import { kaleidoscopeInput, supportsFeedback } from '../rendering/feedback';
 import { supportsSlitScan } from '../rendering/slitscan';
 import { supportsGlow } from '../rendering/bloom';
 import { supportsPrint } from '../rendering/print-screen';
@@ -28,7 +28,7 @@ const DEFAULT_PALETTE = ['#49efd6', '#cbf34a', '#ef62d9', '#7747ef', '#ff826c', 
 const SCULPTURE_PALETTE = CANDY;
 const FRACTAL_PALETTE = ['#5fffe1', '#aff043', '#b77bff', '#f65aa6', '#ffb969', '#09102c'];
 const FRACTAL_EVOLUTION = .82;
-export const FRACTAL_FAMILIES = ['Kaleidoscope', 'Julia Bloom', 'Mandelbox', 'Portal'];
+export const FRACTAL_FAMILIES = ['Folded Lace', 'Julia Bloom', 'Mandelbox', 'Portal'];
 export const FRACTAL_VARIANTS = [
   ['Lace', 'Petals', 'Weave'],
   ['Classic', 'Radial', 'Spiral'],
@@ -52,6 +52,43 @@ const LIQUID_PALETTE = ['#7a0006', '#ff1414', '#ff7a00', '#ffe81a', '#1a1aff', '
 // Meridian: 0 base line, 1 primary accent, 2 secondary accent, 3 hero core, 4 halo, 5 ground.
 const MERIDIAN_PALETTE = ['#ffffff', '#ff3fd0', '#35d0ff', '#ffffff', '#ffffff', '#08070b'];
 const OIL_PALETTE = ['#eeff00', '#a7de12', '#060710', '#25b8ed', '#071275', '#e2a51c'];
+
+/** Where a Kaleidoscope layer takes the picture it folds. */
+export const KALEIDOSCOPE_INPUT = { motif: 0, image: 1, below: 2, feedback: 3 } as const;
+
+/** Whether the source draws a motif of its own: the motif itself, or feedback before any echo. */
+export const kaleidoscopeDrawsMotif = (params: Record<string, number>) => {
+  const input = kaleidoscopeInput(params);
+  return input === KALEIDOSCOPE_INPUT.motif || input === KALEIDOSCOPE_INPUT.feedback;
+};
+
+/** The controls that do nothing for these settings, so they are not shown or changed indirectly. */
+export function kaleidoscopeHidden(params: Record<string, number>): Set<string> {
+  const spiral = Math.round(params.spiral ?? 0) === 1, group = Math.round(params.group ?? 0);
+  const hidden = new Set<string>();
+  if (spiral) { hidden.add('sectors'); hidden.add('cell'); } else {
+    hidden.add('spiralA'); hidden.add('spiralB'); hidden.add('spiralScale'); hidden.add('zoomCycles');
+    hidden.add(group === 0 ? 'cell' : 'sectors');
+  }
+  if (!kaleidoscopeDrawsMotif(params)) { hidden.add('motifScale'); hidden.add('lineWidth'); hidden.add('morphTo'); hidden.add('morphs'); }
+  else if (Math.round(params.morphTo ?? 0) === 0) hidden.add('morphs');
+  return hidden;
+}
+
+/** A spiral needs a whole Motif scale, so animating it would jump the whole picture: its route waits. */
+export const kaleidoscopeHoldsMotifScale = (layer: Pick<Layer, 'kind' | 'params'>) =>
+  layer.kind === 'kaleidoscope' && Math.round(layer.params.spiral ?? 0) >= 1;
+
+/** Controls the Motion tab does not offer for these settings. Saved routes are kept. */
+export function kaleidoscopeRouteHidden(params: Record<string, number>): Set<string> {
+  const hidden = kaleidoscopeHidden(params);
+  if (Math.round(params.spiral ?? 0) >= 1) hidden.add('motifScale');
+  return hidden;
+}
+
+/** On these sources the echo is the layer's own, so a finish's echo settings would do nothing. */
+const kaleidoscopeOwnsEcho = (layer: Pick<Layer, 'kind' | 'params'>) =>
+  layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) >= KALEIDOSCOPE_INPUT.below;
 
 const parameter = (key: string, label: string, min: number, max: number, step: number, value: number, section: ParameterDefinition['section']): ParameterDefinition =>
   ({ key, label, min, max, step, default: value, section });
@@ -205,6 +242,7 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     { ...parameter('zoomFlight', 'Zoom flight', 0, 1, 0.01, 0, 'Motion'), description: 'Flies continuously into the pattern; each loop zooms one step deeper and fades into the next. 0 is off.' },
     { ...parameter('outside', 'Outside colour', 0, 1, 0.01, 0, 'Material'), description: 'Julia only: fills the space beyond the set with dim colour bands instead of black.' },
     { ...parameter('approach', 'Fly in', 0, 1, 0.01, 0, 'Camera'), description: 'Moves the camera inside the Mandelbox toward its folded core. 0 frames the whole box from outside.' },
+    { ...parameter('flySway', 'Fly-in sway', 0, 1, 0.01, 0, 'Camera'), description: 'Replaces the full orbit of Fly in with a gentle side-to-side sway. 0 keeps the full orbit.' },
     parameter('quality', 'Render quality', 0, 2, 1, 2, 'Material'),
     parameter('density', 'Color density', 0.25, 3, 0.01, 1, 'Material'),
     parameter('juliaReal', 'Julia real', -1.2, 0.4, 0.00001, -0.74543, 'Shape'),
@@ -217,6 +255,12 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('lightAngle', 'Light angle', -Math.PI, Math.PI, 0.01, -0.6, 'Material'),
     parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
     parameter('lineWidth', 'Line width', 0.25, 2, 0.01, 1, 'Shape'),
+    parameter('swirl', 'Swirl', 0, 1, 0.01, 0, 'Shape'),
+    parameter('lens', 'Lens', 0, 1, 0.01, 0, 'Shape'),
+    parameter('melt', 'Melt', 0, 1, 0.01, 0, 'Shape'),
+    { ...parameter('dance', 'Shape dance', 0, 1, 0.01, 0, 'Motion'), description: 'Makes the fractal itself change shape through the loop.' },
+    { ...parameter('colorRun', 'Colour run', -4, 4, 1, 0, 'Motion'), description: 'How many times the palette races through the fractal each cycle.' },
+    { ...parameter('neon', 'Neon', 0, 1, 0.01, 0, 'Material'), description: 'Deepens the darks and makes the bright edges glow.' },
     parameter('colorMode', 'Coloring', 0, 2, 1, 0, 'Material'),
     parameter('colorSteps', 'Contour colors', 2, 12, 1, 6, 'Material'),
     parameter('colorMix', 'Coloring amount', 0, 1, 0.01, 1, 'Material'),
@@ -391,6 +435,36 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
   ],
   graphic: GRAPHIC_PARAMETERS,
   meridian: MERIDIAN_PARAMETERS.map(d => ({ ...d })),
+  kaleidoscope: [
+    parameter('input', 'Source', 0, 3, 1, 0, 'Shape'),
+    parameter('group', 'Symmetry', 0, 4, 1, 0, 'Shape'),
+    parameter('sectors', 'Mirrors', 3, 24, 1, 6, 'Shape'),
+    parameter('cell', 'Repeat size', 0.1, 4, 0.01, 1, 'Shape'),
+    parameter('spiral', 'Spiral', 0, 1, 1, 0, 'Shape'),
+    parameter('spiralA', 'Spiral arms', -6, 6, 1, 1, 'Shape'),
+    parameter('spiralB', 'Spiral rings', -6, 6, 1, 2, 'Shape'),
+    parameter('spiralScale', 'Spiral step', 2, 256, 0.01, 4, 'Shape'),
+    parameter('zoomCycles', 'Zoom per loop', -4, 4, 1, 1, 'Motion'),
+    parameter('cycles', 'Cycles per loop', 1, 8, 1, 1, 'Motion'),
+    parameter('sourceX', 'Source position X', -1, 1, 0.001, 0, 'Camera'),
+    parameter('sourceY', 'Source position Y', -1, 1, 0.001, 0, 'Camera'),
+    parameter('sourceScale', 'Source size', 0.1, 8, 0.01, 1, 'Camera'),
+    parameter('sourceTurn', 'Source turn', -Math.PI, Math.PI, 0.01, 0, 'Shape'),
+    parameter('sourceDrift', 'Source drift', 0, 1, 0.01, 0.15, 'Motion'),
+    parameter('warpIn', 'Warp before fold', 0, 1, 0.01, 0, 'Shape'),
+    parameter('warpOut', 'Warp after fold', 0, 1, 0.01, 0, 'Shape'),
+    parameter('twist', 'Twist', 0, 1, 0.01, 0, 'Shape'),
+    parameter('lens', 'Lens', 0, 1, 0.01, 0, 'Shape'),
+    parameter('melt', 'Melt', 0, 1, 0.01, 0, 'Shape'),
+    parameter('morphTo', 'Morphs into', 0, 6, 1, 0, 'Shape'),
+    parameter('morphs', 'Morphs per loop', 1, 8, 1, 1, 'Motion'),
+    parameter('motif', 'Motif', 0, 5, 1, 0, 'Shape'),
+    parameter('motifScale', 'Motif scale', 0.25, 8, 0.01, 2, 'Shape'),
+    parameter('lineWidth', 'Line weight', 0.25, 6, 0.01, 2, 'Shape'),
+    parameter('saturation', 'Saturation', 0, 2, 0.01, 1, 'Material'),
+    parameter('hue', 'Hue shift', -Math.PI, Math.PI, 0.01, 0, 'Material'),
+    parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
+  ],
   image: [
     parameter('mirror', 'Mirror', 0, 3, 1, 0, 'Shape'),
     parameter('repeat', 'Repeat', 1, 8, 1, 1, 'Shape'),
@@ -415,15 +489,16 @@ export function readParameterDefinitions(kind: LayerKind): readonly Readonly<Par
 }
 
 const FRACTAL_ADDED_FIELDS = [
-  'zoomFlight', 'approach', 'outside', 'variant', 'quality', 'density', 'juliaReal', 'juliaImag',
+  'zoomFlight', 'approach', 'flySway', 'outside', 'variant', 'quality', 'density', 'juliaReal', 'juliaImag',
   'trap', 'boxScale', 'boxRadius', 'radial', 'roughness', 'lightAngle', 'exposure', 'lineWidth',
   'focalX', 'focalY', 'cutout', 'evolution', 'reveal', 'passage', 'depth', 'bank', 'position', 'autoTravel', 'afterglow',
 ];
 const GRADING_FIELDS = ['saturation', 'hue', 'exposure'];
 const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
+  kaleidoscope: ['twist', 'lens', 'melt', 'morphTo', 'morphs'],
   surface: [...TIMING_KEYS,'anisotropy','sheenAngle','iridescence', 'roundness', 'relief', 'variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', ...GRADING_FIELDS],
   sculpture: ['spin', 'opening', 'twist', 'form', 'lobes', 'thickness', 'stretch', 'curl', 'foldFrequency', 'asymmetry', 'ridgeScale', 'metallic', 'clearcoat', 'sheen', 'filmScale', 'lightPower', 'shadowStrength', 'shadowSoftness', ...GRADING_FIELDS],
-  fractal: [...FRACTAL_ADDED_FIELDS, 'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue'],
+  fractal: [...FRACTAL_ADDED_FIELDS, 'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue', 'swirl', 'lens', 'melt', 'dance', 'colorRun', 'neon'],
   super8: [...SUPER8_PROJECTOR_KEYS, ...SUPER8_ROLL_KEYS],
   oil: ['layout','dome','anisotropy','sheenAngle','caustics', 'iridescence', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion'],
   scope: [SCOPE_MODE.key, ...EMBER_KEYS],
@@ -474,7 +549,7 @@ function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
     return definitions.filter(d => keys.has(d.key)).map(d => d.key === 'columns' ? {...d, label:'Pleats'} : d);
   }
   if(layer.kind==='relief'&&layer.params.reliefMode===1){
-    const keys=new Set([...TIMING_KEYS,'panelMix','reliefMode','scale','columns','gap','stagger','hingeBias','opening','depth','axis','phaseSpread','organic','motion','cycles','phrase','phaseOffset','lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
+    const keys=new Set([...TIMING_KEYS,'panelMix','concertina','reliefMode','scale','columns','gap','stagger','hingeBias','opening','depth','axis','phaseSpread','organic','motion','cycles','phrase','phaseOffset','lightAngle','lightHeight','fillLight','shadow','roughness','clearcoat','backgroundOpacity','saturation','hue','exposure',...FINISH_KEYS]);
     return definitions.filter(d=>keys.has(d.key));
   }
   if (layer.kind === 'scope') {
@@ -486,7 +561,7 @@ function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const familySpecific: Record<string, number[]> = {
     juliaReal: [1], juliaImag: [1], trap: [1],
     boxScale: [2], boxRadius: [2], radial: [2], roughness: [2], lightAngle: [2],
-    lineWidth: [0, 1, 3], zoomFlight: [0, 1], approach: [2], outside: [1],
+    lineWidth: [0, 1, 3], zoomFlight: [0, 1], approach: [2], flySway: [2], outside: [1],
     morph: [0, 1, 2], reveal: [0, 1, 3], cutout: [0, 1, 3], passage: [2],
     depth: [2, 3], bank: [2, 3], position: [3], autoTravel: [3], afterglow: [3],
   };
@@ -513,6 +588,38 @@ export const SUPER8_MODES = ['Chromatic Staircase', 'Paint Destruction', 'Scratc
 export const PRESETS: Preset[] = [
   ...INSTRUMENTS.flatMap(info => info.looks.map(look => preset(look.id, look.name, info.description, info.kind, look.palette ?? info.palette, look.params))),
   ...GRAPHIC_LOOKS.map(look => preset(look.id, look.name, look.description, 'graphic', look.palette, look.params)),
+  preset('kaleido-neon-bloom', 'Neon Bloom', 'Glowing curves racing through an eight-way rosette.', 'kaleidoscope', LASER_GARDEN, { motif: 3, sectors: 8, motifScale: 1.6, lineWidth: 1.6, warpOut: .35, warpIn: .25, sourceDrift: .25 }),
+  preset('kaleido-laser-lattice', 'Laser Lattice', 'A hexagonal wall of neon line work.', 'kaleidoscope', ULTRAVIOLET, { motif: 3, group: 4, cell: 1.1, motifScale: 1.4, lineWidth: 1.2, warpOut: .5, sourceDrift: .4 }),
+  preset('kaleido-neon-vortex', 'Neon Vortex', 'Light lines pouring down an endless spiral.', 'kaleidoscope', VAPOR, { motif: 3, spiral: 1, spiralA: 2, spiralB: 3, spiralScale: 5, zoomCycles: 2, motifScale: 1, lineWidth: 1.4 }),
+  preset('kaleido-woven-sun', 'Woven Sun', 'Rounded ribbons plaited into a hot rosette.', 'kaleidoscope', SUNSET_RAVE, { motif: 4, sectors: 10, motifScale: 3, lineWidth: 2.2, warpIn: .3, sourceDrift: .2 }),
+  preset('kaleido-ribbon-reef', 'Ribbon Reef', 'Teal and coral strands weaving across a square lattice.', 'kaleidoscope', DEEP_REEF, { motif: 4, group: 3, cell: 1.3, motifScale: 2.5, lineWidth: 2.4, warpOut: .4, sourceDrift: .3 }),
+  preset('kaleido-braid-tunnel', 'Braid Tunnel', 'A woven tube spiralling away forever.', 'kaleidoscope', MOLTEN, { motif: 4, spiral: 1, spiralA: 1, spiralB: 4, spiralScale: 3, zoomCycles: 1, motifScale: 2, lineWidth: 3 }),
+  preset('kaleido-dot-tunnel', 'Dot Tunnel', 'Rippling colour dots flying toward you.', 'kaleidoscope', PRISM, { motif: 5, spiral: 1, spiralA: 0, spiralB: 4, spiralScale: 256, zoomCycles: -2, motifScale: 1, lineWidth: 2.4 }),
+  preset('kaleido-dot-storm', 'Dot Storm', 'A triangle lattice of pulsing, glowing dots.', 'kaleidoscope', TOXIC, { motif: 5, group: 2, cell: 1.2, motifScale: 2, lineWidth: 2.4, warpIn: .25, sourceDrift: .5 }),
+  preset('kaleido-melt-trails', 'Melt Trails', 'Neon folded back into itself until it melts.', 'kaleidoscope', AURORA, { input: 3, echo: .88, motif: 3, sectors: 6, motifScale: 1.5, lineWidth: 1.1, warpIn: .6, warpOut: .55, sourceDrift: .45 }),
+  preset('kaleido-liquid-mirror', 'Liquid Mirror', 'Ribbons dissolving through their own mirrored echoes.', 'kaleidoscope', BUBBLEGUM, { input: 3, echo: .8, motif: 4, group: 1, cell: 1.5, motifScale: 2.4, lineWidth: 1.2, warpIn: .7, warpOut: .3, sourceDrift: .6 }),
+  preset('kaleido-echo-spiral', 'Echo Spiral', 'Dots leaving long trails around a turning spiral.', 'kaleidoscope', ICE_FIRE, { input: 3, echo: .82, motif: 5, spiral: 1, spiralA: 3, spiralB: 2, spiralScale: 6, zoomCycles: 1, motifScale: 1, lineWidth: 1.2 }),
+  preset('kaleido-psych-mandala', 'Psych Mandala', 'Dense twelve-way bloom of dots and warped colour.', 'kaleidoscope', PSYCH_70S, { motif: 5, sectors: 12, motifScale: 2.2, lineWidth: 2.8, warpIn: .55, warpOut: .4, sourceDrift: .3 }),
+  preset('fractal-plasma-julia', 'Plasma Julia', 'A Julia set that keeps changing shape while colour races through it.', 'fractal', ULTRAVIOLET, { evolution: 0, style: 1, variant: 0, scale: .85, detail: .75, dance: .7, colorRun: 2, neon: .3, glow: .8, trap: .75, outside: .95, density: 2.2 }),
+  preset('fractal-liquid-julia', 'Liquid Julia', 'Filigree sagging and pouring through a roaming lens.', 'fractal', DEEP_REEF, { evolution: 0, style: 1, variant: 0, scale: .8, detail: .8, dance: .35, swirl: .35, lens: .6, melt: .7, colorRun: 1, neon: .25, glow: .7, outside: .9, density: 2 }),
+  preset('fractal-julia-vortex', 'Julia Vortex', 'Tendrils wound into a turning whirlpool.', 'fractal', SUNSET_RAVE, { evolution: 0, style: 1, variant: 2, scale: .9, detail: .8, fold: .7, dance: .4, swirl: .85, colorRun: -2, neon: .3, glow: .75, outside: .9, density: 2.4 }),
+  preset('fractal-neon-mandala', 'Neon Mandala', 'A mirrored Julia bloom burning at its edges.', 'fractal', LASER_GARDEN, { evolution: 0, style: 1, variant: 1, scale: .8, detail: .8, symmetry: 10, dance: .55, lens: .35, colorRun: 3, neon: .35, glow: .9, trap: .9, outside: .85, density: 2.2 }),
+  preset('fractal-infinite-dive', 'Infinite Dive', 'An endless flight into glowing Julia detail.', 'fractal', AURORA, { evolution: 0, style: 1, variant: 0, scale: 1, detail: .85, zoomFlight: .8, colorRun: 1, neon: .3, glow: .8, outside: .8, density: 2 }),
+  preset('fractal-acid-lace', 'Acid Lace', 'Recursive line work twisting and dripping.', 'fractal', TOXIC, { evolution: 0, style: 0, variant: 0, scale: .75, detail: .9, symmetry: 8, lineWidth: 1.1, dance: .6, swirl: .4, melt: .55, colorRun: 2, neon: .3, glow: .9, density: 1.6 }),
+  preset('fractal-molten-petals', 'Molten Petals', 'Petals folding open inside a moving lens.', 'fractal', MOLTEN, { evolution: 0, style: 0, variant: 1, scale: .7, detail: .85, fold: .65, symmetry: 10, dance: .7, lens: .7, colorRun: -1, neon: .15, glow: .75, density: 1.8 }),
+  preset('fractal-woven-storm', 'Woven Storm', 'Crossing ribbons pulled into a storm.', 'fractal', ICE_FIRE, { evolution: 0, style: 0, variant: 2, scale: .95, detail: .8, symmetry: 6, dance: .8, swirl: .75, colorRun: 3, neon: .25, glow: .55, lineWidth: .8, density: 1.5 }),
+  preset('fractal-melting-cathedral', 'Melting Cathedral', 'Folded architecture sliding like hot glass.', 'fractal', PSYCH_70S, { evolution: 0, style: 2, variant: 0, scale: 1.9, detail: .42, fold: 0, approach: .85, dance: .3, swirl: .3, melt: .75, colorRun: 1, neon: .1, relief: .8, glow: .8, density: 2.4, exposure: 1.9, contrast: .62 }),
+  preset('fractal-warp-core', 'Warp Core', 'A breathing machine seen through a heavy lens.', 'fractal', ELECTRIC_LIME, { evolution: 0, style: 2, variant: 2, scale: 2, detail: .42, fold: 0, approach: .85, flySway: .12, travel: .1, dance: .35, lens: .85, colorRun: 0, neon: .15, relief: .45, glow: .8, density: 2.4, exposure: 1.6, contrast: .62 }),
+  preset('fractal-neon-vault', 'Neon Vault', 'Flying through sphere folds lit from inside.', 'fractal', VAPOR, { evolution: 0, style: 2, variant: 1, scale: 1.85, detail: .32, fold: .12, approach: .8, dance: .35, swirl: .25, colorRun: -1, neon: .15, relief: .85, glow: .9, density: 2.4, exposure: 1.6, contrast: .62 }),
+  preset('fractal-black-sun', 'Black Sun', 'A radial box fold pulsing around a dark core.', 'fractal', BLOOD_ORANGE, { evolution: 0, style: 2, variant: 0, radial: 1, symmetry: 8, scale: 1.9, detail: .42, fold: 0, approach: .85, flySway: .12, travel: .1, dance: .35, swirl: .55, colorRun: 0, neon: .15, relief: .45, glow: .85, density: 2.4, exposure: 1.5, contrast: .62 }),
+  preset('kaleido-acid-melt', 'Acid Melt', 'Neon rosette sagging and swirling like hot wax.', 'kaleidoscope', ACID_DRIP, { motif: 3, sectors: 6, motifScale: 1.8, lineWidth: 1.5, twist: .55, lens: .5, melt: .75 }),
+  preset('kaleido-black-hole', 'Black Hole Bloom', 'Light lines bent into a pulsing gravity well.', 'kaleidoscope', ELECTRIC_LIME, { motif: 3, spiral: 1, spiralA: 3, spiralB: 2, spiralScale: 6, zoomCycles: 3, motifScale: 1, lineWidth: 1.3, twist: .7, lens: .9 }),
+  preset('kaleido-ribbon-whirlpool', 'Ribbon Whirlpool', 'Woven strands dragged into a turning whirlpool.', 'kaleidoscope', BLOOD_ORANGE, { motif: 4, sectors: 7, motifScale: 2.6, lineWidth: 2.3, twist: .9, lens: .45 }),
+  preset('kaleido-liquid-weave', 'Liquid Weave', 'A hexagon plait that runs and drips.', 'kaleidoscope', MINT_MAGENTA, { motif: 4, group: 4, cell: 1.3, motifScale: 2.4, lineWidth: 2.1, melt: .8, twist: .3 }),
+  preset('kaleido-dot-warp', 'Dot Warp', 'Glowing dots ballooning through a moving lens.', 'kaleidoscope', CANDY, { motif: 5, group: 3, cell: 1.2, motifScale: 3.4, lineWidth: 3.2, lens: .95, twist: .45, melt: .3 }),
+  preset('kaleido-shapeshifter', 'Shapeshifter', 'Neon lines wash outward into woven ribbons and back.', 'kaleidoscope', POP_PORTAL, { motif: 3, morphTo: 5, morphs: 2, sectors: 8, motifScale: 2, lineWidth: 1.8, twist: .35, lens: .4 }),
+  preset('kaleido-portal-morph', 'Portal Morph', 'A dot tunnel that keeps turning into light.', 'kaleidoscope', CRIMSON_TEAL, { motif: 5, morphTo: 4, morphs: 3, spiral: 1, spiralA: 1, spiralB: 4, spiralScale: 256, zoomCycles: -2, motifScale: 1, lineWidth: 2.2, twist: .25 }),
+  preset('kaleido-feedback-inferno', 'Feedback Inferno', 'Molten neon folding into its own burning trails.', 'kaleidoscope', SOLAR, { input: 3, echo: .9, motif: 3, sectors: 5, motifScale: 1.5, lineWidth: 1.1, twist: .6, lens: .6, melt: .7 }),
   preset('chromatic-staircase', 'Chromatic Staircase', 'Hand-painted terraces through a warm, softly flickering projector.', 'super8', SUPER8_PALETTE, { coverage: 1, scale: 0.5, steps: 10 }),
   preset('paint-destruction', 'Paint Destruction', 'Eroding pigment, dry brush strokes and decaying paint echoes.', 'super8', ['#e95a24', '#e8af25', '#245ba1', '#c22d53', '#17131d', '#e4cda8'], { mode: 1, texture: 0.95, roughness: 0.85, feedback: 0.65, travel: 0.65, scratches: 0.15, emulsion: .85, lightLeak: .4, halation: .5, dust: .4, frameLines: .3, colorFade: 0, bleed: 0.2, erosion: 0.45, coverage: 0.95 }),
   preset('scratched-negative', 'Scratched Negative', 'Inverted stepped forms scored by shifting film scratches.', 'super8', ['#f0b458', '#cc5262', '#528f8d', '#7864a6', '#10151c', '#e2dcc4'], { mode: 2, scratches: 0.85, grain: 0.45, flicker: 0.35, weave: 0.4, filmFps: 12, feedback: 0.24, erosion: 0.38, gateMode: 2, sprockets: .85, frameLines: .85, pullDown: .9, dust: .65, hair: .6, lightLeak: .12, vignette: .5, coverage: 1, scale: 0.5, rotation: -1.2, steps: 7 }),
@@ -645,6 +752,7 @@ export function finishSupported(layer: Pick<Layer, 'kind' | 'params'>, finishId?
   if (!supportsFeedback(layer) || !supportsSlitScan(layer) || !supportsWarp(layer)) return false;
   const look = FINISH_LOOKS.find(item => item.id === finishId);
   if (!look) return true;
+  if ('echo' in look.params && kaleidoscopeOwnsEcho(layer)) return false;
   return (supportsGlow(layer) || !GLOW_KEYS.some(key => key in look.params)) && (supportsPrint(layer) || !PRINT_KEYS.some(key => key in look.params)) &&
     (supportsLens(layer) || !LENS_KEYS.some(key => key in look.params));
 }
@@ -653,7 +761,8 @@ export function applyFinish(layer: Layer, finishId: string): Layer {
   if (!look) throw new Error(`Unknown finish: ${finishId}`);
   if (!finishSupported(layer, finishId)) throw new Error(`${look.name} cannot be applied to this layer.`);
   const next = structuredClone(layer), defaults = parameterDefinitions(layer.kind);
-  for (const key of FINISH_LOOK_KEYS) { next.params[key] = defaults.find(d => d.key === key)!.default; delete next.modulations[key]; }
+  const keepEcho = kaleidoscopeOwnsEcho(layer);
+  for (const key of FINISH_LOOK_KEYS) { if (keepEcho && key === 'echo') continue; next.params[key] = defaults.find(d => d.key === key)!.default; delete next.modulations[key]; }
   Object.assign(next.params, look.params);
   return next;
 }
@@ -664,7 +773,7 @@ export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
     id: crypto.randomUUID(),
-    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'smokecloud' ? 'Smoke Cloud' : kind === 'scope' ? 'Oscilloscope' : kind === 'meridian' ? 'Meridian' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : 'Image'),
+    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'smokecloud' ? 'Smoke Cloud' : kind === 'scope' ? 'Oscilloscope' : kind === 'meridian' ? 'Meridian' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : kind === 'kaleidoscope' ? 'Kaleidoscope' : 'Image'),
     kind, visible: true, opacity: 1, blend: 'normal',
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     mask: { kind: 'none', softness: 0.15, invert: false, size: 0.8 },
@@ -722,7 +831,7 @@ export function clampParameter(value: number, definition: ParameterDefinition): 
 }
 
 // Identity, coverage and Julia topology are deliberate composition choices.
-const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'scopeMode','emberPhrases','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
+const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'input','group','motif','spiral','spiralA','spiralB','zoomCycles','colorRun','morphTo','morphs','scopeMode','emberPhrases','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
 const VARIATION_OFF_VALUES: Record<string, number> = { slitChroma: 0, slitZoom: 0, slitReach: 1, glowSpread: 0, glowStreak: 0 };
 export type VariationLocks = { palette: boolean; structure: boolean; motion: boolean; material: boolean };
 
@@ -747,11 +856,15 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
   const distance = (p: Preset) => definitions.filter(d => d.section === 'Shape' && !VARIATION_FIXED.has(d.key))
     .reduce((n,d) => n + ((layer.params[d.key] - p.params[d.key]) / (d.max-d.min)) ** 2, 0);
   const anchor = recipes.sort((a,b) => distance(a)-distance(b))[0];
+  const inactive = layer.kind === 'kaleidoscope' ? kaleidoscopeHidden(layer.params) : null;
+  const ownEcho = kaleidoscopeOwnsEcho(layer);
   const character = { Shape: random()*2-1, Material: random()*2-1, Motion: random()*2-1, Camera: random()*2-1 };
   for (const d of definitions) {
     const key = d.key, original = layer.params[key];
     const locked = d.section === 'Motion' ? locks.motion : d.section === 'Material' ? locks.material : locks.structure;
     if (locked || VARIATION_FIXED.has(key) || d.momentary || d.structural || layer.kind === 'fractal' && ['focalX', 'focalY', 'cutout', 'autoTravel', 'position', 'passage', 'reveal'].includes(key) || (locks.palette && ['hue','saturation','vibrance'].includes(key))) continue;
+    // A Kaleidoscope control with no effect right now keeps its value for when it returns.
+    if (inactive?.has(key) || (ownEcho && FEEDBACK_KEYS.includes(key))) continue;
     // Preserve artist-authored routes and their baseline values as a unit.
     // Flat colour is an explicit choice: never switch it on, change its palette
     // cycling (which can strobe), or vary its controls while it is off.
@@ -1001,7 +1114,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
     if(!isSimplePolygon(surface.points as {x:number;y:number}[]))fail(`${path}.surface.points`,'must form a simple polygon with a useful area.');
     if(surface.source==='mask'&&(layer.mask as Record<string,unknown>)?.kind!=='image')fail(`${path}.surface.source`,'requires an imported image mask.');
   }
-  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', 'smokecloud', 'meridian', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
+  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', 'smokecloud', 'meridian', 'kaleidoscope', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
   text(layer.id, `${path}.id`, 100); text(layer.name, `${path}.name`);
   boolean(layer.visible, `${path}.visible`); number(layer.opacity, `${path}.opacity`, 0, 1);
   choice(layer.blend, ['normal', 'screen', 'multiply', 'add', 'source'] as const, `${path}.blend`);
@@ -1031,7 +1144,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
   if (!Array.isArray(layer.palette) || layer.palette.length !== 6) fail(`${path}.palette`, 'must contain exactly six hex colors.');
   layer.palette.forEach((color, i) => hex(color, `${path}.palette[${i}]`));
   if (own(layer, 'image')) {
-    if (kind !== 'image') fail(`${path}.image`, 'is only allowed on an image layer.');
+    if (kind !== 'image' && kind !== 'kaleidoscope') fail(`${path}.image`, 'is only allowed on an image or Kaleidoscope layer.');
     const image = object(layer.image, `${path}.image`);
     keys(image, ['name', 'dataUrl', 'width', 'height', 'fit'], `${path}.image`);
     text(image.name, `${path}.image.name`, 250);

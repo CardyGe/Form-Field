@@ -5,6 +5,8 @@
 import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { TOON_KEYS, FEEDBACK_KEYS, GLOW_KEYS } from '../core/finishing';
 import { SLIT_MODES, SLIT_SHAPES, slitControlVisible } from '../rendering/slitscan';
+import { KALEIDOSCOPE_INPUT } from '../core/project';
+import { kaleidoscopeInput } from '../rendering/feedback';
 import { FINISH_GROUPS, pickerEffects, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, hasPower, powerLocked, resetFinishEffect, toggleFinishEffect, type FinishEffect, type FinishGroup } from './finish-rack';
 import { FINISH_THUMBS } from './finish-thumbs';
 import type { Layer, ParameterDefinition } from '../shared/types';
@@ -241,6 +243,7 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
       <Parameter definition={opacity} value={layer.opacity} animated={!!mod.opacity} readOnly={readOnly?.(opacity) ?? false} onChange={n => edit(l => ({ ...l, opacity: n }))} onAnimate={animate ? () => animate('opacity') : undefined} onStart={onStart} onEnd={onEnd} />
       <label className="finish-blend">Blending<select aria-label="Blending" value={layer.blend} onChange={e => edit(l => ({ ...l, blend: e.target.value as Layer['blend'] }))}><option value="normal">Normal</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="add">Light add</option><option value="source">Colour from below</option></select></label></section>
     <div className="finish-effects-head"><h3>Effects{activeCount > 0 && <small>{activeCount} on</small>}</h3><button type="button" className="finish-add" onClick={() => setOpen(ADD_VIEW)}><span aria-hidden="true">+</span>Add effect</button></div>
+    {layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) >= KALEIDOSCOPE_INPUT.below && <p className="muted-text">{kaleidoscopeInput(layer.params) === KALEIDOSCOPE_INPUT.feedback ? 'This layer folds its own echo. Set Echo amount in the Shape tab.' : 'Echo does not apply to the layer below.'}</p>}
     {effects.length ? <section className="finish-group">{effects.map(item => rowFor(item.id, item.label, finishSummary(layer, item, definitions), finishEffectOn(layer, item, definitions), powerSwitch(item)))}</section>
       : <p className="finish-empty">No effects yet. Add one to start building a look.</p>}
     {layerPanels.length > 0 && <section className="finish-group"><h3>Layer</h3>{layerPanels.map(item => rowFor(item.id, item.label, item.summary ?? '', !!item.on, <span className="finish-switch-space" />))}</section>}
