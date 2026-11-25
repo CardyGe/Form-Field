@@ -101,7 +101,7 @@ const EMBER_PARAMETERS = [
   { ...parameter('emberPulse', 'Pulse depth', 0, 1, .01, .72, 'Motion'), description: 'Increases the contrast in the movement and light between accents.' },
   { ...parameter('emberRings', 'Ring strength', 0, 1, .01, .62, 'Motion'), description: 'Sets the strength of the rings that travel out from the filament body.' },
   { ...parameter('emberHeat', 'Heat', 0, 1, .01, .82, 'Material'), description: 'Brings orange and gold into the brightest filaments.' },
-  { ...parameter('emberSmoke', 'Smoke', 0, 1, .01, .04, 'Material'), description: 'Adds smoke that curls out of the filament body and thins between accents.' },
+  { ...parameter('emberSmoke', 'Smoke', 0, 1, .01, .5, 'Material'), description: 'Adds smoke that curls out of the filament body and thins between accents.' },
   { ...parameter('emberSparks', 'Sparks', 0, 1, .01, .6, 'Material'), description: 'Sets how much fine spark dust drifts across the black.' },
   { ...parameter('emberSmokeStyle', 'Smoke style', 0, 4, 1, 1, 'Motion'), description: 'Chooses how the smoke moves: Wisps, Rolling, Billow, Plume or Storm.' },
   { ...parameter('emberSmokeOrigin', 'Smoke source', 0, 3, 1, 0, 'Motion'), description: 'Chooses where smoke is released: Core, Ring, Filaments or Rising.' },

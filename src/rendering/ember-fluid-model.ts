@@ -35,15 +35,16 @@ export function emberFluidSettings(params: Record<string, number>, audio?: { bas
   const bass = clamp(audio?.bass ?? 0) * response, highs = clamp(audio?.highs ?? 0) * response;
   return {
     curl: (1 + 185 * clamp(params.emberSmokeCurl) ** 1.3) * style.curl,
-    velocityLife: 1.6 * style.velocityLife,
+    // Spread also keeps each push moving for longer, so a strong burst carries smoke across the frame.
+    velocityLife: 1.6 * (.55 + .9 * clamp(params.emberSmokeSpread)) * style.velocityLife,
     dyeLife: (.2 + 11 * clamp(params.emberSmokeLife) ** 1.5) * style.dyeLife,
     buoyancy: (params.emberSmokeLift ?? 0) * 520 * style.buoyancy,
     force: (15 + 2000 * clamp(params.emberSmokeSpread) + 320 * bass) * style.force,
     emit: 2.3 * clamp(params.emberSmoke) ** 1.4 * style.emit,
     radius: .07 * style.radius * (1 + .3 * bass),
     turbulence: (.1 + 1.6 * clamp(params.emberSmokeDetail) + .8 * highs) * style.turbulence,
-    density: (.06 + 4.2 * clamp(params.emberSmokeBody)) * style.density,
-    lighting: .01 + 2.7 * clamp(params.emberSmokeLight),
+    density: (.02 + 9 * clamp(params.emberSmokeBody) ** 2.2) * style.density,
+    lighting: .01 + 3.6 * clamp(params.emberSmokeLight),
   };
 }
 

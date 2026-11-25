@@ -122,15 +122,15 @@ export class ScopeRenderer {
             vec3 smoke=texture2D(uSmoke,vUv).rgb*uSmokeGain;
             float nearby=1.-exp(-(.62*tight+1.45*mids+.50*broad+.13*light.r));
             float lightLevel=uSmokeLighting*nearby;
-            float transmission=exp(-smoke.x*mix(.2,2.7,uSmokeBody));
+            float transmission=exp(-smoke.x*mix(.1,4.,uSmokeBody*uSmokeBody));
             // Smoke shows only where light reaches it, so smoke drifting into the dark fades out instead of forming a flat sheet.
-            vec3 scattered=uSmokeTint*(.06*smoothstep(.03,.2,nearby)+lightLevel*1.3)+uHot*(.15*lightLevel*uHeat);
+            vec3 scattered=uSmokeTint*(.03*smoothstep(.05,.25,nearby)+lightLevel*1.3)+uHot*(.15*lightLevel*uHeat);
             vec3 behind=(1.-exp(-smoke.y*1.24))*scattered*.51;
             vec3 inFront=(1.-transmission)*scattered;
             sum=(sum+behind)*transmission+inFront+smoke.z*scattered*(.27+.42*lightLevel);
           }
           // The faintest tail of the glow is lifted black on a wall, so Ember's blacks stay black.
-          sum=max(sum-vec3(.0016),vec3(0.));
+          sum=max(sum-vec3(.003),vec3(0.));
         }
         // Roll off towards 1 per channel: bright light loses its colour and burns white.
         vec3 c=1.-exp(-max(sum,0.));
