@@ -1552,26 +1552,41 @@ try {
     await meridianStats(s => s.flashGuard === null, 'the guard is present in a show without Meridian');
     const timer = await studio.evaluate(() => { let on = false; window.__plainStrobe = setInterval(() => { on = !on; window.__studioTest.react.midi([0xb0, 20, on ? 127 : 0]); }, 100); return true; });
     assert.ok(timer);
-    let raw, seen, wall;
+    let raw, seen, wall, guarded;
+    // The area guard is the first limiter on a show without Meridian; switched off here, the always-on limiter must hold the strobe alone.
+    const areaGuard = async on => {
+      if (!on) studio.once('dialog', d => d.accept());
+      await studio.getByRole('button', { name: on ? 'Flash guard OFF' : 'Flash guard on', exact: true }).click();
+      await studio.getByRole('button', { name: on ? 'Flash guard on' : 'Flash guard OFF', exact: true }).waitFor();
+    };
     try {
+      await areaGuard(false);
       raw = await unlimited(async () => { await sleep(600); return captureFlashes(3000); });
       await wallLimiter(true);
       await sleep(1500);
       seen = await captureFlashes(3000);
       wall = await output.evaluate(() => window.__mapStats.wallLimiter);
+      await areaGuard(true);
+      await sleep(1500);
+      guarded = await captureFlashes(3000);
     } finally { await studio.evaluate(() => clearInterval(window.__plainStrobe)); }
     assert.ok(raw.flashes >= 4, `the plain strobe did not run without a limiter: ${JSON.stringify(raw)}`);
     assert.ok(wall.on && (wall.lowestGain < 1 || wall.lowestRedScale < 1), `the always-on limiter did not act: ${JSON.stringify(wall)}`);
     assert.ok(seen.flashes <= 3, `the always-on limiter let the plain strobe through: ${JSON.stringify(seen)}`);
+    assert.ok(guarded.flashes <= 3, `with the area guard back on, the plain strobe got through: ${JSON.stringify(guarded)}`);
     // A steady full-white shape comes back exactly white once the limiter has let go.
     await react('midi', [0xb0, 20, 127]);
     await meridianStats(s => s.wallLimiter?.gain === 1 && s.wallLimiter?.redScale === 1, 'the always-on limiter did not let go of a steady picture', 15000);
-    await sleep(300);
-    const full = await sample(output, [[.5, .5]]);
+    // The area guard lets go of each held cell over its own recovery time, after the always-on limiter has.
+    let full;
+    for (const until = Date.now() + 15000; ; await sleep(250)) {
+      full = await sample(output, [[.5, .5]]);
+      if (full.colours[0].every(v => v === 255) || Date.now() > until) break;
+    }
     assert.deepEqual(full.colours[0], [255, 255, 255], 'a full-brightness white shape is not exactly white');
     assert.equal((await output.evaluate(() => window.__mapStats.flashGuard)), null);
     assert.equal(await studio.locator('.map-flash-guard').count(), 0);
-    meridianReport.plain = { unlimited: raw, limited: seen, wall };
+    meridianReport.plain = { unlimited: raw, limited: seen, wall, areaGuarded: guarded };
     await react('midi', [0xb0, 20, 0]);
     await clearStage();
   });
