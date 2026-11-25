@@ -287,7 +287,7 @@ export class StudioRenderer {
     uSource: { value: null }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) }, uRows: { value: 1 },
   });
   private readonly tile = material(tileFragment, {
-    uSource: { value: null }, uCells: { value: null }, uGrid: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) },
+    uSource: { value: null }, uCells: { value: null }, uGrid: { value: new THREE.Vector2(1, 1) }, uCellsSize: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) },
     uCellPx: { value: new THREE.Vector2(1, 1) }, uSeed: { value: 0 }, uPhase: { value: 0 },
     uLedAmount: { value: 0 }, uLedDot: { value: .75 }, uLedShape: { value: 0 }, uLedBrightness: { value: 1.5 }, uLedDead: { value: 0 },
     uLedScan: { value: 0 }, uLedFlicker: { value: 0 }, uLedCycles: { value: 10 }, uLedGapOn: { value: 1 }, uLedGap: { value: new THREE.Color() },
@@ -1332,7 +1332,9 @@ export class StudioRenderer {
       this.tileCells.texture.minFilter = this.tileCells.texture.magFilter = THREE.NearestFilter;
     }
     const cells = this.tileCells;
-    if (cells.width !== grid.cols || cells.height !== grid.rows) cells.setSize(grid.cols, grid.rows);
+    // Grow only: layers at different pitches share the target, each drawing into its corner of it.
+    if (cells.width < grid.cols || cells.height < grid.rows) cells.setSize(Math.max(cells.width, grid.cols), Math.max(cells.height, grid.rows));
+    cells.viewport.set(0, 0, grid.cols, grid.rows);
     const c = this.cellColour.uniforms;
     c.uSource.value = source; (c.uSourceSize.value as THREE.Vector2).set(width, height);
     (c.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]); c.uRows.value = grid.rows;
@@ -1344,9 +1346,11 @@ export class StudioRenderer {
     const u = this.tile.uniforms;
     u.uSource.value = source; u.uCells.value = cells.texture;
     (u.uGrid.value as THREE.Vector2).set(grid.cols, grid.rows);
+    (u.uCellsSize.value as THREE.Vector2).set(cells.width, cells.height);
     (u.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]);
     (u.uCellPx.value as THREE.Vector2).set(grid.cellUv[0] * width, grid.cellUv[1] * height);
-    u.uSeed.value = number(layer, 'seed', 0) % 1000; u.uPhase.value = phase;
+    // Wrapped to 0..1000: a negative seed would make the shader's unsigned hash input undefined.
+    u.uSeed.value = ((number(layer, 'seed', 0) % 1000) + 1000) % 1000; u.uPhase.value = phase;
     u.uLedAmount.value = led; u.uLedDot.value = number(layer, 'ledDot', .75);
     u.uLedShape.value = Math.round(number(layer, 'ledShape', 0)); u.uLedBrightness.value = Math.max(0, number(layer, 'ledBrightness', 1.5));
     u.uLedDead.value = number(layer, 'ledDead', 0); u.uLedScan.value = number(layer, 'ledScan', 0);

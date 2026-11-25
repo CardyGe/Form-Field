@@ -241,6 +241,30 @@ const CHECKS = [
     },
   },
   {
+    name: 'led-layers',
+    // Two LED layers at different pitches share the cell target. The finer one is first, so the second uses part
+    // of a larger target. Each half of the frame must match that layer rendered alone, and a second frame must not
+    // resize the shared target.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, W = 960, H = 540, fine = { ledAmount: 1, ledSize: 10 }, coarse = { ledAmount: 1, ledSize: 24, ledShape: 1 };
+        const both = q.exact(q.project([q.smooth(fine), q.rightSmooth(coarse)]));
+        const together = await q.px(both);
+        const fineAlone = await q.px(q.exact(q.project([q.smooth(fine)])));
+        const coarseAlone = await q.px(q.exact(q.project([q.rightSmooth(coarse)])));
+        const region = (a, b, x0, x1) => { let sum = 0, n = 0; for (let y = 0; y < H; y++) for (let x = x0; x < x1; x++) for (let k = 0; k < 4; k++) { sum += Math.abs(a[(y * W + x) * 4 + k] - b[(y * W + x) * 4 + k]); n++; } return sum / n; };
+        await q.shot(both, 1.2);
+        const cells = q.renderer.tileCells, resize = cells.setSize;
+        let resized = 0;
+        cells.setSize = function (...args) { resized++; return resize.apply(this, args); };
+        try { await q.shot(both, 1.5); await q.shot(both, 1.8); } finally { cells.setSize = resize; }
+        return { left: region(together, fineAlone, 0, 470), right: region(together, coarseAlone, 490, W), resized, kept: q.renderer.tileCells === cells, distinct: region(fineAlone, coarseAlone, 490, W) };
+      });
+      const ok = r.left < .5 && r.right < .5 && r.distinct > 3 && r.resized === 0 && r.kept;
+      return { ok, detail: `left half against the fine layer alone ${r.left.toFixed(3)}, right half against the coarse layer alone ${r.right.toFixed(3)} (limits .5; the two looks differ by ${r.distinct.toFixed(2)}); cell target resized ${r.resized} times over two more frames (limit 0)${r.kept ? '' : ', and replaced'}` };
+    },
+  },
+  {
     name: 'led-history',
     // The LED wall reads the echo's result once. If it entered the history, each echo would be tiled again.
     run: async ({ page }) => {
@@ -319,6 +343,9 @@ try {
     const smooth = (params = {}) => image(smoothUrl, params, 'smooth');
     const white = (params = {}) => image(whiteUrl, params, 'white');
     const half = (params = {}) => image(halfUrl, params, 'half');
+    // The smooth picture over the right half of the frame only.
+    const rightSmoothUrl = await dataUrl(960, 540, (x, y) => x < 0 ? [0, 0, 0, 0] : [Math.round(128 + 90 * Math.sin(3.1 * x + .4)), Math.round(128 + 90 * Math.cos(4.3 * y - .7)), Math.round(128 + 70 * Math.sin(2.2 * x + 3.7 * y)), 255]);
+    const rightSmooth = (params = {}) => image(rightSmoothUrl, params, 'right-smooth');
     // An animated source that closes its loop.
     const moving = (params = {}) => { const l = m.applyPreset(m.createLayer('surface'), m.PRESETS.find(p => p.kind === 'surface').id); l.id = 'moving-proof'; Object.assign(l.params, params); return l; };
     const project = (layers, transparent = false) => { const p = m.createProject(); p.id = 'tiles-proof'; p.layers = layers; p.background = '#000000'; p.transparent = transparent; return p; };
@@ -377,7 +404,7 @@ try {
       renderer.renderer.readRenderTargetPixels(target, 0, 0, W, H, raw);
       return Float32Array.from(raw, fromHalf);
     };
-    window.tq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, half, moving, project, exact, pixels, shot, px, difference, same, loop, litShare, linearDown, texels, readHalf };
+    window.tq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, half, rightSmooth, moving, project, exact, pixels, shot, px, difference, same, loop, litShare, linearDown, texels, readHalf };
   }, !!baseline);
 
   for (const check of selected) {

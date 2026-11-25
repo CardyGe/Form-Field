@@ -132,13 +132,14 @@ export const tileFragment = /* glsl */`
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D uSource, uCells;
-uniform vec2 uGrid, uCellUv, uCellPx;
+// uGrid is this layer's cells; uCellsSize the shared target, which may be larger.
+uniform vec2 uGrid, uCellsSize, uCellUv, uCellPx;
 uniform float uSeed, uPhase;
 uniform float uLedAmount, uLedDot, uLedShape, uLedBrightness, uLedDead, uLedScan, uLedFlicker, uLedCycles, uLedGapOn;
 uniform vec3 uLedGap;
 const float TAU = 6.28318530718;
 
-vec4 cellColour(vec2 cell) { return texture2D(uCells, vec2(cell.x + .5, uGrid.y - cell.y - .5) / uGrid); }
+vec4 cellColour(vec2 cell) { return texture2D(uCells, vec2(cell.x + .5, uGrid.y - cell.y - .5) / uCellsSize); }
 
 // A seeded random number for a cell, the same on every frame.
 float cellRandom(vec2 cell, uint salt) {
