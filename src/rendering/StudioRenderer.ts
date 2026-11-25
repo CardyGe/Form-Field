@@ -27,7 +27,8 @@ import { SmokeCloudRenderer } from './SmokeCloud';
 import { compositesPlainly, plainOverFragment } from './smoke-cloud-composite';
 import { MeridianRenderer, type MeridianRuntime } from './MeridianRenderer';
 import { MeridianGovernor, type MeridianQuality } from '../meridian/governor';
-import { printActive, printUniforms } from './print-screen';
+import { BLUE_NOISE_SIZE, blueNoise, printActive, printShimmerShift, printUniforms } from './print-screen';
+import { RETRO_PALETTES } from './tiles';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
@@ -333,6 +334,8 @@ export class StudioRenderer {
   };
   private readonly assets = new Map<string, Asset>();
   private readonly fallback: THREE.DataTexture;
+  /** Print screen's blue-noise threshold tile: one red byte per cell, read exactly. */
+  private readonly printNoise: THREE.DataTexture;
   private width = 1;
   private height = 1;
   private disposed = false;
@@ -374,6 +377,10 @@ export class StudioRenderer {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.fallback = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
     this.fallback.needsUpdate = true;
+    this.printNoise = new THREE.DataTexture(blueNoise(), BLUE_NOISE_SIZE, BLUE_NOISE_SIZE, THREE.RedFormat, THREE.UnsignedByteType);
+    this.printNoise.magFilter = this.printNoise.minFilter = THREE.NearestFilter;
+    this.printNoise.wrapS = this.printNoise.wrapT = THREE.RepeatWrapping;
+    this.printNoise.unpackAlignment = 1; this.printNoise.generateMipmaps = false; this.printNoise.needsUpdate = true;
 
     this.surface = material(surfaceFragment, surfaceUniforms());
     this.fractal = material(fractalFragment, {
@@ -438,6 +445,8 @@ export class StudioRenderer {
       ...Object.fromEntries(BLOOM_HEIGHTS.map((_, i) => [`uGlowLevel${i}`, { value: this.fallback }])),
       uGlowChannels: { value: [0, 1, 2, 3, 4].map(() => new THREE.Vector3()) }, uGlowStreakMap: { value: this.fallback }, uGlowColour: { value: new THREE.Color() }, uGlowOn: { value: 0 },
       uPrintOn: { value: 0 }, uPrintCells: { value: 135 }, uPrintOffset: { value: 0 }, uPrintAngles: { value: [0, 0, 0, 0] },
+      uPrintNoise: { value: this.printNoise }, uPrintShift: { value: new THREE.Vector2() },
+      uPrintRetroColours: { value: Array.from({ length: 8 }, () => new THREE.Color()) }, uPrintRetroCount: { value: 2 },
       ...Object.fromEntries(FINISH_PARAMETERS.map(d=>['u'+d.key[0].toUpperCase()+d.key.slice(1),{value:d.default}])),
       uSaturation: {value:1}, uHue: {value:0}, uExposure:{value:1},
       uColorMode:{value:0},uColorSteps:{value:6},uColorMix:{value:1},uColorOffset:{value:0},
@@ -1156,7 +1165,7 @@ export class StudioRenderer {
       u.uMaskInvert.value = Number(layer.mask.invert);
       u.uGlow.value = number(layer, 'glow', layer.kind === 'sculpture' ? .12 : 0);
       this.bindGlow(original, layer, finished, width, height);
-      this.bindPrint(original, layer, wrapped);
+      this.bindPrint(original, layer, wrapped, total);
       for(const d of FINISH_PARAMETERS)u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=number(layer,d.key,d.default);
       u.uSaturation.value=number(layer,'saturation',1);u.uHue.value=number(layer,'hue',0);
       // Original Fractal exposure stays in its original source pass; new colour
@@ -1477,12 +1486,19 @@ export class StudioRenderer {
    * needs no targets of its own and never enters the echo history. Its
    * geometry is in frame units, the same at every render size.
    */
-  private bindPrint(original: Layer, layer: Layer, loopPhase: number): void {
+  private bindPrint(original: Layer, layer: Layer, loopPhase: number, frames: number): void {
     const u = this.composite.uniforms, on = printActive(original) && number(layer, 'printMix', 0) > 0;
     u.uPrintOn.value = Number(on);
     if (!on) return;
     const screen = printUniforms(layer, loopPhase);
     u.uPrintCells.value = screen.cells; u.uPrintAngles.value = screen.angles; u.uPrintOffset.value = screen.scroll;
+    // Shimmer moves the threshold pattern by whole cells once per loop frame.
+    (u.uPrintShift.value as THREE.Vector2).fromArray(printShimmerShift(layer, loopPhase, frames));
+    // Retro palettes are sRGB hex; Color.set converts them to the linear light the composite works in.
+    const colours = RETRO_PALETTES[Math.min(Math.max(Math.round(number(layer, 'printRetro', 0)), 0), RETRO_PALETTES.length - 1)].colours;
+    const slots = u.uPrintRetroColours.value as THREE.Color[];
+    for (let i = 0; i < slots.length; i++) slots[i].set(colours[Math.min(i, colours.length - 1)]);
+    u.uPrintRetroCount.value = colours.length;
   }
 
   private sourcePhase(original: Layer, wrapped: number, duration: number): number {
@@ -2002,7 +2018,7 @@ export class StudioRenderer {
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();
     this.liquidLayouts.clear();
-    this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.filmThickness.dispose();
+    this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.printNoise.dispose(); this.filmThickness.dispose();
     this.keyLight.shadow.dispose();
     this.renderer.dispose();
   }

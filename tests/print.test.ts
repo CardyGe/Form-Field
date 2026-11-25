@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PRESETS, applyFinish, applyPreset, createLayer, createProject, finishSupported, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { PRINT_KEYS, FINISH_KEYS } from '../src/core/finishing';
-import { bayerThreshold, classicLevel, printActive, printCoverage, printInkScale, printMarkSize, printUniforms, supportsPrint } from '../src/rendering/print-screen';
+import { bayerThreshold, classicLevel, printActive, printCoverage, printInkScale, printMarkSize, printShimmerShift, printUniforms, retroColour, shimmerOffset, supportsPrint } from '../src/rendering/print-screen';
 
 test('print screen is off by default and older projects migrate without it', () => {
   const project = createProject();
@@ -153,4 +153,28 @@ test('retro and blue-noise choices validate and the new keys migrate off', () =>
   layer.params.printType = 3; layer.params.printColour = 4;
   const migrated = validateProject(JSON.parse(JSON.stringify(project))).layers[0].params;
   assert.deepEqual([migrated.printRetro, migrated.printShimmer, migrated.printType, migrated.printColour], [0, 0, 3, 4]);
+});
+
+test('retro colours step through the palette by tone', () => {
+  assert.equal(retroColour(0, 0), '#0f380f');
+  assert.equal(retroColour(1, 0), '#9bbc0f');
+  assert.equal(retroColour(.5, 3), '#00ff41');
+});
+
+test('shimmer offsets are whole texels and differ frame to frame', () => {
+  const a = shimmerOffset(0), b = shimmerOffset(1);
+  assert.ok(a.every(Number.isInteger) && b.every(Number.isInteger));
+  assert.notDeepEqual(a, b);
+  for (let f = 0; f < 300; f++) assert.ok(shimmerOffset(f).every(v => v >= 0 && v < 64));
+});
+
+test('shimmer steps once per loop frame, only for Dither and Blue noise, and closes the loop', () => {
+  const TAU = Math.PI * 2, params = (extra: Record<string, number>) => ({ params: { printType: 3, printShimmer: 1, ...extra } });
+  assert.deepEqual(printShimmerShift(params({ printShimmer: 0 }), 1.3, 300), [0, 0]);
+  for (const type of [0, 1]) assert.deepEqual(printShimmerShift(params({ printType: type }), 1.3, 300), [0, 0]);
+  // Exact frame phases land on their own frame; the seam just before TAU is frame 0 again.
+  for (const frame of [0, 1, 7, 299]) assert.deepEqual(printShimmerShift(params({}), frame / 300 * TAU, 300), shimmerOffset(frame));
+  assert.deepEqual(printShimmerShift(params({}), TAU - 1e-4, 300), shimmerOffset(0));
+  assert.deepEqual(printShimmerShift(params({ printType: 2 }), TAU, 300), printShimmerShift(params({ printType: 2 }), 0, 300));
+  assert.notDeepEqual(printShimmerShift(params({}), 1 / 300 * TAU, 300), printShimmerShift(params({}), 2 / 300 * TAU, 300));
 });

@@ -11,7 +11,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'work/print-build');
 await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {StudioRenderer} from './src/rendering/StudioRenderer';
-export {createProject,createLayer,applyPreset,PRESETS} from './src/core/project';`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'renderer.js'), nodePaths: [path.join(root, 'node_modules')] });
+export {createProject,createLayer,applyPreset,PRESETS} from './src/core/project';
+export {encodePNG} from './src/rendering/png';
+export {RETRO_PALETTES} from './src/rendering/tiles';`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'renderer.js'), nodePaths: [path.join(root, 'node_modules')] });
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
 app.setPath('userData',${JSON.stringify(path.join(out, 'user-data'))});app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -50,7 +52,20 @@ try {
         result[(Math.floor(y / factor) * w + Math.floor(x / factor)) * 4 + c] += (c === 3 ? a[(y * width + x) * 4 + c] : lin(a[(y * width + x) * 4 + c])) / (factor * factor);
       return result;
     };
-    window.printQA = { m, renderer, layer, project, pixels, shot, difference, mean, linearMean, shrink };
+    // Still image sources, so any change between frames comes from the screen.
+    const urlOf = bytes => { const parts = []; for (let i = 0; i < bytes.length; i += 8192) parts.push(String.fromCharCode(...bytes.subarray(i, i + 8192))); return `data:image/png;base64,${btoa(parts.join(''))}`; };
+    const dataUrl = async (w, h, pixel) => { const bytes = new Uint8Array(w * h * 4); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) bytes.set(pixel(x / (w - 1), y / (h - 1)), (y * w + x) * 4); return urlOf(await m.encodePNG(bytes, w, h)); };
+    const greyUrl = await dataUrl(96, 54, () => [128, 128, 128, 255]), rampUrl = await dataUrl(960, 540, x => { const v = Math.round(255 * x); return [v, v, v, 255]; });
+    const image = (url, params) => { const l = m.createLayer('image'); l.id = `image-${Math.random()}`; Object.assign(l.params, params); l.image = { name: 'proof.png', dataUrl: url, width: url === greyUrl ? 96 : 960, height: url === greyUrl ? 54 : 540, fit: 'contain' }; return l; };
+    const grey = params => image(greyUrl, params), ramp = params => image(rampUrl, params);
+    const same = (a, b) => { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; };
+    // The renderer wraps phase, so 0 against TAU alone proves nothing: the seam catches motion that does not close.
+    const loop = async p => {
+      const start = await shot(p, 0), wrapped = await shot(p, Math.PI * 2), before = await shot(p, Math.PI * 2 - 1e-4);
+      return { literal: same(start, wrapped), seam: difference(await pixels(start), await pixels(before)) };
+    };
+    const frames = p => Math.max(1, Math.round(p.duration * p.fps.num / p.fps.den));
+    window.printQA = { m, renderer, layer, project, pixels, shot, difference, mean, linearMean, shrink, grey, ramp, same, loop, frames };
   });
   const capture = async (name, body, arg) => {
     const bytes = await page.evaluate(body, arg);
@@ -64,6 +79,7 @@ try {
     'dots-fine': { ...on, printDot: 1, printSize: 4 }, 'dots-ink-paper': { ...on, printColour: 1, printInk: 2, printPaper: 6, printInvert: 1 },
     lines: { ...on, printType: 1, printSize: 6, printAngle: 30 }, dither: { ...on, printType: 2, printSize: 3, printAngle: 0 },
     'dither-2x2': { ...on, printType: 2, printSize: 4, printAngle: 0, printMatrix: 0 },
+    'blue-noise': { ...on, printType: 3, printSize: 6, printAngle: 0 },
     cmyk: { ...on, printColour: 3, printSize: 7 }, rgb: { ...on, printColour: 2, printSize: 9 },
     'cmyk-lines': { ...on, printColour: 3, printType: 1, printSize: 6 },
     edges: { ...on, printArea: 1, printEdgeWidth: 16 }, 'away-from-edges': { ...on, printArea: 2, printEdgeWidth: 16 },
@@ -77,13 +93,18 @@ try {
   await capture('surface-dots', async params => { const q = window.printQA; return Array.from(await q.shot(q.project([q.layer('surface', null, params)]))); }, looks['dots-classic']);
   await capture('surface-flat-colour-dots', async params => { const q = window.printQA; return Array.from(await q.shot(q.project([q.layer('surface', null, params)]))); }, { ...on, toonMix: 1 });
   await capture('scope-dots', async params => { const q = window.printQA; return Array.from(await q.shot(q.project([q.layer('scope', 'ember-ring', params)]))); }, { ...on, printSize: 5 });
+  for (const [name, params] of Object.entries({ 'retro-gameboy': { ...on, printType: 3, printSize: 6, printAngle: 0, printColour: 4, printRetro: 0 },
+    'retro-teletext': { ...on, printType: 2, printSize: 6, printAngle: 0, printColour: 4, printRetro: 2 }, 'retro-green-dots': { ...on, printColour: 4, printRetro: 3, printSize: 6 } }))
+    await capture(`liquid-${name}`, async params => { const q = window.printQA; return Array.from(await q.shot(q.project([q.layer('liquid', 'blue-hour', params)]))); }, params);
+  await capture('grey-blue-noise', async params => { const q = window.printQA; return Array.from(await q.shot(q.project([q.grey(params)]), .9, 1920, 1080)); }, { ...on, printType: 3, printSize: 4, printAngle: 0 });
+  await capture('grey-bayer', async params => { const q = window.printQA; return Array.from(await q.shot(q.project([q.grey(params)]), .9, 1920, 1080)); }, { ...on, printType: 2, printSize: 4, printAngle: 0 });
   // The same frame at 4K: a crop of this is the detail check.
   await capture('liquid-dots-4k', async params => { const q = window.printQA; return Array.from(await q.shot(q.project([q.layer('liquid', 'blue-hour', params)]), .9, 3840, 2160)); }, looks['dots-round']);
   await capture('liquid-dither-4k', async params => { const q = window.printQA; return Array.from(await q.shot(q.project([q.layer('liquid', 'blue-hour', params)]), .9, 3840, 2160)); }, looks.dither);
 
   report.checks = await page.evaluate(async ([looks, TAU]) => {
     const q = window.printQA, px = async (...args) => q.pixels(await q.shot(...args));
-    const liquid = params => q.project([q.layer('liquid', 'blue-hour', params)]);
+    const liquid = params => q.project([q.layer('liquid', 'blue-hour', params)]), on = { printMix: 1 };
     const plain = liquid({}), off = await px(plain);
     // Every control moved, amount 0: must be exactly the plain picture.
     const zero = await px(liquid({ printMix: 0, printType: 1, printSize: 3, printColour: 3, printPaper: 2, printArea: 1, printInvert: 1, printScroll: 2 }));
@@ -125,9 +146,64 @@ try {
     const time = async project => { await q.renderer.prepare(project); q.renderer.render(project, 0, 1920, 1080); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); const began = performance.now();
       for (let i = 0; i < frames; i++) { q.renderer.render(project, i * .05, 1920, 1080); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); } return (performance.now() - began) / frames; };
     const frameMs = { plain: await time(plain) };
-    for (const name of ['dots-round', 'dots-classic', 'lines', 'dither', 'rgb', 'cmyk', 'edges']) frameMs[name] = await time(liquid(looks[name]));
+    for (const name of ['dots-round', 'dots-classic', 'lines', 'dither', 'blue-noise', 'rgb', 'cmyk', 'edges']) frameMs[name] = await time(liquid(looks[name]));
+    frameMs['retro-shimmer'] = await time(liquid({ ...looks['blue-noise'], printColour: 4, printRetro: 2, printShimmer: 1 }));
     frameMs['cmyk-edges-flat'] = await time(liquid({ ...looks.cmyk, printArea: 1, toonMix: 1 }));
-    return { zeroIsNeutral: q.difference(off, zero), plainMean: q.linearMean(off), means, changed,
+    // print-blue: mid-grey through 4-pixel cells at 1080 lines, one sample per cell, 128 x 128 cells.
+    // Energy above a quarter cycle per cell against the single strongest frequency: a repeating
+    // grid puts its energy in a few spikes, blue noise spreads it over the whole high band.
+    const spectrum = async params => {
+      const a = await px(q.project([q.grey({ ...on, printSize: 4, printAngle: 0, ...params })]), .9, 1920, 1080), M = 128, g = new Float64Array(M * M);
+      let lit = 0;
+      for (let y = 0; y < M; y++) for (let x = 0; x < M; x++) { const i = ((16 + y) * 4 * 1920 + (16 + x) * 4 + 2 * 1920 + 2) * 4; g[y * M + x] = a[i] > 64 ? 1 : 0; lit += g[y * M + x]; }
+      for (let i = 0; i < M * M; i++) g[i] -= lit / (M * M);
+      const cos = new Float64Array(M), sin = new Float64Array(M); for (let k = 0; k < M; k++) { cos[k] = Math.cos(-2 * Math.PI * k / M); sin[k] = Math.sin(-2 * Math.PI * k / M); }
+      const rr = new Float64Array(M * M), ri = new Float64Array(M * M);
+      for (let y = 0; y < M; y++) for (let u = 0; u < M; u++) { let re = 0, im = 0; for (let x = 0; x < M; x++) { const k = (u * x) % M; re += g[y * M + x] * cos[k]; im += g[y * M + x] * sin[k]; } rr[y * M + u] = re; ri[y * M + u] = im; }
+      let total = 0, high = 0, low = 0, peak = 0;
+      for (let v = 0; v < M; v++) for (let u = 0; u < M; u++) {
+        if (!u && !v) continue;
+        let re = 0, im = 0; for (let y = 0; y < M; y++) { const k = (v * y) % M; re += rr[y * M + u] * cos[k] - ri[y * M + u] * sin[k]; im += rr[y * M + u] * sin[k] + ri[y * M + u] * cos[k]; }
+        const e = re * re + im * im, f = Math.hypot(Math.min(u, M - u), Math.min(v, M - v)) / M;
+        total += e; if (f > .25) high += e; if (f < .0625) low += e; peak = Math.max(peak, e);
+      }
+      return { lit: lit / (M * M), spread: high / peak, peakShare: peak / total, lowShare: low / total };
+    };
+    const blue = { noise: await spectrum({ printType: 3 }), bayer: await spectrum({ printType: 2, printMatrix: 2 }) };
+    // print-retro: every pixel of an opaque ramp is one of the palette's colours. Cells
+    // are kept above two output pixels, so the screen itself is drawn, not its flat tone.
+    const retro = [];
+    for (let palette = 0; palette < q.m.RETRO_PALETTES.length; palette++) {
+      const colours = q.m.RETRO_PALETTES[palette].colours.map(hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)));
+      for (const params of [{ printType: 3, printSize: 8 }, { printType: 2, printSize: 10 }, { printType: 0, printSize: 12 }, { printType: 1, printSize: 10 }]) {
+        const p = q.project([q.ramp({ ...on, printAngle: 0, printColour: 4, printRetro: palette, ...params })]); p.highlights = 'exact';
+        const a = await px(p);
+        let worst = 0, opaque = true; const used = new Array(colours.length).fill(0);
+        for (let i = 0; i < a.length; i += 4) {
+          let best = 1e9, which = 0;
+          for (let c = 0; c < colours.length; c++) { const d = Math.max(Math.abs(a[i] - colours[c][0]), Math.abs(a[i + 1] - colours[c][1]), Math.abs(a[i + 2] - colours[c][2])); if (d < best) { best = d; which = c; } }
+          worst = Math.max(worst, best); used[which]++; if (a[i + 3] !== 255) opaque = false;
+        }
+        retro.push({ palette, type: params.printType, worst, opaque, used: used.map(n => n / (a.length / 4)) });
+      }
+    }
+    // print-shimmer: consecutive loop frames differ, seeks repeat, the loop closes, and it is off by default.
+    // Cells of 8 (4 output pixels) so the screen is drawn rather than flattened to its tone.
+    const shimmer = { frames: {}, loops: {}, seek: {} };
+    for (const [name, type] of [['dither', 2], ['blue-noise', 3]]) {
+      const p = q.project([q.grey({ ...on, printType: type, printSize: 8, printAngle: 0, printShimmer: 1 })]), n = q.frames(p), at = k => k / n * TAU;
+      const steps = []; let previous = await px(p, at(0));
+      for (let k = 1; k <= 6; k++) { const next = await px(p, at(k)); steps.push(q.difference(previous, next)); previous = next; }
+      steps.push(q.difference(await px(p, at(n - 1)), await px(p, at(0))));
+      shimmer.frames[name] = steps;
+      shimmer.seek[name] = q.same(await q.shot(p, at(5)), await q.shot(p, at(5)));
+      shimmer.loops[name] = { still: await q.loop(p), moving: await q.loop(liquid({ ...on, printType: type, printSize: 8, printShimmer: 1 })) };
+    }
+    const held = q.project([q.grey({ ...on, printType: 3, printSize: 8 })]), heldFrames = q.frames(held);
+    shimmer.offByDefault = q.m.createLayer('liquid').params.printShimmer === 0 && q.same(await q.shot(held, 0), await q.shot(held, TAU / heldFrames));
+    // Shimmer on a dot or line screen does nothing.
+    shimmer.dotsIgnore = q.difference(await px(liquid({ ...looks['dots-round'], printShimmer: 1 }), 1 / 300 * TAU), await px(liquid(looks['dots-round']), 1 / 300 * TAU));
+    return { blue, retro, shimmer, zeroIsNeutral: q.difference(off, zero), plainMean: q.linearMean(off), means, changed,
       wrap: q.difference(start, end), seek: q.difference(start, again), move: q.difference(start, elsewhere),
       sizes, supersample: q.difference(one, two), roughness: { fine, coarse, smooth },
       alpha: { opaqueOff, holes, partial, darkFringe, outside, partialOff, darkFringeOff }, area: { whole, edge, away }, graphicIgnores, frameMs };
@@ -135,7 +211,7 @@ try {
   const c = report.checks;
   assert.equal(c.zeroIsNeutral, 0, 'Print screen 0 changes the picture.');
   for (const [name, d] of Object.entries(c.changed)) assert.ok(d > 1, `${name} does not change the picture (${d}).`);
-  for (const name of ['dots-round', 'dots-classic', 'dots-diamond', 'dots-square', 'lines', 'dither'])
+  for (const name of ['dots-round', 'dots-classic', 'dots-diamond', 'dots-square', 'lines', 'dither', 'blue-noise'])
     assert.ok(Math.abs(c.means[name] / c.plainMean - 1) < .2, `${name} does not keep the layer's brightness: ${c.means[name]} against ${c.plainMean}.`);
   assert.equal(c.wrap, 0, 'A travelling screen does not close its loop.');
   assert.equal(c.seek, 0, 'Seeking back gives a different screened frame.');
@@ -148,6 +224,21 @@ try {
   assert.equal(c.alpha.outside, 0, 'Dots spill outside the layer.');
   assert.ok(c.area.edge < c.area.whole * .9 && c.area.away < c.area.whole * .98 && c.area.edge > .05 && c.area.away > .05, `Print area does not limit the screen: ${JSON.stringify(c.area)}`);
   assert.equal(c.graphicIgnores, 0, 'Graphic Patterns respond to print values.');
+  // print-blue
+  assert.ok(Math.abs(c.blue.noise.lit - c.blue.bayer.lit) < .03, `Blue noise and Bayer print different tone at mid-grey: ${JSON.stringify(c.blue)}`);
+  assert.ok(c.blue.noise.spread > c.blue.bayer.spread * 20 && c.blue.noise.peakShare < .02 && c.blue.noise.lowShare < .02, `Blue noise shows a repeating grid or clumps: ${JSON.stringify(c.blue)}`);
+  // print-retro
+  for (const r of c.retro) {
+    assert.ok(r.worst <= 2 && r.opaque, `Retro palette ${r.palette} (type ${r.type}) prints a colour outside the palette: ${JSON.stringify(r)}`);
+    assert.ok(r.used.every(share => share > .01), `Retro palette ${r.palette} (type ${r.type}) leaves a colour out of the ramp: ${JSON.stringify(r)}`);
+  }
+  // print-shimmer
+  for (const [name, steps] of Object.entries(c.shimmer.frames)) assert.ok(steps.every(d => d > 1), `${name} shimmer holds a frame: ${JSON.stringify(steps)}`);
+  for (const [name, l] of Object.entries(c.shimmer.loops)) for (const [source, r] of Object.entries(l))
+    assert.ok(r.literal && r.seam < .1, `${name} shimmer on a ${source} source does not close its loop: ${JSON.stringify(r)}`);
+  for (const [name, ok] of Object.entries(c.shimmer.seek)) assert.ok(ok, `${name} shimmer gives a different frame on a second seek.`);
+  assert.ok(c.shimmer.offByDefault, 'Shimmer is on by default, or blue noise moves without it.');
+  assert.equal(c.shimmer.dotsIgnore, 0, 'Shimmer changes a dot screen.');
   for (const [name, ms] of Object.entries(c.frameMs)) assert.ok(ms < 16.7, `${name}: ${ms.toFixed(1)} ms per 1080p frame.`);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify(report.checks, null, 2));
