@@ -31,6 +31,7 @@ import { printActive, printUniforms } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
+import { cellColourFragment, cellGrid, tileFragment, tilesActive } from './tiles';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -279,6 +280,20 @@ export class StudioRenderer {
     uMirrorAmount: { value: 0 }, uMirrorMode: { value: 0 }, uMirrorSegments: { value: 6 }, uMirrorTurn: { value: 0 },
     uLayerView: { value: new THREE.Matrix3() }, uLayerInverse: { value: new THREE.Matrix3() }, uLayerMoved: { value: 0 }, uLayerBounded: { value: 0 }, uLayerExtent: { value: new THREE.Vector2(1, 1) }, uPictureInset: { value: new THREE.Vector2(0, 0) },
   });
+  /** Material tiles: the cell colours and the rebuilt layer, shared by all layers and built on first use. */
+  private tileCells: THREE.WebGLRenderTarget | null = null;
+  private tileTarget: THREE.WebGLRenderTarget | null = null;
+  private readonly cellColour = material(cellColourFragment, {
+    uSource: { value: null }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) }, uRows: { value: 1 },
+  });
+  private readonly tile = material(tileFragment, {
+    uSource: { value: null }, uCells: { value: null }, uGrid: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) },
+    uCellPx: { value: new THREE.Vector2(1, 1) }, uSeed: { value: 0 }, uPhase: { value: 0 },
+    uLedAmount: { value: 0 }, uLedDot: { value: .75 }, uLedShape: { value: 0 }, uLedBrightness: { value: 1.5 }, uLedDead: { value: 0 },
+    uLedScan: { value: 0 }, uLedFlicker: { value: 0 }, uLedCycles: { value: 10 }, uLedGapOn: { value: 1 }, uLedGap: { value: new THREE.Color() },
+  });
+  /** This frame's loop length in seconds, so LED flicker keeps its pace on long and short loops. */
+  private loopSeconds = 10;
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
@@ -1065,6 +1080,7 @@ export class StudioRenderer {
     const wrapped = ((phase % TAU) + TAU) % TAU;
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
+    this.loopSeconds = duration;
     this.meridianRuntime.loopFrames = total;
     this.releaseFeedback(project);
     this.releaseTimeTargets(project);
@@ -1092,8 +1108,10 @@ export class StudioRenderer {
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
       const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
-      const finished = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
+      const lensed = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
+      const finished = tilesActive(original) ? this.tileSource(original, layer, lensed, wrapped, width, height) : lensed;
       // Exports always use the full compositor; a live untouched Smoke Cloud does not need its cost at 4K.
+      // A layer with a tile amount above zero is not untouched, so only the plain source reaches this path.
       if (!this.exporting && !this.fullCompositorOnly && compositesPlainly(layer, this.tiling)) {
         // Alone in the frame, it is already the finished composite: drawing it over nothing changes no pixel.
         if (project.layers.filter(item => item.visible).length === 1) { soleSource = finished; continue; }
@@ -1294,6 +1312,51 @@ export class StudioRenderer {
     u.uKeyHue.value = number(layer, 'keyHue', 120); u.uKeyHueRange.value = number(layer, 'keyHueRange', 40);
     u.uKeyInvert.value = Math.round(number(layer, 'keyInvert', 0));
     this.draw(this.lens, output);
+    return output.texture;
+  }
+
+  /**
+   * Material tiles: rebuilds the layer from a grid of cells after Warp and
+   * Colour and Lens and before Glow, so LED light can glow. Its targets are its
+   * own, so it never enters the echo history. Cells are sized in pixels of a
+   * 1080-line frame and fixed to the frame, so previews and 4K exports match.
+   */
+  tileSource(original: Layer, layer: Layer, source: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
+    if (!tilesActive(original)) return source;
+    // A modulated amount can rest at zero, where there is nothing to do.
+    const led = Math.min(1, Math.max(0, number(layer, 'ledAmount', 0)));
+    if (led <= 0) return source;
+    const grid = cellGrid(width, height, number(layer, 'ledSize', 10));
+    if (!this.tileCells) {
+      this.tileCells = target();
+      this.tileCells.texture.minFilter = this.tileCells.texture.magFilter = THREE.NearestFilter;
+    }
+    const cells = this.tileCells;
+    if (cells.width !== grid.cols || cells.height !== grid.rows) cells.setSize(grid.cols, grid.rows);
+    const c = this.cellColour.uniforms;
+    c.uSource.value = source; (c.uSourceSize.value as THREE.Vector2).set(width, height);
+    (c.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]); c.uRows.value = grid.rows;
+    this.draw(this.cellColour, cells);
+    this.tileTarget ??= target();
+    const output = this.tileTarget;
+    if (output.width !== width || output.height !== height) output.setSize(width, height);
+    setWrap(output, this.tiling);
+    const u = this.tile.uniforms;
+    u.uSource.value = source; u.uCells.value = cells.texture;
+    (u.uGrid.value as THREE.Vector2).set(grid.cols, grid.rows);
+    (u.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]);
+    (u.uCellPx.value as THREE.Vector2).set(grid.cellUv[0] * width, grid.cellUv[1] * height);
+    u.uSeed.value = number(layer, 'seed', 0) % 1000; u.uPhase.value = phase;
+    u.uLedAmount.value = led; u.uLedDot.value = number(layer, 'ledDot', .75);
+    u.uLedShape.value = Math.round(number(layer, 'ledShape', 0)); u.uLedBrightness.value = Math.max(0, number(layer, 'ledBrightness', 1.5));
+    u.uLedDead.value = number(layer, 'ledDead', 0); u.uLedScan.value = number(layer, 'ledScan', 0);
+    u.uLedFlicker.value = number(layer, 'ledFlicker', 0);
+    // About one shimmer a second, as whole cycles per loop.
+    u.uLedCycles.value = Math.max(1, Math.round(this.loopSeconds));
+    const gaps = Math.round(number(layer, 'ledGaps', 1));
+    u.uLedGapOn.value = Number(gaps >= 1);
+    (u.uLedGap.value as THREE.Color).set(gaps >= 2 ? layer.palette[gaps - 2] ?? DEFAULT_PALETTE[gaps - 2] : '#000000');
+    this.draw(this.tile, output);
     return output.texture;
   }
 
@@ -1679,6 +1742,10 @@ export class StudioRenderer {
     if (!needs.driver && this.slitDriverTarget) { this.slitDriverTarget.dispose(); this.slitDriverTarget = null; slit.uDriver.value = this.fallback; }
     if (this.lensTarget && !project.layers.some(layer => layer.visible && lensActive(layer))) { this.lensTarget.dispose(); this.lensTarget = null; }
     if (this.warpTarget && !project.layers.some(layer => layer.visible && warpActive(layer))) { this.warpTarget.dispose(); this.warpTarget = null; }
+    if ((this.tileTarget || this.tileCells) && !project.layers.some(layer => layer.visible && tilesActive(layer))) {
+      this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null;
+      this.tile.uniforms.uSource.value = this.tile.uniforms.uCells.value = this.cellColour.uniforms.uSource.value = null;
+    }
   }
 
   /**
@@ -1838,6 +1905,7 @@ export class StudioRenderer {
     this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.warpTarget?.dispose(); this.warpTarget = null; this.warp.dispose();
+    this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.tile.dispose(); this.cellColour.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
