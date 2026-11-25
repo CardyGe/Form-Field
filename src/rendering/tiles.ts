@@ -282,11 +282,15 @@ float tileShade(vec2 lean) { return mix(1., .45 + .55 * max(dot(tileNormal(lean)
 struct Tile { vec2 cell; float grout; vec2 lean; float shadow; float spec; };
 const float BEVEL = .12, TILT = .7;
 
-// A mosaic grid corner's seeded shift, in cells: up to Irregularity x .35 of a cell on each axis.
+// A mosaic grid corner's seeded shift, in cells: up to Irregularity x .35 of a cell on each axis, capped at a quarter
+// cell so every quad stays convex. Corners on the frame's border move only along it, so no tile pulls away from an edge.
 vec2 cornerShift(vec2 corner) {
   if (uTileJitter <= 0.) return vec2(0.);
   uvec3 h = cellHash(corner + 8., 7u);
-  return uTileJitter * .35 * (2. * vec2(h.xy) / 4294967296. - 1.);
+  vec2 shift = min(uTileJitter * .35, .25) * (2. * vec2(h.xy) / 4294967296. - 1.), frame = 1. / uTileCellUv;
+  if (corner.x <= 0. || corner.x >= frame.x - 1e-3) shift.x = 0.;
+  if (corner.y <= 0. || corner.y >= frame.y - 1e-3) shift.y = 0.;
+  return shift;
 }
 float cross2(vec2 a, vec2 b) { return a.x * b.y - a.y * b.x; }
 
@@ -351,7 +355,8 @@ vec4 tileStage(vec2 uv) {
     vec2 s = f + (vec2(i, j) - 1.5) * .25 / uTileCellPx;
     Tile t;
     if (style == 0) t = mosaic(s); else if (style == 1) t = brick(s); else t = beads(s);
-    vec4 c = cellAt(t.cell, uTileGrid, uTileOrigin);
+    // Only Brick uses the spare last column; Mosaic and Beads read their own grid's cells.
+    vec4 c = cellAt(t.cell, style == 1 ? uTileGrid : uTileGrid - vec2(1., 0.), uTileOrigin);
     vec3 rgb = c.rgb * (t.shadow > 0. ? mix(1., .45, uTileRelief) : tileShade(t.lean));
     // The highlight whitens toward the cell's brightest channel, so it never passes the source.
     rgb = mix(rgb, vec3(max(max(c.r, c.g), c.b)), t.spec);

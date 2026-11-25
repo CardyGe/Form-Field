@@ -512,7 +512,8 @@ const CHECKS = [
   },
   {
     name: 'tile-grout',
-    // White under black grout, relief 0 so tiles stay white. 30-pixel tiles at 960x540, a whole number across the frame.
+    // White under black grout, relief 0 so tiles stay white. Size 60 is in 1080-line pixels, so 30-pixel tiles at
+    // 960x540, a whole number across the frame.
     // Grout share is measured in linear light, so pixels a tile edge crosses count by area.
     run: async ({ page }) => {
       const rows = await page.evaluate(async () => {
@@ -672,10 +673,32 @@ const CHECKS = [
     },
   },
   {
+    name: 'tile-edges',
+    // An opaque layer under Mosaic and Beads, with black grout and a transparent background: every pixel of the
+    // frame's four edge rows and columns must stay opaque. Moved corners on the frame border must not leave a notch
+    // that reads a cell outside the grid. Sizes are in 1080-line pixels; 18 and 23 do not divide the frame evenly.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.tq, W = 960, H = 540, rows = [];
+        for (const [style, size, jitter] of [[0, 18, .3], [0, 18, 1], [0, 23, .3], [0, 23, 1], [2, 23, 0]]) {
+          const px = await q.px(q.exact(q.project([q.smooth({ tileAmount: 1, tileStyle: style, tileSize: size, tileJitter: jitter, tileGaps: 1 })], true)));
+          const edge = { left: 0, right: 0, top: 0, bottom: 0 };
+          for (let y = 0; y < H; y++) { if (px[(y * W) * 4 + 3] < 255) edge.left++; if (px[(y * W + W - 1) * 4 + 3] < 255) edge.right++; }
+          for (let x = 0; x < W; x++) { if (px[x * 4 + 3] < 255) edge.top++; if (px[((H - 1) * W + x) * 4 + 3] < 255) edge.bottom++; }
+          rows.push({ style, size, jitter, edge });
+        }
+        return rows;
+      });
+      const ok = rows.every(r => Object.values(r.edge).every(v => v === 0));
+      return { ok, detail: `${rows.map(r => `${STYLES[r.style]} size ${r.size} irregularity ${r.jitter}: not opaque left ${r.edge.left}, right ${r.edge.right}, top ${r.edge.top}, bottom ${r.edge.bottom}`).join('; ')} (all must be 0)` };
+    },
+  },
+  {
     name: 'tile-alpha',
-    // A layer coloured (200, 120, 60), opaque to x 300, fading to nothing at x 500. With 10-pixel tiles and grout wide
-    // enough to hold whole pixels, nothing may show
-    // two cells past the fade, grout must show inside it, and no straight colour may pass 200 by more than 2.
+    // A layer coloured (200, 120, 60), opaque to x 300, fading to nothing at x 500. 10-pixel tiles (size 20 in 1080-line
+    // pixels) and grout wide enough to hold whole pixels. A tile reaches at most half a cell past its cell's coverage
+    // (Brick's offset row; a Mosaic corner moves at most a quarter cell), plus one pixel of edge filtering, so nothing may
+    // show from x 506 on. Grout must show inside, and no straight colour may pass 200 by more than 2.
     run: async ({ page }) => {
       const rows = await page.evaluate(async () => {
         const q = window.tq, W = 960, H = 540, rows = [];
@@ -684,7 +707,7 @@ const CHECKS = [
           let outside = 0, over = 0, worst = 0, grout = 0;
           for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
             const i = (y * W + x) * 4, a = px[i + 3];
-            if (x >= 525 && a > 0) outside++;
+            if (x >= 506 && a > 0) outside++;
             if (a >= 32) { const m = Math.max(px[i], px[i + 1], px[i + 2]); worst = Math.max(worst, m); if (m > 202) over++; }
             if (x < 280 && (gaps === 0 ? a === 0 : a === 255 && px[i] + px[i + 1] + px[i + 2] === 0)) grout++;
           }
