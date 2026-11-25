@@ -20,6 +20,7 @@
     "build:media": "node scripts/build-media-tools.mjs",
     "test:ui": "npm run build && node scripts/verify-ui.mjs",
     "test:workspace": "npm run build && node scripts/verify-workspace-ui.mjs",
+    "test:wall": "npm run build && node scripts/verify-wall-brightness.mjs",
     "test:packaged": "node scripts/verify-packaged.mjs",
     "test:map": "npm run build && node scripts/verify-map.mjs",
     "test:perform": "npm run build && node scripts/verify-perform.mjs",

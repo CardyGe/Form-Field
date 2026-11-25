@@ -110,6 +110,37 @@ void main() {
   o = vec4(v, 1.);  // premultiplied over the black stage
 }`;
 
+/**
+ * The flash limiter's small copy of the wall: each of its pixels is the average, in linear light, of every stage pixel it
+ * covers. A plain filtered read would see only 4 of the ~900 stage pixels behind it, so fine detail that only moves (oil,
+ * thin lines) would jump between light and dark from frame to frame and look to the limiter like flashing. Each tap sits on
+ * a corner where four stage pixels meet, so the filtered read averages those four and the taps cover the footprint exactly.
+ */
+const PROBE = `#version 300 es
+precision highp float;
+out vec4 o;
+uniform vec2 uOut;          // the probe's size in pixels
+uniform vec2 uStage;
+uniform sampler2D uTex;
+uniform float uMaster;      // Perform's master level, as the wall shows it
+vec3 lin(vec3 c) { return mix(c / 12.92, pow((c + .055) / 1.055, vec3(2.4)), step(.04045, c)); }
+vec3 srgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }
+void main() {
+  vec2 cell = uStage / uOut;                                      // stage pixels behind one probe pixel
+  vec2 from = floor(vec2(gl_FragCoord.x - .5, uOut.y - gl_FragCoord.y - .5) * cell);
+  ivec2 taps = ivec2(ceil(cell / 2.));
+  vec3 sum = vec3(0.);
+  for (int y = 0; y < 32; y++) {
+    if (y >= taps.y) break;
+    for (int x = 0; x < 32; x++) {
+      if (x >= taps.x) break;
+      vec2 s = min(from + vec2(x, y) * 2. + 1., uStage - 1.);
+      sum += lin(texture(uTex, vec2(s.x / uStage.x, 1. - s.y / uStage.y)).rgb);
+    }
+  }
+  o = vec4(srgb(clamp(sum / float(taps.x * taps.y) * uMaster, 0., 1.)), 1.);
+}`;
+
 /** Advances the flash guard's cells from the finished stage. */
 const GUARD = `#version 300 es
 precision highp float;
@@ -171,6 +202,7 @@ export class Gpu {
   private shapeP!: Program;
   private layerP!: Program;
   private finalP!: Program;
+  private probeP!: Program;
   private quad!: WebGLVertexArrayObject;
   private stageTex!: WebGLTexture;
   private stageFb!: WebGLFramebuffer;
@@ -230,6 +262,7 @@ export class Gpu {
     this.shapeP = compile(SHAPE, ['uRect', 'uStage', 'uCoverage', 'uKind', 'uColour', 'uPicture', 'uInv', 'uFromKind', 'uFromColour', 'uFrom', 'uFromInv', 'uMix', 'uHueOn', 'uHue', 'uLook', 'uAlpha', 'uDecor', 'uDecorAlpha', 'uDecorTex', 'uRun', 'uRunTex', 'uRunAt']);
     this.layerP = compile(LAYER, ['uRect', 'uStage', 'uTex']);
     this.finalP = compile(FINAL, ['uRect', 'uStage', 'uOut', 'uInv', 'uTex', 'uMaster', 'uGain', 'uRedScale']);
+    this.probeP = compile(PROBE, ['uRect', 'uStage', 'uOut', 'uTex', 'uMaster']);
     this.guardP = compile(GUARD, ['uRect', 'uStage', 'uGuardSource', 'uGuardLast', 'uGuardState', 'uGuardGate', 'uGuardSeconds', 'uGuardReset', 'uGuardEncoded']);
     this.guardGateP = compile(GUARD_GATE, ['uRect', 'uStage', 'uGuardCells', 'uGuardGateLast', 'uGuardSeconds', 'uGuardReset']);
     this.guardShowP = compile(GUARD_SHOW, ['uRect', 'uStage', 'uGuardImage', 'uGuardPrevious', 'uGuardCells', 'uGuardImageEncoded']);
@@ -560,7 +593,7 @@ export class Gpu {
     if (!buffer) return false;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.flashFb);
     gl.viewport(0, 0, width, height);
-    this.flat(IDENTITY, width, height, false);
+    this.probe(width, height);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
     gl.bufferData(gl.PIXEL_PACK_BUFFER, width * height * 4, gl.STREAM_READ);
     gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
@@ -599,6 +632,20 @@ export class Gpu {
     gl.uniform1f(u.uGain, corrected ? this.correction.gain : 1);
     gl.uniform1f(u.uRedScale, corrected ? this.correction.redScale : 1);
     gl.uniformMatrix3fv(u.uInv, false, columns(inv));
+    gl.uniform1f(u.uMaster, this.master);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.guardShown && this.guardFrames ? this.guardFrames[0].tex : this.stageTex); gl.uniform1i(u.uTex, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.enable(gl.BLEND);
+  }
+
+  /** The limiter's averaged copy of the stage, at the master level, as flat() draws it but without the limiter's own correction. */
+  private probe(w: number, h: number): void {
+    const gl = this.gl, { program, u } = this.probeP;
+    gl.disable(gl.BLEND);
+    gl.useProgram(program);
+    gl.uniform4f(u.uRect, 0, 0, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.uniform2f(u.uStage, STAGE_SIZE.width, STAGE_SIZE.height);
+    gl.uniform2f(u.uOut, w, h);
     gl.uniform1f(u.uMaster, this.master);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.guardShown && this.guardFrames ? this.guardFrames[0].tex : this.stageTex); gl.uniform1i(u.uTex, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
