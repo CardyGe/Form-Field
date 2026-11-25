@@ -64,7 +64,7 @@ test('long names are shortened and long ids replaced, so a show always fits on t
 
 test('unknown version still loads valid shapes', () => {
   const r = validateShow(doc([shape()], { version: 9 }));
-  assert.equal(r.show.version, 8);
+  assert.equal(r.show.version, 9);
   assert.equal(r.show.shapes.length, 1);
 });
 
@@ -108,7 +108,7 @@ const doc2 = (shapes: unknown[], sources: unknown[], over: Record<string, unknow
 
 test('a version 1 file opens as an all-colour show without being called repaired', () => {
   const r = validateShow(doc([shape()]));
-  assert.equal(r.show.version, 8);
+  assert.equal(r.show.version, 9);
   assert.equal(r.show.shapes[0].sourceId, null);
   assert.deepEqual(r.show.sources, []);
   assert.equal(r.repaired, false);
@@ -258,7 +258,7 @@ test('version 1 to 3 shapes open with Fit, full brightness, no tint and no stage
   for (const input of [doc([shape()]), doc3([shape()])]) {
     const r = validateShow(input);
     assert.equal(r.repaired, false);
-    assert.equal(r.show.version, 8);
+    assert.equal(r.show.version, 9);
     assert.deepEqual(r.show.shapes[0].placement, DEFAULT_PLACEMENT);
     assert.equal(r.show.shapes[0].brightness, 1);
     assert.equal(r.show.shapes[0].tint, '#ffffff');

@@ -5,12 +5,12 @@
  */
 import { AutoGain } from './features';
 import { BeatDetector } from './beat';
-import { TempoClock, type TempoSource } from './tempo';
+import { TempoClock, type SavedTempoSource } from './tempo';
 import { AudioInput, TEST_TONE, type AudioStatus } from './audio';
 import { MidiInput, type MidiStatus } from './midi';
 import type { Signals } from './signals';
 
-export interface ReactPrefs { audioDevice: string | null; midi: boolean; tempo: TempoSource; bpm: number }
+export interface ReactPrefs { audioDevice: string | null; midi: boolean; tempo: SavedTempoSource; bpm: number }
 const PREFS_KEY = 'reactivity';
 const DEFAULT_PREFS: ReactPrefs = { audioDevice: null, midi: false, tempo: 'beat', bpm: 120 };
 
@@ -21,7 +21,7 @@ function loadPrefs(): ReactPrefs {
     return {
       audioDevice: typeof raw.audioDevice === 'string' ? raw.audioDevice : null,
       midi: raw.midi === true,
-      tempo: (['beat', 'tap', 'midi', 'fixed'] as const).includes(raw.tempo as TempoSource) ? raw.tempo as TempoSource : 'beat',
+      tempo: (['beat', 'tap', 'midi', 'fixed'] as const).includes(raw.tempo as SavedTempoSource) ? raw.tempo as SavedTempoSource : 'beat',
       bpm: typeof raw.bpm === 'number' && Number.isFinite(raw.bpm) ? raw.bpm : 120,
     };
   } catch { return { ...DEFAULT_PREFS }; }
@@ -33,8 +33,10 @@ export class ReactivityEngine {
   readonly midi = new MidiInput(this.tempo);
   prefs: ReactPrefs = loadPrefs();
   signals: Signals = {};
+  /** A rehearsal ended because its file could not be read. Kept until the Perform screen has said so. */
+  rehearsalFault = false;
   private readonly gains = { bass: new AutoGain(), mids: new AutoGain(), highs: new AutoGain(), level: new AutoGain() };
-  private readonly beat = new BeatDetector();
+  private beat = new BeatDetector();
   private listeners = new Set<(signals: Signals) => void>();
   private changes = new Set<() => void>();
   private raf = 0;
@@ -45,6 +47,8 @@ export class ReactivityEngine {
     this.tempo.setSource(this.prefs.tempo);
     this.tempo.setBpm(this.prefs.bpm);
     this.audio.onStatus = () => this.changed();
+    this.audio.onFileLost = () => void this.fileLost();
+    this.audio.onFileResumed = () => this.forgetOnsets();
     this.midi.onStatus = () => this.changed();
   }
 
@@ -58,7 +62,8 @@ export class ReactivityEngine {
     return () => {
       if (!this.listeners.delete(listener) || this.listeners.size) return;
       cancelAnimationFrame(this.raf);
-      this.stopping = setTimeout(() => { if (!this.listeners.size) this.audio.stop(); }, 1000);
+      // A rehearsal is playing to the speakers, so it carries on between sections.
+      this.stopping = setTimeout(() => { if (!this.listeners.size && !this.audio.rehearsal) this.audio.stop(); }, 1000);
     };
   }
   /** Told when devices, status or preferences change (for the panel). */
@@ -68,8 +73,9 @@ export class ReactivityEngine {
   setPrefs(change: Partial<ReactPrefs>): void {
     this.prefs = { ...this.prefs, ...change };
     try { localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs)); } catch { /* kept for this session */ }
-    if (change.tempo) this.tempo.setSource(change.tempo);
-    if (change.bpm !== undefined) this.tempo.setBpm(change.bpm);
+    // During a show the clock stays with the show; a saved change takes effect when it ends.
+    if (change.tempo && !this.show) this.tempo.setSource(change.tempo);
+    if (change.bpm !== undefined && !this.show) this.tempo.setBpm(change.bpm);
     if ('audioDevice' in change) void this.applyAudio();
     if ('midi' in change) { if (this.prefs.midi) void this.midi.start(); else this.midi.stop(); }
     this.changed();
@@ -83,11 +89,72 @@ export class ReactivityEngine {
   }
   private allow: () => Promise<'granted' | 'refused'> = async () => 'refused';
   private async applyAudio(): Promise<void> {
+    // A device chosen during a rehearsal is saved as usual and takes over when the rehearsal stops.
+    if (this.audio.rehearsal) return;
     if (this.prefs.audioDevice === null) this.audio.stop();
     else await this.audio.start(this.prefs.audioDevice, this.allow);
   }
 
-  tap(): void { this.tempo.tap(performance.now() / 1000); if (this.prefs.tempo !== 'tap') this.setPrefs({ tempo: 'tap' }); }
+  /** Plays a recorded mix in place of the input, or with null stops it and goes back to the chosen input. Writes no preferences. */
+  async rehearse(file: Blob | null): Promise<void> {
+    if (file) { if (await this.audio.startFile(file)) this.forgetOnsets(); return; }
+    this.audio.cancelFile();
+    await this.leaveRehearsal();
+  }
+  /** The mix stopped being readable, such as a drive unplugged. A newer mix still loading is left to take over. */
+  private async fileLost(): Promise<void> {
+    await this.leaveRehearsal();
+    this.rehearsalFault = true;
+    this.changed();
+  }
+  private async leaveRehearsal(): Promise<void> {
+    if (!this.audio.rehearsal) return;
+    this.audio.stop();
+    this.forgetOnsets();
+    // With nothing listening the device stays closed, and the next listener opens it.
+    if (this.listeners.size) await this.applyAudio();
+  }
+
+  /** A different sound: the last one's onsets must not suggest its tempo. The beat count carries on. */
+  private forgetOnsets(): void {
+    const { count } = this.beat;
+    this.beat = new BeatDetector();
+    this.beat.count = count;
+  }
+
+  tap(): void {
+    if (this.show) { this.showTap(); return; }
+    this.tempo.tap(performance.now() / 1000);
+    if (this.prefs.tempo !== 'tap') this.setPrefs({ tempo: 'tap' });
+  }
+
+  /** The tempo before the show, while one is running. None of the show controls write preferences. */
+  private show: { bpm: number } | null = null;
+  /**
+   * A show follows the music, unless the saved source is MIDI clock: that leads while it runs, and when it is stopped
+   * or silent the show follows the music until it runs again (see TempoClock.midiShowTick).
+   */
+  beginShowClock(): void {
+    if (this.show) return;
+    this.show = { bpm: this.tempo.bpm };
+    this.tempo.clearBarStart();
+    if (this.prefs.tempo === 'midi') this.tempo.beginMidiShow();
+    else this.tempo.setSource('follow');
+  }
+  /** Back to the saved source and its tempo. The beat count carries on. */
+  endShowClock(): void {
+    if (!this.show) return;
+    const { bpm } = this.show;
+    this.show = null;
+    this.tempo.endMidiShow();
+    this.tempo.setSource(this.prefs.tempo);
+    if (this.prefs.tempo !== 'midi') this.tempo.setBpm(this.prefs.tempo === 'fixed' ? this.prefs.bpm : bpm);
+  }
+  showTap(): void { this.tempo.manualTap(performance.now() / 1000); }
+  followAgain(): void { this.tempo.resumeFollow(performance.now() / 1000); }
+  setBarStart(): void { this.tempo.setBarStart(performance.now() / 1000); }
+  /** During a MIDI clock show: whether MIDI clock leads, is silent, or Tap or Follow took over. Null otherwise. */
+  showMidiClock(): 'leading' | 'silent' | 'operator' | null { return this.tempo.midiShowState(this.last); }
 
   private run(): void {
     const loop = (now: number) => {
@@ -109,12 +176,15 @@ export class ReactivityEngine {
       out['audio.mids'] = this.gains.mids.update(sound.mids, dt);
       out['audio.highs'] = this.gains.highs.update(sound.highs, dt);
       out['audio.level'] = this.gains.level.update(sound.level, dt);
-      const { onset } = this.beat.update(sound.bass, t);
+      const { onset, followOnset, strength } = this.beat.update(sound.bass, t);
       const beat = this.beat.state(t);
       if (onset) this.tempo.detected(t, beat.bpm);
+      if (followOnset) this.tempo.followOnset(t, beat.bpm, strength);
       out['beat.pulse'] = beat.pulse;
       out['beat.count'] = beat.count;
     }
+    this.tempo.midiShowTick(t);
+    this.tempo.followTick(t);
     const clock = this.tempo.advance(t);
     out['tempo.phase'] = clock.phase; out['tempo.beat'] = clock.beat; out['tempo.bpm'] = clock.bpm;
     Object.assign(out, this.midi.values);
@@ -123,6 +193,8 @@ export class ReactivityEngine {
 }
 
 let engine: ReactivityEngine | null = null;
+/** The engine if something has started it, without starting it: asking must not open the microphone. */
+export const reactivityIfStarted = (): ReactivityEngine | null => engine;
 /** The one engine for this window, started the first time it is asked for. */
 export function reactivity(): ReactivityEngine {
   if (engine) return engine;
@@ -130,7 +202,7 @@ export function reactivity(): ReactivityEngine {
   void engine.begin(() => window.studio?.live?.microphoneAccess?.() ?? Promise.resolve('granted'));
   // For scripted checks: a test beat in place of a device, and MIDI bytes as if a controller sent them.
   const e = engine;
-  window.__studioTest = { ...window.__studioTest, react: { testBeat: (on: boolean) => e.setPrefs({ audioDevice: on ? TEST_TONE : null }), midi: (bytes: number[]) => e.midi.inject(bytes), signals: () => e.signals } };
+  window.__studioTest = { ...window.__studioTest, react: { testBeat: (on: boolean) => e.setPrefs({ audioDevice: on ? TEST_TONE : null }), midi: (bytes: number[]) => e.midi.inject(bytes), signals: () => e.signals, audio: () => e.audio.status, mixElement: () => e.audio.fileElement, audioDevice: (id: string) => e.setPrefs({ audioDevice: id }) } };
   return engine;
 }
 export type { AudioStatus, MidiStatus };

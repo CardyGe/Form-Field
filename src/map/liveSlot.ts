@@ -6,11 +6,13 @@
  * starts. A camera that cannot play (refused, missing, lost) also leaves the shapes on their fill.
  */
 import { Stage } from '../live/Stage';
-import { usesPeople, type LiveSettings } from '../live/settings';
+import { usesCamera, usesPeople, type LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { Signals } from '../react/signals';
 import type { Gpu, Texture } from './gpu';
+import type { MorphogenPlay } from '../morphogen/play';
 import { liveReadiness, type LiveReadiness } from './liveReady';
+import { LIMITER } from '../meridian/wall-limiter';
 
 /** Live draws at this shape whatever its quality. */
 export const LIVE_ASPECT = 16 / 9;
@@ -29,6 +31,8 @@ export class LiveSlot {
   private fileChosen = false;
   /** Whether the last frame() uploaded a new picture (the stage must be drawn again). */
   fresh = false;
+  /** Until when the footer says Live's flash limiter is limiting, held briefly as the wall's own is. */
+  private limitingUntil = 0;
 
   constructor(private readonly gpu: Gpu, settings: LiveSettings) {
     this.canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.broken = true; });
@@ -45,6 +49,8 @@ export class LiveSlot {
     // The Live screen's Blackout and setup views never reach Map's projector.
     this.stage.renderer.view = 'art';
     this.stage.renderer.blackout = false;
+    // The wall guards the finished stage, so Live is not limited twice.
+    this.stage.renderer.flashGuard = false;
     // A video file plays on the Live screen only. Here Live waits on the test pattern, unseen; its shapes play their fill.
     this.fileChosen = settings.source.kind === 'file';
     this.stage.apply(this.fileChosen ? { ...settings, source: { kind: 'test', deviceId: settings.source.deviceId } } : settings);
@@ -61,9 +67,16 @@ export class LiveSlot {
   captureRoom(): void { this.stage.renderer.captureRoom(); }
   retry(settings: LiveSettings): void { this.stage.retry(settings.source.kind === 'file' ? { ...settings, source: { kind: 'test', deviceId: settings.source.deviceId } } : settings); }
 
+  /** What is being performed, carried across a rebuilt Live. */
+  get morphogenPlay(): MorphogenPlay { return this.stage.renderer.morphogenPlay; }
+  set morphogenPlay(play: MorphogenPlay) { this.stage.renderer.morphogenPlay = play; }
+
+  /** Morphogen mode on the MIDImix, for the operator's screen. */
+  get midimix(): { active: boolean; look: number | null; queued: number | null } | null { return this.stage.renderer.midimix; }
+
   get readiness(): LiveReadiness {
     const settings = this.stage.renderer.settings, people = this.stage.renderer.peopleDiagnostics();
-    return liveReadiness(this.state, { file: this.fileChosen, needsPeople: usesPeople(settings), peopleLoading: people.status === 'loading' || (people.status as { state?: string } | null)?.state === 'loading',
+    return liveReadiness(this.state, { file: this.fileChosen, needsCamera: usesCamera(settings), warming: !this.stage.renderer.lookReady, needsPeople: usesPeople(settings), peopleLoading: people.status === 'loading' || (people.status as { state?: string } | null)?.state === 'loading',
       drawnSinceRunning: this.stage.renderer.framesDrawn - this.runningSince, hasPicture: this.texture !== null });
   }
 
@@ -74,12 +87,19 @@ export class LiveSlot {
     if (readiness === 'hold') return this.texture;
     if (readiness !== 'play') return null;
     const drawn = this.stage.renderer.framesDrawn;
+    if (this.stage.renderer.limitedArea >= LIMITER.trigger) this.limitingUntil = performance.now() + 1500;
     if (drawn !== this.uploaded && this.canvas.width > 0) {
       this.texture = this.gpu.upload(this.canvas, this.texture);
       this.uploaded = drawn;
       this.fresh = true;
     }
     return this.texture;
+  }
+  /** Live's own flash limiter while it plays Meridian, for Map's footer: null for the other looks. */
+  get limiter(): { limiting: boolean; error: string | null } | null {
+    const renderer = this.stage.renderer;
+    if (renderer.settings.look !== 'meridian') return null;
+    return { limiting: performance.now() < this.limitingUntil, error: renderer.limiterError };
   }
   /** The picture on the wall now, for a fade away from Live. */
   get current(): Texture | null { const r = this.readiness; return r === 'play' || r === 'hold' ? this.texture : null; }

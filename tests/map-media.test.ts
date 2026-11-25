@@ -5,6 +5,7 @@ import zlib from 'node:zlib';
 import { applyEdit, type EditAction } from '../src/map/editor';
 import { createShow, validateShow, imageBytes, isVideoId, MAX_VIDEOS, type CurvePoint, type ShowDocument } from '../src/map/show';
 import { targetRange } from '../src/map/targets';
+import { createLayer, createProject } from '../src/core/project';
 
 const sq = (x0: number, y0: number, x1: number, y1: number): CurvePoint[] => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
 const ok = (show: ShowDocument, action: EditAction): ShowDocument => { const r = applyEdit(show, action); assert.ok(r.ok, `refused: ${!r.ok && r.reason}`); return r.show; };
@@ -91,7 +92,7 @@ test('relinkVideo moves every video on the missing path, and scenes keep their s
 test('version 7 round-trips; version 6 opens with no videos, unrepaired; a video id with no video in the file is a missing source, repaired', () => {
   let show = video(base(), 'a', 'video-1');
   show = ok(show, { type: 'setContent', shapeId: 'b', content: { kind: 'image', sourceId: 'img1', image: picture() } });
-  assert.equal(show.version, 8);
+  assert.equal(show.version, 9);
   const again = validateShow(JSON.parse(JSON.stringify(show)));
   assert.equal(again.repaired, false);
   assert.deepEqual(again.show.videos, show.videos);
@@ -181,4 +182,16 @@ test('review: copies of a picture share it, so it is stored once; a separate cop
   assert.equal(grid.sources.length, 1, 'a grid of a picture stores it once');
   const sep = ok(ok(show, { type: 'shareSource', shapeId: 'b', withShapeId: 'a' }), { type: 'makeSeparate', shapeId: 'b', sourceId: 'img3' });
   assert.equal(imageBytes(sep), 2 * imageBytes(show), 'a separate copy is counted');
+});
+
+test('a Meridian Mark counts against the show image budget, and an edit over it is refused', () => {
+  const mb = 12 * 1024 * 1024, mark = { dataUrl: `data:image/png;base64,${'A'.repeat(Math.ceil(mb / 3) * 4)}`, width: 1, height: 1 };
+  const withMark = (id: string) => {
+    const layer = createLayer('meridian');
+    layer.meridian = { locks: [], mark };
+    return { id, kind: 'instrument' as const, project: { ...createProject(), layers: [layer] }, speed: 1, revision: 0, tempoSync: null };
+  };
+  const show = { ...base(), sources: [withMark('m1'), withMark('m2'), withMark('m3')] } as ShowDocument;
+  assert.equal(imageBytes(show), 3 * Math.ceil(mb / 3) * 3);
+  refused(show, { type: 'setContent', shapeId: 'a', content: { kind: 'image', sourceId: 'i9', image: picture() } }, 'images-over-budget');
 });

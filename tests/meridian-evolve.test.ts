@@ -1,0 +1,605 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createLayer, createProject, PRESETS, validateProject } from '../src/core/project';
+import { DisplayList, STRIDE } from '../src/meridian/display-list';
+import { advanceEvolve, createEvolveClock, createEvolveTransport, evaluateEvolve, evolveCompileCount, EVOLVE_ELEMENTS, EVOLVE_FORM_NAMES, evolveFormKind, exactEvolveClock, GLITCH_SHARDS, SCORE_STYLE_EVOLVE, type EvolveMoves, type EvolveTransport } from '../src/meridian/evolve';
+import { applyLockedVariation } from '../src/meridian/panel';
+import { MACRO_KEYS, MERIDIAN_DEFAULTS } from '../src/meridian/parameters';
+import { SCORE_STYLE_DENSE, SCORE_STYLE_PULSE } from '../src/meridian/pulse';
+import { PRIMITIVE } from '../src/meridian/types';
+
+const SEEDS = [1729, 2, 77, 4096, 31337, 900001, 12345, 555];
+const FPS = 60, DT = 1 / FPS, LOOP = 60;
+const MAX_MOVE = 0.012, MAX_ALPHA = 0.08, MAX_COLOUR = 0.08, MAX_GLOW = 0.25, MAX_WIDTH_PX = 1;
+/** The ruling for a deliberate Density or Scale move: on screen, 4% of frame height per frame, times the visual zoom when above 1. */
+const MAX_USER_MOVE = 0.04;
+const AFTER_TEN_MINUTES = 600;
+const idle: EvolveMoves = { next: false, hold: false, drop: false, collapse: false, burst: false };
+const params = (extra: Record<string, number> = {}) => ({ ...MERIDIAN_DEFAULTS, ...extra });
+const phaseAt = (t: number) => (t / LOOP) * Math.PI * 2;
+
+/** Both ends of an element, in frame heights. Arcs are followed by their ends, so a turning arc is tracked honestly. */
+function ends(d: Float32Array, at: number, out: Float64Array): void {
+  const kind = d[at];
+  if (kind === PRIMITIVE.arc) {
+    const r = d[at + 3], a = d[at + 4], b = a + d[at + 5];
+    out[0] = d[at + 1] + Math.cos(a) * r; out[1] = d[at + 2] + Math.sin(a) * r; out[2] = d[at + 1] + Math.cos(b) * r; out[3] = d[at + 2] + Math.sin(b) * r;
+  } else if (kind === PRIMITIVE.segment) { out[0] = d[at + 1]; out[1] = d[at + 2]; out[2] = d[at + 3]; out[3] = d[at + 4]; }
+  else { const r = kind === PRIMITIVE.ring ? d[at + 3] : 0; out[0] = d[at + 1] + r; out[1] = d[at + 2]; out[2] = d[at + 1] - r; out[3] = d[at + 2]; }
+}
+
+class Watch {
+  private last: Float32Array | null = null;
+  private lastCount = 0;
+  maxMove = 0; maxAlpha = 0; maxColour = 0; maxGlow = 0; maxWidth = 0; minDrawn = Infinity; maxEnergyStep = 0; private energy = 0;
+  private readonly a = new Float64Array(4); private readonly b = new Float64Array(4);
+  /** With `visibleOnly`, marks wholly outside the frame do not count towards movement: nobody can see them travel. */
+  constructor(private readonly visibleOnly = false) {}
+  private inFrame(e: Float64Array, end: number): boolean { return Math.abs(e[end]) < 0.9 && Math.abs(e[end + 1]) < 0.52; }
+  /** `zoom` is the current visual zoom: a deliberate move may travel further on a structure drawn larger. */
+  see(list: DisplayList, zoom = 1): void {
+    const d = list.data;
+    let drawn = 0, energy = 0;
+    for (let i = 0; i < list.count; i++) {
+      const at = i * STRIDE, alpha = d[at + 9];
+      if (alpha > 0.04) { drawn++; const k = d[at]; energy += alpha * (k === PRIMITIVE.ring ? Math.PI * 2 * d[at + 3] : k === PRIMITIVE.arc ? d[at + 3] * d[at + 5] : k === PRIMITIVE.segment ? Math.hypot(d[at + 3] - d[at + 1], d[at + 4] - d[at + 2]) : 0.01) * Math.abs(d[at + 6] || 0.001); }
+      if (!this.last) continue;
+      // A mark appended since the last frame, such as a glitch shard, counts as arriving from nothing.
+      if (i >= this.lastCount) { this.maxAlpha = Math.max(this.maxAlpha, alpha); continue; }
+      const p = this.last, seen = Math.max(alpha, p[at + 9]);
+      this.maxAlpha = Math.max(this.maxAlpha, Math.abs(alpha - p[at + 9]));
+      if (seen <= 0.04) continue;
+      this.maxColour = Math.max(this.maxColour, Math.abs(d[at + 8] - p[at + 8]));
+      this.maxGlow = Math.max(this.maxGlow, Math.abs(d[at + 7] - p[at + 7]));
+      this.maxWidth = Math.max(this.maxWidth, Math.abs(d[at + 6] - p[at + 6]) * 1080);
+      ends(p, at, this.a); ends(d, at, this.b);
+      for (const end of [0, 2]) {
+        if (this.visibleOnly && !this.inFrame(this.a, end) && !this.inFrame(this.b, end)) continue;
+        const moved = Math.hypot(this.a[end] - this.b[end], this.a[end + 1] - this.b[end + 1]);
+        this.maxMove = Math.max(this.maxMove, this.visibleOnly ? moved / Math.max(1, zoom) : moved);
+      }
+    }
+    this.minDrawn = Math.min(this.minDrawn, drawn);
+    if (this.last) this.maxEnergyStep = Math.max(this.maxEnergyStep, Math.abs(energy - this.energy) / Math.max(this.energy, 1e-6));
+    this.energy = energy;
+    this.last = d.slice(0, list.count * STRIDE);
+    this.lastCount = list.count;
+  }
+}
+
+interface Step { params?: Record<string, number>; moves?: EvolveMoves; seed?: number }
+
+function run(seed: number, seconds: number, p: Record<string, number>, frame: (f: number) => Step | void, watch: Watch, start = 0): EvolveTransport {
+  const transport = createEvolveTransport(), list = new DisplayList(2000), view: Record<string, number> = {};
+  let current = p, currentSeed = seed;
+  advanceEvolve(transport, 0, LOOP, 0, seed, current, idle);
+  // The warm-up is the session so far. Faults that grow with accumulated time only show after it.
+  for (let f = 1, warm = Math.round(start * 10); f <= warm; f++) advanceEvolve(transport, phaseAt(f / 10), LOOP, 0.1, seed, current, idle);
+  const frames = Math.round(seconds * FPS);
+  for (let f = 0; f <= frames; f++) {
+    const step = f === 0 ? {} : frame(f) ?? {};
+    if (step.params) current = step.params;
+    if (step.seed !== undefined) currentSeed = step.seed;
+    const clock = advanceEvolve(transport, phaseAt(start + f * DT), LOOP, f === 0 ? 0 : DT, currentSeed, current, step.moves ?? idle);
+    Object.assign(view, current, transport.values);
+    evaluateEvolve(currentSeed, clock, view, list);
+    watch.see(list, 2.4 ** (transport.values.macroScale * 2 - 1));
+  }
+  return transport;
+}
+
+const within = (watch: Watch, label: string, move = MAX_MOVE) => {
+  assert.ok(watch.maxMove <= move, `${label}: moved ${watch.maxMove}`);
+  assert.ok(watch.maxAlpha <= MAX_ALPHA, `${label}: alpha step ${watch.maxAlpha}`);
+  assert.ok(watch.maxColour <= MAX_COLOUR, `${label}: colour step ${watch.maxColour}`);
+  assert.ok(watch.maxGlow <= MAX_GLOW, `${label}: glow step ${watch.maxGlow}`);
+  assert.ok(watch.maxWidth <= MAX_WIDTH_PX, `${label}: width step ${watch.maxWidth}px`);
+};
+
+test('Evolve is the default for a new layer, and saved layers keep their style', () => {
+  assert.equal(createLayer('meridian').params.scoreStyle, SCORE_STYLE_EVOLVE);
+  for (const style of [SCORE_STYLE_PULSE, SCORE_STYLE_DENSE]) {
+    const saved = createLayer('meridian'); saved.params.scoreStyle = style;
+    assert.equal(validateProject({ ...createProject(), layers: [saved] }).layers[0].params.scoreStyle, style);
+  }
+  const old = createLayer('meridian'); delete old.params.scoreStyle; delete old.params.scoreEvolution; delete old.params.scoreHoldShape;
+  assert.equal(validateProject({ ...createProject(), layers: [old] }).layers[0].params.scoreStyle, SCORE_STYLE_DENSE);
+});
+
+test('an exact frame depends only on seed, params and time, in any order', () => {
+  const draw = (phase: number, seed = 1729) => { const list = new DisplayList(2000); evaluateEvolve(seed, exactEvolveClock(phase, 60, params(), createEvolveClock()), params(), list); return Array.from(list.data.subarray(0, list.count * STRIDE)); };
+  const first = draw(2.2); draw(5.1); draw(0.4, 99); draw(3.3);
+  assert.deepEqual(draw(2.2), first);
+});
+
+test('ten minutes at 60 fps never empties, cuts, jumps or flashes, on eight seeds', () => {
+  for (const seed of SEEDS) {
+    const watch = new Watch();
+    run(seed, 600, params(), () => undefined, watch);
+    assert.ok(watch.minDrawn >= 5, `seed ${seed}: ${watch.minDrawn} drawn`);
+    assert.ok(watch.maxMove <= MAX_MOVE, `seed ${seed}: moved ${watch.maxMove}`);
+    assert.ok(watch.maxAlpha <= MAX_ALPHA, `seed ${seed}: alpha step ${watch.maxAlpha}`);
+    assert.ok(watch.maxEnergyStep < 0.12, `seed ${seed}: light step ${watch.maxEnergyStep}`);
+  }
+});
+
+test('structures 30, 60 and 120 seconds apart differ', () => {
+  for (const seed of SEEDS) {
+    const transport = createEvolveTransport(), p = params(), lists = new Map<number, Float32Array>(), list = new DisplayList(2000), view: Record<string, number> = {};
+    advanceEvolve(transport, 0, LOOP, 0, seed, p, idle);
+    for (let f = 1; f <= 420 * 10; f++) {
+      const clock = advanceEvolve(transport, phaseAt(f / 10), LOOP, 0.1, seed, p, idle);
+      if (f % 300 === 0) { Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); lists.set(f / 10, list.data.slice(0, list.count * STRIDE)); }
+    }
+    for (const gap of [30, 60, 120]) for (const [t, a] of lists) {
+      const b = lists.get(t + gap);
+      if (!b) continue;
+      let change = 0;
+      for (let i = 0; i < a.length; i += STRIDE) if (Math.max(a[i + 9], b[i + 9]) > 0.1) change += Math.abs(a[i + 3] - b[i + 3]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+      assert.ok(change > 0.05, `seed ${seed}, ${t}s and ${t + gap}s are alike (${change})`);
+    }
+  }
+});
+
+test('moving any macro across its range in one second causes no jump, after ten minutes and with Glitch up', () => {
+  for (const seed of [1729, 77]) for (const key of MACRO_KEYS) for (const glitch of [0.5, 0.9]) for (const [from, to] of [[0, 1], [1, 0]]) {
+    if (key === 'macroGlitch' && glitch !== 0.5) continue;
+    const zoom = key === 'macroDensity' || key === 'macroScale', watch = new Watch(zoom), base = params({ macroGlitch: glitch, [key]: from });
+    run(seed, 8, base, f => ({ params: { ...base, [key]: from + (to - from) * Math.min(1, f / FPS) } }), watch, AFTER_TEN_MINUTES);
+    within(watch, `seed ${seed} ${key} ${from}->${to} glitch ${glitch}`, zoom ? MAX_USER_MOVE : MAX_MOVE);
+  }
+});
+
+test('Density and Scale arrive within a second and a half, without overshoot', () => {
+  for (const key of ['macroDensity', 'macroScale']) for (const [from, to] of [[0.5, 1], [0.5, 0], [0, 1], [1, 0]]) {
+    const base = params({ [key]: from }), moved = { ...base, [key]: to }, transport = createEvolveTransport();
+    advanceEvolve(transport, 0, LOOP, 0, 1729, base, idle);
+    let at = 0, arrived = 0;
+    for (let f = 1; f <= 360; f++) {
+      advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, 1729, moved, idle);
+      const value = transport.values[key], share = (value - from) / (to - from);
+      assert.ok(share >= at - 1e-9 && share <= 1 + 1e-9, `${key} overshoots or turns back at frame ${f}`);
+      at = share;
+      if (f === 90) arrived = share;
+    }
+    assert.ok(arrived >= 0.75, `${key} ${from}->${to}: ${arrived} of the way after 1.5 s`);
+    assert.equal(transport.values[key], to);
+  }
+});
+
+test('the structure itself has mostly arrived 1.5 s after a Density move', () => {
+  for (const seed of SEEDS) for (const [from, to] of [[0, 1], [1, 0]]) {
+    const held = params({ scoreHoldShape: 1, macroDensity: from }), moved = { ...held, macroDensity: to }, transport = createEvolveTransport(), list = new DisplayList(2000), view: Record<string, number> = {};
+    const step = (f: number, p: Record<string, number>, wall: number) => { const clock = advanceEvolve(transport, phaseAt(f * DT), LOOP, wall, seed, p, idle); Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); return clock.pose; };
+    let frame = 0;
+    advanceEvolve(transport, 0, LOOP, 0, seed, held, idle);
+    for (let f = 0; f < 240; f++) step(++frame, held, DT);
+    const start = transport.clock.pose.slice();
+    for (let f = 0; f < 90; f++) step(++frame, moved, DT);
+    const middle = transport.clock.pose.slice();
+    for (let f = 0; f < 480; f++) step(++frame, moved, DT);
+    const final = transport.clock.pose, gap = (a: Float32Array, b: Float32Array) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]); return sum; };
+    const whole = gap(start, final);
+    if (whole > 1e-3) assert.ok(1 - gap(middle, final) / whole >= 0.75, `seed ${seed} ${from}->${to}: ${1 - gap(middle, final) / whole}`);
+  }
+});
+
+test('deliberate Density and Scale moves stay inside the ruling, by sweep and by instant change', () => {
+  const moves: readonly (readonly [string, number, number, Record<string, number>])[] = [
+    ['macroDensity', 0, 1, {}], ['macroDensity', 1, 0, {}], ['macroDensity', 0, 1, { macroScale: 1 }], ['macroDensity', 1, 0, { macroScale: 1 }],
+    ['macroScale', 0, 1, {}], ['macroScale', 1, 0, {}], ['macroScale', 0, 1, { macroDensity: 1 }], ['macroScale', 1, 0, { macroDensity: 0 }],
+  ];
+  for (const seed of SEEDS) for (const start of [120, 330, AFTER_TEN_MINUTES]) for (const [key, from, to, extra] of moves) for (const seconds of [1, 0]) {
+    const watch = new Watch(true), base = params({ ...extra, [key]: from });
+    run(seed, 5, base, f => ({ params: { ...base, [key]: seconds ? from + (to - from) * Math.min(1, f / FPS) : to } }), watch, start);
+    within(watch, `seed ${seed} at ${start}s ${key} ${from}->${to} ${JSON.stringify(extra)} over ${seconds}s`, MAX_USER_MOVE);
+  }
+});
+
+test('Density and Scale moved together stay inside the ruling', () => {
+  for (const seed of SEEDS) for (const [from, to] of [[0, 1], [1, 0]]) {
+    const watch = new Watch(true), base = params({ macroDensity: from, macroScale: from });
+    run(seed, 5, base, () => ({ params: { ...base, macroDensity: to, macroScale: to } }), watch, AFTER_TEN_MINUTES);
+    within(watch, `seed ${seed} ${from}->${to}`, MAX_USER_MOVE);
+  }
+});
+
+test('changing ring rotation after a long session does not whirl the rings', () => {
+  for (const [key, from, to] of [['ringRotationSpeed', 1, 1.5], ['ringRotationSpeed', 1, -3], ['ringCounterRotation', 0.5, 1], ['ringCounterRotation', 0.5, 0]] as const) for (const start of [AFTER_TEN_MINUTES, 3600]) {
+    const watch = new Watch(), base = params({ [key]: from });
+    run(1729, 6, base, f => (f > 30 ? { params: { ...base, [key]: to } } : {}), watch, start);
+    within(watch, `${key} ${from}->${to} at ${start}s`);
+  }
+});
+
+test('moving Speed or Density never strobes a glitch', () => {
+  for (const seed of [1729, 77, 4096]) for (const key of ['macroSpeed', 'macroDensity']) {
+    const watch = new Watch(key === 'macroDensity'), base = params({ macroGlitch: 1 });
+    run(seed, 16, base, f => ({ params: { ...base, [key]: 0.5 + 0.5 * Math.sin(f / 37) } }), watch, AFTER_TEN_MINUTES);
+    within(watch, `seed ${seed} ${key}`, key === 'macroDensity' ? MAX_USER_MOVE : MAX_MOVE);
+  }
+});
+
+test('a glitch keeps its ring and shards for the whole event', () => {
+  const transport = createEvolveTransport(), base = params({ macroGlitch: 1 });
+  advanceEvolve(transport, 0, LOOP, 0, 1729, base, idle);
+  let cell = Number.NaN, voice = -1;
+  for (let f = 1; f < 3000; f++) {
+    const clock = advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, 1729, { ...base, macroDensity: f % 200 < 100 ? 0 : 1 }, idle);
+    if (clock.glitchCell === cell) assert.equal(clock.glitchVoice, voice);
+    cell = clock.glitchCell; voice = clock.glitchVoice;
+  }
+});
+
+test('Burst at any cadence stays within the light limit', () => {
+  for (const seed of [1729, 77, 4096]) for (const every of [4, 10, 12, 15, 20, 30]) {
+    const watch = new Watch();
+    run(seed, 14, params(), f => ({ moves: { ...idle, burst: f % every < Math.max(1, every >> 1) } }), watch, AFTER_TEN_MINUTES);
+    within(watch, `seed ${seed}, every ${every} frames`);
+  }
+});
+
+test('lowering Glitch to centre during a live event has no step', () => {
+  let events = 0;
+  for (const seed of SEEDS) for (const level of [0.7, 1]) for (const lowered of [0.5, 0.25]) {
+    const high = params({ macroGlitch: level }), low = { ...high, macroGlitch: lowered }, transport = createEvolveTransport(), list = new DisplayList(2000), view: Record<string, number> = {}, watch = new Watch();
+    advanceEvolve(transport, 0, LOOP, 0, seed, high, idle);
+    for (let f = 1; f <= 1200; f++) advanceEvolve(transport, phaseAt(f / 10), LOOP, 0.1, seed, high, idle);
+    let dropped = -1;
+    for (let f = 0; f < 3000 && (dropped < 0 || f < dropped + 150); f++) {
+      const clock = advanceEvolve(transport, phaseAt(120 + f * DT), LOOP, f ? DT : 0, seed, dropped >= 0 ? low : high, idle);
+      Object.assign(view, dropped >= 0 ? low : high, transport.values);
+      evaluateEvolve(seed, clock, view, list);
+      watch.see(list);
+      if (dropped < 0) for (let i = EVOLVE_ELEMENTS; i < list.count; i++) if (list.data[i * STRIDE + 9] > 0.25) { dropped = f; break; }
+    }
+    if (dropped >= 0) events++;
+    assert.equal(list.count, EVOLVE_ELEMENTS, 'no shards remain at or below centre');
+    within(watch, `seed ${seed}, ${level} to ${lowered}`);
+  }
+  assert.ok(events >= 16, `${events} live events were lowered`);
+});
+
+test('a Density move during Burst never throws a lit voice across the frame', () => {
+  for (const seed of [900001, 1729, 77, 4096]) for (const start of [330, AFTER_TEN_MINUTES]) for (const every of [4, 10, 12, 15, 20, 30]) for (const [from, to] of [[1, 0], [0, 1], [0.8, 0.2]]) for (const seconds of [0, 1]) {
+    const watch = new Watch(true), base = params({ macroDensity: from });
+    run(seed, 6, base, f => ({ params: { ...base, macroDensity: seconds ? from + (to - from) * Math.min(1, f / FPS) : to }, moves: { ...idle, burst: f % every < Math.max(1, every >> 1) } }), watch, start);
+    within(watch, `seed ${seed} at ${start}s, Burst every ${every}, Density ${from}->${to} over ${seconds}s`, MAX_USER_MOVE);
+  }
+});
+
+test('lit glitch shards stay inside the ruling when Scale and Density fall together', () => {
+  // Seed 12345 from 330 s, with the move starting on frame 10, is the recorded case: 4.51% on frame 73, carried by a voice at zero alpha.
+  const cases = [[12345, 330], ...SEEDS.flatMap(seed => [120, 330, AFTER_TEN_MINUTES].map(start => [seed, start]))];
+  for (const [seed, start] of cases) for (const glitch of [0.7, 1]) for (const seconds of [1, 0]) for (const lead of [10, 0, 30]) {
+    const watch = new Watch(true), base = params({ macroScale: 1, macroDensity: 1, macroGlitch: glitch });
+    const level = (f: number) => f <= lead ? 1 : seconds ? 1 - Math.min(1, (f - lead) / FPS) : 0;
+    run(seed, 3, base, f => ({ params: { ...base, macroScale: level(f), macroDensity: level(f) } }), watch, start);
+    within(watch, `seed ${seed} at ${start}s, Glitch ${glitch}, Scale and Density 1->0 over ${seconds}s after ${lead} frames`, MAX_USER_MOVE);
+  }
+});
+
+/** The summed change of visible marks between two frames: both ends of each, plus its light. */
+function pictureGap(a: Float32Array, b: Float32Array): number {
+  const p = new Float64Array(4), q = new Float64Array(4);
+  let sum = 0;
+  for (let at = 0; at < Math.min(a.length, b.length); at += STRIDE) {
+    if (Math.max(a[at + 9], b[at + 9]) <= 0.04) continue;
+    ends(a, at, p); ends(b, at, q);
+    sum += Math.abs(a[at + 9] - b[at + 9]) + Math.hypot(p[0] - q[0], p[1] - q[1]) + Math.hypot(p[2] - q[2], p[3] - q[3]);
+  }
+  return sum;
+}
+
+test('Scale and Density arrive by 1.5 s, on the fader and in the picture, alone and together', () => {
+  const cases: readonly (readonly [Record<string, number>, Record<string, number>])[] = [
+    [{ macroScale: 0 }, { macroScale: 1 }], [{ macroScale: 1 }, { macroScale: 0 }],
+    [{ macroDensity: 0 }, { macroDensity: 1 }], [{ macroDensity: 1 }, { macroDensity: 0 }],
+    [{ macroScale: 0, macroDensity: 0 }, { macroScale: 1, macroDensity: 1 }], [{ macroScale: 1, macroDensity: 1 }, { macroScale: 0, macroDensity: 0 }],
+    [{ macroScale: 0, macroDensity: 1 }, { macroScale: 1, macroDensity: 0 }], [{ macroScale: 1, macroDensity: 0 }, { macroScale: 0, macroDensity: 1 }],
+  ];
+  for (const [a, b] of cases) for (const seed of SEEDS) for (const start of [120, 330, AFTER_TEN_MINUTES]) {
+    const from = params(a), to = params(b), transport = createEvolveTransport(), list = new DisplayList(2000), view: Record<string, number> = {}, phase = phaseAt(start);
+    const draw = (p: Record<string, number>, wall: number) => { const clock = advanceEvolve(transport, phase, LOOP, wall, seed, p, idle); Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); return list.data.slice(0, list.count * STRIDE); };
+    advanceEvolve(transport, 0, LOOP, 0, seed, from, idle);
+    for (let f = 1; f <= start * 10; f++) advanceEvolve(transport, phaseAt(f / 10), LOOP, 0.1, seed, from, idle);
+    // The transport is paused from here: only the move itself changes the picture.
+    draw(from, 0);
+    for (let f = 0; f < 30; f++) draw(from, DT);
+    const first = draw(from, DT);
+    for (let f = 1; f < 90; f++) draw(to, DT);
+    const middle = draw(to, DT);
+    for (const key of Object.keys(b)) {
+      const share = (transport.values[key] - a[key]) / (b[key] - a[key]);
+      assert.ok(share >= 0.75, `seed ${seed} at ${start}s ${JSON.stringify(a)} to ${JSON.stringify(b)}: ${key} fader ${share}`);
+    }
+    for (let f = 0; f < 510; f++) draw(to, DT);
+    const final = draw(to, DT), whole = pictureGap(first, final);
+    if (whole > 1e-3) { const arrived = 1 - pictureGap(middle, final) / whole; assert.ok(arrived >= 0.75, `seed ${seed} at ${start}s ${JSON.stringify(a)} to ${JSON.stringify(b)}: picture ${arrived}`); }
+  }
+});
+
+test('24 Meridian layers never rebuild one another\'s forms', () => {
+  const layers = Array.from({ length: 24 }, (_, i) => ({ seed: 1000 + i * 97, transport: createEvolveTransport(), list: new DisplayList(2000), view: {} as Record<string, number> })), p = params();
+  const frame = (f: number, wall: number) => { for (const layer of layers) { const clock = advanceEvolve(layer.transport, phaseAt(f / FPS), LOOP, wall, layer.seed, p, idle); Object.assign(layer.view, p, layer.transport.values); evaluateEvolve(layer.seed, clock, layer.view, layer.list); } };
+  frame(0, 0);
+  for (let f = 1; f <= 240; f++) frame(f, DT);
+  const before = evolveCompileCount();
+  for (let f = 241; f <= 840; f++) frame(f, DT);
+  // Ten seconds: a layer may reach one new form, and builds it once.
+  assert.ok(evolveCompileCount() - before <= 24, `${evolveCompileCount() - before} forms built by 24 layers in 600 frames`);
+  const clocks = layers.map(() => createEvolveClock()), list = new DisplayList(2000);
+  for (let f = 0; f < 2; f++) layers.forEach((layer, i) => evaluateEvolve(layer.seed, exactEvolveClock(1, 60, p, clocks[i]), p, list));
+  const exact = evolveCompileCount();
+  for (let f = 0; f < 300; f++) layers.forEach((layer, i) => evaluateEvolve(layer.seed, exactEvolveClock(1 + f * 1e-4, 60, p, clocks[i]), p, list));
+  assert.equal(evolveCompileCount(), exact, 'exports build nothing per frame either');
+});
+
+test('repeated Reseed never cuts the colour or the structure', () => {
+  for (const gap of [13, 40, 170]) {
+    const watch = new Watch();
+    run(1729, 30, params({ macroHeat: 1 }), f => (f < 1000 ? { seed: 1729 + Math.floor(f / gap) * 311 } : { seed: 1729 + Math.floor(1000 / gap) * 311 }), watch, AFTER_TEN_MINUTES);
+    within(watch, `every ${gap} frames`);
+  }
+});
+
+test('the group controls and Mutate move the picture without a jump', () => {
+  for (const [key, to] of [['ringCount', 20], ['ringWeight', 4], ['ringOpacity', 0.2], ['ringArcShare', 1], ['spokeCount', 40], ['spokeWeight', 4], ['spokeOpacity', 0.1], ['spokeInnerReach', 0.7], ['spokeOuterReach', 0.3], ['spokeOffsetAngle', 120], ['nodeDensity', 1], ['nodeSize', 4], ['nodeGlow', 2], ['nodeOpacity', 0.1], ['heroWeight', 5], ['heroGlow', 5], ['heroPulse', 1], ['heroRadius', 1], ['heroSplit', 1], ['heroHaloStrength', 2]] as const) {
+    const watch = new Watch(), base = params();
+    run(1729, 14, base, f => (f > 30 ? { params: { ...base, [key]: to } } : {}), watch, AFTER_TEN_MINUTES);
+    within(watch, key);
+  }
+  for (let trial = 0; trial < 12; trial++) {
+    const layer = createLayer('meridian'), watch = new Watch(), base = params(layer.params);
+    layer.params.scoreVariation = 1;
+    const mutated = params(applyLockedVariation(layer, 9000 + trial, 'mutate').params);
+    run(1729, 10, base, f => (f > 30 ? { params: mutated } : {}), watch, AFTER_TEN_MINUTES);
+    within(watch, `Mutate ${trial}`);
+  }
+});
+
+test('an export honours the ring rotation controls and keeps the layered rates', () => {
+  const arcStarts = (p: Record<string, number>, phase = 1.3) => { const list = new DisplayList(2000); evaluateEvolve(1729, exactEvolveClock(phase, 60, p, createEvolveClock()), p, list); return Array.from(list.data.subarray(0, list.count * STRIDE)); };
+  assert.notDeepEqual(arcStarts(params({ ringRotationSpeed: 1 })), arcStarts(params({ ringRotationSpeed: -3 })));
+  assert.notDeepEqual(arcStarts(params({ ringCounterRotation: 0 })), arcStarts(params({ ringCounterRotation: 1 })));
+  const clock = exactEvolveClock(Math.PI * 2 * 0.25, 60, params(), createEvolveClock());
+  assert.ok(clock.ringTurns[0] > 0 && clock.ringTurns[1] < 0 && clock.ringTurns[2] > 0, 'tiers keep their directions');
+  assert.ok(Math.abs(clock.ringTurns[0]) > Math.abs(clock.ringTurns[1]) && Math.abs(clock.ringTurns[1]) > Math.abs(clock.ringTurns[2]), 'tiers keep their different rates');
+});
+
+test('a held export stays on one live form and closes', () => {
+  for (const extra of [{ scoreHoldShape: 1 }, { scoreEvolution: 0 }] as Record<string, number>[]) for (const duration of [10, 60]) {
+    const draw = (phase: number, more: Record<string, number> = {}) => { const p = params({ ...extra, ...more }), list = new DisplayList(2000); evaluateEvolve(1729, exactEvolveClock(phase, duration, p, createEvolveClock()), p, list); return list; };
+    const bytes = (list: DisplayList) => Array.from(list.data.subarray(0, list.count * STRIDE));
+    assert.notDeepEqual(bytes(draw(2, { macroOrder: 0 })), bytes(draw(2, { macroOrder: 1 })), 'Chaos is live');
+    let shard = 0;
+    for (let f = 0; f < 400; f++) { const list = draw(f / 400 * Math.PI * 2, { macroGlitch: 1 }); for (let i = EVOLVE_ELEMENTS; i < list.count; i++) shard = Math.max(shard, list.data[i * STRIDE + 9]); }
+    assert.ok(shard > 0.3, `Glitch is live (${shard})`);
+    for (const more of [{}, { macroOrder: 1 }, { macroGlitch: 1 }, { macroSpeed: 1 }, { ringRotationSpeed: -3 }] as Record<string, number>[]) {
+      const first = draw(0, more), last = draw(Math.PI * 2 - 1e-7, more), a = new Float64Array(4), b = new Float64Array(4);
+      assert.equal(first.count, last.count);
+      for (let i = 0; i < first.count; i++) {
+        const at = i * STRIDE;
+        assert.ok(Math.abs(first.data[at + 9] - last.data[at + 9]) < 1e-3, `alpha at ${i}`);
+        if (first.data[at + 9] < 0.01) continue;
+        ends(first.data, at, a); ends(last.data, at, b);
+        assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-3 && Math.hypot(a[2] - b[2], a[3] - b[3]) < 1e-3, `${duration}s ${JSON.stringify(more)} mark ${i}`);
+      }
+    }
+    const watch = new Watch(), clock = createEvolveClock(), p = params({ ...extra, macroGlitch: 1 }), list = new DisplayList(2000);
+    for (let f = 0; f <= duration * FPS; f++) { evaluateEvolve(1729, exactEvolveClock(f / (duration * FPS) * Math.PI * 2, duration, p, clock), p, list); watch.see(list); }
+    within(watch, `held ${duration}s`);
+  }
+});
+
+test('glitch is exactly absent at or below the centre', () => {
+  for (const glitch of [0, 0.25, 0.5]) {
+    const clock = exactEvolveClock(2, 60, params(), createEvolveClock()), a = new DisplayList(2000), b = new DisplayList(2000);
+    evaluateEvolve(1729, clock, params({ macroGlitch: glitch }), a); evaluateEvolve(1729, clock, params({ macroGlitch: 0.5 }), b);
+    assert.equal(a.count, EVOLVE_ELEMENTS);
+    assert.deepEqual(Array.from(a.data.subarray(0, a.count * STRIDE)), Array.from(b.data.subarray(0, b.count * STRIDE)));
+  }
+  const high = new DisplayList(2000);
+  evaluateEvolve(1729, exactEvolveClock(2, 60, params(), createEvolveClock()), params({ macroGlitch: 0.8 }), high);
+  assert.equal(high.count, EVOLVE_ELEMENTS + GLITCH_SHARDS);
+});
+
+test('an export closes: the last frame flows into the first as a picture', () => {
+  // The closing turn maps the home form onto itself, so voices may have swapped places. Compare the sets of marks.
+  const marks = (phase: number, duration: number, p: Record<string, number>) => {
+    const list = new DisplayList(2000); evaluateEvolve(1729, exactEvolveClock(phase, duration, p, createEvolveClock()), p, list);
+    const out: string[] = [], d = list.data, e = new Float64Array(4);
+    for (let i = 0; i < list.count; i++) {
+      const at = i * STRIDE;
+      if (d[at + 9] < 0.03 || (d[at] === PRIMITIVE.arc && d[at + 5] < 1e-3)) continue;
+      if (d[at] === PRIMITIVE.arc) { out.push(`arc ${d[at + 3].toFixed(3)}`); continue; }
+      ends(d, at, e);
+      const pair = [`${e[0].toFixed(2)},${e[1].toFixed(2)}`, `${e[2].toFixed(2)},${e[3].toFixed(2)}`].sort().join(' ');
+      out.push(`${d[at]} ${pair}`.replaceAll('-0.00', '0.00'));
+    }
+    return out.sort();
+  };
+  for (const duration of [10, 20, 60, 137]) for (const extra of [{}, { macroOrder: 1 }, { macroDensity: 1 }, { macroDensity: 0.1 }, { macroSpeed: 1 }] as Record<string, number>[]) {
+    const p = params(extra);
+    assert.deepEqual(marks(Math.PI * 2 - 1e-7, duration, p), marks(0, duration, p), `${duration}s ${JSON.stringify(extra)}`);
+  }
+});
+
+test('an export never jumps either, even a short one at full Evolution', () => {
+  for (const duration of [10, 20, 60]) for (const scoreEvolution of [0.5, 1]) {
+    const p = params({ scoreEvolution }), watch = new Watch(), list = new DisplayList(2000), clock = createEvolveClock(), frames = duration * FPS;
+    for (const seed of SEEDS) { const each = new Watch(); for (let f = 0; f < frames; f++) { evaluateEvolve(seed, exactEvolveClock(f / frames * Math.PI * 2, duration, p, clock), p, list); each.see(list); } watch.maxMove = Math.max(watch.maxMove, each.maxMove); watch.maxAlpha = Math.max(watch.maxAlpha, each.maxAlpha); }
+    assert.ok(watch.maxMove <= MAX_MOVE, `${duration}s at ${scoreEvolution}: moved ${watch.maxMove}`);
+    assert.ok(watch.maxAlpha <= MAX_ALPHA, `${duration}s at ${scoreEvolution}: alpha ${watch.maxAlpha}`);
+  }
+});
+
+test('full Evolution stays free of jumps over a long run', () => {
+  for (const seed of SEEDS.slice(0, 3)) {
+    const watch = new Watch();
+    run(seed, 180, params({ scoreEvolution: 1 }), () => undefined, watch);
+    assert.ok(watch.maxMove <= MAX_MOVE, `seed ${seed}: moved ${watch.maxMove}`);
+    assert.ok(watch.maxAlpha <= MAX_ALPHA, `seed ${seed}: alpha ${watch.maxAlpha}`);
+  }
+});
+
+test('every pad shapes the picture without a cut', () => {
+  for (const key of ['next', 'hold', 'drop', 'collapse', 'burst'] as const) {
+    const watch = new Watch(), list = run(1729, 24, params(), f => ({ moves: { ...idle, [key]: f > 120 && f < 300 } }), watch, 20);
+    assert.ok(list, key);
+    assert.ok(watch.minDrawn >= 5, `${key}: ${watch.minDrawn} drawn`);
+    assert.ok(watch.maxMove <= MAX_MOVE, `${key}: moved ${watch.maxMove}`);
+    assert.ok(watch.maxAlpha <= MAX_ALPHA, `${key}: alpha ${watch.maxAlpha}`);
+  }
+});
+
+test('a new seed glides into place', () => {
+  const transport = createEvolveTransport(), watch = new Watch(), list = new DisplayList(2000), p = params(), view: Record<string, number> = {};
+  advanceEvolve(transport, 0, LOOP, 0, 1729, p, idle);
+  for (let f = 1; f <= 1200; f++) {
+    const seed = f < 300 ? 1729 : 4242;
+    const clock = advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, seed, p, idle);
+    Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); watch.see(list);
+  }
+  assert.ok(watch.maxMove <= MAX_MOVE, `moved ${watch.maxMove}`);
+  assert.ok(watch.maxAlpha <= MAX_ALPHA, `alpha ${watch.maxAlpha}`);
+});
+
+test('Hold shape keeps the form while it goes on turning', () => {
+  const transport = createEvolveTransport(), p = params({ scoreHoldShape: 1 });
+  advanceEvolve(transport, 0, LOOP, 0, 1729, p, idle);
+  for (let f = 1; f <= 600; f++) advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, 1729, p, idle);
+  const settled = transport.clock.evolution, motion = transport.clock.motion;
+  for (let f = 601; f <= 1800; f++) advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, 1729, p, idle);
+  assert.equal(transport.clock.evolution, settled);
+  assert.ok(transport.clock.motion > motion + 10);
+});
+
+test('nothing on the per-frame path allocates', () => {
+  const source = readFileSync(new URL('../src/meridian/evolve.ts', import.meta.url), 'utf8');
+  const body = (name: string): string => {
+    const declared = source.search(new RegExp(`(?:function ${name}\\(|const ${name} = \\()`));
+    assert.ok(declared >= 0, `${name} is on the path`);
+    const arrow = source.slice(declared).startsWith('const') ? source.indexOf('=>', declared) : declared;
+    let at = source.indexOf(arrow === declared ? ') ' : '=> ', arrow), depth = 0;
+    if (arrow === declared) { let round = 0; for (at = source.indexOf('(', declared); ; at++) { if (source[at] === '(') round++; else if (source[at] === ')' && --round === 0) break; } }
+    const open = source.indexOf('{', at), semi = source.indexOf(';', at);
+    if (semi >= 0 && semi < open) return source.slice(at, semi);
+    for (let i = open; i < source.length; i++) { if (source[i] === '{') depth++; else if (source[i] === '}' && --depth === 0) return source.slice(open, i + 1); }
+    throw new Error(name);
+  };
+  const path = ['compile', 'kindAt', 'fillOrder', 'setArcs', 'setRing', 'setSpoke', 'setHero', 'random', 'guardLight', 'foldFor', 'advanceEvolve', 'evaluateEvolve', 'exactEvolveClock', 'project', 'blendPose', 'angleBetween', 'easePose', 'easeField', 'formFor', 'segmentAt', 'boundary', 'morphWindow', 'morphRate', 'journeyRate', 'drawnTravel', 'travel', 'exactStops', 'closedTurn', 'latchGlitch', 'glitchEnvelope', 'ringVoices', 'spokeVoices', 'tierRate', 'growth', 'pull', 'oscillate', 'lightAt', 'rippleAt', 'tintAt', 'hash', 'hashUnit', 'speedRate', 'evolutionRate'];
+  for (const name of path) {
+    const code = body(name).replace(/\/\/.*$/gm, '');
+    assert.ok(!/\bnew\s+[A-Z]|\.(map|filter|slice|concat|flatMap|reduce|forEach)\(|\.\.\./.test(code), `${name} allocates`);
+    assert.ok(!/(^|[=(,:?&|]\s*|\bof\s+|\breturn\s+)\[/m.test(code), `${name} builds an array`);
+    assert.ok(!/=>|\bfunction\b/.test(name === 'pull' || name === 'foldFor' || name === 'oscillate' || name === 'tierRate' || name === 'growth' || name === 'ringVoices' || name === 'speedRate' || name === 'hashUnit' ? code.replace(/^=> /, '') : code), `${name} builds a closure`);
+  }
+  assert.ok(!/from 'three'|from 'react'|document\.|window\./.test(source));
+});
+
+/** Where each change of form falls in a seed's journey, as [position just after it, kind before, kind after]. */
+function changes(seed: number, until: number): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  let kind = evolveFormKind(seed, 0);
+  for (let e = 0.5; e < until; e += 0.5) { const now = evolveFormKind(seed, e); if (now !== kind) { out.push([e, kind, now]); kind = now; } }
+  return out;
+}
+
+test('every seed still opens on its original form', () => {
+  // Recorded from the nine-form journey at 1fd261b.
+  const opening: Record<number, number> = {1: 1, 2: 7, 3: 2, 5: 3, 8: 1, 13: 3, 21: 3, 34: 4, 55: 7, 77: 5, 555: 2, 1729: 0, 4096: 0, 12345: 7, 31337: 5, 900001: 0};
+  for (const [seed, kind] of Object.entries(opening)) assert.equal(evolveFormKind(Number(seed), 0), kind, `seed ${seed}`);
+  for (let seed = 0; seed < 400; seed++) assert.ok(evolveFormKind(seed * 7919, 0) < 9, `seed ${seed * 7919} opens on a new form`);
+});
+
+test('the journey has one answer for each place, reaches every form and never revisits one soon', () => {
+  assert.equal(EVOLVE_FORM_NAMES.length, 15);
+  for (const seed of SEEDS) {
+    const list = changes(seed, 4000), kinds = [evolveFormKind(seed, 0), ...list.map(c => c[2])];
+    assert.equal(new Set(kinds).size, 15, `seed ${seed} reaches ${new Set(kinds).size} kinds`);
+    for (let i = 1; i < kinds.length; i++) for (let back = 1; back <= Math.min(i, 6); back++) assert.notEqual(kinds[i], kinds[i - back], `seed ${seed}, form ${i} repeats ${back} back`);
+    for (const [e, , after] of [...list].reverse().slice(0, 20)) assert.equal(evolveFormKind(seed, e), after, 'the same place gives the same kind, in any order');
+  }
+});
+
+test('every form morphs into every other inside the limits', () => {
+  const found = new Map<string, [number, number]>();
+  for (let seed = 1; found.size < 15 * 14 && seed < 400; seed++) for (const [e, a, b] of changes(seed, 1800)) if (!found.has(`${a}>${b}`)) found.set(`${a}>${b}`, [seed, e]);
+  assert.equal(found.size, 15 * 14, 'all ordered pairs were found');
+  const p = params(), list = new DisplayList(2000), view: Record<string, number> = {};
+  for (const [pair, [seed, boundary]] of found) {
+    const kind = evolveFormKind(seed, boundary - 1);
+    let start = boundary - 1;
+    while (start > boundary - 38 && start > 0 && evolveFormKind(seed, start - 0.5) === kind) start -= 0.5;
+    const transport = createEvolveTransport(), watch = new Watch();
+    advanceEvolve(transport, 0, LOOP, 0, seed, p, idle);
+    transport.clock.evolution = start;
+    for (let f = 1; f < 60 * 180 && transport.clock.evolution < boundary + 0.5; f++) {
+      const clock = advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, seed, p, idle);
+      Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); watch.see(list);
+    }
+    assert.ok(transport.clock.evolution >= boundary, `${pair} finished`);
+    assert.ok(watch.minDrawn >= 5, `${pair}: ${watch.minDrawn} drawn`);
+    within(watch, `${pair} (seed ${seed})`);
+  }
+});
+
+test('full Evolution stays inside the limits for ten minutes, including the seeds that once threw a spoke', () => {
+  for (const seed of [3, 15, 1729, 77, 31337, 900001]) {
+    const watch = new Watch();
+    run(seed, 600, params({ scoreEvolution: 1 }), () => undefined, watch);
+    within(watch, `seed ${seed} at full Evolution`);
+  }
+});
+
+test('repeated Next stays inside the limits on the seeds that once threw a spoke', () => {
+  for (const seed of [3, 15, 1729]) {
+    const watch = new Watch();
+    run(seed, 600, params(), f => ({ moves: { ...idle, next: f % 1500 < 20 } }), watch);
+    within(watch, `seed ${seed} with Next every 25 s`);
+  }
+});
+
+test('at full Evolution, form pairs across several seeds morph inside the limits', () => {
+  const found = new Map<string, [number, number][]>();
+  for (const seed of [3, 15]) for (const [e, a, b] of changes(seed, 1800)) { const key = `${a}>${b}`; found.set(key, [...(found.get(key) ?? []), [seed, e]]); }
+  for (let seed = 1; seed < 500; seed++) for (const [e, a, b] of changes(seed, 1800)) { const key = `${a}>${b}`, list = found.get(key) ?? []; if (list.length < 3 && !list.some(item => item[0] === seed)) found.set(key, [...list, [seed, e]]); }
+  assert.equal(found.size, 15 * 14, 'all ordered pairs were found');
+  const p = params({ scoreEvolution: 1 }), list = new DisplayList(2000), view: Record<string, number> = {};
+  for (const [pair, places] of found) for (const [seed, boundary] of places) {
+    const kind = evolveFormKind(seed, boundary - 1);
+    let start = boundary - 1;
+    while (start > boundary - 38 && start > 0 && evolveFormKind(seed, start - 0.5) === kind) start -= 0.5;
+    const transport = createEvolveTransport(), watch = new Watch();
+    advanceEvolve(transport, 0, LOOP, 0, seed, p, idle);
+    transport.clock.evolution = start; transport.evolveRate = 5;
+    for (let f = 1; f < 60 * 180 && transport.clock.evolution < boundary + 0.5; f++) {
+      const clock = advanceEvolve(transport, phaseAt(f * DT), LOOP, DT, seed, p, idle);
+      Object.assign(view, p, transport.values); evaluateEvolve(seed, clock, view, list); watch.see(list);
+    }
+    assert.ok(transport.clock.evolution >= boundary, `${pair} (seed ${seed}) finished`);
+    within(watch, `${pair} (seed ${seed}) at full Evolution`);
+  }
+});
+
+test('the library leads with Evolve looks', () => {
+  const looks = PRESETS.filter(p => p.kind === 'meridian');
+  assert.ok(looks.slice(0, 10).every(p => p.params.scoreStyle === SCORE_STYLE_EVOLVE), 'first ten are Evolve');
+});
+
+test('node voices keep fixed slots in the list, so the governor can thin them by voice; the hub dot is outside them', async () => {
+  const { EVOLVE_NODES_FROM, NODE_VOICES, EVOLVE_ELEMENTS } = await import('../src/meridian/evolve');
+  const { PRIMITIVE } = await import('../src/meridian/types');
+  for (const seed of [1, 1729, 4242, 90210]) for (const density of [0, .16, .6, 1]) for (const t of [0, 7, 31, 55]) {
+    const list = new DisplayList(2000), p = params({ macroDensity: density, macroGlitch: .9 });
+    evaluateEvolve(seed, exactEvolveClock(phaseAt(t), 60, p, createEvolveClock()), p, list);
+    assert.ok(list.count >= EVOLVE_ELEMENTS, `${list.count} marks`);
+    for (let i = EVOLVE_NODES_FROM; i < EVOLVE_NODES_FROM + NODE_VOICES; i++) {
+      const kind = list.data[i * STRIDE];
+      assert.ok(kind === PRIMITIVE.dot || kind === PRIMITIVE.square, `slot ${i} is kind ${kind} (seed ${seed}, density ${density}, t ${t})`);
+    }
+    assert.equal(list.data[(EVOLVE_ELEMENTS - 1) * STRIDE], PRIMITIVE.dot, 'the hub dot is the last element');
+  }
+});

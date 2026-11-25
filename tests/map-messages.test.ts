@@ -4,9 +4,25 @@ import { createRequire } from 'node:module';
 import { applyEdit } from '../src/map/editor';
 import { createShow, validateWireShow, type ShowDocument } from '../src/map/show';
 import { acceptMapMessage, toWire, sourcesToSend, wallInputs, MAP_MESSAGE_LIMIT, SOURCE_MESSAGE_LIMIT } from '../src/map/messages';
-import { applyMapMessage, initialWall } from '../src/map/wall';
+import { applyMapMessage, fitWallReport, initialWall, WALL_REPORT_LIMIT } from '../src/map/wall';
 
-const mainProcess = createRequire(import.meta.url)('../electron/map.cjs') as { acceptMapMessage: (value: unknown) => boolean };
+const mainProcess = createRequire(import.meta.url)('../electron/map.cjs') as { acceptMapMessage: (value: unknown) => boolean; acceptState: (value: unknown) => boolean };
+
+test('a wall report too big for the main process leaves out the check-only fields first, and one that fits is sent as it is', () => {
+  const small = { fps: 60, level: 0, failing: [], meridian: { a: { status: 'x' } } };
+  assert.equal(fitWallReport(small), small);
+  // Many Meridian sources during a Perform show, with a full step of landings.
+  const meridian = Object.fromEntries(Array.from({ length: 24 }, (_, i) => [`${'m'.repeat(60)}${i}`, { status: 'following the music', beats: 123.456789, wave: .123456789, frames: 123456, drops: 12, holds: 3, linkedSeed: false, phase: .123456789 }]));
+  const landed = Array.from({ length: 32 }, () => ({ launchId: 'x'.repeat(128), zones: [0, 1, 2, 3, 4, 5, 6, 7] }));
+  // Every source failing, each reason at the compositor's 200-character cap.
+  const failing = Array.from({ length: 24 }, (_, i) => ({ id: `${'f'.repeat(60)}${i}`, reason: 'r'.repeat(200) }));
+  const big = { fps: 60, level: 0, failing, landed, meridian, linked: { a: 1 }, meridianRecords: 24 };
+  assert.ok(JSON.stringify(big).length >= WALL_REPORT_LIMIT);
+  assert.equal(mainProcess.acceptState(big), false);
+  const fitted = fitWallReport(big);
+  assert.deepEqual(fitted, { fps: 60, level: 0, failing, landed });
+  assert.equal(mainProcess.acceptState(fitted), true);
+});
 
 function showWithInstruments(count = 2): ShowDocument {
   let show = createShow();
@@ -58,6 +74,118 @@ test('source messages have their own, larger limit; everything else stays at 256
   assert.ok(acceptMapMessage({ type: 'freeze', on: true }));
 });
 
+function performParity(): [string, unknown, boolean][] {
+  const picture = { shapeIds: ['a'], sourceId: 'x', launched: true };
+  const zones = Array.from({ length: 8 }, () => picture);
+  const change = { zone: 0, sourceId: 'x', shapeIds: ['a'], blend: { kind: 'fade', durationMs: 500 }, phaseOffsetBeats: 0 };
+  const launch = { id: 'l1', atMs: 1000, barMs: 2000, changes: [change] };
+  const withChange = (extra: object) => ({ type: 'performLaunch', launch: { ...launch, changes: [{ ...change, ...extra }] } });
+  const withLaunch = (extra: object) => ({ type: 'performLaunch', launch: { ...launch, ...extra } });
+  const valueZone = { brightness: 1, hueDeg: 0, speed: 1 };
+  const valueZones = Array.from({ length: 8 }, () => valueZone);
+  const withValue = (extra: object) => ({ type: 'performValues', values: { master: 1, zones: [{ ...valueZone, ...extra }, ...valueZones.slice(1)] } });
+  // eslint-disable-next-line no-sparse-arrays
+  const holed = [, 'a'];
+  return [
+    ['perform start', { type: 'performStart', zones }, true],
+    ['perform start black zone', { type: 'performStart', zones: [{ shapeIds: [], sourceId: null, launched: false }, ...zones.slice(1)] }, true],
+    ['perform start too few zones', { type: 'performStart', zones: zones.slice(1) }, false],
+    ['perform start too many zones', { type: 'performStart', zones: [...zones, picture] }, false],
+    ['perform start bad launched', { type: 'performStart', zones: [{ ...picture, launched: 1 }, ...zones.slice(1)] }, false],
+    ['perform start bad source', { type: 'performStart', zones: [{ ...picture, sourceId: 3 }, ...zones.slice(1)] }, false],
+    ['perform start too many shapes', { type: 'performStart', zones: [{ ...picture, shapeIds: Array(65).fill('a') }, ...zones.slice(1)] }, false],
+    ['perform start hole in shapes', { type: 'performStart', zones: [{ ...picture, shapeIds: holed }, ...zones.slice(1)] }, false],
+    ['perform start with offsets', { type: 'performStart', zones, phaseOffsets: { x: 1.5, y: -2 } }, true],
+    ['perform start no offsets', { type: 'performStart', zones, phaseOffsets: {} }, true],
+    ['perform start __proto__ offset', { type: 'performStart', zones, phaseOffsets: JSON.parse('{"__proto__":2}') }, true],
+    ['perform start bad __proto__ offset', { type: 'performStart', zones, phaseOffsets: JSON.parse('{"__proto__":"x"}') }, false],
+    ['perform start 8 offsets', { type: 'performStart', zones, phaseOffsets: Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`s${i}`, i])) }, true],
+    ['perform start 9 offsets', { type: 'performStart', zones, phaseOffsets: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`s${i}`, i])) }, false],
+    ['perform start offsets not a record', { type: 'performStart', zones, phaseOffsets: 3 }, false],
+    ['perform start offsets null', { type: 'performStart', zones, phaseOffsets: null }, false],
+    ['perform start offsets a list', { type: 'performStart', zones, phaseOffsets: [1] }, false],
+    ['perform start NaN offset', { type: 'performStart', zones, phaseOffsets: { x: Number.NaN } }, false],
+    ['perform start infinite offset', { type: 'performStart', zones, phaseOffsets: { x: Number.POSITIVE_INFINITY } }, false],
+    ['perform start text offset', { type: 'performStart', zones, phaseOffsets: { x: '1' } }, false],
+    ['perform start empty offset key', { type: 'performStart', zones, phaseOffsets: { '': 1 } }, false],
+    ['perform start long offset key', { type: 'performStart', zones, phaseOffsets: { ['x'.repeat(65)]: 1 } }, false],
+    ['perform end', { type: 'performEnd' }, true],
+    ['perform arm', { type: 'performArm', sourceIds: ['a', 'b'] }, true],
+    ['perform arm none', { type: 'performArm', sourceIds: [] }, true],
+    ['perform arm over budget', { type: 'performArm', sourceIds: Array(9).fill('a') }, false],
+    ['perform arm bad id', { type: 'performArm', sourceIds: [3] }, false],
+    ['perform arm empty id', { type: 'performArm', sourceIds: [''] }, false],
+    ['perform arm long id', { type: 'performArm', sourceIds: ['x'.repeat(65)] }, false],
+    ['perform arm hole', { type: 'performArm', sourceIds: holed }, false],
+    ['perform arm not a list', { type: 'performArm', sourceIds: 'a' }, false],
+    ['perform launch', { type: 'performLaunch', launch }, true],
+    ['perform launch empty', withLaunch({ changes: [] }), true],
+    ['perform launch stop', withChange({ sourceId: null }), true],
+    ['perform launch derived id', withLaunch({ id: `${'x'.repeat(64)}:ceiling` }), true],
+    ['perform launch no launch', { type: 'performLaunch' }, false],
+    ['perform launch empty id', withLaunch({ id: '' }), false],
+    ['perform launch long id', withLaunch({ id: 'x'.repeat(129) }), false],
+    ['perform launch NaN time', withLaunch({ atMs: Number.NaN }), false],
+    ['perform launch infinite time', withLaunch({ atMs: Number.POSITIVE_INFINITY }), false],
+    ['perform launch zero bar', withLaunch({ barMs: 0 }), false],
+    ['perform launch NaN bar', withLaunch({ barMs: Number.NaN }), false],
+    ['perform launch too long a bar', withLaunch({ barMs: 60001 }), false],
+    ['perform launch too many changes', withLaunch({ changes: Array.from({ length: 9 }, (_, i) => ({ ...change, zone: i % 8 })) }), false],
+    ['perform launch one zone twice', withLaunch({ changes: [change, change] }), false],
+    ['perform launch hole in changes', withLaunch({ changes: [, change] }), false],
+    ['perform change zone too high', withChange({ zone: 8 }), false],
+    ['perform change zone negative', withChange({ zone: -1 }), false],
+    ['perform change zone fractional', withChange({ zone: 1.5 }), false],
+    ['perform change bad source', withChange({ sourceId: 3 }), false],
+    ['perform change bad shapes', withChange({ shapeIds: [3] }), false],
+    ['perform change too many shapes', withChange({ shapeIds: Array(65).fill('a') }), false],
+    ['perform change bad blend kind', withChange({ blend: { kind: 'wipe', durationMs: 0 } }), false],
+    ['perform change blend not an object', withChange({ blend: 'cut' }), false],
+    ['perform change negative blend', withChange({ blend: { kind: 'fade', durationMs: -1 } }), false],
+    ['perform change NaN blend', withChange({ blend: { kind: 'fade', durationMs: Number.NaN } }), false],
+    ['perform change blend too long', withChange({ blend: { kind: 'fade', durationMs: 3600001 } }), false],
+    ['perform change NaN phase', withChange({ phaseOffsetBeats: Number.NaN }), false],
+    ['perform cancel', { type: 'performCancel', launchId: 'l1' }, true],
+    ['perform cancel empty', { type: 'performCancel', launchId: '' }, false],
+    ['perform cancel bad', { type: 'performCancel', launchId: 3 }, false],
+    ['perform cancel long', { type: 'performCancel', launchId: 'x'.repeat(129) }, false],
+    ['perform values', { type: 'performValues', values: { master: 0.5, zones: valueZones } }, true],
+    ['perform values not an object', { type: 'performValues', values: 3 }, false],
+    ['perform values NaN master', { type: 'performValues', values: { master: Number.NaN, zones: valueZones } }, false],
+    ['perform values infinite master', { type: 'performValues', values: { master: Number.POSITIVE_INFINITY, zones: valueZones } }, false],
+    ['perform values NaN brightness', withValue({ brightness: Number.NaN }), false],
+    ['perform values infinite hue', withValue({ hueDeg: Number.NEGATIVE_INFINITY }), false],
+    ['perform values NaN speed', withValue({ speed: Number.NaN }), false],
+    ['perform values too few zones', { type: 'performValues', values: { master: 1, zones: valueZones.slice(1) } }, false],
+    ['perform values too many zones', { type: 'performValues', values: { master: 1, zones: [...valueZones, valueZone] } }, false],
+    ['perform values hole', { type: 'performValues', values: { master: 1, zones: [, ...valueZones.slice(1)] } }, false],
+  ];
+}
+
+test('new message types are accepted in both copies of the check', () => {
+  const table = performParity().filter(([, , expected]) => expected);
+  assert.ok(table.length >= 8);
+  for (const [name, message] of table) {
+    assert.equal(acceptMapMessage(message), true, `page: ${name}`);
+    assert.equal(mainProcess.acceptMapMessage(message), true, `main process: ${name}`);
+  }
+});
+
+test('performValues with non-finite numbers is refused', () => {
+  const zones = Array.from({ length: 8 }, () => ({ brightness: 1, hueDeg: 0, speed: 1 }));
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    for (const message of [
+      { type: 'performValues', values: { master: bad, zones } },
+      { type: 'performValues', values: { master: 1, zones: [{ brightness: bad, hueDeg: 0, speed: 1 }, ...zones.slice(1)] } },
+      { type: 'performValues', values: { master: 1, zones: [{ brightness: 1, hueDeg: bad, speed: 1 }, ...zones.slice(1)] } },
+      { type: 'performValues', values: { master: 1, zones: [{ brightness: 1, hueDeg: 0, speed: bad }, ...zones.slice(1)] } },
+    ]) {
+      assert.equal(acceptMapMessage(message), false);
+      assert.equal(mainProcess.acceptMapMessage(message), false);
+    }
+  }
+});
+
 // One table, run against both copies of the check (the page's and the main process's), so they cannot drift.
 const PARITY: [string, unknown, boolean][] = [
   ['show', { type: 'show', show: { shapes: [] } }, true],
@@ -96,10 +224,12 @@ const PARITY: [string, unknown, boolean][] = [
   ['live capture room', { type: 'liveCaptureRoom' }, true],
   ['live retry', { type: 'liveRetry' }, true],
   ['video retry', { type: 'videoRetry' }, true],
+  ['performance reset', { type: 'performanceReset' }, true],
   ['unknown', { type: 'explode' }, false],
   ['null', null, false],
   ['array', [], false],
   ['oversized show', { type: 'show', show: { padding: 'x'.repeat(MAP_MESSAGE_LIMIT) } }, false],
+  ...performParity(),
 ];
 test('the page and the main process accept and refuse exactly the same messages', () => {
   for (const [name, message, expected] of PARITY) {
@@ -202,4 +332,27 @@ test('Ember preset smoke receives the live kick and bands on the wall without a 
   assert.ok(Object.keys(signals).every(key => inputs.has(key)));
   assert.ok(acceptMapMessage({type: 'signals', signals}));
   assert.ok(mainProcess.acceptMapMessage({type: 'signals', signals}));
+});
+
+test('the installation message is read the same by the main process and the wall', () => {
+  const cases: [unknown, boolean][] = [
+    [{ type: 'installation', autopilot: true, everyBeats: 32 }, true],
+    [{ type: 'installation', autopilot: false, everyBeats: 16 }, true],
+    [{ type: 'installation', autopilot: true, everyBeats: 128 }, true],
+    [{ type: 'installation', autopilot: true, everyBeats: 64.5 }, true],
+    [{ type: 'installation', autopilot: true, everyBeats: 15.99 }, false],
+    [{ type: 'installation', autopilot: true, everyBeats: 128.01 }, false],
+    [{ type: 'installation', autopilot: true, everyBeats: Number.NaN }, false],
+    [{ type: 'installation', autopilot: true, everyBeats: Infinity }, false],
+    [{ type: 'installation', autopilot: true, everyBeats: '32' }, false],
+    [{ type: 'installation', autopilot: 1, everyBeats: 32 }, false],
+    [{ type: 'installation', autopilot: 'true', everyBeats: 32 }, false],
+    [{ type: 'installation', everyBeats: 32 }, false],
+    [{ type: 'installation', autopilot: true }, false],
+    [{ type: 'installation' }, false],
+  ];
+  for (const [message, ok] of cases) {
+    assert.equal(acceptMapMessage(message), ok, `wall: ${JSON.stringify(message)}`);
+    assert.equal(mainProcess.acceptMapMessage(message), ok, `main: ${JSON.stringify(message)}`);
+  }
 });

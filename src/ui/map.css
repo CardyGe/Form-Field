@@ -37,7 +37,8 @@
 
 /* Editing a Map shape's composition in Studio */
 .shape-edit-bar { display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 12px; border-radius: 6px; background: #26301a; color: var(--accent); font-size: 12px; white-space: nowrap; }
-.shape-edit-bar .primary-button { min-height: 26px; padding: 3px 10px; }
+.shape-edit-bar .primary-button, .shape-edit-bar .secondary-button { min-height: 26px; padding: 3px 10px; }
+.shape-edit-bar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Stage 3: tools, the bar under the stage, groups in the list, Details sections */
 .map-centre { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -249,6 +250,11 @@ fieldset.layer-controls:disabled { opacity: .55; }
 /* Audit pass: the Map screen matches Studio and Live. */
 /* Labels and buttons are not text to select, so a drag on the stage never highlights them; fields keep their own selection. */
 .map-shell { user-select: none; -webkit-user-select: none; }
+.map-flash-guard { margin-left: auto; padding: 0 8px; border-radius: 4px; color: #17120a; background: #ffd27a; white-space: nowrap; }
+.map-flash-guard + .map-flash-guard { margin-left: 0; }
+.map-flash-guard + .map-quality { margin-left: 0; }
+.map-quality { margin-left: auto; padding: 0 8px; border-radius: 4px; color: #0d1a2a; background: #a9cdfa; white-space: nowrap; }
+.map-flash-guard.is-off { color: #fff; background: #b3261e; }
 .map-shell input:not([type="range"]):not([type="checkbox"]), .map-shell textarea, .map-status { user-select: text; -webkit-user-select: text; }
 /* The same lime as Live's sliders and ticks, not the system blue. */
 .map-shell input[type="range"], .map-shell input[type="checkbox"], .map-shell input[type="radio"] { accent-color: var(--accent); }

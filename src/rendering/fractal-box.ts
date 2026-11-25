@@ -37,9 +37,12 @@ vec2 boxField(vec3 position) {
   float change=uEvolution*(.72+.28*uMorph);
   float opening=fractalCue(fract(uPhase/TAU),vec4(.17,.46,.56,.96));
   float chamber=fractalCue(fract(uPhase/TAU),vec4(.47,.64,.76,.98));
-  float scale=-(uBoxScale+uMorph*.12*sin(uPhase)+change*(.27*opening-.22*chamber));
+  float magnitude=uBoxScale+uMorph*.12*sin(uPhase)+change*(.27*opening-.22*chamber);
+  // Shape dance breathes the fold itself, kept above the scale where the surface stays solid.
+  if(uDance>0.)magnitude=max(magnitude+uDance*.4*sin(uPhase),1.35);
+  float scale=-magnitude;
   float outer=uVariant>.5&&uVariant<1.5?1.25:1.;
-  float inner=clamp(uBoxRadius+change*(.11*opening-.14*chamber),.16,.90);
+  float inner=clamp(uBoxRadius+change*(.11*opening-.14*chamber)+uDance*.08*cos(uPhase),.16,.90);
   float minimum2=inner*inner,outer2=outer*outer;
   // Detail changes the geometric recursion, never the render resolution.
   // Keep the estimator converged even when artistic Detail is low. Fewer
@@ -86,7 +89,7 @@ float boxShadow(vec3 p,vec3 light,float epsilon) {
 vec4 traceBox(vec2 offset) {
   float size=uScale/1.7;
   float oldMotion=legacyCameraMotion();
-  float yaw=uCameraYaw+oldMotion*(uTravel*.25*sin(uPhase)+(uApproach>0.?uPhase:0.));
+  float yaw=uCameraYaw+oldMotion*(uTravel*.25*sin(uPhase)+(uApproach>0.?(uFlySway>0.?uFlySway*.7*sin(uPhase):uPhase):0.));
   float pitch=uCameraPitch+oldMotion*uTravel*.12*cos(uPhase);
   float radius=2.*length(boxLimits())/size+.01/size;
   float framing=radius+3.6/max(uZoom,.5)-oldMotion*uTravel*.35*cos(uPhase);

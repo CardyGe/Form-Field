@@ -12,12 +12,31 @@
  * reaches the periodic steady state to within 1/4096, and the last frame of
  * the loop flows into the first like any other pair of frames.
  */
+import type { KALEIDOSCOPE_INPUT } from '../core/project';
 import type { Layer } from '../shared/types';
 
 /** The highest fade per frame. Higher values need very long warm-ups. */
 export const MAX_PERSISTENCE = .97;
 /** Contribution below which an old frame no longer matters (half-float precision). */
 const FORGET = 1 / 4096;
+// project.ts imports this file, so these are checked against KALEIDOSCOPE_INPUT by type only.
+const INPUT_BELOW: typeof KALEIDOSCOPE_INPUT.below = 2;
+const INPUT_FEEDBACK: typeof KALEIDOSCOPE_INPUT.feedback = 3;
+
+/** The Kaleidoscope input as the renderer uses it: whole and in range, even when modulated. */
+export function kaleidoscopeInput(params: Record<string, number>): number {
+  const input = params.input;
+  return Number.isFinite(input) ? Math.max(0, Math.min(INPUT_FEEDBACK, Math.round(input))) : 0;
+}
+const foldsItsOwnEcho = (layer: Pick<Layer, 'kind' | 'params'>) => layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) === INPUT_FEEDBACK;
+
+/**
+ * A Kaleidoscope on the feedback input folds its history inside its own shader,
+ * so the generic echo pass must not add the previous frame a second time.
+ */
+export function echoAppliedInSource(layer: Pick<Layer, 'kind' | 'params'>): boolean {
+  return foldsItsOwnEcho(layer) && (layer.params.echo ?? 0) > 0;
+}
 
 export function persistence(layer: Pick<Layer, 'params'>): number {
   return MAX_PERSISTENCE * Math.max(0, Math.min(1, layer.params.echo ?? 0));
@@ -50,6 +69,9 @@ export function historyFrames(params: Record<string, number>): number {
  */
 export function echoSettings(layer: Pick<Layer, 'kind' | 'params'>, phase: number): Record<string, number> {
   const p = layer.params;
+  // Only the amount applies here. Held echo and the echo transforms belong to the generic pass,
+  // and without them the gain and the warm-up both follow persistence, which bounds the energy.
+  if (foldsItsOwnEcho(layer)) return { echo: p.echo ?? 0 };
   if (layer.kind !== 'glitchtunnel') return p;
   const fade = p.fade ?? 0;
   return {
@@ -78,11 +100,13 @@ export function frameAtPhase(phase: number, total: number): number {
 /** Feedback cannot run on tiled patterns (the source is a tile, not the frame)
  * or on Evolving ink, whose clip clock does not loop. */
 export function supportsFeedback(layer: Pick<Layer, 'kind' | 'params'>): boolean {
-  // Feedback Glitch is a feedback instrument: its echo is not a finish.
-  return layer.kind !== 'graphic' && layer.kind !== 'glitchtunnel' && !(layer.kind === 'livingink' && layer.params.inkMode === 2);
+  // Feedback Glitch is a feedback instrument: its echo is not a finish. Meridian keeps its own afterglow.
+  return layer.kind !== 'graphic' && layer.kind !== 'glitchtunnel' && layer.kind !== 'meridian' && !(layer.kind === 'livingink' && layer.params.inkMode === 2);
 }
 
 export function feedbackActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>): boolean {
+  // The picture below exists only for the current frame, so a warm-up could not replay it exactly.
+  if (layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) === INPUT_BELOW) return false;
   return layer.kind === 'glitchtunnel' || supportsFeedback(layer) && ((layer.params.echo ?? 0) > 0 || !!layer.modulations.echo);
 }
 

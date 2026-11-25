@@ -3,7 +3,7 @@ import type { LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import type { MapMessage } from '../map/messages';
-export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | InstrumentKind;
+export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | 'smokecloud' | 'meridian' | 'kaleidoscope' | InstrumentKind;
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'add' | 'source';
 export type ModulationKind = 'sine' | 'pulse' | 'noise' | 'keyframes';
 export interface KeyPoint { time: number; value: number }
@@ -36,6 +36,16 @@ export interface Layer {
   palette: string[];
   image?: { name: string; dataUrl: string; width: number; height: number; fit: 'contain' | 'cover' };
   modulations: Record<string, Modulation>;
+  /** Meridian only: group locks, the two morph captures, the morph position and the optional mark. */
+  meridian?: MeridianLayerState;
+}
+export interface MeridianLayerState {
+  locks: string[];
+  morphA?: Record<string, number>;
+  morphB?: Record<string, number>;
+  /** Where the look sits between A (0) and B (1). */
+  morphAmount?: number;
+  mark?: { dataUrl: string; width: number; height: number };
 }
 export interface Project {
   schemaVersion: 1 | 2;
@@ -64,6 +74,12 @@ export interface ParameterDefinition {
   max: number;
   step: number;
   default: number;
+  /** Meridian: the panel group this belongs to. */
+  group?: string;
+  /** Meridian: takes effect at the next phrase, not at once. */
+  structural?: boolean;
+  /** Meridian: a button that acts on its rising edge. */
+  momentary?: boolean;
   section: 'Shape' | 'Motion' | 'Material' | 'Camera';
 }
 export interface Preset {
@@ -153,11 +169,21 @@ export interface StudioBridge {
   onExportProgress(callback: (progress: ExportProgress) => void): () => void;
   live: LiveBridge;
   map: MapBridge;
+  /** Installation mode: absent in older builds. */
+  installation?: InstallationBridge;
 }
 /** Sent from the studio window to the artwork window. */
-export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' } | { type: 'signals'; signals: Record<string, number> };
+export type LiveMessage = { type: 'settings'; settings: LiveSettings } | { type: 'blackout'; on: boolean } | { type: 'flashGuard'; on: boolean } | { type: 'clear' } | { type: 'retry' } | { type: 'captureRoom' } | { type: 'signals'; signals: Record<string, number> } | { type: 'installation'; autopilot: boolean; everyBeats: number };
 /** What the artwork window reports: its camera, and person finding when the look uses it. */
-export type LiveReport = SourceState & { people?: PeopleStatus; roomCaptured?: boolean };
+export type LiveReport = SourceState & { people?: PeopleStatus; roomCaptured?: boolean; /** Meridian Live: words and counts, never a picture. */ meridian?: { status: string; bodies: number; limiterOn: boolean; limiterError: string | null; qualityReduced?: boolean } };
+/** Installation mode's saved settings, as the main process validates them. */
+export interface InstallationSettings { on: boolean; surface: 'map' | 'live'; autopilot: boolean; everyBeats: number; display: number | null }
+export interface InstallationBridge {
+  get(): Promise<{ settings: InstallationSettings; running: boolean }>;
+  set(settings: InstallationSettings): Promise<{ settings: InstallationSettings; running: boolean }>;
+  /** Records one fault string. Resolves false if it was not plain text. */
+  log(text: string): Promise<boolean>;
+}
 export interface LiveBridge {
   /** The saved settings as stored, or null. Pass the result through validateLiveSettings. */
   loadSettings(): Promise<unknown>;
@@ -209,6 +235,8 @@ export interface MapBridge {
   /** Called by the output window to close itself (Escape). */
   requestClose(): void;
   /** Called by the output window: a small JPEG of what the wall shows. */
+  /** True only in the scripted checks' own test window. */
+  readonly checks?: boolean;
   sendPreview(jpeg: ArrayBuffer): void;
   /** The wall's picture, about ten times a second while it changes. */
   onPreview(callback: (jpeg: ArrayBuffer) => void): () => void;

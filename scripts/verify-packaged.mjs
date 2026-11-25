@@ -1,3 +1,4 @@
+import { openFinish } from './finish-ui.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -177,7 +178,7 @@ try {
 
   await page.getByRole('button', { name: 'Add fractal', exact: true }).click();
   const familyImages = new Set();
-  for (const name of ['Kaleidoscope', 'Julia Bloom', 'Mandelbox']) {
+  for (const name of ['Folded Lace', 'Julia Bloom', 'Mandelbox']) {
     await page.getByRole('button', { name, exact: true }).click();
     await page.waitForTimeout(500);
     familyImages.add(await digest());
@@ -207,6 +208,7 @@ try {
   await page.waitForTimeout(400);
   assert.notEqual(await digest(), beforeFold, 'The packaged Fold control must alter the actual GPU image while paused.');
   await page.getByRole('button', { name: 'Finish', exact: true }).click();
+  await openFinish(page, 'Mask');
   await page.locator('label.stacked-label').filter({ hasText: /^Mask shape/ }).locator('select').selectOption('circle');
   await page.getByLabel('Mask size value', { exact: true }).fill('0.9');
   await page.getByLabel('Mask size value', { exact: true }).press('Tab');
@@ -273,6 +275,7 @@ try {
   await page.getByLabel('Repeat value', { exact: true }).fill('2');
   await page.getByLabel('Repeat value', { exact: true }).press('Tab');
   await page.getByRole('button', { name: 'Finish', exact: true }).click();
+  await openFinish(page, 'Color finish');
   for (const [label, value] of [['Saturation', '0.7'], ['Hue shift', '0.35'], ['Exposure', '0.85']]) {
     await page.getByLabel(`${label} value`, { exact: true }).fill(value);
     await page.getByLabel(`${label} value`, { exact: true }).press('Tab');

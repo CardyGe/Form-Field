@@ -1,6 +1,6 @@
 import { FINISH_KEYS } from './finishing';
 import type { Layer, LayerKind, ParameterDefinition } from '../shared/types';
-import { visibleParameterDefinitions, type VariationLocks } from './project';
+import { kaleidoscopeHidden, visibleParameterDefinitions, type VariationLocks } from './project';
 
 export const TRANSFORM_LIMITS = { position: [-2, 2], scale: [.05, 8] } as const;
 const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
@@ -19,6 +19,7 @@ const preferred: Partial<Record<LayerKind, string[]>> = {
   resonance: ['modalBlend', 'radialMix'],
   texturecuts: ['scale', 'cuts'],
   glitchtunnel: ['tunnelZoom', 'glitch'],
+  kaleidoscope: ['twist', 'lens'],
 };
 
 /** Continuous, visible controls only; never rebuild a simulation during a drag. */
@@ -35,8 +36,9 @@ export function canvasAxes(layer: Layer, locks: VariationLocks): ParameterDefini
     ['spacing', 'glyphSize'], ['size', 'stretch'],
   ][Math.round(layer.params.style)] ?? [];
   // Finishing and feedback controls act on the finished layer, never as drag axes.
-  const available = visibleParameterDefinitions(layer).filter(d => !FINISH_KEYS.includes(d.key) &&
-    d.step !== 1 && !d.preparation && !layer.modulations[d.key] &&
+  const hidden = layer.kind === 'kaleidoscope' ? kaleidoscopeHidden(layer.params) : null;
+  const available = visibleParameterDefinitions(layer).filter(d => !hidden?.has(d.key) && !FINISH_KEYS.includes(d.key) &&
+    d.step !== 1 && !d.preparation && !d.structural && !layer.modulations[d.key] &&
     (d.section === 'Shape' && !locks.structure || keys.includes(d.key) && d.section === 'Material' && !locks.material));
   return [...keys.map(key => available.find(d => d.key === key)), ...available]
     .filter((d, i, all): d is ParameterDefinition => !!d && all.indexOf(d) === i).slice(0, 2);

@@ -1,4 +1,6 @@
+import { FlashGuardButton } from './FlashGuardButton';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
+import { mapGuardStatus, wallGuardPolicy } from '../meridian/wall-guard';
 import { useMap, showReacts, type MapTool } from './useMap';
 import MapMenu, { type MenuEntry } from './MapMenu';
 import MapShapeList from './MapShapeList';
@@ -166,17 +168,26 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   // This screen's own Live, as the Live card's status line shows it while the output is closed.
   const [localLive, setLocalLive] = useState<{ running: boolean; state: string } | null>(null);
   const [localVideos, setLocalVideos] = useState<Record<string, { state: string; playsAs: number | null }>>({});
+  const [localLimiting, setLocalLimiting] = useState(false);
+  const [localFailed, setLocalFailed] = useState(false);
+  const [localReduced, setLocalReduced] = useState(false);
+  const [localLiveLimiter, setLocalLiveLimiter] = useState<{ limiting: boolean; error: string | null } | null>(null);
   useEffect(() => {
-    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); return; }
+    if (map.outputOpen) { setLocalLive(null); setLocalVideos({}); setLocalLimiting(false); setLocalFailed(false); setLocalReduced(false); setLocalLiveLimiter(null); return; }
     const timer = setInterval(() => {
       const next = compositor.current?.stats().live ?? null;
       setLocalLive(old => old?.running === next?.running && old?.state === next?.state ? old : next);
       const videos = compositor.current?.stats().videos ?? {};
       setLocalVideos(old => JSON.stringify(old) === JSON.stringify(videos) ? old : videos);
+      setLocalLimiting(!!compositor.current?.stats().flashGuard?.limiting);
+      setLocalFailed(!!compositor.current?.stats().flashGuard?.failed);
+      setLocalReduced(!!compositor.current?.stats().meridianQuality?.reduced);
+      const liveLimiter = compositor.current?.stats().live?.limiter ?? null;
+      setLocalLiveLimiter(old => old?.limiting === liveLimiter?.limiting && old?.error === liveLimiter?.error ? old : liveLimiter);
     }, 500);
     return () => clearInterval(timer);
   }, [map.outputOpen]);
-  map.onLiveAction.current = action => { if (action === 'clear') compositor.current?.liveClear(); else if (action === 'retry') compositor.current?.liveRetry(); else if (action === 'videoRetry') compositor.current?.videoRetry(); else compositor.current?.liveCaptureRoom(); };
+  map.onLiveAction.current = action => { if (action === 'performanceReset') compositor.current?.resetPerformance(); else if (action === 'clear') compositor.current?.liveClear(); else if (action === 'retry') compositor.current?.liveRetry(); else if (action === 'videoRetry') compositor.current?.videoRetry(); else compositor.current?.liveCaptureRoom(); };
   useEffect(() => {
     if (!canvas.current) return;
     // It draws on its own hidden canvas; this screen copies that picture and draws its marks over it.
@@ -713,6 +724,14 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
   const penHint = pen ? `Pen: ${pen.points.length} point${pen.points.length === 1 ? '' : 's'}${pen.hole ? ' (a hole)' : ''} · click the first point or press Enter to close · Backspace takes back a point · Esc abandons` : null;
   const cornersHint = cornersMode ? `Stage corners: drag a numbered corner, or use the arrow keys on corner ${cornerIndex + 1} (Shift for 10 pixels, Tab for the next corner). This screen stays flat; the projector bends.` : null;
   const status = reason ?? inspectorNote ?? map.saveError ?? map.sendWarning ?? failing ?? map.notice ?? cornersHint ?? penHint ?? (map.outputOpen ? wallText : map.loaded ? 'Ready' : 'Loading…');
+  // Safety stays on screen whatever else the status line is saying.
+  const guardPolicy = useMemo(() => wallGuardPolicy(map.show.sources.map(s => s.project)), [map.show.sources]);
+  // A Live playing Meridian runs its own flash limiter; its state and any error show here too.
+  const liveMeridian = usesLive(map.show) && map.live?.look === 'meridian';
+  const { warning: guardWarning, limiting: guardLimiting } = mapGuardStatus(guardPolicy, liveMeridian,
+    { limiting: map.outputOpen ? !!wall?.flashGuard?.limiting : localLimiting, failed: !!(map.outputOpen ? wall?.flashGuard?.failed : localFailed) },
+    map.outputOpen ? wall?.live?.limiter ?? null : localLiveLimiter);
+  const qualityReduced = map.outputOpen ? !!wall?.meridianQuality?.reduced : localReduced;
   const soloOn = map.solo.shapes.length + map.solo.groups.length > 0;
   // The browser follows the single selected shape; it closes when there is none, or a Blocker or locked shape is picked.
   // Several shapes playing one instrument count as that one instrument: the browser changes it through the first of them.
@@ -786,7 +805,7 @@ export default function MapPanel({ header, onError, onEditInStudio }: { header: 
         <MapDetails map={map} onEditInStudio={onEditInStudio} setNote={setInspectorNote} onOpenLooks={() => setLooksOpen(o => !o)} linked={linkedChanges} setLinked={setLinkedChanges} liveStatus={localLive} videoStatus={map.outputOpen ? map.wallState?.videos ?? {} : localVideos} />
       </aside>
     </div>
-    <footer className="map-status" role="status"><span>{status}</span>{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
+    <footer className="map-status" role="status"><span>{status}</span><FlashGuardButton on={map.flashGuard} onChange={map.setFlashGuard} />{guardWarning && <strong className="map-flash-guard is-off" role="alert">{guardWarning}</strong>}{guardLimiting && <strong className="map-flash-guard" role="alert">Flash guard: limiting</strong>}{map.installationWaiting && <strong className="map-quality" role="status">{map.installationWaiting}</strong>}{qualityReduced && <strong className="map-quality" role="status" title="Meridian is drawing less bloom, tearing or small detail to keep the wall smooth. Lines stay sharp and the flash limiter is unchanged. It comes back after a few calm seconds.">Quality reduced</strong>}{map.loaded && <span className={`map-saved ${map.saveError ? 'save-failed' : ''}`} title="The show is saved as you work. Use Save As to keep a copy in a file.">{map.saveError ? 'Not saved' : 'Autosaved'}</span>}</footer>
     {looksOpen && lookShape && <MapLookBrowser current={currentLook(lookShape)} colour={lookShape.colour} onPick={value => act.play(lookShape.id, value, sharedSelection || linkedChanges)} onClose={() => setLooksOpen(false)} />}
     {menu && <MapMenu x={menu.x} y={menu.y} label={menu.shapeId ? 'Shape' : 'Stage'} entries={menuEntries(menu.shapeId)} onClose={() => setMenu(null)} />}
   </section>;

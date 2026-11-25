@@ -50,10 +50,42 @@ const within = (value, limit) => { try { const text = JSON.stringify(value); ret
 const idOrNull = value => value === null || typeof value === 'string';
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 
-/** What the output may report to the studio: its frame rate, the governor level, failing sources, prepare counts. */
+// Perform's limits and checks, as in src/map/messages.ts.
+const ZONE_COUNT = 8;
+const MAX_SHAPES = 64;
+const MAX_ID_LENGTH = 64;
+const PERFORM_ARMED_LIMIT = 8;
+const LAUNCH_ID_LIMIT = 128;
+const BAR_MS_LIMIT = 60000;
+const BLEND_MS_LIMIT = 3600000;
+const LANDED_LIMIT = 32; // MAX_WALL_LAUNCHES in src/perform/wall-perform.ts: the most the wall lands in one step
+const BLEND_KINDS = ['cut', 'fade', 'dip', 'dissolve'];
+// Array.from first: every() skips the holes of a sparse array, and structured clone keeps them.
+const listOf = (value, limit, check) => Array.isArray(value) && value.length <= limit && Array.from(value).every(item => check(item));
+const sized = (value, limit) => typeof value === 'string' && value !== '' && value.length <= limit;
+const performId = value => sized(value, MAX_ID_LENGTH);
+const performIdOrNull = value => value === null || performId(value);
+const zoneIndex = value => Number.isInteger(value) && value >= 0 && value < ZONE_COUNT;
+const everyZone = (value, check) => Array.isArray(value) && value.length === ZONE_COUNT && listOf(value, ZONE_COUNT, check);
+const acceptPicture = z => plain(z) && listOf(z.shapeIds, MAX_SHAPES, performId) && performIdOrNull(z.sourceId) && typeof z.launched === 'boolean';
+const acceptBlend = b => plain(b) && BLEND_KINDS.includes(b.kind) && finite(b.durationMs) && b.durationMs >= 0 && b.durationMs <= BLEND_MS_LIMIT;
+const acceptChange = c => plain(c) && zoneIndex(c.zone) && performIdOrNull(c.sourceId) && listOf(c.shapeIds, MAX_SHAPES, performId) && acceptBlend(c.blend) && finite(c.phaseOffsetBeats);
+const acceptLaunch = l => plain(l) && sized(l.id, LAUNCH_ID_LIMIT) && finite(l.atMs) && finite(l.barMs) && l.barMs >= 1 && l.barMs <= BAR_MS_LIMIT
+  && listOf(l.changes, ZONE_COUNT, acceptChange) && new Set(l.changes.map(c => c.zone)).size === l.changes.length;
+const acceptValueZone = z => plain(z) && finite(z.brightness) && finite(z.hueDeg) && finite(z.speed);
+const acceptValues = v => plain(v) && finite(v.master) && everyZone(v.zones, acceptValueZone);
+// At most one offset per zone's source. Object.entries reads own keys only, so __proto__ is checked like any other id.
+const acceptOffsets = o => o === undefined || (plain(o) && Object.keys(o).length <= ZONE_COUNT && Object.entries(o).every(([id, beats]) => performId(id) && finite(beats)));
+const acceptLanded = l => plain(l) && sized(l.launchId, LAUNCH_ID_LIMIT) && listOf(l.zones, ZONE_COUNT, zoneIndex);
+
+/** What the output may report to the studio: its frame rate, the governor level, failing sources, prepare counts, and Perform's armed sources, landings and what each zone draws. */
 function acceptState(value) {
   if (!plain(value) || !within(value, 16 * 1024)) return false;
-  return finite(value.fps) && Number.isInteger(value.level) && value.level >= 0 && value.level <= 3 && Array.isArray(value.failing) && (value.prepares === undefined || plain(value.prepares));
+  return finite(value.fps) && Number.isInteger(value.level) && value.level >= 0 && value.level <= 3 && Array.isArray(value.failing) && (value.prepares === undefined || plain(value.prepares))
+    && (value.armed === undefined || listOf(value.armed, PERFORM_ARMED_LIMIT, performId))
+    && (value.landed === undefined || listOf(value.landed, LANDED_LIMIT, acceptLanded))
+    && (value.drawing === undefined || everyZone(value.drawing, performIdOrNull))
+    && (value.swapResults === undefined || listOf(value.swapResults, PERFORM_ARMED_LIMIT, r => plain(r) && performId(r.id) && Number.isInteger(r.revision) && r.revision >= 0 && ['started', 'failed', 'lost'].includes(r.result)));
 }
 
 function acceptMapMessage(value) {
@@ -61,8 +93,9 @@ function acceptMapMessage(value) {
   if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MESSAGE_LIMIT)) return false;
   switch (value.type) {
     case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && value.fadeMs >= 0 && value.fadeMs <= 30000));
-    case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && value.revision >= 0 && plain(value.project);
+    case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && value.revision >= 0 && plain(value.project) && (value.crossfade === undefined || value.crossfade === true);
     case 'blackout':
+    case 'flashGuard':
     case 'testGrid':
     case 'freeze': return typeof value.on === 'boolean';
     case 'identify': return idOrNull(value.shapeId);
@@ -71,7 +104,14 @@ function acceptMapMessage(value) {
     case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
     case 'fade': return finite(value.ms) && value.ms >= 0 && value.ms <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, 16 * 1024);
-    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': return true;
+    case 'installation': return typeof value.autopilot === 'boolean' && finite(value.everyBeats) && value.everyBeats >= 16 && value.everyBeats <= 128;
+    case 'performStart': return everyZone(value.zones, acceptPicture) && acceptOffsets(value.phaseOffsets);
+    case 'performEnd': return true;
+    case 'performArm': return listOf(value.sourceIds, PERFORM_ARMED_LIMIT, performId);
+    case 'performLaunch': return acceptLaunch(value.launch);
+    case 'performCancel': return sized(value.launchId, LAUNCH_ID_LIMIT);
+    case 'performValues': return acceptValues(value.values);
     default: return false;
   }
 }
@@ -83,7 +123,7 @@ const FILTERS = [{ name: 'Form & Field Map show', extensions: ['formshow'] }];
  * `open(window)` loads the app page into the output window with the hash #map-output;
  * `closeLiveOutput()` closes Live's output window. Map never holds Live's window.
  */
-function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath, preload, studio, open, closeLiveOutput, videoFiles }) {
+function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath, preload, studio, open, closeLiveOutput, videoFiles, allowChecks = true }) {
   let output = null;
   let showPath = null;
   // Every write, and the autosave read, goes through one queue, so two saves never overlap
@@ -150,7 +190,8 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
     if (!display) throw new Error('That display is no longer connected.');
     if (closeLiveOutput) closeLiveOutput();
     closeOutput();
-    const windowed = process.env.STUDIO_LIVE_TEST_WINDOW === '1';
+    // Never in a packaged app: the check window carries the scripted checks' hooks.
+    const windowed = allowChecks && process.env.STUDIO_LIVE_TEST_WINDOW === '1';
     // On the screen the controls are on, full screen would hide them: open an ordinary window there instead.
     const framed = !windowed && sameScreenAsStudio(display);
     const { window, release } = createOutputWindow({ BrowserWindow, powerSaveBlocker, display, preload, title: 'Form & Field Map', windowed, framed });
@@ -187,4 +228,4 @@ function setupMap({ BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, au
   return { closeOutput, isOutput: contents => alive(output) && contents === output.webContents };
 }
 
-module.exports = { loadShowFile, saveShowFile, acceptMapMessage, setupMap };
+module.exports = { loadShowFile, saveShowFile, acceptMapMessage, acceptState, setupMap };

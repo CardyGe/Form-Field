@@ -8,6 +8,7 @@ import type { Project } from '../shared/types';
 import { visibleParameterDefinitions } from '../core/project';
 import { reactable } from './targets';
 import { STAGE_SIZE, type Point } from './show';
+import type { BlendKind } from '../perform/types';
 
 const TAU = Math.PI * 2;
 /** Smallest side a source is drawn at, so a thin shape still gets a picture. */
@@ -78,13 +79,48 @@ export function governorStep(g: Governor, frameMs: number): Governor {
 }
 
 /** At the last level instruments are drawn every other frame; the shapes keep their last picture in between. */
+/**
+ * On a show with Meridian, its own governor gives up bloom, tearing and small marks, which cost the picture less than drawing
+ * every other frame. So Map's last step (every other frame) waits until every Meridian source is at its floor ('exhausted').
+ * Before that Map stays at most at level 2, which only draws other instruments smaller.
+ */
+export function meridianFirst(g: Governor, meridian: 'none' | 'reducing' | 'exhausted'): Governor {
+  return meridian === 'reducing' && g.level === 3 ? { level: 2, slow: 0, fast: 0 } : g;
+}
+
 export const drawsThisFrame = (level: Governor['level'], frameIndex: number) => level < 3 || frameIndex % 2 === 0;
+
+/** The order sources are worked through in a frame: armed ones last and most urgent first, so a queued look gets the frame's one start before a look only kept ready for later. With nothing armed, the order is unchanged. */
+export function inStartOrder<T extends { id: string }>(sources: readonly T[], armed: readonly string[]): readonly T[] {
+  if (!armed.length) return sources;
+  const rest = sources.filter(s => !armed.includes(s.id));
+  return [...rest, ...armed.flatMap(id => sources.filter(s => s.id === id))];
+}
+
+/** Which renderer gives way to a source of this rank: the lowest rank below it, and among equals the longest unused. */
+export function rendererToEvict<T extends { rank: number; lastUsed: number }>(slots: Iterable<readonly [string, T]>, rank: number): readonly [string, T] | null {
+  let least: readonly [string, T] | null = null;
+  for (const entry of slots) {
+    const s = entry[1];
+    if (s.rank < rank && (!least || s.rank < least[1].rank || (s.rank === least[1].rank && s.lastUsed < least[1].lastUsed))) least = entry;
+  }
+  return least;
+}
 
 /** How far a crossfade has gone, 0 to 1. */
 export function fadeAlpha(startedMs: number, nowMs: number, durationMs = 400): number {
   // A fade of no time is a cut: done at once (never 0 / 0).
   if (!(durationMs > 0)) return 1;
   return Math.min(1, Math.max(0, (nowMs - startedMs) / durationMs));
+}
+
+/** How much of the outgoing and incoming picture to show, t from 0 to 1. A cut is done at once; a dip goes through black at the halfway point. */
+export function blendAlphas(kind: BlendKind, t: number): { from: number; to: number } {
+  if (kind === 'cut') return { from: 0, to: 1 };
+  // Written so NaN counts as the start.
+  const at = t >= 1 ? 1 : t > 0 ? t : 0;
+  if (kind === 'dip') return at < .5 ? { from: 1 - at * 2, to: 0 } : { from: 0, to: at * 2 - 1 };
+  return { from: 1 - at, to: at };
 }
 
 /** What a shape plays, as far as fading is concerned: which source, and which instruments it is made of. */
@@ -94,6 +130,19 @@ export interface Playing { sourceId: string | null; kinds: string }
 export function shouldFade(before: Playing | undefined, after: Playing): boolean {
   if (!before) return false;
   return before.sourceId !== after.sourceId || before.kinds !== after.kinds;
+}
+
+/**
+ * A source is about to change its picture: blends still leaving it stop reading it live and hold a copy of it as it is,
+ * so they never jump to the new look.
+ */
+export function freezeLeaving<T>(fades: Iterable<{ from: T | string; fromSource?: string | null }>, id: string, copy: () => T, free: (picture: T) => void): void {
+  for (const fade of fades) {
+    if (fade.fromSource !== id) continue;
+    if (typeof fade.from !== 'string') free(fade.from);
+    fade.from = copy();
+    fade.fromSource = null;
+  }
 }
 
 /**

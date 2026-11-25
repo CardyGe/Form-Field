@@ -58,13 +58,20 @@ export const FEEDBACK_PARAMETERS:ParameterDefinition[]=[
  * some frames ago. Stateless and exactly looping. Off by default (Time shift 0).
  */
 export const SLIT_PARAMETERS:ParameterDefinition[]=[
- {key:'slitShift',label:'Time shift',min:-1,max:1,step:.01,default:0,section:'Motion',description:'How far back the delay map reaches, as a share of Time span. Negative values flip the map. 0 is off.'},
+ {key:'slitShift',label:'Time shift',min:-1,max:1,step:.01,default:0,section:'Motion',description:'How far back the delay map reaches, as a share of Time span. In Delay map mode, negative values flip the map. Other Time modes use only its size. 0 is off.'},
  {key:'slitSpan',label:'Time span',min:1,max:120,step:1,default:30,section:'Motion',description:'The longest delay in frames, at Time shift 1.'},
- {key:'slitShape',label:'Delay map',min:0,max:4,step:1,default:0,section:'Shape',description:'Which parts of the frame lag: rows, columns, rings, a diagonal or random blocks.'},
+ {key:'slitShape',label:'Delay map',min:0,max:6,step:1,default:0,section:'Shape',description:'Which parts of the frame lag: rows, columns, rings, a diagonal, random blocks, by brightness or in bands.'},
  {key:'slitSlices',label:'Time slices',min:2,max:32,step:1,default:12,section:'Shape',description:'Moments of the past sampled each frame. More slices are smoother and slower to render.'},
  {key:'slitSmooth',label:'Slice blend',min:0,max:1,step:.01,default:0,section:'Shape',description:'0 gives hard stepped terraces; 1 blends neighbouring slices into a continuous smear.'},
  {key:'slitBlocks',label:'Block count',min:2,max:40,step:1,default:8,section:'Shape',description:'Blocks per frame height for the Blocks map.'},
  {key:'slitScroll',label:'Map scroll',min:-4,max:4,step:1,default:0,section:'Motion',description:'Times the delay map sweeps across the frame per loop.'},
+ {key:'slitMode',label:'Time mode',min:0,max:4,step:1,default:0,section:'Shape',description:'How the slices combine: a delay map, an echo, the median, the darkest or the brightest.'},
+ {key:'slitDirection',label:'Direction',min:0,max:1,step:1,default:0,section:'Motion',description:'Slices reach into the past, or into the future of the loop.'},
+ {key:'slitDecay',label:'Echo fade',min:.05,max:1,step:.01,default:.7,section:'Material',description:'How quickly older slices fade in Echo. 1 weights every slice equally.'},
+ {key:'slitReach',label:'Colour reach',min:.1,max:1,step:.01,default:1,section:'Material',description:'How far back each colour remembers. Red remembers least, blue all of it.'},
+ {key:'slitTwist',label:'Twist',min:-4,max:4,step:.01,default:0,section:'Shape',description:'Turns each older slice a little further around the frame centre.'},
+ {key:'slitZoom',label:'Time zoom',min:0,max:.9,step:.01,default:0,section:'Shape',description:'Scales each older slice a little further in towards the centre.'},
+ {key:'slitChroma',label:'Colour lag',min:0,max:1,step:.01,default:0,section:'Material',description:'Delays red and blue against green, so colours trail apart.'},
 ];
 /**
  * Glow: the bright parts of the layer spill soft light around themselves. The
@@ -77,6 +84,10 @@ export const GLOW_PARAMETERS:ParameterDefinition[]=[
  {key:'glowThreshold',label:'Glow threshold',min:0,max:1,step:.01,default:.5,section:'Material',description:'Brightness above which light glows. 0 makes the whole layer glow.'},
  {key:'glowSize',label:'Glow size',min:0,max:1,step:.01,default:.5,section:'Material',description:'Tight halo at 0, wide haze at 1. The width is a share of the frame, so exports match the preview.'},
  {key:'glowTint',label:'Glow colour',min:0,max:6,step:1,default:0,section:'Material',description:'0 keeps the layer\'s own colour; 1–6 use the matching palette swatch.'},
+ {key:'glowSpread',label:'Glow colour spread',min:0,max:1,step:.01,default:0,section:'Material',description:'Lets the wide part of the glow fan out into colour. 0 keeps one colour.'},
+ {key:'glowStreak',label:'Glow streak',min:0,max:2,step:.01,default:0,section:'Material',description:'Stretches bright points into streaks of light. 0 is off.'},
+ {key:'glowStreakAngle',label:'Streak angle',min:-90,max:90,step:1,default:0,section:'Material',description:'Direction of the streaks, in degrees from horizontal.'},
+ {key:'glowStreakShape',label:'Streak shape',min:0,max:1,step:1,default:0,section:'Material',description:'Line streaks one way; Cross adds a second streak at right angles.'},
 ];
 /**
  * Print screen: the layer's tone is redrawn as halftone dots, a line screen or
@@ -107,6 +118,122 @@ export const PRINT_PARAMETERS:ParameterDefinition[]=[
  {key:'printEdgeSense',label:'Edge sensitivity',min:0,max:1,step:.01,default:.5,section:'Material',description:'How small a tone step counts as an edge. Higher finds fainter edges.'},
  {key:'printEdgeFeather',label:'Edge feather',min:0,max:1,step:.01,default:.25,section:'Material',description:'Softness of the boundary between screened and plain.'},
 ];
+/**
+ * Split: the layer's colour channels are pulled apart along a direction, so
+ * edges grow coloured fringes. Distances are in pixels of a 1080-line frame.
+ * Stateless and exactly looping; it never enters the Feedback history. Off by
+ * default (Split amount 0 and Channel order RGB).
+ */
+export const SPLIT_PARAMETERS:ParameterDefinition[]=[
+ {key:'splitAmount',label:'Split amount',min:0,max:64,step:.25,default:0,section:'Material',description:'How far the colour channels are pulled apart, in pixels at 1080 lines. 0 is off.'},
+ {key:'splitShape',label:'Split shape',min:0,max:3,step:1,default:0,section:'Material',description:'Straight pulls one way, Lens pulls from the centre, Edges only where tone changes, Wave in rippling bands.'},
+ {key:'splitAngle',label:'Split angle',min:-180,max:180,step:1,default:0,section:'Material',description:'Direction of a Straight, Edges or Wave split, in degrees.'},
+ {key:'splitSamples',label:'Colour smoothness',min:3,max:15,step:1,default:3,section:'Material',description:'How many steps the split is drawn in. 3 gives pure red, green and blue; more is a smooth rainbow.'},
+ {key:'splitThreshold',label:'Edge threshold',min:0,max:1,step:.01,default:.15,section:'Material',description:'How strong an edge must be before Edges splits it.'},
+ {key:'splitWaves',label:'Waves',min:1,max:24,step:1,default:4,section:'Material',description:'Number of ripples across the frame for the Wave shape.'},
+ {key:'splitTravel',label:'Wave travel per loop',min:-8,max:8,step:1,default:1,section:'Motion',description:'Whole ripples the Wave shape slides per loop; the loop closes exactly.'},
+ {key:'splitOrder',label:'Channel order',min:0,max:5,step:1,default:0,section:'Material',description:'Which colour channel goes where: RGB leaves them alone, the others swap them.'},
+ {key:'splitBlocks',label:'Order blocks',min:0,max:64,step:1,default:0,section:'Material',description:'Breaks the frame into blocks, this many per frame height, each of which may swap its channel order. 0 swaps the whole frame.'},
+ {key:'splitChance',label:'Block chance',min:0,max:1,step:.01,default:.5,section:'Material',description:'Share of blocks that swap their channel order.'},
+];
+/**
+ * Gradient map: the layer's brightness is mapped onto a gradient of colours,
+ * dark to bright. Off by default (Gradient map 0).
+ */
+export const GRADIENT_PARAMETERS:ParameterDefinition[]=[
+ {key:'gradMix',label:'Gradient map',min:0,max:1,step:.01,default:0,section:'Material',description:'Blends from the layer\'s colour to its brightness mapped onto a gradient. 0 is off.'},
+ {key:'gradPalette',label:'Gradient colours',min:0,max:9,step:1,default:0,section:'Material',description:'0 uses the layer palette, sorted dark to bright; the others are ready-made gradients.'},
+ {key:'gradMidpoint',label:'Gradient midpoint',min:.05,max:.95,step:.01,default:.5,section:'Material',description:'The brightness that lands halfway along the gradient. Lower brightens the result; higher darkens it.'},
+ {key:'gradOffset',label:'Gradient offset',min:0,max:1,step:.01,default:0,section:'Material',description:'Slides the gradient round; a full turn returns to the start.'},
+ {key:'gradCycles',label:'Gradient cycles per loop',min:-8,max:8,step:1,default:0,section:'Motion',description:'Whole turns the gradient makes per loop; the loop closes exactly.'},
+ {key:'gradKeep',label:'Keep brightness',min:0,max:1,step:1,default:0,section:'Material',description:'Off: the gradient sets the brightness. On: the layer keeps its own brightness and takes only the gradient\'s colour.'},
+];
+/**
+ * Grading: white balance, then a tint in the shadows and one in the highlights.
+ * Each keeps the pixel's brightness. Off by default (all amounts 0).
+ */
+export const GRADE_PARAMETERS:ParameterDefinition[]=[
+ {key:'gradeTemperature',label:'Temperature',min:-1,max:1,step:.01,default:0,section:'Material',description:'Warms (positive) or cools (negative) the colour without changing brightness. 0 is off.'},
+ {key:'gradeTint',label:'Tint',min:-1,max:1,step:.01,default:0,section:'Material',description:'Moves the colour towards magenta (positive) or green (negative) without changing brightness. 0 is off.'},
+ {key:'gradeShadowTint',label:'Shadow tint',min:0,max:1,step:.01,default:0,section:'Material',description:'How strongly the darks take the shadow colour. Brightness is kept, except that a black or near-black colour darkens them. 0 is off.'},
+ {key:'gradeShadowColour',label:'Shadow colour',min:1,max:6,step:1,default:1,section:'Material',description:'Palette swatch used for the shadow tint.'},
+ {key:'gradeHighlightTint',label:'Highlight tint',min:0,max:1,step:.01,default:0,section:'Material',description:'How strongly the brights take the highlight colour. Brightness is kept, except that a black or near-black colour darkens them. 0 is off.'},
+ {key:'gradeHighlightColour',label:'Highlight colour',min:1,max:6,step:1,default:2,section:'Material',description:'Palette swatch used for the highlight tint.'},
+];
+/**
+ * Luma Key: makes part of the layer transparent by its brightness or its hue.
+ * Colour and coverage fade together, so the edge has no fringe. Off by default.
+ */
+export const KEY_PARAMETERS:ParameterDefinition[]=[
+ {key:'keyMix',label:'Key',min:0,max:1,step:.01,default:0,section:'Material',description:'How much of the layer outside the key range becomes transparent. 0 is off.'},
+ {key:'keyMode',label:'Key by',min:0,max:1,step:1,default:0,section:'Material',description:'Brightness keeps a range of tones; hue keeps one colour.'},
+ {key:'keyLow',label:'Key low',min:0,max:1,step:.01,default:.25,section:'Material',description:'Darkest tone kept when keying by brightness.'},
+ {key:'keyHigh',label:'Key high',min:0,max:1,step:.01,default:1,section:'Material',description:'Brightest tone kept when keying by brightness.'},
+ {key:'keySoftness',label:'Key softness',min:0,max:1,step:.01,default:.1,section:'Material',description:'Feathers the edge of the key.'},
+ {key:'keyHue',label:'Key hue',min:0,max:360,step:1,default:120,section:'Material',description:'The colour kept when keying by hue, in degrees round the colour wheel.'},
+ {key:'keyHueRange',label:'Hue range',min:1,max:180,step:1,default:40,section:'Material',description:'How far either side of the key hue is kept, in degrees.'},
+ {key:'keyInvert',label:'Invert key',min:0,max:1,step:1,default:0,section:'Material',description:'Off keeps the range; on removes it instead.'},
+];
+/**
+ * Warp: waves, noise, ripples, magnets or plasma bend the picture. Off by default (Warp amount 0).
+ */
+export const WARP_PARAMETERS:ParameterDefinition[]=[
+ {key:'bendAmount',label:'Warp amount',min:0,max:1,step:0.005,default:0,section:'Material',description:'How far the picture is bent, as a share of the frame height. 0 is off.'},
+ {key:'bendField',label:'Warp type',min:0,max:4,step:1,default:0,section:'Shape',description:'Waves, Noise, Ripple, Magnetic or Plasma.'},
+ {key:'bendScale',label:'Warp scale',min:0.25,max:12,step:0.01,default:3,section:'Shape',description:'How many bends fit across the frame.'},
+ {key:'bendAngle',label:'Warp angle',min:-180,max:180,step:1,default:0,section:'Shape',description:'Direction of the bends, in degrees.'},
+ {key:'bendCycles',label:'Warp cycles per loop',min:-8,max:8,step:1,default:1,section:'Motion',description:'Whole cycles the bends travel per loop; the loop closes exactly.'},
+ {key:'bendDetail',label:'Warp detail',min:1,max:5,step:1,default:3,section:'Shape',description:'Layers of finer bends added on top.'},
+ {key:'bendPoints',label:'Warp points',min:1,max:8,step:1,default:3,section:'Shape',description:'How many magnets pull and push in Magnetic.'},
+ {key:'bendFalloff',label:'Warp falloff',min:0,max:1,step:0.01,default:0.5,section:'Shape',description:'How quickly a magnet fades with distance.'},
+ {key:'bendChroma',label:'Warp colour fringe',min:0,max:1,step:0.01,default:0,section:'Material',description:'Bends red and blue by different amounts, so edges grow colour fringes.'},
+];
+/**
+ * Liquid: the picture is swirled and melted along flowing currents. Off by default (Liquid amount 0).
+ */
+export const LIQUID_PARAMETERS:ParameterDefinition[]=[
+ {key:'liquidAmount',label:'Liquid amount',min:0,max:1,step:0.005,default:0,section:'Material',description:'How far the picture is pushed along the currents. 0 is off.'},
+ {key:'liquidStyle',label:'Liquid style',min:0,max:4,step:1,default:0,section:'Shape',description:'Swirl, Flow, Ridge, Vortex or Chaos.'},
+ {key:'liquidScale',label:'Liquid scale',min:0.25,max:8,step:0.01,default:2,section:'Shape',description:'Size of the currents.'},
+ {key:'liquidSteps',label:'Flow steps',min:1,max:16,step:1,default:6,section:'Shape',description:'How many steps the picture follows the currents. More is smoother and slower.'},
+ {key:'liquidDetail',label:'Liquid detail',min:1,max:5,step:1,default:3,section:'Shape',description:'Layers of finer currents added on top.'},
+ {key:'liquidCycles',label:'Liquid cycles per loop',min:-4,max:4,step:1,default:1,section:'Motion',description:'Whole cycles the currents turn per loop; the loop closes exactly.'},
+ {key:'liquidTrail',label:'Liquid trail',min:0,max:1,step:0.01,default:0,section:'Material',description:'Leaves a faint smear behind the flow.'},
+ {key:'liquidChroma',label:'Liquid colour fringe',min:0,max:1,step:0.01,default:0,section:'Material',description:'Flows red and blue by different amounts, so edges grow colour fringes.'},
+];
+/**
+ * Luma Warp: the picture is pushed along its own light, or the layer below. Off by default (Luma warp amount 0).
+ */
+export const LUMA_WARP_PARAMETERS:ParameterDefinition[]=[
+ {key:'lumaWarpAmount',label:'Luma warp amount',min:0,max:1,step:0.005,default:0,section:'Material',description:'How far the picture is pushed by light and dark. 0 is off.'},
+ {key:'lumaWarpSource',label:'Driven by',min:0,max:1,step:1,default:0,section:'Shape',description:'This layer, or the layer below it.'},
+ {key:'lumaWarpChannel',label:'Read from',min:0,max:4,step:1,default:0,section:'Shape',description:'Brightness, red, green, blue or saturation.'},
+ {key:'lumaWarpMode',label:'Luma direction',min:0,max:2,step:1,default:0,section:'Shape',description:'Push along an angle, along edges or along contours.'},
+ {key:'lumaWarpAngle',label:'Luma angle',min:-180,max:180,step:1,default:90,section:'Shape',description:'Direction of the push, in degrees.'},
+ {key:'lumaWarpThreshold',label:'Luma threshold',min:0,max:1,step:0.01,default:0,section:'Material',description:'Tones below this are left alone.'},
+ {key:'lumaWarpSoft',label:'Luma softness',min:0,max:1,step:0.01,default:0.2,section:'Material',description:'Softens the start of the push.'},
+ {key:'lumaWarpChroma',label:'Luma colour fringe',min:0,max:1,step:0.01,default:0,section:'Material',description:'Pushes red and blue by different amounts, so edges grow colour fringes.'},
+];
+/**
+ * Polar: wraps the picture into a circle or unrolls a circle. Off by default (Polar amount 0).
+ */
+export const POLAR_PARAMETERS:ParameterDefinition[]=[
+ {key:'polarAmount',label:'Polar amount',min:0,max:1,step:0.005,default:0,section:'Material',description:'How far the picture is wrapped. 0 is off.'},
+ {key:'polarMode',label:'Polar type',min:0,max:1,step:1,default:0,section:'Shape',description:'Wraps the picture into a circle, or unrolls a circle into a strip.'},
+ {key:'polarCentreX',label:'Polar centre X',min:-0.5,max:0.5,step:0.005,default:0,section:'Shape',description:'Horizontal position of the centre, as a share of the frame height.'},
+ {key:'polarCentreY',label:'Polar centre Y',min:-0.5,max:0.5,step:0.005,default:0,section:'Shape',description:'Vertical position of the centre.'},
+ {key:'polarTwist',label:'Polar twist',min:-4,max:4,step:0.01,default:0,section:'Shape',description:'Turns the picture further around the centre the further out it is.'},
+];
+/**
+ * Mirror: reflects the picture into halves, quarters or wedges. Off by default (Mirror amount 0).
+ */
+export const MIRROR_PARAMETERS:ParameterDefinition[]=[
+ {key:'mirrorAmount',label:'Mirror amount',min:0,max:1,step:0.01,default:0,section:'Material',description:'How much of the mirrored picture shows. 0 is off.'},
+ {key:'mirrorMode',label:'Mirror type',min:0,max:3,step:1,default:0,section:'Shape',description:'Left-right, top-bottom, four-way or kaleidoscope.'},
+ {key:'mirrorSegments',label:'Mirror segments',min:2,max:16,step:1,default:6,section:'Shape',description:'Wedges in the kaleidoscope.'},
+ {key:'mirrorAngle',label:'Mirror angle',min:-180,max:180,step:1,default:0,section:'Shape',description:'Turns the mirror lines, in degrees.'},
+ {key:'mirrorTurns',label:'Mirror turns per loop',min:-8,max:8,step:1,default:0,section:'Motion',description:'Whole turns the mirror makes per loop; the loop closes exactly.'},
+];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[
  {key:'toneContrast',label:'Tonal contrast',min:.5,max:2,step:.01,default:1,section:'Material',description:'Luminance contrast around the pivot, preserving colour ratios.'},
  {key:'tonePivot',label:'Contrast pivot',min:.05,max:.75,step:.01,default:.18,section:'Material',description:'Anchor for Tonal contrast. Neutral contrast leaves the pivot inactive.'},
@@ -119,6 +246,15 @@ export const FINISH_PARAMETERS:ParameterDefinition[]=[
  ...SLIT_PARAMETERS,
  ...GLOW_PARAMETERS,
  ...PRINT_PARAMETERS,
+ ...SPLIT_PARAMETERS,
+ ...GRADIENT_PARAMETERS,
+ ...GRADE_PARAMETERS,
+ ...KEY_PARAMETERS,
+ ...WARP_PARAMETERS,
+ ...LIQUID_PARAMETERS,
+ ...LUMA_WARP_PARAMETERS,
+ ...POLAR_PARAMETERS,
+ ...MIRROR_PARAMETERS,
 ];
 export const FINISH_KEYS=FINISH_PARAMETERS.map(p=>p.key);
 export const TOON_KEYS=TOON_PARAMETERS.map(p=>p.key);
@@ -126,3 +262,12 @@ export const FEEDBACK_KEYS=FEEDBACK_PARAMETERS.map(p=>p.key);
 export const SLIT_KEYS=SLIT_PARAMETERS.map(p=>p.key);
 export const GLOW_KEYS=GLOW_PARAMETERS.map(p=>p.key);
 export const PRINT_KEYS=PRINT_PARAMETERS.map(p=>p.key);
+export const SPLIT_KEYS=SPLIT_PARAMETERS.map(p=>p.key);
+export const GRADIENT_KEYS=GRADIENT_PARAMETERS.map(p=>p.key);
+export const GRADE_KEYS=GRADE_PARAMETERS.map(p=>p.key);
+export const KEY_KEYS=KEY_PARAMETERS.map(p=>p.key);
+export const WARP_KEYS=WARP_PARAMETERS.map(p=>p.key);
+export const LIQUID_KEYS=LIQUID_PARAMETERS.map(p=>p.key);
+export const LUMA_WARP_KEYS=LUMA_WARP_PARAMETERS.map(p=>p.key);
+export const POLAR_KEYS=POLAR_PARAMETERS.map(p=>p.key);
+export const MIRROR_KEYS=MIRROR_PARAMETERS.map(p=>p.key);

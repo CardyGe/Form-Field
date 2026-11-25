@@ -89,3 +89,17 @@ test('Map plays the Ember preset and routes bass, beat and MIDI to independent c
   const quiet = modulator.apply(show, projects(show), {}, 1);
   assert.deepEqual(withParams(source, quiet.params.get('ember')), source);
 });
+
+test('smoothing for a deleted link is let go, so a long show of edits does not keep it', () => {
+  let show = ok(base(), { type: 'addLink', link: link({}) });
+  show = ok(show, { type: 'addLink', link: link({ id: 'o', target: 'shape.a.opacity', amount: -1 }) });
+  const m = new Modulator();
+  m.apply(show, projects(show), { 'audio.bass': 1 }, 1 / 60);
+  const state = (m as unknown as { state: Map<string, number> }).state;
+  assert.equal(state.size, 2);
+  const fewer = { ...show, links: show.links!.filter(l => l.id === 'o') };
+  m.apply(fewer, projects(fewer), { 'audio.bass': 1 }, 1 / 60);
+  assert.deepEqual([...state.keys()], ['o']);
+  m.apply({ ...show, links: [] }, projects(show), {}, 1 / 60);
+  assert.equal(state.size, 0);
+});

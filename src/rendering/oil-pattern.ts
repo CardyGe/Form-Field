@@ -15,10 +15,13 @@
  * Cell size varies smoothly across the tile, as it does in real paint.
  */
 import * as THREE from 'three';
+import { ProgramsCompiling } from './program-gate';
 
 export const OIL_PATTERN_SIZE = 512;
 /** Steps until the patterns settle into stable shapes. */
 export const OIL_PATTERN_STEPS = 5000;
+/** How many of those steps one frame takes while a look is being made ready during a show. */
+const OIL_STEPS_PER_FRAME = 40;
 /** Concentration that separates ink from paint. */
 export const OIL_INK_LEVEL = .2;
 const MAX_TILES = 4;
@@ -101,8 +104,17 @@ export class OilPatternBaker {
   private readonly tiles = new Map<number, THREE.WebGLRenderTarget>();
   /** Milliseconds the last bake took to submit, for diagnostics. */
   lastBakeMs = 0;
+  /** A bake under way, kept between frames while it is paced. */
+  private baking: { seed: number; pairs: THREE.WebGLRenderTarget[][]; result: THREE.WebGLRenderTarget; seeded: number; step: number; pair: number } | null = null;
+  private dropBake(): void {
+    if (!this.baking) return;
+    for (const [a, b] of this.baking.pairs) { a.dispose(); b.dispose(); }
+    this.baking.result.dispose();
+    this.baking = null;
+  }
 
-  constructor(private readonly renderer: THREE.WebGLRenderer) {
+  /** `paced`: whether to spread a bake over frames (a look being made ready during a show) rather than finish it at once. */
+  constructor(private readonly renderer: THREE.WebGLRenderer, private readonly paced: () => boolean = () => false) {
     const uniforms = { uSize: { value: OIL_PATTERN_SIZE }, uSeed: { value: 0 }, uPair: { value: 0 } };
     const make = (fragmentShader: string, extra: Record<string, THREE.IUniform> = {}) => new THREE.ShaderMaterial({
       vertexShader: vertex, fragmentShader, uniforms: { ...uniforms, ...extra },
@@ -122,29 +134,36 @@ export class OilPatternBaker {
     if (cached) { this.tiles.delete(seed); this.tiles.set(seed, cached); return cached.texture; }
     const started = performance.now();
     const previous = this.renderer.getRenderTarget();
-    const pairs = [0, 1].map(() => [simTarget(THREE.FloatType, THREE.NearestFilter), simTarget(THREE.FloatType, THREE.NearestFilter)]);
+    if (this.baking && this.baking.seed !== seed) this.dropBake();
+    const bake = this.baking ??= { seed, pairs: [0, 1].map(() => [simTarget(THREE.FloatType, THREE.NearestFilter), simTarget(THREE.FloatType, THREE.NearestFilter)]), result: simTarget(THREE.HalfFloatType, THREE.LinearFilter), seeded: 0, step: 0, pair: 0 };
+    const { pairs, result } = bake;
     for (const material of [this.seedMaterial, this.stepMaterial, this.packMaterial]) material.uniforms.uSeed.value = seed % 9973;
     const draw = (material: THREE.ShaderMaterial, output: THREE.WebGLRenderTarget) => {
       this.quad.material = material;
       this.renderer.setRenderTarget(output);
       this.renderer.render(this.scene, this.camera);
     };
-    pairs.forEach(([first], pair) => { this.seedMaterial.uniforms.uPair.value = pair; draw(this.seedMaterial, first); });
-    for (let step = 0; step < OIL_PATTERN_STEPS; step++) {
-      for (let pair = 0; pair < 2; pair++) {
-        const [from, to] = step % 2 === 0 ? pairs[pair] : [pairs[pair][1], pairs[pair][0]];
-        this.stepMaterial.uniforms.uPair.value = pair;
+    // Each draw is counted only once it has been made, so a bake that is postponed carries on exactly where it stopped.
+    try {
+      for (; bake.seeded < 2; bake.seeded++) { this.seedMaterial.uniforms.uPair.value = bake.seeded; draw(this.seedMaterial, pairs[bake.seeded][0]); }
+      const stopAt = this.paced() ? Math.min(OIL_PATTERN_STEPS, bake.step + OIL_STEPS_PER_FRAME) : OIL_PATTERN_STEPS;
+      while (bake.step < stopAt) {
+        const [from, to] = bake.step % 2 === 0 ? pairs[bake.pair] : [pairs[bake.pair][1], pairs[bake.pair][0]];
+        this.stepMaterial.uniforms.uPair.value = bake.pair;
         this.stepMaterial.uniforms.uState.value = from.texture;
         draw(this.stepMaterial, to);
+        if (++bake.pair === 2) { bake.pair = 0; bake.step++; }
       }
+      if (bake.step < OIL_PATTERN_STEPS) throw new ProgramsCompiling();
+      const finalIndex = OIL_PATTERN_STEPS % 2;
+      this.packMaterial.uniforms.uFirst.value = pairs[0][finalIndex].texture;
+      this.packMaterial.uniforms.uSecond.value = pairs[1][finalIndex].texture;
+      draw(this.packMaterial, result);
+    } finally {
+      this.renderer.setRenderTarget(previous);
     }
-    const finalIndex = OIL_PATTERN_STEPS % 2;
-    const result = simTarget(THREE.HalfFloatType, THREE.LinearFilter);
-    this.packMaterial.uniforms.uFirst.value = pairs[0][finalIndex].texture;
-    this.packMaterial.uniforms.uSecond.value = pairs[1][finalIndex].texture;
-    draw(this.packMaterial, result);
-    this.renderer.setRenderTarget(previous);
     for (const [a, b] of pairs) { a.dispose(); b.dispose(); }
+    this.baking = null;
     this.tiles.set(seed, result);
     // A few layers with different seeds can share the cache without regrowing.
     while (this.tiles.size > MAX_TILES) {
@@ -163,7 +182,7 @@ export class OilPatternBaker {
     return Float32Array.from(bytes, THREE.DataUtils.fromHalfFloat);
   }
 
-  release(): void { for (const tile of this.tiles.values()) tile.dispose(); this.tiles.clear(); }
+  release(): void { this.dropBake(); for (const tile of this.tiles.values()) tile.dispose(); this.tiles.clear(); }
 
   dispose(): void {
     this.release();

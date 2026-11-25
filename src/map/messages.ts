@@ -1,17 +1,25 @@
 import type { Project } from '../shared/types';
-import { usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow } from './show';
+import { MIDIMIX_MAP, midimixInputs } from '../morphogen/midimix-map';
+import { MAX_ID_LENGTH, MAX_SHAPES, usesLive, type CurvePoint, type Point, type ShowDocument, type WireShow } from './show';
 import { shapeValidity } from './outline';
 import { EMBER_SMOKE_INPUTS } from '../react/ember-smoke';
 import { acceptSignals, type Signals } from '../react/signals';
+import { wallGuardPolicy } from '../meridian/wall-guard';
 import { ownCornersPinnable } from './placement';
 import type { LiveSettings } from '../live/settings';
+import { clipSourceIds } from '../perform/set';
+import type { ZonePicture } from '../perform/resolve';
+import { ZONE_COUNT } from '../perform/types';
+import type { PerformValues, WallLaunch } from '../perform/wall-perform';
 
 export type MapMessage =
   /** fadeMs: this show is a scene switch, crossfading over that long. */
   | { type: 'show'; show: WireShow; fadeMs?: number }
-  /** One source's composition, sent once per revision. */
-  | { type: 'source'; id: string; revision: number; project: Project }
+  /** One source's composition, sent once per revision. crossfade: a draft applied during a show, held until ready and then faded in. */
+  | { type: 'source'; id: string; revision: number; project: Project; crossfade?: true }
   | { type: 'blackout'; on: boolean }
+  /** The wall's flash guard. Not saved: every launch starts with it on. */
+  | { type: 'flashGuard'; on: boolean }
   | { type: 'testGrid'; on: boolean }
   | { type: 'freeze'; on: boolean }
   | { type: 'identify'; shapeId: string | null }
@@ -29,7 +37,21 @@ export type MapMessage =
   /** Open Live's camera again (after it was unplugged, or refused and then allowed). */
   | { type: 'liveRetry' }
   /** Stage 6: every video that cannot play loads again. */
-  | { type: 'videoRetry' };
+  | { type: 'videoRetry' }
+  /** Perform: a show starts over the Map show, or ends and hands the wall back. */
+  | { type: 'performStart'; zones: ZonePicture[]; phaseOffsets?: Record<string, number> }
+  | { type: 'performEnd' }
+  /** The sources to keep warm off-screen. */
+  | { type: 'performArm'; sourceIds: string[] }
+  /** An exact-time launch. The same id replaces it. */
+  | { type: 'performLaunch'; launch: WallLaunch }
+  | { type: 'performCancel'; launchId: string }
+  /** Per-frame brightness, hue, speed and master. */
+  | { type: 'performValues'; values: PerformValues }
+  /** A show file was opened: linked Meridian moves from before it end. A scene change never sends this. */
+  | { type: 'performanceReset' }
+  /** Installation mode: whether Meridian's autopilot steers Evolve on the wall, and its pace in beats. */
+  | { type: 'installation'; autopilot: boolean; everyBeats: number };
 
 /** Live's settings travel under the same limit as on Live's own output. */
 export const LIVE_SETTINGS_LIMIT = 16 * 1024;
@@ -77,7 +99,10 @@ export function toWire(show: ShowDocument): WireShow {
     // Not rounded: a pinnable quad at the edge of the rules could round to one that is not.
     stageCorners: show.stageCorners,
     usesLive: usesLive(show),
+    // Only when true, so what a show without Meridian sends is unchanged.
+    ...(wallGuardPolicy(show.sources.map(s => s.project)).on ? { guardWall: true } : {}),
     videos: show.videos,
+    clipSourceIds: clipSourceIds(show.performance),
   };
 }
 
@@ -101,14 +126,38 @@ const within = (value: unknown, limit: number): boolean => { try { const text = 
 const idOrNull = (value: unknown) => value === null || typeof value === 'string';
 const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
 
+/** Perform's limits: at most 8 armed sources (the renderer budget); a launch id is a clip-sized id plus ":ceiling", with room to spare. */
+const PERFORM_ARMED_LIMIT = 8;
+const LAUNCH_ID_LIMIT = 128;
+const BAR_MS_LIMIT = 60000;
+const BLEND_MS_LIMIT = 3600000;
+const BLEND_KINDS: unknown[] = ['cut', 'fade', 'dip', 'dissolve'];
+// Array.from first: every() skips the holes of a sparse array, and structured clone keeps them.
+const listOf = (value: unknown, limit: number, check: (item: unknown) => boolean) => Array.isArray(value) && value.length <= limit && Array.from(value).every(item => check(item));
+const sized = (value: unknown, limit: number) => typeof value === 'string' && value !== '' && value.length <= limit;
+const performId = (value: unknown) => sized(value, MAX_ID_LENGTH);
+const performIdOrNull = (value: unknown) => value === null || performId(value);
+const zoneIndex = (value: unknown) => Number.isInteger(value) && (value as number) >= 0 && (value as number) < ZONE_COUNT;
+const everyZone = (value: unknown, check: (item: unknown) => boolean) => Array.isArray(value) && value.length === ZONE_COUNT && listOf(value, ZONE_COUNT, check);
+const acceptPicture = (z: unknown) => plain(z) && listOf(z.shapeIds, MAX_SHAPES, performId) && performIdOrNull(z.sourceId) && typeof z.launched === 'boolean';
+const acceptBlend = (b: unknown) => plain(b) && BLEND_KINDS.includes(b.kind) && finite(b.durationMs) && (b.durationMs as number) >= 0 && (b.durationMs as number) <= BLEND_MS_LIMIT;
+const acceptChange = (c: unknown) => plain(c) && zoneIndex(c.zone) && performIdOrNull(c.sourceId) && listOf(c.shapeIds, MAX_SHAPES, performId) && acceptBlend(c.blend) && finite(c.phaseOffsetBeats);
+const acceptLaunch = (l: unknown) => plain(l) && sized(l.id, LAUNCH_ID_LIMIT) && finite(l.atMs) && finite(l.barMs) && (l.barMs as number) >= 1 && (l.barMs as number) <= BAR_MS_LIMIT
+  && listOf(l.changes, ZONE_COUNT, acceptChange) && new Set((l.changes as { zone: number }[]).map(c => c.zone)).size === (l.changes as unknown[]).length;
+const acceptValueZone = (z: unknown) => plain(z) && finite(z.brightness) && finite(z.hueDeg) && finite(z.speed);
+const acceptValues = (v: unknown) => plain(v) && finite(v.master) && everyZone(v.zones, acceptValueZone);
+// At most one offset per zone's source. Object.entries reads own keys only, so __proto__ is checked like any other id.
+const acceptOffsets = (o: unknown) => o === undefined || (plain(o) && Object.keys(o).length <= ZONE_COUNT && Object.entries(o).every(([id, beats]) => performId(id) && finite(beats)));
+
 /** Checks the envelope and size only. The show's geometry and a composition's contents are checked where they are used. */
 export function acceptMapMessage(value: unknown): value is MapMessage {
   if (!plain(value)) return false;
   if (!within(value, value.type === 'source' ? SOURCE_MESSAGE_LIMIT : MAP_MESSAGE_LIMIT)) return false;
   switch (value.type) {
     case 'show': return plain(value.show) && (value.fadeMs === undefined || (finite(value.fadeMs) && (value.fadeMs as number) >= 0 && (value.fadeMs as number) <= 30000));
-    case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && (value.revision as number) >= 0 && plain(value.project);
+    case 'source': return typeof value.id === 'string' && value.id !== '' && Number.isInteger(value.revision) && (value.revision as number) >= 0 && plain(value.project) && (value.crossfade === undefined || value.crossfade === true);
     case 'blackout':
+    case 'flashGuard':
     case 'testGrid':
     case 'freeze': return typeof value.on === 'boolean';
     case 'identify': return idOrNull(value.shapeId);
@@ -117,18 +166,33 @@ export function acceptMapMessage(value: unknown): value is MapMessage {
     case 'signals': return within(value, SIGNALS_LIMIT) && acceptSignals(value.signals);
     case 'fade': return finite(value.ms) && (value.ms as number) >= 0 && (value.ms as number) <= 30000;
     case 'liveSettings': return (value.settings === null || plain(value.settings)) && within(value, LIVE_SETTINGS_LIMIT);
-    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': return true;
+    case 'liveClear': case 'liveCaptureRoom': case 'liveRetry': case 'videoRetry': case 'performanceReset': return true;
+    case 'installation': return typeof value.autopilot === 'boolean' && finite(value.everyBeats) && (value.everyBeats as number) >= 16 && (value.everyBeats as number) <= 128;
+    case 'performStart': return everyZone(value.zones, acceptPicture) && acceptOffsets(value.phaseOffsets);
+    case 'performEnd': return true;
+    case 'performArm': return listOf(value.sourceIds, PERFORM_ARMED_LIMIT, performId);
+    case 'performLaunch': return acceptLaunch(value.launch);
+    case 'performCancel': return sized(value.launchId, LAUNCH_ID_LIMIT);
+    case 'performValues': return acceptValues(value.values);
     default: return false;
   }
 }
 
+/** `tempo.external` is set by the operator window when the tempo comes from MIDI, tap or a fixed number. */
+const MERIDIAN_INPUTS = ['audio.bass', 'audio.mids', 'audio.highs', 'audio.level', 'beat.pulse', 'tempo.bpm', 'tempo.external'];
+
 /**
  * The signals the wall needs each frame: what Map's links listen to, the tempo (for tempo sync), and, while the show
- * plays Live, what Live's own links listen to.
+ * plays Live, what Live's own links listen to. During a Perform show also the tempo's speed: a video locked to the
+ * tempo plays at a rate worked out from it, and the zone's speed knob only works when the wall knows it.
  */
-export function wallInputs(show: ShowDocument, live: LiveSettings | null): Set<string> {
+export function wallInputs(show: ShowDocument, live: LiveSettings | null, perform = false): Set<string> {
   const inputs = new Set<string>(['tempo.beat', 'tempo.phase', ...show.links.map(l => l.input)]);
+  if (perform) inputs.add('tempo.bpm');
   if (live && usesLive(show)) for (const l of live.links) inputs.add(l.input);
+  if (live?.look === 'morphogen' && usesLive(show)) for (const input of midimixInputs(MIDIMIX_MAP)) inputs.add(input);
   if (show.sources.some(s => s.project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1))) for (const input of EMBER_SMOKE_INPUTS) inputs.add(input);
+  // Meridian follows the music on the wall as it does in Studio, so it needs the sound and the tempo's source.
+  if (show.sources.some(s => s.project.layers.some(l => l.visible && l.kind === 'meridian'))) for (const input of MERIDIAN_INPUTS) inputs.add(input);
   return inputs;
 }

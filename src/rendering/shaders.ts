@@ -12,7 +12,7 @@ varying vec2 vUv;
 ${sourceViewGLSL}
 uniform sampler2D uImage;
 uniform vec2 uFit;
-uniform float uMirror,uRepeat;
+uniform float uMirror,uRepeat,uExactEdge;
 void main() {
   vec2 uv=(sourceUV(vUv)-.5)/uFit+.5;
   // Derivatives belong to the unwrapped domain: fract() would introduce a
@@ -22,7 +22,10 @@ void main() {
   if(uRepeat>1.)uv=fract(uv*uRepeat);
   if(mod(uMirror,2.)>.5){uv.x=1.-uv.x;dx.x=-dx.x;dy.x=-dy.x;}
   if(uMirror>1.5){uv.y=1.-uv.y;dx.y=-dx.y;dy.y=-dy.y;}
-  vec4 c=(uMirror<.5&&uRepeat<1.5)?texture2D(uImage,uv):textureGrad(uImage,uv,dx,dy);
+  // Beside the early return above, automatic derivatives can pick a coarse mip and draw a
+  // one-pixel line of the picture's average colour. uExactEdge avoids it; it stays off
+  // outside the Time modes so existing renders do not change.
+  vec4 c=(uMirror<.5&&uRepeat<1.5&&uExactEdge<.5)?texture2D(uImage,uv):textureGrad(uImage,uv,dx,dy);
   gl_FragColor=vec4(c.rgb*c.a,c.a);
 }
 `;
@@ -48,9 +51,10 @@ uniform float uColorMode,uColorSteps,uColorMix,uColorOffset;
 uniform vec3 uGradePalette[6];
 uniform float uToonMix,uToonBands,uToonOffset,uToonCycles,uToonSoftness,uToonOutline,uToonOutlineColor,uLoopPhase;
 uniform sampler2D uGlowLevel0,uGlowLevel1,uGlowLevel2,uGlowLevel3,uGlowLevel4;
-uniform float uGlowWeights[5];
+uniform vec3 uGlowChannels[5];
+uniform sampler2D uGlowStreakMap;
 uniform vec3 uGlowColour;
-uniform float uGlowOn,uGlowTint;
+uniform float uGlowOn,uGlowTint,uGlowStreak,uGlowMix;
 uniform float uPrintOn,uPrintCells,uPrintOffset;
 uniform float uPrintAngles[4];
 uniform float uPrintMix,uPrintType,uPrintDot,uPrintMatrix,uPrintFloor,uPrintCeiling,uPrintMax,uPrintGain,uPrintSoft,uPrintInvert;
@@ -496,9 +500,10 @@ void main() {
   vec3 glow=vec3(0.);
   if(uGlowOn>.5) {
     vec2 g=(uSourceViewInverse*vec3(uv,1.)).xy;
-    glow=uGlowWeights[0]*texture2D(uGlowLevel0,g).rgb+uGlowWeights[1]*texture2D(uGlowLevel1,g).rgb
-      +uGlowWeights[2]*texture2D(uGlowLevel2,g).rgb+uGlowWeights[3]*texture2D(uGlowLevel3,g).rgb
-      +uGlowWeights[4]*texture2D(uGlowLevel4,g).rgb;
+    glow=uGlowChannels[0]*texture2D(uGlowLevel0,g).rgb+uGlowChannels[1]*texture2D(uGlowLevel1,g).rgb
+      +uGlowChannels[2]*texture2D(uGlowLevel2,g).rgb+uGlowChannels[3]*texture2D(uGlowLevel3,g).rgb
+      +uGlowChannels[4]*texture2D(uGlowLevel4,g).rgb;
+    if(uGlowStreak>.0001)glow+=uGlowStreak*uGlowMix*texture2D(uGlowStreakMap,g).rgb;
     if(uGlowTint>.5)glow=uGlowColour*max(glow.r,max(glow.g,glow.b));
     // Saturation, Hue and Exposure act on the glow as they do on the layer.
     if(abs(uSaturation-1.)>.000001 || abs(uHue)>.000001 || abs(uExposure-1.)>.000001)glow=grade(glow);

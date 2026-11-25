@@ -19,10 +19,18 @@ export function bloomWeights(amount: number, size: number): number[] {
   });
 }
 
+/** Per-level weights for red, green and blue. Spread moves red toward the tight
+ * levels and blue toward the wide ones; at 0 all three channels are the plain weights. */
+export function bloomChannelWeights(amount: number, size: number, spread: number): [number, number, number][] {
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  const red = bloomWeights(amount, clamp(size - .35 * spread)), green = bloomWeights(amount, size), blue = bloomWeights(amount, clamp(size + .35 * spread));
+  return green.map((g, i) => [red[i], g, blue[i]]);
+}
+
 /** Glow cannot run on tiled patterns (the source is a tile, not the frame);
- * the Oscilloscope has its own bloom. */
+ * the Oscilloscope and Meridian have their own bloom. */
 export function supportsGlow(layer: Pick<Layer, 'kind'>): boolean {
-  return layer.kind !== 'graphic' && layer.kind !== 'scope';
+  return layer.kind !== 'graphic' && layer.kind !== 'scope' && layer.kind !== 'smokecloud' && layer.kind !== 'meridian';
 }
 
 export function glowActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>): boolean {
@@ -33,9 +41,11 @@ export function glowActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>
  * for; its taps then move closer together by the same share (reach), so the
  * blur covers the same part of the frame. */
 export function bloomLevelSize(index: number, width: number, height: number): { width: number; height: number; reach: number } {
-  const h = Math.max(2, Math.min(BLOOM_HEIGHTS[index], height));
-  return { width: Math.max(2, Math.round(h * width / height)), height: h, reach: h / BLOOM_HEIGHTS[index] };
+  const h = bloomLevelHeight(index, height);
+  return { width: bloomLevelWidth(h, width, height), height: h, reach: h / BLOOM_HEIGHTS[index] };
 }
+const bloomLevelHeight = (index: number, height: number) => Math.max(2, Math.min(BLOOM_HEIGHTS[index], height));
+const bloomLevelWidth = (levelHeight: number, width: number, height: number) => Math.max(2, Math.round(levelHeight * width / height));
 
 /** A half-float colour target for light that is blurred or summed. */
 export function lightTarget(mipmaps = false): THREE.WebGLRenderTarget {
@@ -70,6 +80,7 @@ type Draw = (material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) =>
 /** Five blurred copies of a light texture, each blurring the one before it at half the size. */
 export class BloomPyramid {
   private readonly levels = BLOOM_HEIGHTS.map(() => [lightTarget(), lightTarget()] as const);
+  private readonly result: THREE.Texture[] = [];
   // One direction of a Gaussian blur; run across, then down.
   private readonly blur = new THREE.ShaderMaterial({
     vertexShader: fullscreenVertex,
@@ -87,23 +98,108 @@ export class BloomPyramid {
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
 
-  /** Blurs the source and returns the five levels, tightest first. With wrap
+  /** Blurs the source and returns the five levels, tightest first, in an array reused by the next call. With wrap
    * the levels repeat at the frame edges, for a source that tiles.
    * Toggling the wrap reallocates the level targets (see setWrap). */
   render(source: THREE.Texture, width: number, height: number, draw: Draw, wrap = false): THREE.Texture[] {
-    const blur = this.blur.uniforms;
-    return this.levels.map(([across, down], i) => {
+    const blur = this.blur.uniforms, step = blur.uStep.value as THREE.Vector2, result = this.result;
+    let from = source;
+    for (let i = 0; i < this.levels.length; i++) {
+      const [across, down] = this.levels[i];
       setWrap(across, wrap); setWrap(down, wrap);
-      const { width: w, height: h, reach } = bloomLevelSize(i, width, height);
+      const h = bloomLevelHeight(i, height), w = bloomLevelWidth(h, width, height), reach = h / BLOOM_HEIGHTS[i];
       if (across.width !== w || across.height !== h) { across.setSize(w, h); down.setSize(w, h); }
-      blur.uSource.value = source; (blur.uStep.value as THREE.Vector2).set(reach / w, 0); draw(this.blur, across);
-      blur.uSource.value = across.texture; (blur.uStep.value as THREE.Vector2).set(0, reach / h); draw(this.blur, down);
-      return source = down.texture;
-    });
+      blur.uSource.value = from; step.set(reach / w, 0); draw(this.blur, across);
+      blur.uSource.value = across.texture; step.set(0, reach / h); draw(this.blur, down);
+      from = result[i] = down.texture;
+    }
+    return result;
   }
 
   dispose(): void {
     this.blur.dispose();
     for (const [across, down] of this.levels) { across.dispose(); down.dispose(); }
+  }
+}
+
+/** Streak length per pass, in pixels of a 1080-line frame. It doubles each pass. */
+export const STREAK_STEPS = [6, 12, 24, 48];
+
+/** The passes for a render height. Shorter steps lead in until the first is at most
+ * one texel of the half-size bright pass, so a small point cannot fall between taps
+ * and break into beads at 1080 and 4K. */
+export function streakSteps(height: number): number[] {
+  const texel = 1080 / Math.max(1, Math.ceil(height / 2)), steps = [...STREAK_STEPS];
+  while (steps[0] > texel) steps.unshift(steps[0] / 2);
+  return steps;
+}
+
+/**
+ * Stretches bright light along one direction (and, with cross, along the one
+ * at right angles). Each pass blurs across five taps at twice the step before
+ * it, at a quarter of the render's size, and larger renders add shorter lead-in
+ * passes (see streakSteps). Weights sum to 1, so one streak carries no more light
+ * than the points it came from; Cross adds two streaks, so it can carry twice
+ * that. The step is a share of the frame height, so the streak is the same in a
+ * preview and a 4K export.
+ */
+export class StreakBlur {
+  private targets: THREE.WebGLRenderTarget[] | null = null;
+  private readonly material = new THREE.ShaderMaterial({
+    vertexShader: fullscreenVertex,
+    fragmentShader: /* glsl */`
+      precision highp float; varying vec2 vUv; uniform sampler2D uSource; uniform vec2 uStep; uniform vec3 uTaps;
+      void main() {
+        vec3 sum=texture2D(uSource,vUv).rgb*uTaps.x;
+        sum+=(texture2D(uSource,vUv+uStep).rgb+texture2D(uSource,vUv-uStep).rgb)*uTaps.y;
+        sum+=(texture2D(uSource,vUv+uStep*2.).rgb+texture2D(uSource,vUv-uStep*2.).rgb)*uTaps.z;
+        gl_FragColor=vec4(sum,1.);
+      }`,
+    uniforms: { uSource: { value: null }, uStep: { value: new THREE.Vector2() }, uTaps: { value: new THREE.Vector3() } },
+    depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
+  });
+  private readonly add = new THREE.ShaderMaterial({
+    vertexShader: fullscreenVertex,
+    fragmentShader: /* glsl */`
+      precision highp float; varying vec2 vUv; uniform sampler2D uSource, uOther;
+      void main() { gl_FragColor=vec4(texture2D(uSource,vUv).rgb+texture2D(uOther,vUv).rgb,1.); }`,
+    uniforms: { uSource: { value: null }, uOther: { value: null } },
+    depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
+  });
+
+  /** Streaks the source along angle (degrees from horizontal). Targets are made on first use. */
+  render(source: THREE.Texture, width: number, height: number, angle: number, cross: boolean, draw: Draw, wrap = false): THREE.Texture {
+    this.targets ??= [lightTarget(), lightTarget()];
+    if (cross && this.targets.length < 4) this.targets.push(lightTarget(), lightTarget());
+    const w = Math.max(2, Math.ceil(width / 4)), h = Math.max(2, Math.ceil(height / 4)), aspect = width / height;
+    for (const t of this.targets) { setWrap(t, wrap); if (t.width !== w || t.height !== h) t.setSize(w, h); }
+    const uniforms = this.material.uniforms, taps = uniforms.uTaps.value as THREE.Vector3;
+    taps.set(.2042, .1802, .1238);
+    const norm = taps.x + 2 * taps.y + 2 * taps.z; taps.divideScalar(norm);
+    const chain = (first: number, theta: number): THREE.WebGLRenderTarget => {
+      let from = source, last = this.targets![first];
+      streakSteps(height).forEach((length, p) => {
+        last = this.targets![first + (p % 2)];
+        // The step is a share of the frame height, turned into texture units.
+        const k = length / 1080;
+        (uniforms.uStep.value as THREE.Vector2).set(Math.cos(theta) * k / aspect, Math.sin(theta) * k);
+        uniforms.uSource.value = from; draw(this.material, last); from = last.texture;
+      });
+      return last;
+    };
+    const theta = angle * Math.PI / 180, one = chain(0, theta);
+    if (!cross) return one.texture;
+    const other = chain(2, theta + Math.PI / 2);
+    this.add.uniforms.uSource.value = one.texture; this.add.uniforms.uOther.value = other.texture;
+    // The pass count varies with height, so write to whichever target the first chain did not end on.
+    const sum = one === this.targets[0] ? this.targets[1] : this.targets[0];
+    draw(this.add, sum);
+    return sum.texture;
+  }
+
+  dispose(): void {
+    this.material.dispose(); this.add.dispose();
+    for (const t of this.targets ?? []) t.dispose();
+    this.targets = null;
   }
 }

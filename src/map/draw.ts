@@ -17,6 +17,8 @@ export interface DrawOptions {
   blackout: boolean; testGrid: boolean; identifyId: string | null; crosshair: Point | null;
   selectedId: string | null; selectedIndex: number | null; outlinesOnly: boolean; invalidIds: string[];
   solo?: string[]; operator?: boolean;
+  /** The wall's flash guard. On unless the operator has turned it off for this session. */
+  flashGuard?: boolean;
 }
 /**
  * rect: points = [top-left, bottom-right]; line: points = [from, to].

@@ -1,25 +1,31 @@
 import {FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS, PRINT_KEYS} from '../core/finishing';
 import { SLIT_SHAPES, supportsSlitScan } from '../rendering/slitscan';
-import { supportsFeedback } from '../rendering/feedback';
+import { kaleidoscopeInput, supportsFeedback } from '../rendering/feedback';
 import { supportsGlow } from '../rendering/bloom';
 import { supportsPrint } from '../rendering/print-screen';
+import { PALETTE_LIBRARY } from '../core/palettes';
+import { KALEIDOSCOPE_MORPHS, KALEIDOSCOPE_MOTIFS, KALEIDOSCOPE_OWN_KEYS, KALEIDOSCOPE_SOURCES, KALEIDOSCOPE_SYMMETRIES, kaleidoscopeDrawsMotif, kaleidoscopeHidden, kaleidoscopeRouteHidden } from './kaleidoscope-controls';
 import { INSTRUMENTS, isInstrument, PROJECTION_LOOK_IDS } from '../core/instruments';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from 'react';
 import type { ExportFormat, Supersample, ExportJob, ExportProgress, Layer, LayerKind, Modulation, ParameterDefinition, Project, StudioStatus } from '../shared/types';
-import { applyPreset, createLayer, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FRACTAL_FAMILIES, FRACTAL_VARIANTS, FRACTAL_PROJECTION_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported } from '../core/project';
+import { KALEIDOSCOPE_INPUT, applyPreset, assertImportableImage, createLayer, MAX_IMPORT_SIDE, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FRACTAL_FAMILIES, FRACTAL_VARIANTS, FRACTAL_PROJECTION_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported } from '../core/project';
 import { frameCount, phaseAtFrame, sampleModulation } from '../core/timeline';
 import { isEvolving } from '../core/playback';
 import { SurfaceEditor } from './SurfaceEditor';
 import { LayerShapeControls, Parameter, ChoiceParameter, Icon, patterns, mirrorModes, surfaceVariants, sculptureForms } from './LayerControls';
 import { FinishSections } from './FinishControls';
+import { visibleBelow } from '../rendering/warp';
 import { GRAPHIC_FAMILIES, GRAPHIC_VARIANTS } from '../core/graphics';
 import graphicThumb from './assets/graphics.png';
 import surfaceThumb from './assets/surface.png';
 import sculptureThumb from './assets/sculpture.png';
 import fractalThumb from './assets/fractal.png';
+import kaleidoscopeThumb from './assets/kaleidoscope.png';
 import oilThumb from './assets/oil.png';
 import liquidThumb from './assets/liquid.png';
+import smokeCloudThumb from './assets/smokecloud.png';
 import scopeThumb from './assets/scope.png';
+import meridianThumb from './assets/meridian.png';
 import super8Thumb from './assets/super8.png';
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import { Preview } from './Preview';
@@ -30,10 +36,16 @@ import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
 import LivePanel from './LivePanel';
 import { KIND_LABELS } from '../core/library';
-import { beginStudioEdit, endStudioEdit, onStudioWallWarning, studioEdit } from './useMap';
+import { applyClipDraft, beginClipCopyDraft, beginClipEdit, beginStudioEdit, clipApplyStarting, clipDraftIsCopy, clipDraftOnWall, clipDraftZones, discardClipDraft, endStudioEdit, onClipApplySettled, onClipDraftFailed, onStudioWallWarning, reopenFailedDraft, studioEdit, wallStaysOpen, type ClipCopy } from './useMap';
+import { performService } from '../perform/service';
 import { projectForStudioSave, stashStudio, type ShapeEdit } from './studio-edit';
 import MapPanel from './MapPanel';
+import PerformPanel from './PerformPanel';
+import { MeridianControls, useMeridianPerformance } from './MeridianControls';
+import { listensToMusic, motionParameters } from '../meridian/panel';
+import { motionIgnored } from '../meridian/parameters';
 import { sameCanvasValues } from '../core/canvas-interaction';
+import { loadInstallation } from './installation';
 
 const TAU = Math.PI * 2;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -51,9 +63,11 @@ function lookCaption(preset: typeof PRESETS[number]): string {
   if (preset.kind === 'graphic') return `${GRAPHIC_FAMILIES[style]} · ${GRAPHIC_VARIANTS[style][variant] ?? 'Custom'}`;
   if (preset.kind === 'oil') return 'Paint · glass · cellular ink';
   if (preset.kind === 'liquid') return 'Oil droplets · dye · projector';
+  if (preset.kind === 'smokecloud') return 'Fluid smoke · fine points · ring';
   if (preset.kind === 'scope') return preset.params.scopeMode === 1 ? 'Filaments · rolling smoke' : 'Glowing line · signal · beam';
   if (preset.kind === 'fractal') return FRACTAL_PROJECTION_LOOK_IDS.includes(preset.id)
     ? preset.description : `${FRACTAL_FAMILIES[style]} · ${FRACTAL_VARIANTS[style][variant]}`;
+  if (preset.kind === 'kaleidoscope') return `${KALEIDOSCOPE_MOTIFS[Math.round(preset.params.motif ?? 0)]} · ${preset.params.spiral ? 'Spiral' : KALEIDOSCOPE_SYMMETRIES[Math.round(preset.params.group ?? 0)]}`;
   return `${sculptureForms[Math.round(preset.params.form ?? 0)]} · Sculpture`;
 }
 
@@ -121,15 +135,18 @@ const defaultMod = (kind: Modulation['kind']): Modulation => ({ kind, cycles: 1,
 
 const instrumentThumbnails = import.meta.glob<string>('./assets/instruments/*.png', { eager: true, query: '?url', import: 'default' });
 const projectionThumbnails = import.meta.glob<string>('./assets/projection/*.png', { eager: true, query: '?url', import: 'default' });
-const startingLooks:Partial<Record<LayerKind,string>>={livingink:'tidal-pigment',relief:'breathing-facade'};
+const startingLooks:Partial<Record<LayerKind,string>>={livingink:'tidal-pigment',relief:'breathing-facade',kaleidoscope:'kaleido-neon-bloom'};
 const instrumentCatalogue = [
   { kind: 'surface', name: 'Surface', caption: '4 patterns · 12 variants', image: surfaceThumb, label: 'Add surface' },
   { kind: 'sculpture', name: 'Sculpture', caption: 'Shell · bloom · ribbon · knot', image: sculptureThumb, label: 'Add sculpture' },
-  { kind: 'fractal', name: 'Fractals', caption: 'Kaleidoscope · Julia · Mandelbox · Portal', image: fractalThumb, label: 'Add fractal' },
+  { kind: 'fractal', name: 'Fractals', caption: 'Folded Lace · Julia · Mandelbox · Portal', image: fractalThumb, label: 'Add fractal' },
+  { kind: 'kaleidoscope', name: 'Kaleidoscope', caption: 'Mirrors · tiles · spirals', image: kaleidoscopeThumb, label: 'Add Kaleidoscope' },
   { kind: 'super8', name: 'Super 8 Paint', caption: 'Paint · moving film · projector', image: super8Thumb, label: 'Add Super 8 Paint' },
   { kind: 'oil', name: 'Oil Slides', caption: 'Paint · glass · cellular ink', image: oilThumb, label: 'Add oil slides' },
   { kind: 'liquid', name: 'Liquid Light', caption: 'Oil droplets · dye · projector', image: liquidThumb, label: 'Add liquid light' },
   { kind: 'scope', name: 'Oscilloscope', caption: 'Glowing line · signal · beam', image: scopeThumb, label: 'Add oscilloscope' },
+  { kind: 'smokecloud', name: 'Smoke Cloud', caption: 'Fluid smoke · fine points · ring', image: smokeCloudThumb, label: 'Add smoke cloud' },
+  { kind: 'meridian', name: 'Meridian', caption: 'Rings · spokes · living light', image: meridianThumb, label: 'Add Meridian' },
   { kind: 'graphic', name: 'Graphic Patterns', caption: 'Waves · circles · tiles · paths', image: graphicThumb, label: 'Add graphic patterns' },
   ...INSTRUMENTS.map(info => ({ kind: info.kind, name: info.name, caption: info.description, image: projectionThumbnails[`./assets/projection/${startingLooks[info.kind]}.png`]??instrumentThumbnails[`./assets/instruments/${info.kind}.png`], label: `Add ${info.name}` })),
 ] satisfies {kind: LayerKind; name: string; caption: string; image: string; label: string}[];
@@ -143,6 +160,7 @@ export default function App() {
   const startupTask = useRef<Promise<void>>(Promise.resolve()), autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectRef = useRef(project), history = useRef<Project[]>([]), future = useRef<Project[]>([]), gesture = useRef(false);
   const [tiledView, setTiledView] = useState(false), [historyRevision, setHistoryRevision] = useState(0), [selectedId, setSelectedId] = useState(project.layers[0]?.id ?? '');
+  const [finishOpen, setFinishOpen] = useState<string | null>(null);
   const [tab, setTab] = useState<'Shape' | 'Motion' | 'Finish'>('Shape'), [libraryTab, setLibraryTab] = useState<'Instruments' | 'Presets'>('Instruments');
   const [presetFilter, setPresetFilter] = useState('selected');
   const [oilFine, setOilFine] = useState(false);
@@ -161,18 +179,22 @@ export default function App() {
   };
   const [playing, setPlaying] = useState(true), phase = useRef(0), rendererRef = useRef<StudioRenderer | null>(null);
   /** Live is a separate screen over the studio; the studio pauses underneath it. */
-  const [mode, setMode] = useState<'studio' | 'live' | 'map'>('studio');
+  const [mode, setMode] = useState<'studio' | 'live' | 'map' | 'perform'>('studio');
+  // Installation mode: launched with it on, the app goes straight to the show it ran last (Map or Live), which opens its output.
+  useEffect(() => { void loadInstallation().then(settings => { if (settings?.on) setMode(settings.surface); }); }, []);
   const [emberSound, setEmberSound] = useState<ReactivityEngine | null>(null);
   const emberMeters = useMemo(() => new MeterStore(), []);
   const hasEmber = project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1);
+  const hasMeridian = project.layers.some(listensToMusic);
+  const flashGuardOff = project.layers.some(l => l.visible && l.kind === 'meridian' && (l.params.safetyFlashGuard ?? 1) < .5);
   useEffect(() => {
-    if (!emberSound || mode !== 'studio' || !hasEmber) return;
+    if (!emberSound || mode !== 'studio' || !(hasEmber || hasMeridian)) return;
     let shown = 0;
     return emberSound.subscribe(signals => {
       const now = performance.now();
       if (now - shown > 100) { shown = now; emberMeters.set(signals); }
     });
-  }, [emberSound, emberMeters, mode, hasEmber]);
+  }, [emberSound, emberMeters, mode, hasEmber, hasMeridian]);
   /** A Map shape's composition being edited here. Studio's own project is set aside meanwhile, and saved, not this one. */
   const [shapeEdit, setShapeEdit] = useState<ShapeEdit | null>(null);
   const shapeEditRef = useRef<ShapeEdit | null>(null);
@@ -181,18 +203,23 @@ export default function App() {
   const [modKey, setModKey] = useState('warp'), [exportOpen, setExportOpen] = useState(false), [jobs, setJobs] = useState<ExportJob[]>([]);
   const [format, setFormat] = useState<ExportFormat>('prores4444'), [outputDir, setOutputDir] = useState(''), [resolution, setResolution] = useState('3840x2160'), [exportRate, setExportRate] = useState('30/1'), [exportAlpha, setExportAlpha] = useState(true), [supersample, setSupersample] = useState<Supersample>(1);
   const [progress, setProgress] = useState<ExportProgress | null>(null), [exporting, setExporting] = useState(false), [stillBusy, setStillBusy] = useState(false);
-  const cancel = useRef(false), activeJob = useRef<string | null>(null), imageInput = useRef<HTMLInputElement>(null), maskInput = useRef<HTMLInputElement>(null);
+  const cancel = useRef(false), activeJob = useRef<string | null>(null), imageInput = useRef<HTMLInputElement>(null), kaleidoscopeInputRef = useRef<HTMLInputElement>(null), maskInput = useRef<HTMLInputElement>(null);
   // ProRes 4444 and PNG carry optional alpha; HAP Alpha always does; ProRes 422, HAP and HAP Q never do.
   const alphaOptional = format === 'prores4444' || format === 'png';
   const exportTransparent = format === 'hapalpha' || (alphaOptional && exportAlpha);
   const selected = project.layers.find(l => l.id === selectedId) ?? project.layers[0];
   const allDefinitions = selected ? parameterDefinitions(selected.kind) : [];
   const definitions = selected ? visibleParameterDefinitions(selected) : [];
-  const selectedModKey = modKey === 'opacity' || modKey.startsWith('transform.') || definitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation) || (selected?.modulations[modKey] && allDefinitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation)) ? modKey : definitions.find(d => d.step !== 1 && !d.preparation)?.key ?? 'opacity';
+  // A Kaleidoscope offers motion only for controls that act right now; saved routes wait for their control to return.
+  const routeHidden = selected?.kind === 'kaleidoscope' ? kaleidoscopeRouteHidden(selected.params) : null;
+  const routeDefinitions = motionParameters(definitions).filter(d => d.step !== 1 && !d.preparation && !d.structural && !(selected && motionIgnored(selected, d.key)) && !routeHidden?.has(d.key));
+  const selectedModKey = routeHidden?.has(modKey) ? routeDefinitions[0]?.key ?? 'opacity' : modKey === 'opacity' || modKey.startsWith('transform.') || motionParameters(definitions).some(d => d.key === modKey && d.step !== 1 && !d.preparation && !d.structural) || (selected?.modulations[modKey] && allDefinitions.some(d => d.key === modKey && d.step !== 1 && !d.preparation)) ? modKey : motionParameters(definitions).find(d => d.step !== 1 && !d.preparation && !d.structural)?.key ?? 'opacity';
   const modulation = selected?.modulations[selectedModKey];
-  const effectivePresetFilter = presetFilter === 'selected' ? selected?.kind === 'surface' || selected?.kind === 'fractal' || selected?.kind === 'graphic' ? `${selected.kind}-${Math.round(selected.params.style ?? 0)}` : selected?.kind === 'sculpture' ? `sculpture-${Math.round(selected.params.form ?? 0)}` : selected && ['oil', 'liquid', 'scope', 'super8'].includes(selected.kind) ? selected.kind : selected && isInstrument(selected.kind) ? selected.kind : 'all' : presetFilter;
+  // An opaque Kaleidoscope above hides this layer completely, so its controls would appear to do nothing.
+  const coveredBy = selected ? project.layers.slice(project.layers.findIndex(l => l.id === selected.id) + 1).find(l => l.kind === 'kaleidoscope' && l.visible && l.opacity >= 1 && l.blend === 'normal' && l.mask.kind === 'none' && Math.round(l.params.input ?? 0) !== KALEIDOSCOPE_INPUT.feedback) : undefined;
+  const effectivePresetFilter = presetFilter === 'selected' ? selected?.kind === 'surface' || selected?.kind === 'fractal' || selected?.kind === 'graphic' ? `${selected.kind}-${Math.round(selected.params.style ?? 0)}` : selected?.kind === 'sculpture' ? `sculpture-${Math.round(selected.params.form ?? 0)}` : selected && ['oil', 'liquid', 'scope', 'super8', 'meridian', 'kaleidoscope'].includes(selected.kind) ? selected.kind : selected && isInstrument(selected.kind) ? selected.kind : 'all' : presetFilter;
   const visiblePresets = PRESETS.filter(preset => effectivePresetFilter === 'projection' && PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'fractal-projection' && FRACTAL_PROJECTION_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'flat' && FLAT_LOOK_IDS.includes(preset.id) || effectivePresetFilter === 'all' || preset.kind === effectivePresetFilter || `${preset.kind}-${preset.kind === 'sculpture' ? preset.params.form : preset.params.style}` === effectivePresetFilter);
-  const searchedFinishes = FINISH_LOOKS.filter(f => `${f.name} ${f.description}`.toLowerCase().includes(libraryQuery));
+  const searchedFinishes = FINISH_LOOKS.filter(f => `${f.name} ${f.description}`.toLowerCase().includes(libraryQuery) && !(selected?.kind === 'kaleidoscope' && 'echo' in f.params && !finishSupported(selected, f.id)));
   const searchedPresets = visiblePresets.filter(p => `${p.name} ${p.description} ${kindLabels[p.kind]}`.toLowerCase().includes(libraryQuery));
   const searchedInstruments = instrumentCatalogue.filter(i => `${i.name} ${i.caption}`.toLowerCase().includes(libraryQuery));
   const [exportNum, exportDen] = exportRate.split('/').map(Number);
@@ -207,6 +234,13 @@ export default function App() {
     setMessage(s); noticeTimer.current = setTimeout(() => setMessage(''), 4500);
   }, []);
   useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  // During a show a preview that cannot play never leaves a lasting error over the controller. In Studio it is a short note.
+  const previewError = useCallback((s: string) => {
+    if (!shapeEditRef.current?.draft && !performService().running) { reportError(s); return; }
+    if (modeRef.current === 'studio') notify(`This look cannot play: ${s.replace(/^Error: /, '')}`);
+  }, [notify, reportError]);
   const replace = useCallback((requested: Project, record = true) => {
     const { project: next, message } = reconcileTile(requested);
     if (message) notify(message);
@@ -217,6 +251,7 @@ export default function App() {
   }, [notify]);
   const edit = (fn: (p: Project) => Project) => replace(fn(projectRef.current));
   const editLayer = (fn: (l: Layer) => Layer, id = selected?.id) => { if (id) edit(p => { const layers=p.layers.map(l=>{if(l.id!==id)return l;const next=fn(l);if(next.surface?.source==='mask'&&next.mask.kind!=='image')delete next.surface;return next;}); return {...p,schemaVersion:layers.some(l=>l.surface||Object.values(l.modulations).some(m=>m.range))?2:p.schemaVersion,layers}; }); };
+  const meridianPerformance = useMeridianPerformance({ layer: selected, enabled: mode === 'studio' && !exportOpen, edit: (change, id) => editLayer(change, id), notify });
   const beginGesture = () => { if (!gesture.current) { history.current.push(projectRef.current); history.current = history.current.slice(-80); future.current = []; gesture.current = true; } };
   const endGesture = () => { gesture.current = false; setHistoryRevision(n => n + 1); };
   const undo = () => { const prev = history.current.pop(); if (prev) { future.current.push(projectRef.current); replace(prev, false); } };
@@ -231,13 +266,13 @@ export default function App() {
   // Recorded like any edit, so Undo brings the previous composition back.
   const newProject = async () => { try {
     const next = createProject();
-    replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath('');
+    rendererRef.current?.resetMeridianPerformance(); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath('');
     await window.studio?.forgetProjectPath();
     notify('New composition. Undo brings the previous one back.');
   } catch (e) { reportError(String(e)); } };
   const open = async () => { try {
-    if (window.studio) { const result = await window.studio.openProject(); if (result.project) { const next = validateProject(result.project); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath(result.path ?? ''); } }
-    else { const input = document.createElement('input'); input.type = 'file'; input.accept = '.formfield,.json'; input.onchange = async () => { try { const file = input.files?.[0]; if (file) { const next = validateProject(JSON.parse(await file.text())); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; } } catch (e) { reportError(String(e)); } }; input.click(); }
+    if (window.studio) { const result = await window.studio.openProject(); if (result.project) { const next = validateProject(result.project); rendererRef.current?.resetMeridianPerformance(); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; setFilePath(result.path ?? ''); } }
+    else { const input = document.createElement('input'); input.type = 'file'; input.accept = '.formfield,.json'; input.onchange = async () => { try { const file = input.files?.[0]; if (file) { const next = validateProject(JSON.parse(await file.text())); rendererRef.current?.resetMeridianPerformance(); replace(next); setSelectedId(next.layers[0]?.id ?? ''); phase.current = 0; } } catch (e) { reportError(String(e)); } }; input.click(); }
   } catch (e) { reportError(String(e)); } };
 
   useEffect(() => { let alive = true; startupTask.current = (async () => {
@@ -251,14 +286,14 @@ export default function App() {
         if (restored.status === 'fulfilled') {
           // Not while a Map shape is being edited: the restored project is Studio's own, not the shape's.
           if (restored.value && history.current.length === 0 && !shapeEditRef.current) {
-            try { const next = validateProject(restored.value); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); }
+            try { const next = validateProject(restored.value); rendererRef.current?.resetMeridianPerformance(); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); }
             catch (error) { issues.push(`Project recovery: ${String(error)}. The previous autosave is retained in the application recovery folder.`); }
           }
         } else issues.push(`Project recovery: ${String(restored.reason)}. The previous autosave is retained in the application recovery folder.`);
         if (issues.length) reportError(issues.join('\n'));
       } else {
         const text = localStorage.getItem('formfield-autosave');
-        if (text && history.current.length === 0) { const next = validateProject(JSON.parse(text)); if (alive) { replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); } }
+        if (text && history.current.length === 0) { const next = validateProject(JSON.parse(text)); if (alive) { rendererRef.current?.resetMeridianPerformance(); replace(next, false); setSelectedId(next.layers[0]?.id ?? ''); } }
       }
     } catch (e) { if (alive) reportError(`Recovery: ${String(e)}`); }
     finally { if (alive) setReady(true); }
@@ -297,7 +332,7 @@ export default function App() {
         if (key === 'i' && !workspace.focusMode) { e.preventDefault(); workspace.toggleInspector(); return; }
         if (e.key === 'Escape' && workspace.focusMode && !workspace.libraryOpen && !workspace.variationOpen) { e.preventDefault(); workspace.setFocusMode(false); workspace.focusButton.current?.focus(); return; }
       }
-      if (command && ['s', 'n', 'o'].includes(e.key.toLowerCase()) && shapeEditRef.current) { e.preventDefault(); notify('Go back to Map first: this composition belongs to a shape.'); }
+      if (command && ['s', 'n', 'o'].includes(e.key.toLowerCase()) && shapeEditRef.current) { e.preventDefault(); notify(shapeEditRef.current.draft ? 'Apply or discard this draft first: it is not a Studio project.' : shapeEditRef.current.from === 'perform' ? 'Go back to Perform first: this composition belongs to a clip.' : 'Go back to Map first: this composition belongs to a shape.'); }
       else if (command && e.key.toLowerCase() === 's') { e.preventDefault(); void save(e.shiftKey); }
       else if (command && e.key.toLowerCase() === 'n' && !exporting) { e.preventDefault(); void newProject(); }
       else if (command && e.key.toLowerCase() === 'o') { e.preventDefault(); void open(); }
@@ -316,28 +351,54 @@ export default function App() {
   }), []);
 
   useEffect(() => { onStudioWallWarning(text => notify(`Map: ${text}.`)); return () => onStudioWallWarning(null); }, [notify]);
+  // For the scripted checks: what Studio holds, and an edit made the way the controls make one.
+  useEffect(() => { window.__studioTest = { ...window.__studioTest, studioDraft: { get: () => projectRef.current, edit: (fn: (p: Project) => Project) => replace(fn(projectRef.current)) } }; }, [replace]);
   /** Opens a Map shape's composition in Studio, setting Studio's own project, history and file aside. */
-  const editShapeInStudio = (sourceId: string, shapeId: string) => {
-    if (shapeEditRef.current) return;
+  const editShapeInStudio = (sourceId: string, shapeId: string, clip?: { name: string; copy?: ClipCopy }) => {
+    // One edit at a time: an open draft is never replaced by another.
+    if (shapeEditRef.current) { if (shapeEditRef.current.draft) { notify('Apply or discard the open draft first.'); setMode('studio'); } return; }
     // Studio must have restored its own project first, or the restore could land on the shape's composition.
     if (!ready) { notify('Studio is still opening. Try again in a moment.'); return; }
+    // During a show every edit is a draft, also one opened from Map: the source may be on the wall.
+    const draft = !!clip?.copy || performService().running;
+    const own = validateProject(projectRef.current);
+    const begun = clip?.copy ? beginClipCopyDraft(clip.copy) : clip ? beginClipEdit(sourceId, draft) : beginStudioEdit(sourceId, shapeId, undefined, draft);
+    if (!begun) return;
+    setAsideStudio(own, { sourceId, shapeName: clip?.name ?? begun.shapeName, from: clip ? 'perform' : 'map', draft }, begun.project);
+    workspace.closePopovers(); setExportOpen(false); setMode('studio');
+  };
+  /** Studio's own project, history and file go aside, saved, and the edit's composition takes their place. */
+  const setAsideStudio = (own: Project, about: Pick<ShapeEdit, 'sourceId' | 'shapeName' | 'from' | 'draft'>, shown: Project) => {
     // Studio's own latest change is saved before it is set aside.
     if (autosaveTimer.current) { clearTimeout(autosaveTimer.current); autosaveTimer.current = null; }
-    const own = validateProject(projectRef.current);
-    const begun = beginStudioEdit(sourceId, shapeId);
-    if (!begun) return;
     void (window.studio ? window.studio.saveAutosave(own) : Promise.resolve(localStorage.setItem('formfield-autosave', JSON.stringify(own))))
       .then(() => setSaved('Autosaved')).catch(() => setSaved('Save project to keep changes'));
-    const edit: ShapeEdit = { sourceId, shapeName: begun.shapeName, stash: stashStudio({ project: projectRef.current, history: history.current, future: future.current, filePath, selectedId, phase: phase.current }) };
+    const edit: ShapeEdit = { ...about, stash: stashStudio({ project: projectRef.current, history: history.current, future: future.current, filePath, selectedId, phase: phase.current }) };
     shapeEditRef.current = edit; setShapeEdit(edit);
     history.current = []; future.current = [];
     // Shown without being recorded: opening the composition is not an edit to it.
-    projectRef.current = begun.project; setProject(begun.project); setHistoryRevision(n => n + 1);
-    setSelectedId(begun.project.layers[0]?.id ?? ''); phase.current = 0; setFilePath('');
-    workspace.closePopovers(); setExportOpen(false); setMode('studio');
+    projectRef.current = shown; setProject(shown); setHistoryRevision(n => n + 1);
+    setSelectedId(shown.layers[0]?.id ?? ''); phase.current = 0; setFilePath('');
   };
   /** Back from editing a Map shape: Studio's own project, history and file return as they were. */
-  const finishShapeEdit = (to: 'studio' | 'live' | 'map') => {
+  const finishShapeEdit = (to: 'studio' | 'live' | 'map' | 'perform') => {
+    // A draft stays open while the operator moves about, so going to play the show never loses it.
+    if (shapeEditRef.current?.draft) setMode(to); else closeShapeEdit(to);
+  };
+  const applyDraft = () => {
+    const edit = shapeEditRef.current;
+    if (!edit) return;
+    const refused = applyClipDraft();
+    if (refused) { notify(`That draft could not be applied: ${refused}. It is still open.`); return; }
+    closeShapeEdit(edit.from ?? 'perform');
+  };
+  const discardDraft = () => {
+    const edit = shapeEditRef.current;
+    if (!edit) return;
+    discardClipDraft();
+    closeShapeEdit(edit.from ?? 'perform');
+  };
+  const closeShapeEdit = (to: 'studio' | 'live' | 'map' | 'perform') => {
     const edit = shapeEditRef.current;
     if (!edit) { setMode(to); return; }
     endStudioEdit();
@@ -346,9 +407,41 @@ export default function App() {
     projectRef.current = edit.stash.project; setProject(edit.stash.project); setHistoryRevision(n => n + 1);
     setSelectedId(edit.stash.selectedId); phase.current = edit.stash.phase; setFilePath(edit.stash.filePath);
     // Going to Live instead of Map: the Map wall that stayed open for the edit closes, as leaving Map does.
-    if (to !== 'map') void window.studio?.map?.closeOutput().catch(() => {});
+    // A running show keeps it, wherever the operator goes.
+    if (to !== 'map' && to !== 'perform' && !wallStaysOpen()) void window.studio?.map?.closeOutput().catch(() => {});
     setMode(to);
   };
+  // The draft's bar says plainly when the show it was opened in has ended.
+  // Read as it is at each render, so the bar never shows a wrong word for a frame; the subscription only asks for that render.
+  const [, setShowSeen] = useState('');
+  const draftShowRunning = !!shapeEdit?.draft && performService().running;
+  useEffect(() => {
+    if (!shapeEdit?.draft) return;
+    const service = performService(), seen = () => setShowSeen(`${service.running}:${clipDraftOnWall()}`);
+    seen();
+    return service.subscribe(seen);
+  }, [shapeEdit]);
+  const draftZones = shapeEdit?.draft ? clipDraftZones() : [];
+  const draftStatus = !shapeEdit?.draft ? '' : !draftShowRunning ? 'The show has ended. This draft is kept'
+    : clipDraftIsCopy() ? 'this copy joins the set when you apply' : clipDraftOnWall() ? 'the projector keeps playing until you apply' : 'this look is not on the projector now';
+  // A look the wall could not start comes back as an open draft, without taking the operator away from the show.
+  const [failedDrafts, setFailedDrafts] = useState(0);
+  useEffect(() => {
+    onClipDraftFailed(() => { notify('The new look could not start. The old one is still playing.'); setFailedDrafts(n => n + 1); });
+    return () => onClipDraftFailed(null);
+  }, [notify]);
+  // Apply says Starting… until the wall has answered for this look's last Apply.
+  const [, setApplySettled] = useState(0);
+  useEffect(() => {
+    onClipApplySettled(note => { if (note) notify(note); setApplySettled(n => n + 1); });
+    return () => onClipApplySettled(null);
+  }, [notify]);
+  const draftStarting = !!shapeEdit?.draft && clipApplyStarting();
+  useEffect(() => {
+    if (!ready || shapeEditRef.current) return;
+    const failed = reopenFailedDraft();
+    if (failed) setAsideStudio(validateProject(projectRef.current), { sourceId: failed.sourceId, shapeName: failed.shapeName, from: failed.from, draft: true }, failed.project);
+  }, [failedDrafts, shapeEdit, ready]);
   useEffect(() => window.studio?.onExportProgress(p => { if (p.jobId === activeJob.current) setProgress(p); }), []);
 
   const addLayer = (kind: LayerKind) => {
@@ -360,15 +453,15 @@ export default function App() {
     const to = index + direction; if (to < 0 || to >= p.layers.length) return p;
     const layers = [...p.layers]; [layers[index], layers[to]] = [layers[to], layers[index]]; return { ...p, layers };
   });
-  const importImage = async (file: File | undefined, asMask = false) => {
+  const importImage = async (file: File | undefined, asMask = false, kaleidoscopeId?: string) => {
     if (!file) return;
     try {
-      if (!['image/png', 'image/jpeg'].includes(file.type)) throw new Error('Choose a PNG or JPEG image.');
-      if (file.size > 12 * 1024 * 1024) throw new Error('Choose an image smaller than 12 MB.');
+      assertImportableImage(file);
       const dataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('Image could not be read.')); reader.readAsDataURL(file); });
       const image = await new Promise<HTMLImageElement>((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error('Image could not be decoded.')); image.src = dataUrl; });
-      if (image.naturalWidth > 8192 || image.naturalHeight > 8192) throw new Error('Images must be no larger than 8192 pixels on either side.');
-      if (asMask) { const next = { ...projectRef.current, layers: projectRef.current.layers.map(l => l.id === selected?.id ? { ...l, mask: { ...l.mask, kind: 'image' as const, dataUrl } } : l) }; replace(validateProject(next)); }
+      if (image.naturalWidth > MAX_IMPORT_SIDE || image.naturalHeight > MAX_IMPORT_SIDE) throw new Error('Images must be no larger than 8192 pixels on either side.');
+      if (kaleidoscopeId) { const found = { name: file.name.slice(0, 240), dataUrl, width: image.naturalWidth, height: image.naturalHeight, fit: 'cover' as const }; replace(validateProject({ ...projectRef.current, layers: projectRef.current.layers.map(l => l.id === kaleidoscopeId && l.kind === 'kaleidoscope' ? { ...l, image: found } : l) })); }
+      else if (asMask) { const next = { ...projectRef.current, layers: projectRef.current.layers.map(l => l.id === selected?.id ? { ...l, mask: { ...l.mask, kind: 'image' as const, dataUrl } } : l) }; replace(validateProject(next)); }
       else { if (projectRef.current.layers.length >= 4) throw new Error('Remove a layer before importing another image.'); const layer = createLayer('image'); layer.name = (file.name.replace(/\.[^.]+$/, '') || 'Imported image').slice(0, 60); layer.image = { name: file.name.slice(0, 240), dataUrl, width: image.naturalWidth, height: image.naturalHeight, fit: 'contain' }; replace(validateProject({ ...projectRef.current, layers: [...projectRef.current.layers, layer] })); setSelectedId(layer.id); }
     } catch (e) { reportError(String(e)); }
   };
@@ -436,12 +529,14 @@ export default function App() {
   };
 
   const modeSwitch = <><div className="brand"><div className="brand-mark">f<span>f</span></div><div>Form <span>&</span> Field</div></div>
-    <div className="mode-switch" role="group" aria-label="Section"><button aria-pressed={mode === 'studio'} onClick={() => setMode('studio')}>Studio</button><button aria-pressed={mode === 'live'} disabled={exporting} title={exporting ? 'Live is available when the export has finished' : 'Live camera to projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('live'); }}>Live</button><button aria-pressed={mode === 'map'} disabled={exporting} title={exporting ? 'Map is available when the export has finished' : 'Map shapes onto the projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('map'); }}>Map</button></div></>;
+    <div className="mode-switch" role="group" aria-label="Section"><button aria-pressed={mode === 'studio'} onClick={() => setMode('studio')}>Studio</button><button aria-pressed={mode === 'live'} disabled={exporting} title={exporting ? 'Live is available when the export has finished' : 'Live camera to projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('live'); }}>Live</button><button aria-pressed={mode === 'map'} disabled={exporting} title={exporting ? 'Map is available when the export has finished' : 'Map shapes onto the projector'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('map'); }}>Map</button><button aria-pressed={mode === 'perform'} disabled={exporting} title={exporting ? 'Perform is available when the export has finished' : 'Play clips and scenes live'} onClick={() => { workspace.closePopovers(); setExportOpen(false); finishShapeEdit('perform'); }}>Perform</button></div></>;
   return <div className={`studio-shell ${workspace.layersExpanded ? 'layers-expanded' : 'layers-collapsed'} ${workspace.inspectorOpen ? '' : 'inspector-hidden'} ${workspace.focusMode ? 'focus-preview' : ''}`}>
     <input ref={imageInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0]); e.target.value = ''; }} />
+    <input ref={kaleidoscopeInputRef} hidden type="file" aria-label="Kaleidoscope image file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0], false, selected?.kind === 'kaleidoscope' ? selected.id : undefined); e.target.value = ''; }} />
     <input ref={maskInput} hidden type="file" accept="image/png,image/jpeg" onChange={e => { void importImage(e.target.files?.[0], true); e.target.value = ''; }} />
     <header className="app-header" inert={mode !== 'studio'}>{modeSwitch}
-      {shapeEdit && <div className="shape-edit-bar" role="status">Editing <strong>{shapeEdit.shapeName}</strong> from Map · changes show on the projector<button className="primary-button" onClick={() => finishShapeEdit('map')}>Back to Map</button></div>}
+      {shapeEdit?.draft && <div className="shape-edit-bar" role="status"><span>Draft of <strong>{shapeEdit.shapeName}</strong> · {draftStatus}{draftZones.length > 1 && ` · Apply changes zones ${draftZones.map(z => z + 1).join(', ')}: they share this look`}</span><button className="primary-button" disabled={draftStarting} title={draftStarting ? 'The last change to this look is still starting. Your draft is kept.' : undefined} onClick={applyDraft}>{draftStarting ? 'Starting…' : draftShowRunning ? 'Apply to show' : 'Apply to clip'}</button><button className="secondary-button" onClick={discardDraft}>Discard</button></div>}
+      {shapeEdit && !shapeEdit.draft && <div className="shape-edit-bar" role="status">Editing <strong>{shapeEdit.shapeName}</strong> from {shapeEdit.from === 'perform' ? 'Perform' : 'Map'} · changes show on the projector<button className="primary-button" onClick={() => finishShapeEdit(shapeEdit.from ?? 'map')}>Back to {shapeEdit.from === 'perform' ? 'Perform' : 'Map'}</button></div>}
       <div className="project-title"><EditableName label="Project name" value={project.name} maxLength={80} onCommit={name => edit(p => ({ ...p, name }))} />{fileName && <span className="project-file" title={filePath}>{fileName}</span>}<span role="status" className={saved === 'Save project to keep changes' ? 'save-failed' : ''}>{saved}</span></div>
       <div className="header-actions"><button className="icon-button" title="Undo · ⌘Z" disabled={!history.current.length} onClick={undo}><Icon name="undo" /></button><button className="icon-button" title="Redo · ⇧⌘Z" disabled={!future.current.length} onClick={redo}><Icon name="redo" /></button><span className="divider" /><button className="text-button" title="New composition · ⌘N" disabled={exporting || !!shapeEdit} onClick={() => void newProject()}><Icon name="plus" size={16} />New</button><button className="text-button" title="Open · ⌘O" disabled={!!shapeEdit} onClick={() => void open()}><Icon name="folder" size={16} />Open</button><button className="text-button" title={fileName ? `Save to ${fileName} · ⌘S\nShift-click or ⇧⌘S to save as a new file` : 'Save · ⌘S'} disabled={!!shapeEdit} onClick={e => void save(e.shiftKey)}><Icon name="save" size={16} />Save</button><button className="primary-button" disabled={!!shapeEdit} title={shapeEdit ? 'Go back to Map to export your own composition' : undefined} onClick={e => { e.currentTarget.focus(); setExportOpen(true); }}><Icon name="download" size={16} />Export</button></div>
     </header>
@@ -451,7 +546,7 @@ export default function App() {
       <div className="drawer-heading"><strong>Library</strong><button className="icon-button" aria-label="Close library" popoverTarget="library-drawer" popoverTargetAction="hide"><Icon name="close" size={16} /></button></div>
       <label className="library-search"><Icon name="search" size={15} /><input type="search" autoFocus aria-label="Search library" placeholder="Search instruments and looks…" value={librarySearch} onChange={e=>setLibrarySearch(e.target.value)} /></label>
       <div className="tab-switch library-tabs">{(['Instruments', 'Presets'] as const).map(t => <button key={t} aria-pressed={libraryTab === t} className={libraryTab === t ? 'active' : ''} onClick={() => setLibraryTab(t)}>{t}</button>)}</div>
-      <div className="library-content">{libraryTab === 'Instruments' ? <div className="instrument-list">{searchedInstruments.map(info => <button key={info.kind} aria-label={info.label} className="instrument-card" onClick={() => addLayer(info.kind)}><img className="instrument-art" src={info.image} alt="" /><div className="instrument-info"><div><strong>{info.name}</strong><small>{info.caption}</small></div><Icon name="plus" size={14} /></div></button>)}{!searchedInstruments.length && <p className="empty-note">No instruments match “{librarySearch}”.</p>}<button className="import-button" onClick={() => addLayer('image')}><Icon name="image" size={16} /><span>Import image<small>PNG / JPEG</small></span></button></div> : <><label className="stacked-label preset-filter">Filter<select aria-label="Preset library filter" value={presetFilter} onChange={e => setPresetFilter(e.target.value)}><option value="selected">Current selection</option><option value="all">All presets</option><option value="projection">Projection motion · {PROJECTION_LOOK_IDS.length} studies</option><option value="flat">Flat colour &amp; outlines · {FLAT_LOOK_IDS.length} looks</option><option value="finish">Finishes for any layer · {FINISH_LOOKS.length - 1} looks</option><optgroup label="Surfaces"><option value="surface">All surfaces</option>{patterns.surface!.map((label, index) => <option key={index} value={`surface-${index}`}>{label}</option>)}</optgroup><optgroup label="Sculptures"><option value="sculpture">All sculptures</option>{sculptureForms.map((label, index) => <option key={index} value={`sculpture-${index}`}>{label}</option>)}</optgroup><optgroup label="Fractals"><option value="fractal">All fractals</option><option value="fractal-0">Kaleidoscopes</option><option value="fractal-1">Julia blooms</option><option value="fractal-2">Mandelbox worlds</option><option value="fractal-3">Portals</option><option value="fractal-projection">Fractals for projection</option></optgroup><optgroup label="Graphic Patterns"><option value="graphic">All graphic patterns</option>{GRAPHIC_FAMILIES.map((label, index) => <option key={index} value={`graphic-${index}`}>{label}</option>)}</optgroup><optgroup label="Light, material & space">{INSTRUMENTS.map(i=><option key={i.kind} value={i.kind}>{i.name}</option>)}</optgroup><option value="oil">Oil Slides</option><option value="liquid">Liquid Light</option><option value="scope">Oscilloscope</option><option value="super8">Super 8 Paint</option></select></label><div className="preset-list">{presetFilter === 'finish' ? searchedFinishes.map(finish => <button key={finish.id} className="preset-card finish-card" disabled={!selected || !finishSupported(selected, finish.id)} onClick={() => { if (selected && finishSupported(selected, finish.id)) editLayer(l => applyFinish(l, finish.id)); }}><strong>{finish.name}</strong><span>{finish.description}</span></button>) : searchedPresets.map(preset => <button key={preset.id} className="preset-card" onClick={() => {
+      <div className="library-content">{libraryTab === 'Instruments' ? <div className="instrument-list">{searchedInstruments.map(info => <button key={info.kind} aria-label={info.label} className="instrument-card" onClick={() => addLayer(info.kind)}><img className="instrument-art" src={info.image} alt="" /><div className="instrument-info"><div><strong>{info.name}</strong><small>{info.caption}</small></div><Icon name="plus" size={14} /></div></button>)}{!searchedInstruments.length && <p className="empty-note">No instruments match “{librarySearch}”.</p>}<button className="import-button" onClick={() => addLayer('image')}><Icon name="image" size={16} /><span>Import image<small>PNG / JPEG</small></span></button></div> : <><label className="stacked-label preset-filter">Filter<select aria-label="Preset library filter" value={presetFilter} onChange={e => setPresetFilter(e.target.value)}><option value="selected">Current selection</option><option value="all">All presets</option><option value="projection">Projection motion · {PROJECTION_LOOK_IDS.length} studies</option><option value="flat">Flat colour &amp; outlines · {FLAT_LOOK_IDS.length} looks</option><option value="finish">Finishes for any layer · {FINISH_LOOKS.length - 1} looks</option><optgroup label="Surfaces"><option value="surface">All surfaces</option>{patterns.surface!.map((label, index) => <option key={index} value={`surface-${index}`}>{label}</option>)}</optgroup><optgroup label="Sculptures"><option value="sculpture">All sculptures</option>{sculptureForms.map((label, index) => <option key={index} value={`sculpture-${index}`}>{label}</option>)}</optgroup><optgroup label="Fractals"><option value="fractal">All fractals</option><option value="fractal-0">Folded lace</option><option value="fractal-1">Julia blooms</option><option value="fractal-2">Mandelbox worlds</option><option value="fractal-3">Portals</option><option value="fractal-projection">Fractals for projection</option></optgroup><optgroup label="Graphic Patterns"><option value="graphic">All graphic patterns</option>{GRAPHIC_FAMILIES.map((label, index) => <option key={index} value={`graphic-${index}`}>{label}</option>)}</optgroup><optgroup label="Light, material & space">{INSTRUMENTS.map(i=><option key={i.kind} value={i.kind}>{i.name}</option>)}</optgroup><option value="oil">Oil Slides</option><option value="liquid">Liquid Light</option><option value="scope">Oscilloscope</option><option value="super8">Super 8 Paint</option></select></label><div className="preset-list">{presetFilter === 'finish' ? searchedFinishes.map(finish => <button key={finish.id} className="preset-card finish-card" disabled={!selected || !finishSupported(selected, finish.id)} onClick={() => { if (selected && finishSupported(selected, finish.id)) editLayer(l => applyFinish(l, finish.id)); }}><strong>{finish.name}</strong><span>{finish.description}</span></button>) : searchedPresets.map(preset => <button key={preset.id} className="preset-card" onClick={() => {
         if(preset.params.inkMode===2&&project.duration>60){notify('Shorten the clip to 60 seconds before selecting evolving chemistry.');return;}
         // Flat looks are authored as exact palette colour; soft highlight roll-off would dull them.
         if ((preset.params.toonMix ?? 0) > 0 && project.highlights !== 'exact') { edit(p => ({ ...p, highlights: 'exact' })); notify('Exact colour turned on for flat palette colour. Change it under Finish → Output.'); }
@@ -471,7 +566,7 @@ export default function App() {
       <div className="workspace-tools"><button ref={workspace.libraryButton} className={`workspace-tool ${workspace.libraryOpen ? 'active' : ''}`} aria-label="Open library" aria-expanded={workspace.libraryOpen} aria-controls="library-drawer" popoverTarget="library-drawer" title="Library · B"><Icon name="library" size={16}/><span>Library</span></button><button ref={workspace.layersButton} className={`workspace-tool ${workspace.layersExpanded ? 'active' : ''}`} aria-label="Toggle layer list" aria-expanded={workspace.layersExpanded} aria-controls="layer-panel" onClick={workspace.toggleLayers} disabled={workspace.focusMode} title="Layers · L"><Icon name="layers" size={16}/></button><span className="viewer-meta">{project.width} × {project.height}<span> · {Number((project.fps.num / project.fps.den).toFixed(2))} fps</span></span></div>
       <div className="viewer-options"><span className="live-badge"><i />{exporting ? 'Exporting' : playing ? 'Playing' : 'Paused'}</span><button className={checker ? 'selected-tool' : ''} title="Toggle transparency checker" aria-pressed={checker} onClick={() => setChecker(v => !v)}><Icon name="grid" size={15} /></button><button ref={workspace.inspectorButton} className={`workspace-tool ${workspace.inspectorOpen && !workspace.focusMode ? 'active' : ''}`} aria-label="Toggle inspector" aria-expanded={workspace.inspectorOpen && !workspace.focusMode} aria-controls="inspector-panel" onClick={workspace.toggleInspector} disabled={workspace.focusMode} title="Inspector · I"><Icon name="inspector" size={16}/></button><button ref={workspace.focusButton} className="workspace-tool focus-toggle" aria-label={workspace.focusMode ? 'Exit focus mode' : 'Focus preview'} aria-pressed={workspace.focusMode} onClick={workspace.toggleFocus} title={workspace.focusMode ? 'Exit focus · F or Esc' : 'Focus preview · F'}><Icon name="focus" size={16}/><span>{workspace.focusMode ? 'Exit focus' : 'Focus'}</span></button></div>
     </div>
-      <div className="preview-stage"><Preview tiled={tiledView && !!project.tileEdges} project={project} playing={playing && !exporting && mode === 'studio'} phase={phase} rendererRef={rendererRef} smokeSound={emberSound} onError={reportError} onEnded={()=>setPlaying(false)} checker={checker} layer={selected} locks={locks} blocked={exporting || exportOpen || !ready} onChange={(layer, record) => {
+      <div className="preview-stage">{flashGuardOff && <div className="m-flash-warning" role="alert">Flash guard is off</div>}<Preview tiled={tiledView && !!project.tileEdges} project={project} playing={playing && !exporting && mode === 'studio'} phase={phase} rendererRef={rendererRef} smokeSound={emberSound} onError={previewError} onEnded={()=>setPlaying(false)} checker={checker} layer={selected} locks={locks} blocked={exporting || exportOpen || !ready} onChange={(layer, record) => {
         const current = projectRef.current;
         const before = current.layers.find(l => l.id === layer.id);
         if (before && !sameCanvasValues(before, layer)) replace({ ...current, layers: current.layers.map(l => l.id === layer.id ? layer : l) }, record);
@@ -490,30 +585,34 @@ export default function App() {
       <div className="inspector-title"><span className="eyebrow">Selected layer</span><div><Icon name={selected.kind} size={20} /><EditableName label="Layer name" value={selected.name} maxLength={60} onCommit={name => editLayer(l => ({ ...l, name }))} /><button className="icon-button" title="Duplicate layer" disabled={project.layers.length >= 4} onClick={() => { const copy = structuredClone(selected); copy.id = uid(); copy.name = `${copy.name.slice(0, 54)} copy`; edit(p => ({ ...p, layers: [...p.layers, copy] })); setSelectedId(copy.id); }}><Icon name="copy" size={15} /></button><button className="icon-button" title="Delete layer" disabled={project.layers.length <= 1} onClick={() => { const layers = project.layers.filter(l => l.id !== selected.id); edit(p => ({ ...p, layers })); setSelectedId(layers.at(-1)?.id ?? ''); }}><Icon name="trash" size={15} /></button></div></div>
       <div className="tab-switch inspector-tabs">{(['Shape', 'Motion', 'Finish'] as const).map(t => <button key={t} aria-pressed={tab === t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>{t}</button>)}</div>
       <div className="inspector-content">{tab === 'Shape' ? <>
-        <LayerShapeControls layer={selected} edit={editLayer} onAnimateKey={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} seed={project.seed} duration={project.duration} notify={notify} oilFine={oilFine} setOilFine={setOilFine}
+        {coveredBy && <p className="muted-text" role="status">Covered by {coveredBy.name} above, so changes here won't show. Select that layer, hide it, or set its Source to Layer below.</p>}
+        <LayerShapeControls layer={selected} isBottomLayer={project.layers[0]?.id === selected.id} onChooseKaleidoscopeImage={() => kaleidoscopeInputRef.current?.click()} edit={editLayer} onAnimateKey={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} seed={project.seed} duration={project.duration} notify={notify} oilFine={oilFine} setOilFine={setOilFine}
           scopeAudioSlot={<details className="control-section"><summary>Smoke audio input</summary>
             <ReactDevices audioOnly engine={emberSound} meter={emberMeters} onStart={() => setEmberSound(reactivity())} />
             <p className="muted-text">The input drives playback. Exports use the repeating smoke phrase.</p>
           </details>}
+          parametersSlot={selected.kind === 'meridian' ? <MeridianControls soundSlot={<ReactDevices audioOnly engine={emberSound} meter={emberMeters} onStart={() => setEmberSound(reactivity())} />} layer={selected} edit={editLayer} performance={meridianPerformance} notify={notify} onAnimateKey={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} /> : undefined}
           imageSlot={<>{selected.kind === 'image' && <div className="image-settings">{selected.image ? <img src={selected.image.dataUrl} alt={selected.image.name} /> : <p>Import a PNG or JPEG to begin.</p>}<label>Image fit<select aria-label="Image fit" value={selected.image?.fit ?? 'contain'} onChange={e => editLayer(l => ({ ...l, image: l.image ? { ...l.image, fit: e.target.value as 'contain' | 'cover' } : undefined }))}><option value="contain">Contain</option><option value="cover">Cover</option></select></label><ChoiceParameter label="Mirror" name="Image mirror" options={mirrorModes} value={selected.params.mirror} onChange={mirror => editLayer(l => ({ ...l, params: { ...l.params, mirror } }))} /></div>}</>} surfaceSlot={<>{isInstrument(selected.kind)&&<SurfaceEditor layer={selected} onChange={surface=>editLayer(l=>{const next={...l};if(surface)next.surface=surface;else delete next.surface;return next;})} onStart={beginGesture} onEnd={endGesture}/>}</>} />
       </> : tab === 'Motion' ? <>
         <p className="motion-help">Animate a parameter over the {isEvolving(project)?'clip':'loop'}.</p>
-        <label className="stacked-label">Parameter<select aria-label="Motion parameter" value={selectedModKey} onChange={e => setModKey(e.target.value)}>{definitions.filter(d => d.step !== 1 && !d.preparation).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}{!definitions.some(d => d.key === selectedModKey) && allDefinitions.some(d => d.key === selectedModKey) && <option value={selectedModKey}>{allDefinitions.find(d => d.key === selectedModKey)!.label} · other family</option>}<option value="opacity">Layer opacity</option><optgroup label="Layer transform"><option value="transform.x">Horizontal</option><option value="transform.y">Vertical</option><option value="transform.scale">Size</option><option value="transform.rotation">Rotation</option></optgroup></select></label>
+        <label className="stacked-label">Parameter<select aria-label="Motion parameter" value={selectedModKey} onChange={e => setModKey(e.target.value)}>{routeDefinitions.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}{!motionParameters(definitions).some(d => d.key === selectedModKey) && allDefinitions.some(d => d.key === selectedModKey) && <option value={selectedModKey}>{allDefinitions.find(d => d.key === selectedModKey)!.label} · other family</option>}<option value="opacity">Layer opacity</option><optgroup label="Layer transform"><option value="transform.x">Horizontal</option><option value="transform.y">Vertical</option><option value="transform.scale">Size</option><option value="transform.rotation">Rotation</option></optgroup></select></label>
         <label className="stacked-label">Motion source<select aria-label="Motion source" value={modulation?.kind ?? 'off'} onChange={e => changeMod(e.target.value === 'off' ? undefined : { ...(modulation ?? defaultMod(e.target.value as Modulation['kind'])), kind: e.target.value as Modulation['kind'] })}><option value="off">Off</option><option value="sine">Sine</option><option value="pulse">Pulse</option><option value="noise">Smooth noise</option><option value="keyframes">Keyframes</option></select></label>
         {modulation ? <>{!modulation.range&&<Parameter definition={{ key: 'amount', label: 'Depth', min: 0, max: 1, step: .01, default: .2, section: 'Motion' }} value={modulation.amount} animated={false} onChange={n => changeMod({ ...modulation, amount: n })} onStart={beginGesture} onEnd={endGesture} />}<Parameter definition={{ key: 'cycles', label: 'Cycles per loop', min: 1, max: 8, step: 1, default: 1, section: 'Motion' }} value={modulation.cycles} animated={false} onChange={n => changeMod({ ...modulation, cycles: n })} onStart={beginGesture} onEnd={endGesture} /><Parameter definition={{ key: 'phase', label: 'Phase offset', min: 0, max: 1, step: .01, default: 0, section: 'Motion' }} value={modulation.phase} animated={false} onChange={n => changeMod({ ...modulation, phase: n })} onStart={beginGesture} onEnd={endGesture} />{modulation.kind === 'keyframes' && <KeyframeCurve mod={modulation} onChange={changeMod} onStart={beginGesture} onEnd={endGesture} />}<button className="wide-button" onClick={() => changeMod(undefined)}>Remove animation</button></> : <div className="empty-note"><Icon name="wave" size={28} /><p>Choose a motion source.</p></div>}
         {modulation && <section className="control-section"><label className="stacked-label">Animation range<select aria-label="Animation range" value={modulation.range?'endpoints':'offset'} onChange={e=>{if(e.target.value==='offset'){const {range,...rest}=modulation;changeMod(rest);}else{const d=allDefinitions.find(d=>d.key===selectedModKey),bounds=d?[d.min,d.max]:selectedModKey==='opacity'?[0,1]:selectedModKey==='transform.scale'?[.05,8]:selectedModKey==='transform.rotation'?[-TAU,TAU]:[-2,2];changeMod({...modulation,range:{min:bounds[0],max:bounds[1]}});}}}><option value="offset">Offset from base</option><option value="endpoints">Smooth between endpoints</option></select></label>{modulation.range&&<div className="endpoint-controls">{(['min','max'] as const).map(key=><label key={key}>{key==='min'?'Lower endpoint':'Upper endpoint'}<input type="number" aria-label={key==='min'?'Lower endpoint':'Upper endpoint'} step="any" value={modulation.range![key]} onChange={e=>{const n=Number(e.target.value),d=allDefinitions.find(d=>d.key===selectedModKey),bounds=d?[d.min,d.max]:selectedModKey==='opacity'?[0,1]:selectedModKey==='transform.scale'?[.05,8]:selectedModKey==='transform.rotation'?[-TAU,TAU]:[-2,2];if(Number.isFinite(n)&&n>=bounds[0]&&n<=bounds[1]&&(key==='min'?n<modulation.range!.max:n>modulation.range!.min))changeMod({...modulation,range:{...modulation.range!,[key]:n}});}}/></label>)}</div>}<p className="motion-help">Endpoints define the full movement without clipping at the control limits. Depth applies to offset routes.</p></section>}
-        <section className="control-section"><h3>Active routes</h3>{Object.entries(selected.modulations).length ? Object.entries(selected.modulations).map(([key, mod]) => <button className="route-row" key={key} onClick={() => setModKey(key)}><Icon name="wave" size={15} /><span>{allDefinitions.find(d => d.key === key)?.label ?? key}</span><small>{mod.kind} · {mod.cycles}×</small></button>) : <p className="muted-text">No parameter animations.</p>}</section>
+        <section className="control-section"><h3>Active routes</h3>{Object.entries(selected.modulations).length ? Object.entries(selected.modulations).map(([key, mod]) => routeHidden?.has(key) ? <p className="muted-text" key={key}>{allDefinitions.find(d => d.key === key)?.label ?? key}: waits until this control is in use again.</p> : <button className="route-row" key={key} onClick={() => setModKey(key)}><Icon name="wave" size={15} /><span>{allDefinitions.find(d => d.key === key)?.label ?? key}</span><small>{motionIgnored(selected, key) ? 'Not used on Evolve' : `${mod.kind} · ${mod.cycles}×`}</small></button>) : <p className="muted-text">No parameter animations.</p>}</section>
       </> : <>
-        <FinishSections layer={selected} definitions={definitions} edit={editLayer} animate={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />
-        <section className="control-section"><h3>Transform</h3>{([{ key: 'x', label: 'Horizontal', min: -2, max: 2, step: .01, default: 0 }, { key: 'y', label: 'Vertical', min: -2, max: 2, step: .01, default: 0 }, { key: 'scale', label: 'Size', min: .05, max: 8, step: .01, default: 1 }, { key: 'rotation', label: 'Rotation', min: -Math.PI, max: Math.PI, step: .01, default: 0 }] as const).map(d => <Parameter key={d.key} definition={{ ...d, section: 'Shape' }} value={selected.transform[d.key]} animated={!!selected.modulations[`transform.${d.key}`]} onChange={n => editLayer(l => ({ ...l, transform: { ...l.transform, [d.key]: n } }))} onAnimate={() => { setModKey(`transform.${d.key}`); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />)}</section>
-        <section className="control-section"><h3>Mask</h3><label className="stacked-label">Mask shape<select value={selected.mask.kind} onChange={e => { const kind = e.target.value as Layer['mask']['kind']; if (kind === 'image' && !selected.mask.dataUrl) maskInput.current?.click(); else editLayer(l => ({ ...l, mask: { kind, softness: l.mask.softness, invert: l.mask.invert, size: l.mask.size, ...(kind === 'image' ? { dataUrl: l.mask.dataUrl } : {}) } })); }}><option value="none">None</option><option value="circle">Circle</option><option value="rectangle">Rectangle</option><option value="image">Imported image</option></select></label>{selected.mask.kind !== 'none' && <><Parameter definition={{ key: 'size', label: 'Mask size', min: .05, max: 2, step: .01, default: 1, section: 'Shape' }} value={selected.mask.size} animated={false} onChange={n => editLayer(l => ({ ...l, mask: { ...l.mask, size: n } }))} onStart={beginGesture} onEnd={endGesture} /><Parameter definition={{ key: 'softness', label: 'Feather', min: 0, max: 1, step: .01, default: .1, section: 'Shape' }} value={selected.mask.softness} animated={false} onChange={n => editLayer(l => ({ ...l, mask: { ...l.mask, softness: n } }))} onStart={beginGesture} onEnd={endGesture} /><label className="checkbox-row"><input type="checkbox" checked={selected.mask.invert} onChange={e => editLayer(l => ({ ...l, mask: { ...l.mask, invert: e.target.checked } }))} />Invert mask</label>{selected.mask.kind === 'image' && <button className="wide-button" onClick={() => maskInput.current?.click()}>Replace mask image</button>}</>}</section>
-        <section className="control-section"><h3>Output</h3><label className="checkbox-row"><input type="checkbox" aria-label="Exact colour" checked={project.highlights === 'exact'} onChange={e => edit(p => ({ ...p, highlights: e.target.checked ? 'exact' : 'soft' }))} />Exact colour (no highlight roll-off)</label><p className="muted-text">Keeps palette colours at their exact values. Turn off for lit 3D and glowing sources, whose highlights then roll off softly.</p>{(() => { const blockers = tileBlockers(project); return <><label className="checkbox-row"><input type="checkbox" aria-label="Tile edges" checked={!!project.tileEdges} disabled={blockers.length > 0} onChange={e => edit(p => { const { tileEdges: _off, ...rest } = p; return e.target.checked ? { ...rest, tileEdges: true } : rest; })} />Tile edges</label><p className="muted-text">The exported clip repeats seamlessly side by side and top to bottom, for mapping copies onto neighbouring surfaces.</p>{blockers.map((b, i) => <p key={i} className="muted-text">{b}</p>)}</>; })()}</section>
-        <section className="control-section"><h3>Composition background</h3><label className="checkbox-row"><input type="checkbox" checked={project.transparent} onChange={e => edit(p => ({ ...p, transparent: e.target.checked }))} />Transparent background</label><label className="background-color">Background color<input aria-label="Background color" type="color" value={project.background} onChange={e => edit(p => ({ ...p, background: e.target.value }))} /></label></section>
+        <FinishSections hasLayerBelow={visibleBelow(project.layers, selected.id)} layer={selected} definitions={definitions} edit={editLayer} animate={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} open={finishOpen} onOpen={setFinishOpen} layerPanels={[
+          { id: 'transform', label: 'Transform', summary: selected.transform.x || selected.transform.y || selected.transform.rotation || selected.transform.scale !== 1 ? 'Moved' : '', on: !!(selected.transform.x || selected.transform.y || selected.transform.rotation || selected.transform.scale !== 1), content: <>{([{ key: 'x', label: 'Horizontal', min: -2, max: 2, step: .01, default: 0 }, { key: 'y', label: 'Vertical', min: -2, max: 2, step: .01, default: 0 }, { key: 'scale', label: 'Size', min: .05, max: 8, step: .01, default: 1 }, { key: 'rotation', label: 'Rotation', min: -Math.PI, max: Math.PI, step: .01, default: 0 }] as const).map(d => <Parameter key={d.key} definition={{ ...d, section: 'Shape' }} value={selected.transform[d.key]} animated={!!selected.modulations[`transform.${d.key}`]} onChange={n => editLayer(l => ({ ...l, transform: { ...l.transform, [d.key]: n } }))} onAnimate={() => { setModKey(`transform.${d.key}`); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} />)}</> },
+          { id: 'mask', label: 'Mask', summary: selected.mask.kind === 'none' ? '' : selected.mask.kind === 'image' ? 'Image' : selected.mask.kind === 'circle' ? 'Circle' : 'Rectangle', on: selected.mask.kind !== 'none', content: <><label className="stacked-label">Mask shape<select value={selected.mask.kind} onChange={e => { const kind = e.target.value as Layer['mask']['kind']; if (kind === 'image' && !selected.mask.dataUrl) maskInput.current?.click(); else editLayer(l => ({ ...l, mask: { kind, softness: l.mask.softness, invert: l.mask.invert, size: l.mask.size, ...(kind === 'image' ? { dataUrl: l.mask.dataUrl } : {}) } })); }}><option value="none">None</option><option value="circle">Circle</option><option value="rectangle">Rectangle</option><option value="image">Imported image</option></select></label>{selected.mask.kind !== 'none' && <><Parameter definition={{ key: 'size', label: 'Mask size', min: .05, max: 2, step: .01, default: 1, section: 'Shape' }} value={selected.mask.size} animated={false} onChange={n => editLayer(l => ({ ...l, mask: { ...l.mask, size: n } }))} onStart={beginGesture} onEnd={endGesture} /><Parameter definition={{ key: 'softness', label: 'Feather', min: 0, max: 1, step: .01, default: .1, section: 'Shape' }} value={selected.mask.softness} animated={false} onChange={n => editLayer(l => ({ ...l, mask: { ...l.mask, softness: n } }))} onStart={beginGesture} onEnd={endGesture} /><label className="checkbox-row"><input type="checkbox" checked={selected.mask.invert} onChange={e => editLayer(l => ({ ...l, mask: { ...l.mask, invert: e.target.checked } }))} />Invert mask</label>{selected.mask.kind === 'image' && <button className="wide-button" onClick={() => maskInput.current?.click()}>Replace mask image</button>}</>}</> },
+          { id: 'output', label: 'Output', summary: project.highlights === 'exact' ? 'Exact colour' : '', content: <><label className="checkbox-row"><input type="checkbox" aria-label="Exact colour" checked={project.highlights === 'exact'} onChange={e => edit(p => ({ ...p, highlights: e.target.checked ? 'exact' : 'soft' }))} />Exact colour (no highlight roll-off)</label><p className="muted-text">Keeps palette colours at their exact values. Turn off for lit 3D and glowing sources, whose highlights then roll off softly.</p>{(() => { const blockers = tileBlockers(project); return <><label className="checkbox-row"><input type="checkbox" aria-label="Tile edges" checked={!!project.tileEdges} disabled={blockers.length > 0} onChange={e => edit(p => { const { tileEdges: _off, ...rest } = p; return e.target.checked ? { ...rest, tileEdges: true } : rest; })} />Tile edges</label><p className="muted-text">The exported clip repeats seamlessly side by side and top to bottom, for mapping copies onto neighbouring surfaces.</p>{blockers.map((b, i) => <p key={i} className="muted-text">{b}</p>)}</>; })()}</> },
+          { id: 'background', label: 'Background', summary: project.transparent ? 'Transparent' : project.background, content: <><label className="checkbox-row"><input type="checkbox" checked={project.transparent} onChange={e => edit(p => ({ ...p, transparent: e.target.checked }))} />Transparent background</label><label className="background-color">Background color<input aria-label="Background color" type="color" value={project.background} onChange={e => edit(p => ({ ...p, background: e.target.value }))} /></label></> },
+        ]} />
       </>}</div>
     </> : <div className="empty-inspector"><Icon name="layers" size={32} /><h2>No layers</h2><p>Add an instrument or image to begin.</p><button className="secondary-button" onClick={() => addLayer('surface')}>Add surface</button></div>}</aside>
     </main>
     {mode === 'live' && <LivePanel header={modeSwitch} onError={reportError} />}
     {mode === 'map' && <MapPanel header={modeSwitch} onError={reportError} onEditInStudio={editShapeInStudio} />}
+    {mode === 'perform' && <PerformPanel header={modeSwitch} onError={reportError} onEditClip={(sourceId, name) => editShapeInStudio(sourceId, '', { name })} onCopyClip={copy => editShapeInStudio(copy.sourceId, '', { name: copy.clip.name, copy })} draftName={shapeEdit?.draft ? shapeEdit.shapeName : null} onOpenDraft={() => setMode('studio')} />}
 
     <footer className="app-footer" inert={mode !== 'studio'}><span className="workspace-shortcuts"><kbd>F</kbd> focus <kbd>B</kbd> library <kbd>L</kbd> layers <kbd>I</kbd> inspector</span><span className="footer-status"><span className={status && (!status.ffmpeg || !status.ffprobe) ? 'engine-unavailable' : ''}>{status?.ffmpeg && status.ffprobe ? 'Export engine ready' : status ? 'Export engine unavailable' : 'Movies and sequences require the desktop app'}</span><span className="build-label" title={`Commit ${__FORM_FIELD_BUILD__.commit}${__FORM_FIELD_BUILD__.modified ? ' with uncommitted changes' : ''} · built ${new Date(__FORM_FIELD_BUILD__.date).toLocaleString()}`}>v{__FORM_FIELD_BUILD__.version} · build {__FORM_FIELD_BUILD__.build}{__FORM_FIELD_BUILD__.modified ? '+' : ''}</span></span></footer>
     {!exportOpen && <Notices message={message} error={error} onDismiss={() => setError('')} />}

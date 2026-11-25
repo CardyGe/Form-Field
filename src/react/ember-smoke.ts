@@ -13,6 +13,7 @@ export interface SmokeAudioFrame {
 }
 
 export function usesEmberSmokeAudio(layer: Layer): boolean {
+  if (layer.visible && layer.kind === 'smokecloud') return layer.params.cloudResponse > 0 || !!layer.modulations.cloudResponse;
   return layer.visible && layer.kind === 'scope' && layer.params.scopeMode === 1 &&
     (layer.params.emberSmoke > 0 || !!layer.modulations.emberSmoke) &&
     (layer.params.emberSmokeResponse > 0 || !!layer.modulations.emberSmokeResponse);

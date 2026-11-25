@@ -1,6 +1,8 @@
+import { FlashGuardButton } from './FlashGuardButton';
 import { useRef, type ComponentProps, type ReactNode } from 'react';
 import { LiveLookControls, LiveReactSection, Slider, liveLinks } from './LiveLookControls';
 import { useLive } from './useLive';
+import { InstallationControls } from './InstallationControls';
 import { LINKS_BUDGET, IGNORE_STILL, LOOK_LABELS, RELIEF_CONTROLS, RELIEF_SIZES, RELIEF_SURFACES, RELIEF_MOTIONS, RELIEF_FINISHES, RELIEF_PRESETS, type ReliefSettings, type LookKind, NOISE_FLOOR, PAINT_CONTROLS, SENSITIVITY, SIGNAL_CONTROLS, SIGNAL_STARTS, SMOKE_CONTROLS, SMOKE_STARTS, usesPeople, type Box, type LiveSettings, type SignalKey } from '../live/settings';
 import { RELIEF_PALETTES, validateReliefPalette } from '../live/relief-palettes';
 import { rampHex } from '../live/colour';
@@ -53,6 +55,7 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
       {live.outputOpen ? <button className="primary-button" onClick={live.closeOutput}>Close output</button>
         : <button className="primary-button" disabled={!live.desktop || s.display === null || s.source.kind === 'file'} title={s.source.kind === 'file' ? 'Video files play in this preview only. Choose a camera or the test pattern to open the output.' : 'Show the artwork full screen on the chosen display · Esc closes it'} onClick={() => void live.openOutput()}>Open output</button>}
       <button className={`text-button live-toggle ${live.blackout ? 'on' : ''}`} aria-pressed={live.blackout} onClick={() => live.setBlackout(!live.blackout)}>Blackout</button>
+      <FlashGuardButton on={live.flashGuard} onChange={live.setFlashGuard} />
       <button className="text-button" onClick={live.clear}>Clear</button>
       <span className="live-fps" title="Frames per second">{live.fps ? `${Math.round(live.fps)} fps` : ''}</span>
     </div></header>
@@ -107,6 +110,15 @@ export default function LivePanel({ header, onError }: { header: ReactNode; onEr
           : <canvas aria-label="Live preview" ref={live.setCanvas} />}
       </div>
       <aside className="live-column" aria-label={LOOK_LABELS[s.look]}>
+        {s.look === 'meridian' && live.meridian && <section className="live-people" aria-label="Meridian status">
+          <p className={`live-status ${live.meridian.status.startsWith('Camera lost') || live.meridian.status.startsWith('Movement only') ? 'warn' : ''}`} role="status">{live.meridian.status}</p>
+          {live.meridian.status.startsWith('Movement only') && <p className="live-status warn">People are being found from movement alone. Keep the projection and moving lights out of the camera's view; Throw and Release wait until people are found.</p>}
+          {live.meridian.limiterError ? <p className="live-status warn" role="alert">Flash limiter is not running ({live.meridian.limiterError}). Only the artwork window's basic whole-picture limiter is holding back flashes: keep strobing moves off.</p>
+            : live.meridian.limiterOn ? <p className="live-status">Flash limiter on</p> : null}
+          <InstallationControls surface="live" display={s.display} />
+          {live.installationWaiting && <p className="live-status warn" role="status">{live.installationWaiting}</p>}
+          {live.meridian.qualityReduced && <p className="live-status" role="status" title="Less bloom, tearing or small detail, to keep the output smooth. Lines stay sharp and the flash limiter is unchanged. It comes back after a few calm seconds.">Quality reduced</p>}
+        </section>}
         <LiveLookControls s={s} update={live.update} reactFor={reactFor} onView={() => live.setView('art')} onClear={live.clear} />
       </aside>
     </div>

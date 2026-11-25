@@ -50,6 +50,8 @@ export class Modulator {
   apply<T extends ModShow>(show: T, projects: ReadonlyMap<string, Project>, signals: Signals, dt: number): Modulated<T> {
     const out: Modulated<T> = { show, opacity: new Map(), speed: new Map(), params: new Map() };
     const links = show.links ?? [];
+    // Smoothing for links that were deleted is let go, so a long show of edits does not keep it all.
+    if (this.state.size > links.length) for (const id of [...this.state.keys()]) if (!links.some(l => l.id === id)) this.state.delete(id);
     if (!links.length) return out;
     const byTarget = new Map<string, Link[]>();
     for (const l of links) if (l.on) (byTarget.get(l.target) ?? byTarget.set(l.target, []).get(l.target)!).push(l);

@@ -7,19 +7,27 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:signal": "vite --config vite.signal.config.ts",
+    "build:signal": "tsc --noEmit && vite build --config vite.signal.config.ts",
+    "preview:signal": "vite preview --config vite.signal.config.ts",
     "build": "tsc --noEmit && vite build",
     "start": "npm run build && electron .",
     "test": "tsx --test tests/*.test.ts && node --test electron/*.test.cjs",
     "test:interaction": "npm run build && node scripts/verify-canvas-interaction.mjs",
     "test:zoom": "npm run build && node scripts/verify-zoom-quality.mjs",
     "package": "node scripts/package.mjs",
+    "bench": "env -u ELECTRON_RUN_AS_NODE electron scripts/bench.cjs",
     "build:media": "node scripts/build-media-tools.mjs",
     "test:ui": "npm run build && node scripts/verify-ui.mjs",
     "test:workspace": "npm run build && node scripts/verify-workspace-ui.mjs",
     "test:packaged": "node scripts/verify-packaged.mjs",
     "test:map": "npm run build && node scripts/verify-map.mjs",
+    "test:perform": "npm run build && node scripts/verify-perform.mjs",
+    "test:perform:soak": "npm run build && node scripts/verify-perform-soak.mjs",
     "test:live": "npm run build && node scripts/verify-live.mjs && node scripts/verify-live-ui.mjs",
-    "test:projection": "npm run build && node scripts/verify-projection-media.mjs --performance --native && node scripts/verify-projection-media-ui.mjs"
+    "test:projection": "npm run build && node scripts/verify-projection-media.mjs --performance --native && node scripts/verify-projection-media-ui.mjs",
+    "test:morphogen": "npm run build && node scripts/verify-morphogen.mjs",
+    "test:morphogen:show": "npm run build && node scripts/verify-morphogen-show.mjs"
   },
   "devDependencies": {
     "@mediapipe/tasks-vision": "1.2.0",

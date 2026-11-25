@@ -12,9 +12,13 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const live = require('./live.cjs');
 const map = require('./map.cjs');
+const installation = require('./installation.cjs');
 const { ExportManager, atomicWrite, asBuffer, validateProject, resolveMediaTools } = require('./export-manager.cjs');
 
 app.setName('Form & Field');
+// Chromium keeps 16 graphics contexts a page and silently stops the oldest past that, which on the projector window is
+// the stage itself. Perform plays up to 24 instruments beside the stage (scripts/verify-perform-contexts.mjs).
+app.commandLine.appendSwitch('max-active-webgl-contexts', '32');
 const explicitUserData = app.commandLine.getSwitchValue('user-data-dir');
 if (explicitUserData) {
   if (!path.isAbsolute(explicitUserData)) throw new Error('--user-data-dir must be an absolute path.');
@@ -25,6 +29,7 @@ let window;
 let manager;
 let liveControl;
 let mapControl;
+let installationControl;
 let quitting = false;
 let quitRequested = false;
 let closingPromise = null;
@@ -241,10 +246,13 @@ app.whenReady().then(async () => {
   await manager.initializing;
   setupIPC();
   const pageOpener = hash => target => { const devURL = process.env.STUDIO_DEV_URL; if (devURL) target.loadURL(`${devURL.replace(/\/$/, '')}/#${hash}`); else target.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { hash }); };
-  liveControl = live.setupLive({ closeOtherOutput: () => mapControl?.closeOutput(), BrowserWindow, ipcMain, screen, systemPreferences, powerSaveBlocker, settingsFile: path.join(app.getPath('userData'), 'live-settings.json'),
+  liveControl = live.setupLive({ allowChecks: !app.isPackaged, closeOtherOutput: () => mapControl?.closeOutput(), BrowserWindow, ipcMain, screen, systemPreferences, powerSaveBlocker, settingsFile: path.join(app.getPath('userData'), 'live-settings.json'),
     preload: path.join(__dirname, 'preload.cjs'), studio: () => window,
     open: pageOpener('live-output') });
-  mapControl = map.setupMap({ videoFiles, BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath: path.join(app.getPath('userData'), 'map-autosave.formshow'),
+  // Installation mode: on launch with it on, the display is kept awake at once; the studio window then restores the last show.
+  installationControl = installation.setupInstallation({ ipcMain, powerSaveBlocker, fs, studio: () => window,
+    settingsFile: path.join(app.getPath('userData'), 'installation.json'), logFile: path.join(app.getPath('userData'), 'installation-faults.log') });
+  mapControl = map.setupMap({ allowChecks: !app.isPackaged, videoFiles, BrowserWindow, ipcMain, screen, powerSaveBlocker, dialog, autosavePath: path.join(app.getPath('userData'), 'map-autosave.formshow'),
     preload: path.join(__dirname, 'preload.cjs'), studio: () => window, open: pageOpener('map-output'), closeLiveOutput: () => liveControl?.closeOutput() });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: 'Form & Field', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
@@ -259,6 +267,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin' || process.env.STUDIO_DEV_URL) { quitRequested = true; if (!closingPromise) void requestClose(); }
 });
+app.on('will-quit', () => installationControl?.stop());
 app.on('before-quit', event => {
   if (quitting || !manager) return;
   event.preventDefault(); quitRequested = true; void requestClose();

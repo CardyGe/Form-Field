@@ -188,6 +188,33 @@ try {
     await page.getByLabel('Use empty room', { exact: true }).uncheck();
     await page.getByLabel('Look', { exact: true }).selectOption('paint');
   });
+  await check('Meridian can be chosen, says who is there, runs the flash limiter, loads a Studio look and reaches the output', async () => {
+    await page.getByLabel('Look', { exact: true }).selectOption('meridian');
+    await page.getByLabel('Source', { exact: true }).selectOption({ label: 'Test pattern' });
+    await page.getByText('Flash limiter on', { exact: true }).waitFor({ timeout: 30000 });
+    // The test pattern's crowd walks in after a few seconds.
+    await page.getByRole('status').filter({ hasText: /^(\d+ (person|people)|Nobody there · attract)$/ }).first().waitFor({ timeout: 30000 });
+    await page.getByRole('status').filter({ hasText: /^\d+ (person|people)$/ }).first().waitFor({ timeout: 30000 });
+    await until(() => lit(page, preview(page)), v => v > .003, 'Meridian preview stayed dark');
+    await page.screenshot({ path: path.join(out, 'meridian.png') });
+    await page.getByLabel('Load from Studio preset', { exact: true }).selectOption('meridian-evolve-orrery');
+    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'meridian' && v?.meridian?.preset === 'meridian-evolve-orrery' && v.meridian.macroDensity === .82, 'the Studio look was not loaded');
+    await until(() => page.getByLabel('Density', { exact: true }).inputValue(), v => v === '0.82', 'Density did not follow the Studio look');
+    const drop = page.getByRole('button', { name: 'Drop', exact: true });
+    await drop.dispatchEvent('pointerdown'); await drop.dispatchEvent('pointerup');
+    await page.getByLabel('Orbit', { exact: true }).fill('0.5');
+    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.meridian?.liveOrbit === .5 && v.meridian.moveDrop === 0, 'Meridian settings were not saved');
+    const opened = app.waitForEvent('window');
+    await page.getByRole('button', { name: 'Open output', exact: true }).click();
+    const output = await opened; await output.waitForLoadState();
+    await until(() => lit(output, output.locator('canvas')), v => v > .003, 'Meridian did not reach the output');
+    await page.getByText('Flash limiter on', { exact: true }).waitFor({ timeout: 30000 }); // reported by the artwork window
+    await page.getByRole('button', { name: 'Close output', exact: true }).click();
+    await page.getByRole('button', { name: 'Open output', exact: true }).waitFor();
+    await page.getByLabel('Look', { exact: true }).selectOption('paint');
+    await page.getByLabel('Source', { exact: true }).selectOption({ index: 0 });
+    await until(() => page.evaluate(() => window.studio.live.loadSettings()), v => v?.look === 'paint' && v.source.kind === 'camera', 'the camera and Paint were not restored');
+  });
   await check('No page errors with the camera allowed', async () => assert.deepEqual(errors, []));
   await check('Refused camera access explains where to allow it and offers other sources', async () => {
     await app.close();

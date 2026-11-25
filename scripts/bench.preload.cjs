@@ -1,0 +1,9 @@
+const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('bench', {
+  config: () => ipcRenderer.invoke('bench-config'),
+  done: report => ipcRenderer.invoke('bench-done', report),
+  fail: error => ipcRenderer.invoke('bench-fail', String(error)),
+  load: () => ipcRenderer.invoke('bench-load'),
+  note: text => ipcRenderer.invoke('bench-note', String(text)),
+  image: (name, base64) => ipcRenderer.invoke('bench-image', String(name), String(base64)),
+});

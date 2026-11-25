@@ -2,6 +2,16 @@
 
 A local visual instrument studio for Apple Silicon Macs. Create looping liquid fields, pearlescent 3D forms, fractal worlds and graphic patterns, composite up to four layers, and export full-resolution stage media. This is a working 0.17 alpha.
 
+## What's new: Meridian (alpha)
+
+- **Meridian (alpha):** a generative artwork and live instrument. Its default style, **Evolve**, is one calm, continuous structure of mostly white rings, arcs and spokes that slowly morphs through 15 forms and never resets. **Pulse** and **Dense** remain selectable. Treat it as alpha until feedback from its first party is in.
+- **Play it:** 8 macros (Density, Tension, Chaos, Speed, Weight, Glitch, Heat, Scale), Evolution, Hold shape, moves on keys N, H, D, C, M, R and 1-8, seed slots, A/B morph, searchable lockable groups and 10 Evolve presets.
+- **Music and Map:** the light follows audio bands and a smoothed beat, and the test beat is available. Meridian plays on mapped shapes, and moves work through Map links and MIDI learn.
+- **Meridian Live:** reacts to people (orbit, constellation, merge, throw, conduct and more). The camera picture never reaches the output.
+- **Flash guard:** on by default whenever a show contains Meridian, and it covers other instruments on that wall. The Meridian panel shows "Flash guard on"; turning it off needs confirmation, and the Map footer warns while it is off. Turning it off does not leave the wall unlimited: a basic whole-picture flash limiter runs on every wall and on the Live output, after Meridian's guard, but it is much coarser. It is not a certified photosensitivity test.
+- **Hardening:** a quality governor, recovery after graphics resets, an installation mode with autopilot, a text-only fault log, and a soak tool. See `docs/meridian-show-checklist.md` and `reports/Meridian soak.md`.
+- **Not yet tested:** no real projector, camera, room lighting, DJ audio or MIDI hardware, and no 12-hour run on the show Mac. A crashed wall is not reopened automatically.
+
 ## What's new in 0.17
 
 - **Map:** a new screen for projection mapping. Switch to **Map** in the header, draw shapes and drag their corners to fit the surfaces in the room, using a room photo, Snap, a test grid and Identify. The artwork shows on a projector while the controls stay on your screen, with Blackout.
@@ -112,6 +122,18 @@ Finish → Time displacement makes parts of the frame show the layer as it was s
 
 Each slice is the looping source rendered again at an earlier moment, so no history is stored. The loop closes exactly, needs no warm-up and can be exported in any order. Each slice costs one extra render of the source, so 12 slices render about 12 times slower than the plain layer. Time displacement runs before Feedback and Flat colour, so both apply to the stitched result. It needs a source that moves: raise the source's Cycles per loop if the steps barely show. Three looks live under Library → Presets → Time displacement.
 
+## Warp
+
+Five effects in Finish → Add effect bend any layer except Graphic Patterns. Each is off until you raise its amount, and layers using one cannot use Tile Edges.
+
+- **Warp** bends the picture with Waves, Noise, Ripple, Magnetic or Plasma.
+- **Liquid** pushes it along currents: Swirl, Flow, Ridge, Vortex or Chaos.
+- **Luma Warp** moves it by its own light or by the layer below. Soft pictures suit it best: on very fine detail, such as Fractals, Edges and Contours break up into grain.
+- **Polar** wraps the picture into a circle or unrolls a circle into a strip.
+- **Mirror** folds it left-right, top-bottom, four ways or into a kaleidoscope.
+
+Distances are shares of the frame height, so a look matches at every export size, and motion runs in whole cycles so loops close exactly. On a still Image, only Warp and Liquid move by themselves; give Mirror some turns per loop to animate it.
+
 ## Feedback
 
 Any layer except Graphic Patterns and Ink *Evolving* can feed back into itself (Finish → Feedback). Each frame keeps a faded echo of the last one, zoomed, turned, moved and hue-shifted, and the new source is drawn with it. Flat colour and outlines then apply to the result, so echoes are re-banded into flat poster colour.
@@ -144,6 +166,12 @@ Five looks: Feedback Glitch, Neon Collapse, Glitch Staircase, Static Bloom and M
 ## Live
 
 Live turns a camera into projected artwork as it happens. It is a separate screen: switch between **Studio** and **Live** in the header. Nothing in Live is exported or recorded, and camera video never leaves the computer.
+
+### Signal Melt in a browser
+
+Run `npm run dev:signal` and open [Signal Melt](http://localhost:5174). Drag the demo figure or focus the artwork and use the arrow keys. **Use camera** turns the participant's silhouette into colour and pose trails. Hold still to charge the effect, then move to release it. Use **Fullscreen** to fill a display.
+
+For sharing, `npm run build:signal` creates the static site in `work/signal-melt-web`. Open its `index.html` directly for the interactive demo. For camera play, run `npm run preview:signal` locally or publish the contents of the folder, including `mediapipe`, to an HTTPS static host. The browser asks for camera access when a participant chooses **Use camera**. Camera frames are processed on the device.
 
 **Setting up**
 
@@ -247,6 +275,8 @@ The four material instruments expose **Advanced shape**, **Advanced motion** and
 Family-specific controls add ink seed coverage, development and edge pigment; staggered rounded shutters; and circular and harmonic nodal figures. Ink preparation controls are not animation targets. Their cache keys include every preparation setting.
 
 Each new instrument has a fourth exploration look that demonstrates these controls. Neutral migration defaults preserve existing artwork.
+
+**Finish** also has **Colour split**, **Gradient map**, **Colour balance** and **Key**, and Glow gains **Glow colour spread** and **Glow streak**. **Time displacement** gains **Time mode** (Delay map, Echo, Median, Darkest, Brightest), **Direction**, **Twist**, **Time zoom**, **Colour reach** and **Colour lag**. All of them start off, so existing projects look the same. Seven new finish looks use them: Neon Map, Anamorphic, Time Vortex, Ghosts, Long Exposure, Premonition and Brightness Time. Results are in [the colour and time proof](docs/colour-and-time-proof.md).
 
 Volume Banding suppression uses deterministic sampling dither; High quality reduces the resulting sampling texture. Directional highlights are filtered against rapid normal changes to reduce sparkle. All render and grading changes use the shared compositor and native output pipeline. The detailed audit and research are in [the professional effect audit](docs/professional-effect-audit-0.10.md).
 
@@ -498,6 +528,8 @@ All instruments and modulation use an explicit periodic phase. A loop exports ph
 Projects embed imported images and masks. Autosave writes are atomic, debounced during editing, and flushed before native close/quit, including a name still being typed. A failed close save offers to keep editing. One raw copy of the previous autosave is preserved per app session; the latest ten startup backups are retained in the application's `recovery` folder.
 
 Export jobs retain an immutable project snapshot, frame checksums and high-precision masters. **Stop safely** retains completed frames. Recoverable jobs appear in Export after interruption or restart. Resume reconciles cached files and refuses to mix frames from a different renderer build. Keep the same app version to resume an unfinished job.
+
+Map shows with a Perform set are saved as show version 9. Opened in an older build, a version 9 show loses its Perform set on that build's next autosave, and a show from a newer version opens here without its set; keep a copy before moving shows between builds.
 
 The default destination is `~/Documents/Form & Field Exports`. Each job has its own folder. A 4K frame cache can consume several gigabytes per loop; finished caches are retained deliberately. Remove a completed job's directory in Finder when its masters are no longer needed. Do not remove the cache of a job you intend to resume.
 

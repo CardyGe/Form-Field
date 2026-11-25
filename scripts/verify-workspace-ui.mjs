@@ -1,3 +1,4 @@
+import { openFinish } from './finish-ui.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -141,18 +142,100 @@ try {
   await saved(p=>p.layers[0].modulations.warp?.points[0].value===.05);
   await page.getByRole('button',{name:'Remove animation',exact:true}).click();
   await saved(p=>!p.layers[0].modulations.warp);
-  await page.getByRole('button',{name:'Finish',exact:true}).click();
+  await page.getByRole('button',{name:'Finish',exact:true}).click();await openFinish(page,'Tonal finishing');
   const gamma=page.getByLabel('Midtone gamma value',{exact:true});
   const before=await state();await gamma.fill('1.17');await gamma.press('Enter');
   await saved(p=>p.layers[0].params.toneGamma===1.17);
   await page.getByTitle('Undo · ⌘Z',{exact:true}).click();await saved(p=>JSON.stringify(p)===JSON.stringify(before));
   await page.getByRole('button',{name:'Shape',exact:true}).click();
  });
+ await check('colour sections show on a Surface layer and not on a Graphic layer',async()=>{
+  const titles=['Colour split','Gradient map','Colour balance','Key'];
+  for(const [kind,expected] of [['surface',true],['graphic',false]]){
+   const p={...model.createProject(),layers:[model.createLayer(kind)]};
+   await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===p.id);
+   await page.getByRole('button',{name:'Finish',exact:true}).click();
+   await openFinish(page);
+   const panel=page.locator('.inspector-content');
+   assert.equal(await page.locator('.finish-row').count(),4,kind+': a new layer lists only its layer settings');
+   assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'The Finish list fits one screen.');
+   await page.getByRole('button',{name:'Add effect',exact:true}).click();
+   for(const title of titles)assert.equal(await page.getByRole('button',{name:'Add '+title,exact:true}).count(),expected?1:0,kind+': '+title);
+   if(expected){
+    for(const group of ['Colour','Light','Warp','Surface','Time']){
+     await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:group,exact:true}).click();
+     assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'The '+group+' group of Add effect fits one screen.');
+     if(group==='Warp')assert.equal(await page.locator('.finish-picker-group button').count(),5,'The Warp filter shows five cards.');
+    }
+    await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:'All',exact:true}).click();
+    assert.ok(await page.locator('.finish-picker img').evaluateAll(all=>all.length===16&&all.every(i=>i.complete&&i.naturalWidth>0)),'Every effect has a thumbnail.');
+    await snapshot('add-effect');
+    const search=page.getByLabel('Search effects',{exact:true});await search.fill('halftone');
+    assert.equal(await page.locator('.finish-picker-group button').count(),1);await search.fill('');await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.finish-picker').count(),0);
+    await page.getByRole('button',{name:'Add effect',exact:true}).click();
+    assert.equal(await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:'All',exact:true}).getAttribute('aria-pressed'),'true','The group filter starts at All again.');
+    await openFinish(page);
+    for(const [title,key] of [['Warp','bendAmount'],['Liquid','liquidAmount'],['Luma Warp','lumaWarpAmount'],['Polar','polarAmount'],['Mirror','mirrorAmount']]){
+     await openFinish(page,title);await saved(x=>x.layers[0].params[key]>0);
+     assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),title+' fits one screen.');
+     if(title==='Luma Warp'){
+      assert.equal(await page.getByText('There is no layer below this one, so nothing moves.',{exact:true}).count(),0);
+      await page.getByLabel('Driven by',{exact:true}).selectOption('1');await saved(x=>x.layers[0].params.lumaWarpSource===1);
+      assert.equal(await page.getByText('There is no layer below this one, so nothing moves.',{exact:true}).count(),1,'The bottom layer says why nothing moves.');
+      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Luma Warp with its message fits one screen.');
+     }
+     await page.getByRole('button',{name:'Remove',exact:true}).click();await saved(x=>x.layers[0].params[key]===0);
+    }
+    await openFinish(page,'Colour split');await saved(x=>x.layers[0].params.splitAmount===8);
+    assert.equal(await page.getByLabel('Split shape',{exact:true}).count(),1);
+    assert.equal(await page.getByLabel('Channel order',{exact:true}).count(),1);
+    await page.getByRole('button',{name:'Remove',exact:true}).click();await saved(x=>x.layers[0].params.splitAmount===0);
+    assert.equal(await page.getByRole('button',{name:'Colour split settings',exact:true}).count(),0);
+    await openFinish(page,'Gradient map');assert.equal(await page.getByLabel('Gradient colours',{exact:true}).count(),1);
+    await openFinish(page,'Key');assert.equal(await page.getByLabel('Key by',{exact:true}).count(),1);
+    await openFinish(page,'Glow');await saved(x=>x.layers[0].params.glowMix===.8);
+    const glow=page.getByRole('switch',{name:'Glow on',exact:true}),amount=page.getByLabel('Glow amount value',{exact:true});await amount.fill('1.37');await amount.press('Enter');await saved(x=>x.layers[0].params.glowMix===1.37);
+    await glow.click();await saved(x=>x.layers[0].params.glowMix===0);
+    await page.getByRole('button',{name:'Shape',exact:true}).click();await page.getByRole('button',{name:'Finish',exact:true}).click();
+    await glow.click();await saved(x=>x.layers[0].params.glowMix===1.37);
+    await openFinish(page);assert.equal(await page.getByRole('button',{name:'Glow settings',exact:true}).count(),1);
+    await openFinish(page,'Feedback');await saved(x=>x.layers[0].params.echo===.8);
+    assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Feedback fits one screen.');
+    await page.getByRole('button',{name:'Damage',exact:true}).click();assert.equal(await page.getByLabel('Echo melt value',{exact:true}).count(),1);
+    await openFinish(page);
+   }
+   await page.getByRole('button',{name:'Shape',exact:true}).click();
+  }
+  await fs.writeFile(fixture,JSON.stringify(original));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===original.id);
+ });
+ await check('Luma explains a zero-opacity layer below, and the group filter survives a layer switch honestly',async()=>{
+  const named=(kind,name,extra={})=>({...model.createLayer(kind),name,...extra});
+  const p={...model.createProject(),layers:[named('surface','Under',{opacity:0}),named('surface','Over'),named('graphic','Flat')]};
+  await fs.writeFile(fixture,JSON.stringify(p));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===p.id);
+  await page.getByRole('button',{name:'Select Over',exact:true}).click();
+  await page.getByRole('button',{name:'Finish',exact:true}).click();
+  await openFinish(page,'Luma Warp');await saved(x=>x.layers[1].params.lumaWarpAmount>0);
+  await page.getByLabel('Driven by',{exact:true}).selectOption('1');await saved(x=>x.layers[1].params.lumaWarpSource===1);
+  assert.equal(await page.getByText('There is no layer below this one, so nothing moves.',{exact:true}).count(),1,'A zero-opacity layer below counts as nothing below.');
+  await openFinish(page);await page.getByRole('button',{name:'Add effect',exact:true}).click();
+  const groups=page.getByRole('group',{name:'Effect groups',exact:true});
+  await groups.getByRole('button',{name:'Warp',exact:true}).click();
+  assert.equal(await page.locator('.finish-picker-group button').count(),5,'The Warp filter shows five cards.');
+  await page.getByRole('button',{name:'Select Flat',exact:true}).click();
+  await groups.getByRole('button',{name:'All',exact:true}).waitFor();
+  assert.equal(await page.getByText('No effects match that search.',{exact:true}).count(),0,'A filter the new layer lacks shows no false empty state.');
+  assert.ok(await page.locator('.finish-picker-group button').count()>0,'The picker still lists this layer\'s effects.');
+  assert.equal(await groups.getByRole('button',{name:'All',exact:true}).getAttribute('aria-pressed'),'true','The picker falls back to All.');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button',{name:'Shape',exact:true}).click();
+  await fs.writeFile(fixture,JSON.stringify(original));await page.getByRole('button',{name:'Open',exact:true}).click();await saved(x=>x.id===original.id);
+ });
  await check('preset browsing preserves the family filter and applies normal saved looks',async()=>{
   await libraryShow();await page.getByLabel('Search library',{exact:true}).fill('');
   await library.getByRole('button',{name:'Presets',exact:true}).click();
   await page.getByLabel('Preset library filter',{exact:true}).selectOption('finish');
-  assert.equal(await library.locator('.finish-card').count(),19);
+  assert.equal(await library.locator('.finish-card').count(),26);
   await snapshot('finish-library');
   await page.getByLabel('Search library',{exact:true}).fill('tunnel');
   assert.ok(await library.locator('.preset-card').count()>0);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advancePhase, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize } from '../src/map/playout';
+import { advancePhase, blendAlphas, drawsThisFrame, fadeAlpha, frameCost, governorStep, initialGovernor, GOVERNOR_SCALES, shouldFade, sourceSize } from '../src/map/playout';
 import { applyPreset, createLayer, createProject } from '../src/core/project';
 
 const TAU = Math.PI * 2;
@@ -62,6 +62,23 @@ test('drawsThisFrame: at the last level instruments draw every other frame', () 
   assert.deepEqual([0, 1, 2, 3].map(n => drawsThisFrame(3, n)), [true, false, true, false]);
 });
 
+test('dip goes through black', () => {
+  assert.deepEqual(blendAlphas('dip', .25), { from: .5, to: 0 });
+  assert.deepEqual(blendAlphas('dip', .75), { from: 0, to: .5 });
+  assert.deepEqual(blendAlphas('dip', .5), { from: 0, to: 0 });
+  assert.deepEqual(blendAlphas('dip', 0), { from: 1, to: 0 });
+  assert.deepEqual(blendAlphas('dip', 1), { from: 0, to: 1 });
+});
+
+test('blendAlphas: a cut is done at once, fades and dissolves cross, and t stays in range', () => {
+  assert.deepEqual(blendAlphas('cut', 0), { from: 0, to: 1 });
+  assert.deepEqual(blendAlphas('fade', .25), { from: .75, to: .25 });
+  assert.deepEqual(blendAlphas('dissolve', .5), { from: .5, to: .5 });
+  assert.deepEqual(blendAlphas('fade', -1), { from: 1, to: 0 });
+  assert.deepEqual(blendAlphas('fade', 2), { from: 0, to: 1 });
+  assert.deepEqual(blendAlphas('fade', Number.NaN), { from: 1, to: 0 });
+});
+
 test('fadeAlpha and shouldFade', () => {
   assert.equal(fadeAlpha(1000, 1000), 0);
   assert.equal(fadeAlpha(1000, 1200), 0.5);
@@ -82,4 +99,17 @@ test('frameCost: the work of a frame, or how late it came when the screen missed
   assert.equal(frameCost(5, 33), 33);    // the GPU is behind: the CPU work looks small, but frames come at 30 fps
   assert.equal(frameCost(20, 16.7), 20);
   assert.equal(frameCost(5, 900), 5);    // a stall (hidden window) is not a slow frame
+});
+
+test('on a Meridian show, Map does not halve the frame rate until Meridian has given up everything it can', async () => {
+  const { meridianFirst } = await import('../src/map/playout');
+  let g = initialGovernor();
+  for (let i = 0; i < 400; i++) g = meridianFirst(governorStep(g, 40), 'reducing');
+  assert.equal(g.level, 2, 'held at level 2 while Meridian is still reducing');
+  for (let i = 0; i < 400; i++) g = meridianFirst(governorStep(g, 40), 'exhausted');
+  assert.equal(g.level, 3, 'once Meridian is at its floor, Map may draw every other frame');
+  let plain = initialGovernor();
+  for (let i = 0; i < 400; i++) plain = meridianFirst(governorStep(plain, 40), 'none');
+  assert.equal(plain.level, 3, 'shows without Meridian are as before');
+  assert.equal(meridianFirst(g, 'none'), g, 'no copy when nothing changes');
 });

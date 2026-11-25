@@ -14,14 +14,27 @@ import type { MaskProvider } from './MaskProvider';
 import { Tracking, FLOW_SIZE } from './Tracking';
 import { Paint } from './Paint';
 import { Signal } from './Signal';
+import { Morphogen } from './Morphogen';
+import { MorphogenPlay } from '../morphogen/play';
+import { FlashLimiter } from '../map/flash-limiter';
 import { Smoke } from './Smoke';
+import { Kaleidoscope } from './Kaleidoscope';
 import { Relief } from './Relief';
+import { Meridian } from './Meridian';
+import { WallLimiterGl } from '../map/wall-limiter-gl';
+import { LIMITER, limiterScales } from '../meridian/wall-limiter';
+import { MERIDIAN_DEFAULTS } from '../meridian/parameters';
+import { MeridianGovernor } from '../meridian/governor';
 import type { Look } from './look';
+import { GUARD_COLUMNS, GUARD_MAX_STEP, GUARD_ROWS, flashGuardApplyGLSL, flashGuardGateGLSL, flashGuardStepGLSL } from '../rendering/flash-guard';
 import { trackingViewFragment } from './tracking-shaders';
 import { LiveModulator } from './modulate';
 import type { Signals } from '../react/signals';
 
-const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal };
+const looks = { paint: Paint, smoke: Smoke, relief: Relief, signal: Signal, morphogen: Morphogen, meridian: Meridian, kaleidoscope: Kaleidoscope };
+/** Meridian on the Live output keeps to the same flash rule as the wall in Map, at Flash Guard's default strictness. */
+const CONTEXT_LOST = 'the graphics card reset; the limiter starts again as soon as it is back';
+const MERIDIAN_HOLDS = limiterScales({ safetyMaxFlashes: MERIDIAN_DEFAULTS.safetyMaxFlashes, safetyRedLimit: MERIDIAN_DEFAULTS.safetyRedLimit });
 
 /** Operator setup view: the camera dimmed, people in blue with a pink outline. Never shown in the artwork window. */
 const peopleViewFragment = /* glsl */`
@@ -40,16 +53,19 @@ void main() {
 }`;
 
 const finalFragment = /* glsl */`
-uniform sampler2D uImage; uniform float uBlackout, uEncode;
+uniform sampler2D uImage; uniform float uBlackout, uEncode, uGain, uRedScale;
 vec3 encode(vec3 c) { c = clamp(c, 0., 1.); return mix(c * 12.92, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }
 void main() {
   vec3 c = texture2D(uImage, vUv).rgb;
+  if (uEncode > .5 && (uGain < 1. || uRedScale < 1.)) c = (vec3(dot(c, vec3(.2126, .7152, .0722))) * (1. - uRedScale) + c * uRedScale) * uGain;
   gl_FragColor = vec4(mix(c, encode(c), uEncode) * (1. - uBlackout), 1.);
 }`;
 
 export class LiveRenderer {
   settings: LiveSettings = defaultLiveSettings();
   blackout = false;
+  /** Holds back rapid flashing in the artwork. Map turns this off for its Live, because the wall has its own guard. */
+  flashGuard = true;
   /** This frame's sound, beat, tempo and MIDI; the settings' links read them. */
   signals: Signals = {};
   private readonly modulator = new LiveModulator();
@@ -67,8 +83,15 @@ export class LiveRenderer {
   private look: Look | null = null;
   private signalSource: FrameSource['element'] = null;
   private lookKind: LiveSettings['look'] | null = null;
+  /** What is being performed on Morphogen. It outlives the GPU look. */
+  morphogenPlay = new MorphogenPlay();
+  private flashLimiter: FlashLimiter | null = null;
+  private flashTarget: THREE.WebGLRenderTarget | null = null;
+  private flashPending = 0;
+  private flashRead = -1;
   private readonly black: THREE.DataTexture;
   private scratch: THREE.WebGLRenderTarget;
+  private guard: { step: THREE.ShaderMaterial; show: THREE.ShaderMaterial; gate: THREE.ShaderMaterial; gates: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget]; targets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget]; frames: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget]; fresh: boolean } | null = null;
   private width = 0;
   private height = 0;
   private time = 0;
@@ -77,13 +100,38 @@ export class LiveRenderer {
   private running = false;
   private disposed = false;
   private counted = { frames: 0, since: 0, worst: 0 };
+  /** The flash limiter for Meridian's output, its 8-bit input, and whether it must start again from the next picture. */
+  private limiter: WallLimiterGl | null = null;
+  private limitInput: THREE.WebGLRenderTarget | null = null;
+  private limitFresh = true;
+  /** The graphics context is lost: the limiter's own pictures and programs went with it and are made again on its return. */
+  private contextLost = false;
+  private limitCost = 0;
+  /** Why the limiter could not run on the last Meridian frame; null when it ran. The picture is shown without it meanwhile (the artwork window keeps its basic limiter). */
+  limiterError: string | null = null;
+  /** Whether the last frame went through the limiter. */
+  limited = false;
+  /** The share of the picture the limiter is holding back now; 0 when it is not running. */
+  get limitedArea(): number { return this.limited ? this.limiter?.limitedArea ?? 0 : 0; }
+  /** Meridian's quality governor for this output: bloom, then tearing, then small marks, when frames stay slow. */
+  private readonly governor = new MeridianGovernor();
+  /**
+   * Installed only by the scripted checks (live-checks.ts, never imported by the app): replaces the finished artwork, for
+   * example with a strobe, before it reaches the limiter.
+   */
+  private checkImage: ((image: THREE.Texture) => THREE.Texture) | null = null;
+  private readonly onContextLost = () => {
+    this.contextLost = true; this.limiter = null; this.limitInput = null; this.limitFresh = true; this.limited = false;
+    if (this.settings.look === 'meridian') this.limiterError = CONTEXT_LOST;
+  };
+  private readonly onContextRestored = () => { this.contextLost = false; this.limitFresh = true; this.restartLook(); };
 
   /** `makeProvider` starts person finding when a look needs people. Without it, people are never found. */
   /** How many frames have been drawn: Map waits for one before it shows Live. */
   framesDrawn = 0;
 
   /** preserveDrawingBuffer: keep the picture after it is shown, so Map's compositor can copy this canvas (Live in Map). */
-  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource, makeProvider?: () => MaskProvider, options: { preserveDrawingBuffer?: boolean } = {}) {
+  constructor(private readonly canvas: HTMLCanvasElement, private readonly source: FrameSource, makeProvider?: () => MaskProvider, options: { preserveDrawingBuffer?: boolean; limitFlashes?: boolean } = {}) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: options.preserveDrawingBuffer === true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(1);
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
@@ -91,12 +139,47 @@ export class LiveRenderer {
     this.renderer.autoClear = false;
     try { this.passes = new Passes(this.renderer); } catch (error) { this.renderer.dispose(); throw error; }
     this.black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); this.black.needsUpdate = true;
-    this.final = this.passes.material(finalFragment, { uImage: { value: this.black }, uBlackout: { value: 0 }, uEncode: { value: 1 } });
+    this.final = this.passes.material(finalFragment, { uImage: { value: this.black }, uBlackout: { value: 0 }, uEncode: { value: 1 }, uGain: { value: 1 }, uRedScale: { value: 1 } });
+    if (options.limitFlashes) {
+      this.flashLimiter = new FlashLimiter();
+      this.flashTarget = new THREE.WebGLRenderTarget(64, 36, { type: THREE.UnsignedByteType, depthBuffer: false, stencilBuffer: false });
+      this.flashTarget.texture.colorSpace = THREE.NoColorSpace;
+    }
     this.tracking = new Tracking(this.passes, makeProvider);
     this.trackingView = this.passes.material(trackingViewFragment, { uCamera: { value: null }, uFlow: { value: null }, uBox: { value: new THREE.Vector4(0, 1, 0, 1) } });
     this.scratch = this.passes.target(1, 1);
     this.counted.since = performance.now();
+    // three makes its own resources again after a lost context; the look's simulation has lost its state, so it starts again.
+    // The limiter's raw resources are let go without touching the lost context and built afresh on the first frame back,
+    // starting from black so even that frame is limited.
+    canvas.addEventListener('webglcontextlost', this.onContextLost);
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
   }
+
+  /** The artwork window's flash protection. In Map, the wall's own limiter does this job instead. */
+  private limitFlashes(): void {
+    if (!this.flashLimiter || !this.flashTarget) return;
+    if (this.flashPending >= 6) return;
+    const u = this.final.uniforms, gain = u.uGain.value, redScale = u.uRedScale.value, blackout = u.uBlackout.value, taken = this.time, pixels = new Uint8Array(64 * 36 * 4);
+    u.uGain.value = 1; u.uRedScale.value = 1; u.uBlackout.value = 0;
+    this.passes.draw(this.final, this.flashTarget);
+    u.uGain.value = gain; u.uRedScale.value = redScale; u.uBlackout.value = blackout;
+    this.renderer.setRenderTarget(null);
+    this.flashPending++;
+    this.renderer.readRenderTargetPixelsAsync(this.flashTarget, 0, 0, 64, 36, pixels).then(() => {
+      if (this.disposed || !this.flashLimiter || taken < this.flashRead) return;
+      this.flashRead = taken;
+      const c = this.flashLimiter.push(pixels, 64, 36, taken);
+      u.uGain.value = c.gain; u.uRedScale.value = c.redScale;
+    }).catch(() => {}).finally(() => { this.flashPending--; });
+  }
+
+  private readonly restartLook = () => { this.look?.dispose(); this.look = null; this.lookKind = null; };
+
+  /** False while the look is still forming its first picture. */
+  get lookReady(): boolean { return !!this.look && this.lookKind === this.settings.look && (this.look.ready ?? true); }
+  /** Morphogen mode on the MIDImix, when the look on screen has one. */
+  get midimix(): { active: boolean; look: number | null; queued: number | null } | null { return this.look?.midimix ?? null; }
 
   start(): void {
     if (this.running || this.disposed) return;
@@ -125,14 +208,21 @@ export class LiveRenderer {
     if (this.lookKind !== this.settings.look) {
       // Switching looks starts the new one fresh; each keeps its own settings.
       this.look?.dispose();
+      // Choosing another look ends the performance; a graphics recovery (no previous kind) carries it across.
+      if (this.lookKind !== null) this.morphogenPlay = new MorphogenPlay();
       this.look = new looks[this.settings.look](this.passes, this.width, this.height);
+      this.look.adoptPlay?.(this.morphogenPlay);
       this.lookKind = this.settings.look;
+      this.governor.reset();
     }
     if (!this.look) return;
     if (this.settings.look === 'signal' && this.signalSource !== this.source.element) this.look.clear();
     this.signalSource = this.source.element;
+    this.look.setSignals?.(this.signals, this.settings);
+    if (this.look instanceof Meridian) { this.look.signals = this.signals; this.look.quality = this.governor.update(seconds * 1000); }
     this.look.step(step, this.time, this.tracking, settings);
     let image: THREE.Texture = this.look.output, encode = 1;
+    if (this.checkImage) image = this.checkImage(image);
     if (this.view === 'tracking') {
       const u = this.trackingView.uniforms, box = this.settings.box;
       u.uCamera.value = this.tracking.camera; u.uFlow.value = this.tracking.flow;
@@ -147,12 +237,116 @@ export class LiveRenderer {
       this.passes.draw(this.peopleView, this.scratch);
       image = this.scratch.texture; encode = 0;
     }
+    // One limiter at a time: Meridian goes through the wall's limiter below; every other look through the area guard here.
+    const areaGuarded = this.flashGuard && this.view === 'art' && !this.blackout && this.settings.look !== 'meridian';
+    if (areaGuarded) image = this.stepGuard(image, step);
+    else if (this.guard) this.guard.fresh = true;
     this.final.uniforms.uImage.value = image;
     this.final.uniforms.uEncode.value = encode;
     this.final.uniforms.uBlackout.value = this.blackout ? 1 : 0;
-    this.passes.draw(this.final, null);
+    // Meridian's artwork goes through the wall's flash limiter. Once it has been used, the other looks' pictures go through it
+    // too, unchanged (the limit faded fully away), so it knows what the wall showed and switching back to Meridian is limited.
+    // The setup views are the operator's only, so they never do.
+    const guarded = this.settings.look === 'meridian' && this.view === 'art';
+    const following = !guarded && this.view === 'art' && this.limiter !== null;
+    if (this.contextLost) {
+      this.limited = false;
+      if (guarded) this.limiterError = CONTEXT_LOST;
+    } else if (guarded) {
+      if (!this.limitOutput(seconds, 0)) { this.passes.draw(this.final, null); this.limitFresh = true; this.limited = false; }
+    } else {
+      if (!following || !this.limitOutput(seconds, 1)) { this.passes.draw(this.final, null); this.limitFresh = this.limitFresh || !following; }
+      if (this.view !== 'art') this.limitFresh = true;
+      this.limited = false;
+    }
+    // The artwork window's own flash protection reads the picture before the limiters and dims the whole output on top.
+    if (encode === 1) this.limitFlashes();
     this.framesDrawn++;
     this.counted.frames++;
+  }
+
+  /**
+   * Draws the finished picture through the flash limiter onto the canvas, in the frame it limits, with no readback. Returns
+   * false, having drawn nothing, if the limiter cannot run: the caller then shows the picture as it is and the warning stands.
+   */
+  private limitOutput(seconds: number, fade: number): boolean {
+    const started = performance.now(), gl = this.renderer.getContext() as WebGL2RenderingContext;
+    try {
+      if (!this.limiter || this.limiter.width !== this.width || this.limiter.height !== this.height) {
+        this.limiter?.dispose(); this.limitInput?.dispose();
+        this.limiter = new WallLimiterGl(gl, this.width, this.height);
+        this.limitInput = new THREE.WebGLRenderTarget(this.width, this.height, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+        this.limitInput.texture.colorSpace = THREE.NoColorSpace;
+        this.limitFresh = true;
+      }
+      const dt = Number.isFinite(seconds) ? Math.min(LIMITER.longestStep, Math.max(0, seconds)) : 0;
+      if (this.limitFresh) {
+        // A fresh start (first use, a new size, a graphics reset, back from a setup view) begins from black, so the picture
+        // that follows is already limited: a large bright arrival climbs by the rule rather than appearing at once.
+        const blackout = this.final.uniforms.uBlackout.value;
+        this.final.uniforms.uBlackout.value = 1;
+        this.passes.draw(this.final, this.limitInput!);
+        this.final.uniforms.uBlackout.value = blackout;
+        const black = this.limitTexture();
+        const primed = this.limiter.limit(black, null, 0, 0, true, MERIDIAN_HOLDS);
+        this.renderer.resetState();
+        if (!primed) { this.limiterError = this.limiter.error ?? 'the flash limiter could not start'; return false; }
+      }
+      this.passes.draw(this.final, this.limitInput!);
+      const done = this.limiter.limit(this.limitTexture(), null, dt, fade, false, MERIDIAN_HOLDS);
+      this.renderer.resetState();
+      if (!done) { this.limiterError = this.limiter.error ?? 'the flash limiter could not start'; return false; }
+      this.limitFresh = false; this.limiterError = null; this.limited = fade < 1;
+      this.limitCost = this.limitCost * .95 + (performance.now() - started) * .05;
+      return true;
+    } catch (error) {
+      this.renderer.resetState();
+      this.limiterError = String((error as Error)?.message ?? error);
+      return false;
+    }
+  }
+
+  private limitTexture(): WebGLTexture {
+    const texture = (this.renderer.properties.get(this.limitInput!.texture) as { __webglTexture?: WebGLTexture }).__webglTexture;
+    if (!texture) throw new Error('the picture to limit could not be found');
+    return texture;
+  }
+
+  /** Meridian's own state and the limiter's, for the operator and the scripted checks: numbers and words, never a picture. */
+  meridianReport(): (ReturnType<Meridian['diagnostics']> & { limiter: { on: boolean; error: string | null; area: number; cpuMs: number } }) | null {
+    if (!(this.look instanceof Meridian)) return null;
+    return { ...this.look.diagnostics(), limiter: { on: this.limited, error: this.limiterError, area: this.limiter?.limitedArea ?? 0, cpuMs: this.limitCost } };
+  }
+
+  /** One flash-guard step from the finished artwork; returns the cells for the final pass. */
+  private stepGuard(image: THREE.Texture, seconds: number): THREE.Texture {
+    this.guard ??= {
+      step: this.passes.material(`${flashGuardStepGLSL}\nvoid main() { gl_FragColor = flashGuardStep(vUv); }`, { uGuardSource: { value: null }, uGuardLast: { value: null }, uGuardState: { value: null }, uGuardGate: { value: null }, uGuardSeconds: { value: 0 }, uGuardReset: { value: 1 }, uGuardEncoded: { value: 0 } }),
+      gate: this.passes.material(`${flashGuardGateGLSL}\nvoid main() { gl_FragColor = flashGuardGate(); }`, { uGuardCells: { value: null }, uGuardGateLast: { value: null }, uGuardSeconds: { value: 0 }, uGuardReset: { value: 1 } }),
+      gates: [this.passes.target(1, 1), this.passes.target(1, 1)],
+      show: this.passes.material(`${flashGuardApplyGLSL}\nvoid main() { gl_FragColor = flashGuardShow(vUv); }`, { uGuardImage: { value: null }, uGuardPrevious: { value: null }, uGuardCells: { value: null }, uGuardImageEncoded: { value: 0 } }),
+      targets: [this.passes.target(GUARD_COLUMNS, GUARD_ROWS), this.passes.target(GUARD_COLUMNS, GUARD_ROWS)],
+      frames: [this.passes.target(this.width, this.height), this.passes.target(this.width, this.height)],
+      fresh: true,
+    };
+    const g = this.guard, u = g.step.uniforms;
+    if (g.frames[0].width !== this.width || g.frames[0].height !== this.height) { g.frames.forEach(t => t.setSize(this.width, this.height)); g.fresh = true; }
+    u.uGuardSource.value = image; u.uGuardState.value = g.targets[0].texture; u.uGuardLast.value = g.fresh ? image : g.frames[0].texture; u.uGuardGate.value = g.gates[0].texture;
+    u.uGuardSeconds.value = Math.min(GUARD_MAX_STEP, seconds); u.uGuardReset.value = g.fresh ? 1 : 0;
+    this.passes.draw(g.step, g.targets[1]);
+    g.targets.reverse();
+    const a = g.gate.uniforms;
+    a.uGuardCells.value = g.targets[0].texture; a.uGuardGateLast.value = g.gates[0].texture;
+    a.uGuardSeconds.value = Math.min(GUARD_MAX_STEP, seconds); a.uGuardReset.value = g.fresh ? 1 : 0;
+    this.passes.draw(g.gate, g.gates[1]);
+    g.gates.reverse();
+    a.uGuardCells.value = null; a.uGuardGateLast.value = null; u.uGuardGate.value = null;
+    const s = g.show.uniforms;
+    s.uGuardImage.value = image; s.uGuardPrevious.value = g.fresh ? image : g.frames[0].texture; s.uGuardCells.value = g.targets[0].texture;
+    this.passes.draw(g.show, g.frames[1]);
+    g.frames.reverse(); g.fresh = false;
+    u.uGuardState.value = null; u.uGuardLast.value = null; s.uGuardPrevious.value = null; s.uGuardCells.value = null;
+    return g.frames[0].texture;
   }
 
   /** Wipes the artwork back to its ground. */
@@ -201,8 +395,13 @@ export class LiveRenderer {
   dispose(): void {
     if (this.disposed) return;
     this.stop(); this.disposed = true;
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
+    this.flashTarget?.dispose();
     for (const item of [this.final, this.trackingView, this.tracking, this.black, this.scratch]) item.dispose();
+    this.limiter?.dispose(); this.limitInput?.dispose(); this.checkImage = null;
     this.peopleView?.dispose();
+    this.guard?.step.dispose(); this.guard?.show.dispose(); this.guard?.gate.dispose(); this.guard?.gates.forEach(t => t.dispose()); this.guard?.targets.forEach(t => t.dispose()); this.guard?.frames.forEach(t => t.dispose());
     this.look?.dispose();
     this.passes.dispose(); this.renderer.dispose();
   }

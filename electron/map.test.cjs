@@ -282,3 +282,54 @@ test('the output reports its frame rate to the studio, and only small, well-form
   relay(h.fromOutput(), good);
   assert.deepEqual(reports(), [['studio:map:state', good]]);
 });
+
+test('the output may report what is armed and what landed, and only in a well-formed shape', async () => {
+  const h = harness();
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  const reports = () => h.sent.filter(([channel]) => channel === 'studio:map:state');
+  const relay = h.listeners.get('studio:map:state');
+  const base = { fps: 60, level: 0, failing: [] };
+  for (const bad of [
+    { armed: 'x' }, { armed: [3] }, { armed: [''] }, { armed: Array(9).fill('a') }, { armed: [, 'a'] },
+    { landed: 'x' }, { landed: [{ launchId: '', zones: [] }] }, { landed: [{ launchId: 3, zones: [] }] },
+    { landed: [{ launchId: 'a', zones: [8] }] }, { landed: [{ launchId: 'a', zones: [1.5] }] }, { landed: [{ launchId: 'a', zones: 'x' }] },
+    { landed: [{ launchId: 'a', zones: Array(9).fill(0) }] }, { landed: Array(33).fill({ launchId: 'a', zones: [] }) }, { landed: [, { launchId: 'a', zones: [] }] },
+  ]) relay(h.fromOutput(), { ...base, ...bad });
+  assert.equal(reports().length, 0);
+  const good = { ...base, armed: ['a'], landed: [{ launchId: 'l:ceiling', zones: [7] }, { launchId: 'empty', zones: [] }] };
+  relay(h.fromOutput(), good);
+  assert.deepEqual(reports(), [['studio:map:state', good]]);
+  // The most the wall can land in one step (MAX_WALL_LAUNCHES) always passes, even with the longest ids and every zone.
+  const full = { ...base, landed: Array.from({ length: 32 }, () => ({ launchId: 'x'.repeat(128), zones: [0, 1, 2, 3, 4, 5, 6, 7] })) };
+  relay(h.fromOutput(), full);
+  assert.equal(reports().length, 2);
+});
+
+test('the output may report what each zone draws, eight sources or nulls and nothing else', async () => {
+  const h = harness();
+  await h.handlers.get('studio:map:openOutput')(h.fromStudio, 7);
+  const reports = () => h.sent.filter(([channel]) => channel === 'studio:map:state');
+  const relay = h.listeners.get('studio:map:state');
+  const base = { fps: 60, level: 0, failing: [] };
+  for (const bad of [
+    { drawing: 'x' }, { drawing: Array(7).fill(null) }, { drawing: Array(9).fill(null) }, { drawing: [3, null, null, null, null, null, null, null] },
+    { drawing: ['', null, null, null, null, null, null, null] }, { drawing: ['x'.repeat(200), null, null, null, null, null, null, null] }, { drawing: [, null, null, null, null, null, null, null] },
+  ]) relay(h.fromOutput(), { ...base, ...bad });
+  assert.equal(reports().length, 0);
+  const good = { ...base, drawing: ['a', null, '__proto__', null, null, null, null, 'video-1'] };
+  relay(h.fromOutput(), good);
+  assert.deepEqual(reports(), [['studio:map:state', good]]);
+});
+
+test('a packaged app never gives the wall window the check hooks, even with the test window asked for', async () => {
+  const before = process.env.STUDIO_LIVE_TEST_WINDOW;
+  process.env.STUDIO_LIVE_TEST_WINDOW = '1';
+  try {
+    const packaged = harness({ allowChecks: false });
+    await packaged.handlers.get('studio:map:openOutput')(packaged.fromStudio, 7);
+    assert.deepEqual(packaged.windows[0].options.webPreferences.additionalArguments, []);
+    const checks = harness();
+    await checks.handlers.get('studio:map:openOutput')(checks.fromStudio, 7);
+    assert.deepEqual(checks.windows[0].options.webPreferences.additionalArguments, ['--form-field-checks']);
+  } finally { if (before === undefined) delete process.env.STUDIO_LIVE_TEST_WINDOW; else process.env.STUDIO_LIVE_TEST_WINDOW = before; }
+});

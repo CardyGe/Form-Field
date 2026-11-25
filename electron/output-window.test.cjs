@@ -40,6 +40,12 @@ test('the artwork window is sandboxed, refuses new windows, and keeps the displa
   assert.deepEqual(blocker.stopped, [7]);
 });
 
+test('only the scripted checks window is given the check hooks flag', () => {
+  const make = windowed => { const { blocker, BrowserWindow } = fakes(); return createOutputWindow({ BrowserWindow, powerSaveBlocker: blocker, display, preload: '/p.js', title: 'T', windowed }).window.options.webPreferences.additionalArguments; };
+  assert.deepEqual(make(false), []);
+  assert.deepEqual(make(true), ['--form-field-checks']);
+});
+
 test('windowed mode uses a small ordinary size', () => {
   const { blocker, BrowserWindow } = fakes();
   const { window } = createOutputWindow({ BrowserWindow, powerSaveBlocker: blocker, display, preload: '/p.js', windowed: true });

@@ -1,5 +1,6 @@
 import type { Layer, Modulation, Project } from '../shared/types';
-import { clampParameter, hashSeed, readParameterDefinitions, seededRandom } from './project';
+import { clampParameter, hashSeed, kaleidoscopeHoldsMotifScale, readParameterDefinitions, seededRandom } from './project';
+import { motionIgnored } from '../meridian/parameters';
 
 const TAU = Math.PI * 2;
 const wrap = (value: number, period = TAU): number => ((value % period) + period) % period;
@@ -90,7 +91,11 @@ export function evaluateLayer(layer: Layer, phase: number): Layer {
   // Read, not copied: this runs for every layer on every frame.
   const definitions = readParameterDefinitions(layer.kind);
   const seed = layer.params.seed ?? hashSeed(layer.id);
+  const holdScale = kaleidoscopeHoldsMotifScale(layer);
   for (const [key, mod] of Object.entries(layer.modulations)) {
+    if (motionIgnored(layer, key)) continue;
+    // The route stays saved and takes effect again when Spiral is turned off.
+    if (holdScale && key === 'motifScale') continue;
     const signal = sampleModulation(mod, phase, hashSeed(`${seed}:${key}`));
     const sample = signal * mod.amount;
     if(mod.range){
