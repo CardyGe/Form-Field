@@ -17,16 +17,17 @@ import { ColourSplitSection, GradientMapSection, ColourBalanceSection, KeySectio
 const SLIT_MODE_HELP = ['Each part of the frame lags by its own delay, set by the delay map.', 'Every slice is layered on top, the newest strongest, so motion leaves fading echoes.', 'Median keeps the middle value of the slices, so moving things drop out and still things stay.', 'Keeps the darkest value of the slices, so dark shapes leave trails.', 'Keeps the brightest value of the slices, so bright shapes leave trails.'];
 
 const PRINT_CHOICES: Record<string, string[]> = {
-  printType: ['Dots', 'Lines', 'Dither'],
+  printType: ['Dots', 'Lines', 'Dither', 'Blue noise'],
   printDot: ['Round', 'Classic', 'Diamond', 'Square'],
   printMatrix: ['2×2', '4×4', '8×8'],
-  printColour: ['Layer colour', 'Palette ink', 'RGB light', 'CMYK ink'],
+  printColour: ['Layer colour', 'Palette ink', 'RGB light', 'CMYK ink', 'Retro palette'],
+  printRetro: ['Game Boy', 'CGA', 'Teletext', 'Green screen'],
   printArea: ['Everywhere', 'Edges only', 'Away from edges'],
 };
 const PRINT_GROUPS: [string, string[]][] = [
-  ['Screen', ['printMix', 'printType', 'printSize', 'printAngle', 'printDot', 'printMatrix', 'printScroll']],
+  ['Screen', ['printMix', 'printType', 'printSize', 'printAngle', 'printDot', 'printMatrix', 'printScroll', 'printShimmer']],
   ['Tone', ['printFloor', 'printCeiling', 'printMax', 'printGain', 'printSoft', 'printInvert']],
-  ['Colour', ['printColour', 'printInk', 'printPaper']],
+  ['Colour', ['printColour', 'printInk', 'printRetro', 'printPaper']],
   ['Where it prints', ['printArea', 'printEdgeWidth', 'printEdgeSense', 'printEdgeFeather']],
 ];
 /** Whether a print control applies, given the layer's other print choices. */
@@ -37,6 +38,8 @@ function printControlShown(layer: Layer, key: string): boolean {
   if (key === 'printDot') return type === 0;
   if (key === 'printMatrix') return type === 2;
   if (key === 'printInk') return colour === 1;
+  if (key === 'printRetro') return colour === 4;
+  if (key === 'printShimmer') return type === 3;
   if (key === 'printInvert') return colour < 2;
   if (key.startsWith('printEdge')) return Math.round(p.printArea ?? 0) > 0;
   return true;

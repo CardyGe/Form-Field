@@ -13,13 +13,13 @@ test('print screen is off by default and older projects migrate without it', () 
   }
   const migrated = validateProject(JSON.parse(JSON.stringify(project)));
   assert.deepEqual(PRINT_KEYS.map(k => migrated.layers[0].params[k]),
-    [0, 0, 8, 45, 0, 2, 0, 0, 1, .8, 0, 0, 0, 0, 1, 0, 0, 12, .5, .25]);
+    [0, 0, 8, 45, 0, 2, 0, 0, 1, .8, 0, 0, 0, 0, 1, 0, 0, 12, .5, .25, 0, 0]);
 });
 
 test('print keys are finish keys in the spec order', () => {
   assert.deepEqual(PRINT_KEYS, ['printMix','printType','printSize','printAngle','printDot','printMatrix','printScroll',
     'printFloor','printCeiling','printMax','printGain','printSoft','printInvert','printColour','printInk','printPaper',
-    'printArea','printEdgeWidth','printEdgeSense','printEdgeFeather']);
+    'printArea','printEdgeWidth','printEdgeSense','printEdgeFeather','printRetro','printShimmer']);
   assert.equal(PRINT_KEYS.every(k => FINISH_KEYS.includes(k)), true);
 });
 
@@ -144,4 +144,13 @@ test('vary never switches the screen or its stepped choices, and keeps it near w
     for (const key of stepped) assert.equal(varied.params[key], on.params[key], key);
     assert.ok(Math.abs(varied.params.printSize - 8) <= 63 * .1201, `size ${varied.params.printSize}`);
   }
+});
+
+test('retro and blue-noise choices validate and the new keys migrate off', () => {
+  const project = createProject();
+  const layer = project.layers[0];
+  delete layer.params.printRetro; delete layer.params.printShimmer;
+  layer.params.printType = 3; layer.params.printColour = 4;
+  const migrated = validateProject(JSON.parse(JSON.stringify(project))).layers[0].params;
+  assert.deepEqual([migrated.printRetro, migrated.printShimmer, migrated.printType, migrated.printColour], [0, 0, 3, 4]);
 });

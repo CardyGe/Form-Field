@@ -103,7 +103,7 @@ test('adding turns a switched effect on, keeps one already on, and restores a st
 
 test('search matches names, groups and descriptions, with every word required', () => {
   const ids = (query: string) => searchFinishEffects(FINISH_EFFECTS, query).map(item => item.id);
-  assert.deepEqual(ids('glow'), ['glow']);
+  assert.deepEqual(ids('glow'), ['glow', 'led']); // LED wall's description says "glowing"
   assert.ok(ids('time').includes('feedback'));
   assert.ok(ids('halftone').includes('print'));
   assert.deepEqual(ids('halftone glow'), []);
