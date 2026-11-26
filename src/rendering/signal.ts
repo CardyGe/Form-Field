@@ -84,3 +84,141 @@ export function signalControlVisible(layer: Pick<Layer, 'params' | 'modulations'
   }
   return false;
 }
+
+/**
+ * Shared by the stage programs. `uLines` is 1080-line pixels per output pixel. Randomness is placed on tape lines
+ * and grain cells two 1080-line pixels across, counted from the frame's top-left: VHS holds well under 540 lines,
+ * and a cell this size covers whole pixels of a 960 preview and of a 4K export alike, so the two match once the
+ * export is averaged down. All randomness is a stateless hash of the seed (wrapped to 0..999), a place and the loop frame.
+ */
+const signalCommon = /* glsl */`
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uSource;
+uniform vec2 uSize;
+uniform float uLines, uSeed, uFrame, uAmount;
+uvec3 pcg(uvec3 v) {
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  v ^= v >> 16u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  return v;
+}
+// 0..1 for whole numbers a, b and c, under this layer's seed.
+float rnd(float a, float b, float c, uint salt) {
+  uvec3 h = pcg(uvec3(uint(a), uint(b) + uint(c) * 4099u, uint(uSeed * 64.) * 64u + salt));
+  return float(h.x) / 4294967296.;
+}
+// Distance from the frame's top in output pixels, the tape line (0..539) and the grain column.
+float fromTop() { return uSize.y - gl_FragCoord.y; }
+float tapeLine() { return floor(fromTop() * uLines * .5); }
+float grainColumn() { return floor(gl_FragCoord.x * uLines * .5); }
+`;
+
+/**
+ * VHS: worn videotape, in linear light. Rows wobble and now and then tear sideways, the colour part of a broadcast
+ * split smears along the row while brightness stays sharp, noisy bands drift through, the bottom edge tears where the
+ * heads switch, a rolling bar crosses `uRoll` whole times per loop, and tape age fades, cools the colour and warms it.
+ * Moved rows carry their alpha, and every added light is scaled by coverage, so nothing appears where the layer is
+ * empty. Light is never clamped above; only negative values from the colour split are cut.
+ */
+export const vhsFragment = signalCommon + /* glsl */`
+uniform float uPhase, uTracking, uBleed, uNoise, uHead, uAge, uRoll;
+const float TAU = 6.28318530718;
+// The colour difference parts of BT.601, on premultiplied light.
+vec2 chroma(vec3 c) { float y = dot(c, vec3(.299, .587, .114)); return vec2(.492 * (c.b - y), .877 * (c.r - y)); }
+vec3 fromSplit(float y, vec2 uv) { return vec3(y + 1.140 * uv.y, y - .395 * uv.x - .581 * uv.y, y + 2.032 * uv.x); }
+// A pixel of this row, the edge pixel repeating past the frame's sides.
+vec4 along(float x) { return texture2D(uSource, vec2(clamp(x, .5, uSize.x - .5) / uSize.x, vUv.y)); }
+void main() {
+  vec4 plain = texture2D(uSource, vUv);
+  float row = tapeLine(), k = 1. / uLines, frame = floor(uFrame + .5), shift = 0.;
+  if (uTracking > 0.) shift += (rnd(row, frame, 0., 1u) - .5) * 80. * uTracking * k;
+  // Rare rows tear up to 40% of the frame width; worn tape tears more.
+  if (rnd(row, frame, 0., 2u) < .04 * uTracking * uTracking + .02 * uAge) shift += (rnd(row, frame, 0., 3u) - .5) * .8 * uSize.x;
+  // Head switching: the bottom 8% times the amount, pulled further sideways toward the bottom.
+  float strip = 540. * .08 * uHead, headTop = 540. - strip;
+  bool head = uHead > 0. && row >= headTop;
+  if (head) shift += uSize.x * (.01 + .05 * (row - headTop) / strip + .02 * (rnd(row, frame, 0., 4u) - .5));
+  // Rolling bar: a soft band, its centre moving down the frame a whole number of times per loop.
+  float bar = 0.;
+  if (uRoll > 0.) {
+    float d = fromTop() / uSize.y - fract(uRoll * uPhase / TAU + rnd(0., 0., 0., 5u));
+    d -= floor(d + .5);
+    bar = abs(d) < .06 ? .5 + .5 * cos(3.14159265 * d / .06) : 0.;
+    shift += bar * (rnd(row, frame, 0., 6u) - .5) * 12. * k;
+  }
+  float x = gl_FragCoord.x - shift;
+  vec4 c = along(x);
+  vec3 rgb = c.rgb;
+  if (uBleed > 0.) {
+    // Colour per unit of coverage, blurred along the row, then laid back on this pixel's own coverage.
+    float radius = 60. * uBleed * k, total = 0., cover = 0.;
+    vec2 split = vec2(0.);
+    for (int i = 0; i < 32; i++) {
+      float o = (float(i) + .5) / 16. - 1., w = 1. - abs(o);
+      vec4 s = along(x + o * radius);
+      split += w * chroma(s.rgb); cover += w * s.a; total += w;
+    }
+    vec2 own = cover > 1e-5 ? split / cover * c.a : vec2(0.);
+    rgb = max(fromSplit(dot(c.rgb, vec3(.299, .587, .114)), own), 0.);
+  }
+  float grain = rnd(grainColumn(), row, frame, 7u) - .5, noise = 0.;
+  // Noise bands: up to twelve per frame, each 2 to 12 pixels of a 1080-line frame tall (1 to 6 tape lines).
+  int bands = int(ceil(uNoise * 12.));
+  for (int i = 0; i < 12; i++) {
+    if (i >= bands) break;
+    float top = floor(rnd(float(i), frame, 0., 8u) * 540.), tall = 1. + floor(rnd(float(i), frame, 0., 9u) * 6.);
+    if (row >= top && row < top + tall) noise = max(noise, (.3 + .7 * rnd(float(i), frame, 0., 10u)) * uNoise);
+  }
+  rgb += grain * noise * .8 * c.a;
+  if (head) rgb += (rnd(grainColumn(), row, frame, 11u) - .5) * uHead * .5 * c.a;
+  rgb += ((rnd(grainColumn(), row, frame, 12u) - .5) * .5 + .06) * bar * c.a;
+  if (uAge > 0.) {
+    float y = dot(rgb, vec3(.299, .587, .114));
+    rgb = mix(vec3(y), rgb, 1. - .45 * uAge);
+    rgb *= vec3(1. + .12 * uAge, 1. + .02 * uAge, 1. - .18 * uAge);
+    // Faded: the darks lift a little and the lights sink, inside coverage only.
+    rgb = mix(rgb, rgb * .88 + .03 * c.a, uAge);
+  }
+  gl_FragColor = mix(plain, vec4(max(rgb, 0.), c.a), uAmount);
+}`;
+
+/**
+ * Dropout: bands of the picture drop out. A frame starts an event when the hash of that frame is under the chance;
+ * an event lasts `uBurst` frames and drops the bands its start frame chose, at least one. So a frame is dropped when
+ * any of the last `uBurst` frames, counted around the loop, started an event, and seeks and the loop seam repeat.
+ * Black and Noise fill only where the layer has coverage; Hold line repeats the last row above the dropped run,
+ * carrying its alpha.
+ */
+export const dropFragment = signalCommon + /* glsl */`
+uniform float uFrames, uChance, uBands, uFill, uBurst;
+bool dropsBand(int start, float band) {
+  float s = float(start);
+  return rnd(s, band, 0., 21u) < .5 || band == floor(rnd(s, 0., 0., 22u) * uBands);
+}
+bool dropped(float band) {
+  int frames = max(1, int(uFrames + .5)), frame = int(uFrame + .5);
+  for (int k = 0; k < 8; k++) {
+    if (float(k) >= uBurst) break;
+    int start = ((frame - k) % frames + frames) % frames;
+    if (rnd(float(start), 0., 0., 20u) < uChance && dropsBand(start, band)) return true;
+  }
+  return false;
+}
+void main() {
+  vec4 plain = texture2D(uSource, vUv);
+  float band = floor(fromTop() * uBands / uSize.y);
+  if (!dropped(band)) { gl_FragColor = plain; return; }
+  int fill = int(uFill + .5);
+  vec4 result = vec4(0., 0., 0., plain.a);
+  if (fill == 1) result.rgb = vec3(rnd(grainColumn(), tapeLine(), floor(uFrame + .5), 23u)) * plain.a;
+  else if (fill == 2) {
+    float top = band;
+    for (int i = 0; i < 20; i++) { if (top <= 0. || !dropped(top - 1.)) break; top -= 1.; }
+    // The last output row above the run, or the top row when the run starts at the top.
+    float above = top <= 0. ? 0. : ceil(top * uSize.y / uBands - .5) - 1.;
+    result = texture2D(uSource, vec2(vUv.x, 1. - (above + .5) / uSize.y));
+  }
+  gl_FragColor = mix(plain, result, uAmount);
+}`;

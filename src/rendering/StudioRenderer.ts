@@ -32,6 +32,7 @@ import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActiv
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
 import { CHAR_SETS, cellColourFragment, fitCellGrid, tileFragment, tilesActive } from './tiles';
+import { dropFragment, loopFrame, signalActive, signalStages, vhsFragment } from './signal';
 import { GLYPH_PX, GLYPH_SPREAD, buildGlyphAtlas } from './glyph-atlas';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
@@ -305,6 +306,18 @@ export class StudioRenderer {
   });
   /** This frame's loop length in seconds, so LED flicker keeps its pace on long and short loops. */
   private loopSeconds = 10;
+  /** Signal path: two targets the stages ping-pong between, shared by all layers and built on first use. */
+  private signalTargets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null = null;
+  private readonly vhs = material(vhsFragment, {
+    uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
+    uPhase: { value: 0 }, uTracking: { value: .4 }, uBleed: { value: .5 }, uNoise: { value: .3 }, uHead: { value: .4 }, uAge: { value: .3 }, uRoll: { value: 0 },
+  });
+  private readonly drop = material(dropFragment, {
+    uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
+    uFrames: { value: 1 }, uChance: { value: .15 }, uBands: { value: 4 }, uFill: { value: 0 }, uBurst: { value: 1 },
+  });
+  /** This frame's loop length in frames, so per-frame randomness repeats on seeks and across the loop seam. */
+  private loopFrames = 300;
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
@@ -1100,6 +1113,7 @@ export class StudioRenderer {
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
     this.loopSeconds = duration;
+    this.loopFrames = total;
     this.meridianRuntime.loopFrames = total;
     this.releaseFeedback(project);
     this.releaseTimeTargets(project);
@@ -1129,19 +1143,20 @@ export class StudioRenderer {
       const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
       const lensed = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
       const finished = tilesActive(original) ? this.tileSource(original, layer, lensed, wrapped, width, height) : lensed;
+      const signalled = signalActive(original) ? this.signalSource(original, layer, finished, wrapped, width, height) : finished;
       // Exports always use the full compositor; a live untouched Smoke Cloud does not need its cost at 4K.
       // A layer with a tile amount above zero is not untouched, so only the plain source reaches this path.
       if (!this.exporting && !this.fullCompositorOnly && compositesPlainly(layer, this.tiling)) {
         // Alone in the frame, it is already the finished composite: drawing it over nothing changes no pixel.
-        if (project.layers.filter(item => item.visible).length === 1) { soleSource = finished; continue; }
+        if (project.layers.filter(item => item.visible).length === 1) { soleSource = signalled; continue; }
         this.plainOver ??= new THREE.ShaderMaterial({ vertexShader: fullscreenVertex, fragmentShader: plainOverFragment, uniforms: { uBelow: { value: null }, uSource: { value: null } }, depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false });
-        this.plainOver.uniforms.uBelow.value = below.texture; this.plainOver.uniforms.uSource.value = finished;
+        this.plainOver.uniforms.uBelow.value = below.texture; this.plainOver.uniforms.uSource.value = signalled;
         this.draw(this.plainOver, next);
         [below, next] = [next, below];
         continue;
       }
       const u = this.composite.uniforms;
-      u.uBelow.value = below.texture; u.uSource.value = finished;
+      u.uBelow.value = below.texture; u.uSource.value = signalled;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
       (u.uTexel.value as THREE.Vector2).set(1 / width, 1 / height);
       u.uAspect.value = width / height; u.uScale.value = layer.transform.scale;
@@ -1163,7 +1178,7 @@ export class StudioRenderer {
       u.uMaskSize.value = layer.mask.size; u.uMaskSoftness.value = layer.mask.softness;
       u.uMaskInvert.value = Number(layer.mask.invert);
       u.uGlow.value = number(layer, 'glow', layer.kind === 'sculpture' ? .12 : 0);
-      this.bindGlow(original, layer, finished, width, height);
+      this.bindGlow(original, layer, signalled, width, height);
       this.bindPrint(original, layer, wrapped, total);
       for(const d of FINISH_PARAMETERS)u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=number(layer,d.key,d.default);
       u.uSaturation.value=number(layer,'saturation',1);u.uHue.value=number(layer,'hue',0);
@@ -1432,6 +1447,49 @@ export class StudioRenderer {
     }
     this.draw(this.tile, output);
     return output.texture;
+  }
+
+  /**
+   * Signal path: damages the finished layer like a worn broadcast after the tile pass and before Glow, so CRT light
+   * can glow. Each active stage runs in pass order, ping-ponging between two targets of its own, so it never enters
+   * the echo history, and is mixed with its input by that effect's amount. Sizes are in pixels of a 1080-line frame;
+   * per-frame randomness hashes the loop frame, so seeks and the loop seam repeat.
+   */
+  signalSource(original: Layer, layer: Layer, source: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
+    if (!signalActive(original)) return source;
+    const amount = (key: string) => Math.min(1, Math.max(0, number(layer, key, 0)));
+    const frames = Math.max(1, this.loopFrames), frame = loopFrame(phase, frames);
+    // Wrapped to 0..1000: a negative seed would make the shader's unsigned hash input undefined.
+    const seed = ((number(layer, 'seed', 0) % 1000) + 1000) % 1000;
+    let input = source, next = 0;
+    for (const stage of signalStages(original)) {
+      const program = stage === 'vhs' ? this.vhs : stage === 'drop' ? this.drop : null;
+      // A modulated amount can rest at zero, where there is nothing to do.
+      const mix = amount(`${stage}Amount`);
+      if (!program || mix <= 0) continue;
+      this.signalTargets ??= [target(), target()];
+      const output = this.signalTargets[next];
+      if (output.width !== width || output.height !== height) output.setSize(width, height);
+      setWrap(output, this.tiling);
+      const u = program.uniforms;
+      u.uSource.value = input; (u.uSize.value as THREE.Vector2).set(width, height); u.uLines.value = 1080 / height;
+      u.uSeed.value = seed; u.uFrame.value = frame; u.uAmount.value = mix;
+      if (stage === 'vhs') {
+        u.uPhase.value = phase;
+        u.uTracking.value = amount('vhsTracking'); u.uBleed.value = amount('vhsBleed'); u.uNoise.value = amount('vhsNoise');
+        u.uHead.value = amount('vhsHeadSwitch'); u.uAge.value = amount('vhsAge');
+        // Whole passes only, so the loop closes.
+        u.uRoll.value = Math.max(0, Math.round(number(layer, 'vhsRoll', 0)));
+      } else {
+        u.uFrames.value = frames; u.uChance.value = amount('dropChance');
+        u.uBands.value = Math.min(20, Math.max(1, Math.round(number(layer, 'dropBands', 4))));
+        u.uFill.value = Math.min(2, Math.max(0, Math.round(number(layer, 'dropFill', 0))));
+        u.uBurst.value = Math.min(8, Math.max(1, Math.round(number(layer, 'dropBurst', 1))));
+      }
+      this.draw(program, output);
+      input = output.texture; next = 1 - next;
+    }
+    return input;
   }
 
   /** A character set's glyphs as edge distances, one channel, built once and kept until the tile targets go. */
@@ -1847,6 +1905,10 @@ export class StudioRenderer {
       this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs();
       this.tile.uniforms.uSource.value = this.tile.uniforms.uCells.value = this.cellColour.uniforms.uSource.value = null;
     }
+    if (this.signalTargets && !project.layers.some(layer => layer.visible && signalActive(layer))) {
+      for (const output of this.signalTargets) output.dispose();
+      this.signalTargets = null; this.vhs.uniforms.uSource.value = this.drop.uniforms.uSource.value = null;
+    }
   }
 
   /**
@@ -2007,6 +2069,8 @@ export class StudioRenderer {
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.warpTarget?.dispose(); this.warpTarget = null; this.warp.dispose();
     this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs(); this.tile.dispose(); this.cellColour.dispose();
+    for (const output of this.signalTargets ?? []) output.dispose();
+    this.signalTargets = null; this.vhs.dispose(); this.drop.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
