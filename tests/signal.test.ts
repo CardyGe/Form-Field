@@ -46,6 +46,18 @@ test('the CRT curve leaves the centre alone and pushes the corners out', () => {
   assert.ok(x > 1 && y > 1);
   assert.deepEqual(crtCurve([.9, .2], 0), [.9, .2]);
 });
+test('the CRT curve pushes each point out by the curve times its squared distance in frame heights', () => {
+  // d = (uv - .5) with x in frame heights; source = .5 + d * (1 + curve * |d|²), x back in frame widths.
+  const close = (a: [number, number], b: [number, number]) => assert.ok(Math.abs(a[0] - b[0]) < 1e-12 && Math.abs(a[1] - b[1]) < 1e-12, `${a} vs ${b}`);
+  const aspect = 16 / 9, dx = .25 * aspect;
+  close(crtCurve([.75, .5], .3, aspect), [.5 + .25 * (1 + .3 * dx * dx), .5]);
+  close(crtCurve([.5, .1], .5, aspect), [.5, .5 - .4 * (1 + .5 * .16)]);
+  // A radial barrel: a point's push depends on its distance alone, so a corner moves along its diagonal.
+  const [x, y] = crtCurve([.9, .9], .2, 1);
+  close([x, y], [.5 + .4 * (1 + .2 * .32), .5 + .4 * (1 + .2 * .32)]);
+  // Square frames by default.
+  close(crtCurve([.75, .5], .3), [.5 + .25 * (1 + .3 * .0625), .5]);
+});
 test('variations never switch signal effects on or change their choices', () => {
   for (const preset of PRESETS) {
     const layer = applyPreset(createLayer(preset.kind), preset.id);

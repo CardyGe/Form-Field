@@ -46,11 +46,15 @@ export function loopFrame(wrapped: number, frames: number): number {
   return Math.round(wrapped / (Math.PI * 2) * count) % count;
 }
 
-/** Barrel distortion of the CRT glass: the centre stays put and the corners are pushed out. */
-export function crtCurve(uv: [number, number], curve: number): [number, number] {
+/**
+ * Barrel distortion of the CRT glass: maps a screen uv to the source uv it shows. The centre stays put and points
+ * are pushed out by `c + d * (1 + curve * |d|²)`, with `d = uv - .5` measured in frame heights (x times the aspect,
+ * width over height), so the bulge is round on any frame. `crtFragment` runs the same maths.
+ */
+export function crtCurve(uv: [number, number], curve: number, aspect = 1): [number, number] {
   if (curve <= 0) return [uv[0], uv[1]];
-  const x = uv[0] * 2 - 1, y = uv[1] * 2 - 1;
-  return [(x * (1 + curve * y * y) + 1) / 2, (y * (1 + curve * x * x) + 1) / 2];
+  const dx = (uv[0] - .5) * aspect, dy = uv[1] - .5, push = 1 + curve * (dx * dx + dy * dy);
+  return [.5 + dx * push / aspect, .5 + dy * push];
 }
 
 const VHS_OWN = ['vhsTracking', 'vhsBleed', 'vhsNoise', 'vhsHeadSwitch', 'vhsAge', 'vhsRoll'];
@@ -226,4 +230,85 @@ void main() {
     result = texture2D(uSource, vec2(vUv.x, 1. - (above + .5) / uSize.y));
   }
   gl_FragColor = mix(plain, result, uAmount);
+}`;
+
+/**
+ * CRT: an old tube screen, in linear light. The picture is bent by the barrel of the glass (`crtCurve`), crossed by
+ * scan lines that follow the bent picture, seen through a colour mask on the glass, darkened toward the curved edge
+ * and lifted by `uBright` to make up for the light the lines and mask take away.
+ * - Scan lines are a raised cosine across each line. Each is averaged over the output pixel, and lines finer than
+ *   2 output pixels fade to a flat darkening of the same mean, so they never beat against the pixel grid.
+ * - The mask's cell is one triad, `uMaskSize` 1080-line pixels across, counted from the frame's top-left. Every
+ *   phosphor profile has a mean of 1, so a white field keeps its mean brightness before `uBright`; each harmonic is
+ *   averaged over the output pixel (a box filter), so a 960 preview matches a 4K export averaged down.
+ * - Bloom: a bright beam spreads past the mask, so the mask eases off as the light rises, just enough that its
+ *   brightest phosphor stays in range wherever the light is in range (judged on the unaveraged mask, so a
+ *   preview and an export ease alike). The display would otherwise clip the peaks
+ *   and lose light the preview keeps; light already over range shows no mask and stays over range.
+ * - Outside the screen is transparent, or black where the layer has coverage: the alpha of the unwarped pixel,
+ *   so a Black bezel never adds light or cover where the layer is empty. The screen edge is filtered over one output pixel.
+ * Light is never clamped.
+ */
+export const crtFragment = signalCommon + /* glsl */`
+uniform float uCurve, uScanLines, uDepth, uMask, uMaskSize, uCorners, uBezel, uBright;
+const float PI = 3.14159265359;
+// crtCurve in signal.ts: d is measured in frame heights from the centre.
+vec2 curved(vec2 uv) {
+  if (uCurve <= 0.) return uv;
+  vec2 aspect = vec2(uSize.x / uSize.y, 1.), d = (uv - .5) * aspect;
+  return .5 + d * (1. + uCurve * dot(d, d)) / aspect;
+}
+// The share of a cosine of this period, in output pixels, left after averaging over one output pixel.
+float boxed(float period) { float w = PI / max(period, 1e-3); return sin(w) / w; }
+// A phosphor of a period of this many output pixels at phase x (in periods): (1 + cos)² / 1.5, mean 1, peak at x = 0.
+float phosphor(float x, float period) {
+  float t = 2. * PI * x;
+  return 1. + 4. / 3. * boxed(period) * cos(t) + 1. / 3. * boxed(period * .5) * cos(2. * t);
+}
+// The colour mask at a place in output pixels from the frame's top-left, and the most any phosphor of it reaches
+// before averaging over the pixel, so bloom eases a preview and an export alike.
+vec3 screenMask(vec2 p, out float most) {
+  most = 1.;
+  int kind = int(uMask + .5);
+  if (kind == 0) return vec3(1.);
+  float cell = uMaskSize / uLines;
+  vec2 at = p / cell;
+  vec3 m = vec3(phosphor(at.x, cell), phosphor(at.x - 1. / 3., cell), phosphor(at.x - 2. / 3., cell));
+  most = 8. / 3.;
+  // Slots: each column of triads is cut into slots, neighbouring columns half a slot apart. The cut averages to
+  // nothing down a column, so the mean holds.
+  if (kind == 2) {
+    m *= 1. - .7 * boxed(cell) * boxed(2. * cell) * cos(2. * PI * at.y) * cos(PI * (at.x - 1. / 3.));
+    most *= 1.7;
+  }
+  // Dots: a triad of round dots, green half a row from red and blue. Rows and columns average apart, so the mean holds.
+  else if (kind == 3) {
+    m *= vec3(phosphor(at.y, cell), phosphor(at.y - .5, cell), phosphor(at.y, cell));
+    most *= most;
+  }
+  return m;
+}
+void main() {
+  vec4 plain = texture2D(uSource, vUv);
+  vec2 s = curved(vUv);
+  // How far s moves per output pixel, along each source axis: the edge distance and line size in output pixels.
+  vec2 rate = max(vec2(length(vec2(dFdx(s.x), dFdy(s.x))), length(vec2(dFdx(s.y), dFdy(s.y)))), vec2(1e-7));
+  vec2 edge = clamp(min(s, 1. - s) / rate + .5, 0., 1.);
+  float screen = edge.x * edge.y;
+  vec2 texel = .5 / uSize;
+  vec4 c = texture2D(uSource, clamp(s, texel, 1. - texel));
+  // Scan lines down the bent picture, bright at each line's middle.
+  float line = (1. - s.y) * uScanLines, period = 1. / (uScanLines * rate.y);
+  float keep = boxed(period) * clamp((period - 2.) * 4., 0., 1.);
+  float lines = 1. - uDepth * .5 * (1. - keep * cos(2. * PI * (line - .5)));
+  // Corners: a smooth falloff from the curved edge, 1 at the centre.
+  float inner = pow(clamp(16. * s.x * (1. - s.x) * s.y * (1. - s.y), 0., 1.), .3);
+  vec3 light = c.rgb * lines * (1. - uCorners * (1. - inner)) * uBright;
+  float most, peak = max(max(light.r, light.g), light.b);
+  vec3 m = screenMask(vec2(gl_FragCoord.x, fromTop()), most);
+  // Bloom: the share of the mask that keeps the brightest phosphor at 1 or under; all of it for dim light.
+  float bloom = peak * most <= 1. ? 1. : clamp((1. / peak - 1.) / (most - 1.), 0., 1.);
+  vec4 tube = vec4(light * (1. + bloom * (m - 1.)), c.a);
+  vec4 outside = vec4(0., 0., 0., uBezel > .5 ? plain.a : 0.);
+  gl_FragColor = mix(plain, mix(outside, tube, screen), uAmount);
 }`;

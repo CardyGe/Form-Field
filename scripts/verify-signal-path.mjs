@@ -1,5 +1,5 @@
-// Real Electron/WebGL checks for the signal path finishes: VHS and Dropout so far.
-// Run: node scripts/verify-signal-path.mjs --baseline=<checkout of the commit before them> [--only=neutral,vhs,drop,signal]
+// Real Electron/WebGL checks for the signal path finishes: VHS, Dropout and CRT so far.
+// Run: node scripts/verify-signal-path.mjs --baseline=<checkout of the commit before them> [--only=neutral,vhs,drop,signal,crt]
 // --only takes comma-separated name prefixes. Each check prints one PASS or FAIL
 // line, and any failure makes the exit code non-zero. Output goes to work/signal-path.
 // (scripts/verify-signal.mjs is Signal Melt's GPU runner, a different feature.)
@@ -30,6 +30,12 @@ const NO_VHS = 'VHS does not change the render. ';
 const NO_DROP = 'Dropout does not change the render. ';
 // One VHS control at a time: everything else off, so each check sees only its own control.
 const VHS_ALONE = { vhsAmount: 1, vhsTracking: 0, vhsBleed: 0, vhsNoise: 0, vhsHeadSwitch: 0, vhsAge: 0, vhsRoll: 0 };
+const NO_CRT = 'CRT does not change the render. ';
+// CRT with every control neutral: a flat screen, no lines, mask or corners, Transparent outside, brightness 1.
+const CRT_ALONE = { crtAmount: 1, crtCurve: 0, crtLines: 480, crtLineDepth: 0, crtMask: 0, crtMaskSize: 3, crtCorners: 0, crtBezel: 0, crtBrightness: 1 };
+// 160 lines stay over 2.25 preview pixels apart across the curved screen; finer ones fade flat on the preview by
+// design, where an export averaged down would alias them instead.
+const CRT_ROUGH = { crtAmount: 1, crtCurve: .4, crtLines: 160, crtLineDepth: 1, crtMask: 2, crtMaskSize: 6, crtCorners: 1, crtBezel: 1 };
 
 const CHECKS = [
   {
@@ -360,6 +366,184 @@ const CHECKS = [
       return { ok, detail: `${r.vhsFull <= 1 ? NO_VHS : ''}${r.dropFull <= 1 ? NO_DROP : ''}at .001: VHS ${r.vhs.toFixed(4)}, Dropout ${r.drop.toFixed(4)} (limit 1/255); at 1: VHS ${r.vhsFull.toFixed(2)}, Dropout ${r.dropFull.toFixed(2)} (over 1)` };
     },
   },
+  {
+    name: 'crt-curve',
+    // Screen curve .3, every other CRT control neutral. (1) The shader's barrel matches crtCurve in signal.ts: a source
+    // holding its own uv in half float goes through the CRT stage and is read back in float at nine points. (2) A
+    // straight white line across the top third bows outward: its row is nearest the top in the middle. (3) The centre
+    // pixel is unchanged. (4) Outside the curved screen a Transparent bezel is alpha 0, a Black one is opaque black
+    // where the layer has coverage and alpha 0 where it has none. (5) The screen edge takes one output pixel: along the
+    // middle half of the rows, each crossing of the right edge has one or two partly covered pixels, one on average.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async alone => {
+        const q = window.sq, W = 960, H = 540, curve = { ...alone, crtCurve: .3 };
+        const pin = await q.uvPin(curve, W, H, [[.5, .5], [.3, .4], [.7, .62], [.2, .8], [.85, .3], [.6, .15], [.12, .5], [.5, .9], [.42, .66]]);
+        const line = await q.px(q.exact(q.project([q.line(curve)])));
+        // The line's brightest row in a column, counted from the top (the read-back pixels start at the bottom row).
+        const rowAt = x => { let best = -1, most = 0; for (let y = 0; y < H; y++) { const v = line[(y * W + x) * 4]; if (v > most) { most = v; best = H - 1 - y; } } return best; };
+        const rows = [rowAt(480), rowAt(320), rowAt(200)];
+        const plain = await q.px(q.exact(q.project([q.smooth()]))), bent = await q.px(q.exact(q.project([q.smooth(curve)])));
+        let centre = 0;
+        for (const [x, y] of [[479, 269], [480, 270]]) for (let k = 0; k < 4; k++) centre = Math.max(centre, Math.abs(plain[(y * W + x) * 4 + k] - bent[(y * W + x) * 4 + k]));
+        const at = (d, x, y) => Array.from(d.subarray((y * W + x) * 4, (y * W + x) * 4 + 4));
+        const clear = await q.px(q.exact(q.project([q.smooth({ ...curve, crtBezel: 0 })], true)));
+        const black = await q.px(q.exact(q.project([q.smooth({ ...curve, crtBezel: 1 })], true)));
+        const softBlack = await q.px(q.exact(q.project([q.soft({ ...curve, crtBezel: 1 })], true)));
+        const edges = await q.px(q.exact(q.project([q.white({ ...curve, crtBezel: 0 })], true)));
+        let most = 0, total = 0, counted = 0;
+        for (let y = Math.round(H / 4); y < Math.round(H * 3 / 4); y++) {
+          let partial = 0;
+          for (let x = W / 2; x < W; x++) { const a = edges[(y * W + x) * 4 + 3]; if (a > 2 && a < 253) partial++; }
+          most = Math.max(most, partial); total += partial; counted++;
+        }
+        return {
+          pin, rows, centre, clear: at(clear, 0, 0), black: at(black, 0, 0), softLeft: at(softBlack, 0, 0), softRight: at(softBlack, W - 1, 0),
+          edgeMost: most, edgeMean: total / counted, change: q.difference(plain, bent),
+        };
+      }, CRT_ALONE);
+      const bows = r.rows[0] < r.rows[1] && r.rows[1] < r.rows[2] && r.rows[2] - r.rows[0] >= 5;
+      const bezel = r.clear[3] === 0 && r.black[3] === 255 && r.black[0] + r.black[1] + r.black[2] === 0 && r.softLeft[3] === 255 && r.softLeft[0] + r.softLeft[1] + r.softLeft[2] === 0 && r.softRight[3] === 0;
+      const edge = r.edgeMost <= 2 && r.edgeMean >= .7 && r.edgeMean <= 1.5;
+      const ok = r.pin.worst < 1.5e-3 && bows && r.centre <= 1 && bezel && edge;
+      return { ok, detail: `${r.change < .1 ? NO_CRT : ''}shader against crtCurve: worst ${r.pin.worst.toExponential(2)} over ${r.pin.points} points (limit 1.5e-3); line rows at x 480/320/200: ${r.rows.join('/')} (rising toward the middle, by at least 5); centre change ${r.centre}/255 (limit 1); corner Transparent ${r.clear.join(',')}, Black ${r.black.join(',')}, soft layer Black left ${r.softLeft.join(',')} right ${r.softRight.join(',')}; partly covered edge pixels per row ${r.edgeMean.toFixed(2)} mean, ${r.edgeMost} most (.7 to 1.5, at most 2)` };
+    },
+  },
+  {
+    name: 'crt-lines',
+    // A white field, flat screen, no mask or corners. Scan lines 240 at depth 1: the strongest ripple down the frame,
+    // from a DFT of the row means in linear light, must be 240 cycles per frame height at 960x540 and at 3840x2160.
+    // Depth 0 must leave every row the same.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async alone => {
+        const q = window.sq, out = {};
+        const strongest = (d, W, H) => {
+          const rows = new Float64Array(H);
+          for (let y = 0; y < H; y++) { let s = 0; for (let x = 0; x < W; x++) s += q.toLinear(d[(y * W + x) * 4 + 1]); rows[y] = s / W; }
+          let best = 0, size = 0, mean = rows.reduce((a, b) => a + b, 0) / H;
+          for (let k = 1; k <= H / 2; k++) {
+            let re = 0, im = 0;
+            for (let y = 0; y < H; y++) { const a = Math.PI * 2 * k * y / H; re += (rows[y] - mean) * Math.cos(a); im -= (rows[y] - mean) * Math.sin(a); }
+            const m = Math.hypot(re, im) * 2 / H;
+            if (m > size) { size = m; best = k; }
+          }
+          return { cycles: best, ripple: size / mean };
+        };
+        for (const [W, H] of [[960, 540], [3840, 2160]]) out[W] = strongest(await q.px(q.exact(q.project([q.white({ ...alone, crtLines: 240, crtLineDepth: 1 })])), .9, W, H), W, H);
+        const flat = await q.px(q.exact(q.project([q.white({ ...alone, crtLines: 240, crtLineDepth: 0 })])));
+        let low = 255, high = 0;
+        for (let y = 0; y < 540; y++) { let s = 0; for (let x = 0; x < 960; x++) s += flat[(y * 960 + x) * 4 + 1]; s /= 960; low = Math.min(low, s); high = Math.max(high, s); }
+        out.flat = high - low;
+        return out;
+      }, CRT_ALONE);
+      const ok = r[960].cycles === 240 && r[3840].cycles === 240 && r[960].ripple > .1 && r[3840].ripple > .1 && r.flat <= 1;
+      return { ok, detail: `strongest ripple at 960x540: ${r[960].cycles} cycles (size ${(r[960].ripple * 100).toFixed(1)}% of the mean), at 3840x2160: ${r[3840].cycles} cycles (${(r[3840].ripple * 100).toFixed(1)}%) (240, over 10%); depth 0 row spread ${r.flat.toFixed(3)}/255 (limit 1)` };
+    },
+  },
+  {
+    name: 'crt-mask',
+    // A white field at 1920x1080 (1080-line pixels), flat screen, Mask size 6, CRT brightness .5 so the mask's peaks
+    // stay near range. Stripes, Slots and Dots each differ from None and from each other by over 1/255. Stripes splits
+    // the middle row into columns where red, green or blue is over twice each other channel in linear light, each
+    // colour in at least 20% of columns, and rows 300 and 700 match it. Each mask keeps the white field's mean light
+    // (linear, all channels) within 2% of None.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async alone => {
+        const q = window.sq, W = 1920, H = 1080, shots = [];
+        for (let mask = 0; mask < 4; mask++) shots.push(await q.px(q.exact(q.project([q.white({ ...alone, crtMask: mask, crtMaskSize: 6, crtBrightness: .5 })])), .9, W, H));
+        const pairs = [];
+        for (let a = 0; a < 4; a++) for (let b = a + 1; b < 4; b++) pairs.push(q.difference(shots[a], shots[b]));
+        const stripes = shots[1], share = [0, 0, 0];
+        for (let x = 0; x < W; x++) {
+          const i = (540 * W + x) * 4, c = [0, 1, 2].map(k => q.toLinear(stripes[i + k]));
+          for (let k = 0; k < 3; k++) if (c[k] > 2 * c[(k + 1) % 3] && c[k] > 2 * c[(k + 2) % 3]) share[k]++;
+        }
+        let rowsDiffer = 0;
+        for (const y of [300, 700]) for (let x = 0; x < W * 4; x++) rowsDiffer = Math.max(rowsDiffer, Math.abs(stripes[y * W * 4 + x] - stripes[540 * W * 4 + x]));
+        const mean = d => { let s = 0; for (let i = 0; i < d.length; i += 4) s += q.toLinear(d[i]) + q.toLinear(d[i + 1]) + q.toLinear(d[i + 2]); return s / (d.length / 4 * 3); };
+        const means = shots.map(mean);
+        return { pairs, share: share.map(s => s / W), rowsDiffer, means };
+      }, CRT_ALONE);
+      const kept = r.means.slice(1).map(v => v / r.means[0]);
+      const ok = r.pairs.every(d => d > 1) && r.share.every(s => s >= .2) && r.rowsDiffer <= 1 && kept.every(k => Math.abs(k - 1) <= .02);
+      return { ok, detail: `${r.pairs[0] <= 1 ? NO_CRT : ''}differences None/Stripes/Slots/Dots pairwise ${r.pairs.map(d => d.toFixed(2)).join(', ')} (each over 1); Stripes columns red/green/blue ${r.share.map(s => `${(s * 100).toFixed(1)}%`).join('/')} (each at least 20%); rows 300 and 700 against 540: ${r.rowsDiffer}/255 (limit 1); mean light against None ${kept.map(k => k.toFixed(4)).join('/')} (1 ± .02)` };
+    },
+  },
+  {
+    name: 'crt-glow',
+    // CRT brightness 2 on a white field at 1920x1080, read back in float from the CRT stage: the peak must be over 1.5. A small
+    // white square with Glow amount 1: the light in a ring outside the square must be over 1.2 times as bright with
+    // CRT brightness 2 as with 1.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, W = 960, H = 540;
+        // At 1080 lines, where the default 480 scan lines are resolved rather than averaged flat.
+        const f = await q.floatFrame(q.project([q.white({ crtAmount: 1, crtBrightness: 2 })]), 1920, 1080);
+        let peak = 0; for (let i = 0; i < f.length; i += 4) peak = Math.max(peak, f[i], f[i + 1], f[i + 2]);
+        const ring = d => {
+          let s = 0, n = 0;
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const r = Math.max(Math.abs(x + .5 - W / 2), Math.abs(y + .5 - H / 2)) / H;
+            if (r > .13 && r < .25) { const i = (y * W + x) * 4; s += q.toLinear(d[i]) + q.toLinear(d[i + 1]) + q.toLinear(d[i + 2]); n++; }
+          }
+          return s / n;
+        };
+        const glow = { crtAmount: 1, glowMix: 1 };
+        const one = ring(await q.px(q.exact(q.project([q.square({ ...glow, crtBrightness: 1 })])))), two = ring(await q.px(q.exact(q.project([q.square({ ...glow, crtBrightness: 2 })]))));
+        return { peak, one, two };
+      });
+      const ok = r.peak > 1.5 && r.one > 0 && r.two > r.one * 1.2;
+      return { ok, detail: `peak ${r.peak.toFixed(3)} at CRT brightness 2 (over 1.5); glow ring ${r.one.toFixed(4)} at brightness 1, ${r.two.toFixed(4)} at 2 (over 1.2 times)` };
+    },
+  },
+  {
+    name: 'crt-corners',
+    // A white field, flat screen, no lines or mask. Dark corners 1 against 0, in linear light: the four 5% corner boxes
+    // at least 50% darker, the middle 10% box under 5% darker.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async alone => {
+        const q = window.sq, W = 960, H = 540;
+        const lit = (d, x0, y0, w, h) => { let s = 0; for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) s += q.toLinear(d[(y * W + x) * 4 + 1]); return s / (w * h); };
+        const off = await q.px(q.exact(q.project([q.white({ ...alone, crtCorners: 0 })]))), on = await q.px(q.exact(q.project([q.white({ ...alone, crtCorners: 1 })])));
+        const cw = W * .05, ch = H * .05 | 0, boxes = [[0, 0], [W - cw, 0], [0, H - ch], [W - cw, H - ch]];
+        const corners = boxes.map(([x, y]) => 1 - lit(on, x, y, cw, ch) / lit(off, x, y, cw, ch));
+        const centre = 1 - lit(on, W * .45, H * .45 | 0, W * .1, H * .1 | 0) / lit(off, W * .45, H * .45 | 0, W * .1, H * .1 | 0);
+        return { corners, centre };
+      }, CRT_ALONE);
+      const ok = r.corners.every(c => c >= .5) && r.centre < .05;
+      return { ok, detail: `${r.corners.every(c => c < .01) ? NO_CRT : ''}corners darker by ${r.corners.map(c => `${(c * 100).toFixed(1)}%`).join(', ')} (at least 50%); centre by ${(r.centre * 100).toFixed(2)}% (under 5%)` };
+    },
+  },
+  {
+    name: 'crt-scale',
+    // The same settings for a 960 preview and a 3840 export, the export averaged down 4x4 in linear light.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async rough => {
+        const q = window.sq, rows = [];
+        const plain = await q.px(q.exact(q.project([q.smooth()])));
+        for (const [name, params] of [['CRT defaults', { crtAmount: 1 }], ['CRT rough', rough], ['CRT Dots', { crtAmount: 1, crtMask: 3 }]]) {
+          const p = q.exact(q.project([q.smooth(params)]));
+          const small = await q.px(p, .9, 960, 540), big = await q.px(p, .9, 3840, 2160);
+          rows.push({ name, mean: q.difference(small, q.linearDown(big, 960, 540, 4)), change: q.difference(small, plain) });
+        }
+        return rows;
+      }, CRT_ROUGH);
+      const ok = rows.every(r => r.mean < 3 && r.change > 1);
+      return { ok, detail: `${rows.some(r => r.change <= 1) ? NO_CRT : ''}${rows.map(r => `${r.name}: ${r.mean.toFixed(3)} (moved ${r.change.toFixed(2)})`).join(', ')} (limit 3/255)` };
+    },
+  },
+  {
+    name: 'crt-engage',
+    // An amount of .001 is all but plain; an amount of 1 is not.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async rough => {
+        const q = window.sq, plain = await q.px(q.exact(q.project([q.smooth()])));
+        const diff = async params => q.difference(plain, await q.px(q.exact(q.project([q.smooth(params)]))));
+        return { low: await diff({ ...rough, crtAmount: .001 }), full: await diff({ ...rough, crtAmount: 1 }) };
+      }, CRT_ROUGH);
+      const ok = r.low < 1 && r.full > 1;
+      return { ok, detail: `${r.full <= 1 ? NO_CRT : ''}at .001: ${r.low.toFixed(4)} (limit 1/255); at 1: ${r.full.toFixed(2)} (over 1)` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -373,7 +557,7 @@ export {encodePNG} from './src/rendering/png';${extra}`, resolveDir: dir, loader
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
-await bundle(root, 'renderer.js');
+await bundle(root, 'renderer.js', `\nexport {crtCurve} from './src/rendering/signal';\nexport * as THREE from 'three';`);
 if (baseline) await bundle(path.resolve(baseline), 'baseline.js');
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
@@ -410,6 +594,40 @@ try {
       return l;
     };
     const smooth = (params = {}) => image(smoothUrl, params, 'smooth');
+    const whiteUrl = await dataUrl(960, 540, () => [255, 255, 255, 255]);
+    const white = (params = {}) => image(whiteUrl, params, 'white');
+    // A white line 2% of the frame tall across the top third (rows 103 to 113 of 540), on black.
+    const lineUrl = await dataUrl(960, 540, (x, y) => Math.abs(y + .3) < .01 ? [255, 255, 255, 255] : [0, 0, 0, 255]);
+    const line = (params = {}) => image(lineUrl, params, 'line');
+    // A white square a fifth of the frame tall in the middle, nothing around it.
+    const squareUrl = await dataUrl(960, 540, (x, y) => Math.max(Math.abs(x), Math.abs(y)) < .1 ? [255, 255, 255, 255] : [0, 0, 0, 0]);
+    const square = (params = {}) => image(squareUrl, params, 'square');
+    // The signal pass's last target in float, bottom row first: with one stage on, that stage's output.
+    const readTarget = (output, W, H) => {
+      const gl = renderer.renderer.getContext(), data = new Float32Array(W * H * 4);
+      renderer.renderer.setRenderTarget(output); gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, data); renderer.renderer.setRenderTarget(null);
+      return data;
+    };
+    const floatFrame = async (p, W, H, phase = .9) => { await renderer.prepare(p); renderer.render(p, phase, W, H); return readTarget(renderer.signalTargets[0], W, H); };
+    // A half-float source holding its own uv in red and green, through the CRT stage alone: at each point, how far the
+    // shader's source position is from crtCurve in signal.ts at that pixel's centre.
+    const uvPin = async (params, W, H, points) => {
+      const T = m.THREE, layer = m.createLayer('image'); Object.assign(layer.params, params);
+      const half = new Uint16Array(W * H * 4), one = T.DataUtils.toHalfFloat(1);
+      for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) { const k = (j * W + i) * 4; half[k] = T.DataUtils.toHalfFloat((i + .5) / W); half[k + 1] = T.DataUtils.toHalfFloat((j + .5) / H); half[k + 3] = one; }
+      const source = new T.DataTexture(half, W, H, T.RGBAFormat, T.HalfFloatType);
+      source.minFilter = source.magFilter = T.LinearFilter; source.needsUpdate = true;
+      renderer.signalSource(layer, layer, source, .9, W, H);
+      const data = readTarget(renderer.signalTargets[0], W, H);
+      source.dispose();
+      let worst = 0;
+      for (const [u, v] of points) {
+        const i = Math.floor(u * W), j = Math.floor(v * H), k = (j * W + i) * 4;
+        const [x, y] = m.crtCurve([(i + .5) / W, (j + .5) / H], params.crtCurve, W / H);
+        worst = Math.max(worst, Math.abs(data[k] - x), Math.abs(data[k + 1] - y));
+      }
+      return { worst, points: points.length };
+    };
     // (200, 120, 60), opaque to x 300 of 960, fading to nothing at x 500.
     const softUrl = await dataUrl(960, 540, x => { const at = (x + 960 / 540 / 2) * 540; return [200, 120, 60, Math.round(255 * Math.min(1, Math.max(0, (500 - at) / 200)))]; });
     const soft = (params = {}) => image(softUrl, params, 'soft');
@@ -461,7 +679,7 @@ try {
       }
       return reduced;
     };
-    window.sq = { m, old, renderer, tinyUrl, urlOf, image, smooth, soft, redBlue, moving, project, loop120, exact, pixels, shot, px, difference, same, loop, litShare, toLinear, linearDown };
+    window.sq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, line, square, floatFrame, uvPin, soft, redBlue, moving, project, loop120, exact, pixels, shot, px, difference, same, loop, litShare, toLinear, linearDown };
   }, !!baseline);
 
   for (const check of selected) {

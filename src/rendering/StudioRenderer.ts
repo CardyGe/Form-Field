@@ -32,7 +32,7 @@ import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActiv
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
 import { CHAR_SETS, cellColourFragment, fitCellGrid, tileFragment, tilesActive } from './tiles';
-import { dropFragment, loopFrame, signalActive, signalStages, vhsFragment } from './signal';
+import { crtFragment, dropFragment, loopFrame, signalActive, signalStages, vhsFragment } from './signal';
 import { GLYPH_PX, GLYPH_SPREAD, buildGlyphAtlas } from './glyph-atlas';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
@@ -315,6 +315,10 @@ export class StudioRenderer {
   private readonly drop = material(dropFragment, {
     uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
     uFrames: { value: 1 }, uChance: { value: .15 }, uBands: { value: 4 }, uFill: { value: 0 }, uBurst: { value: 1 },
+  });
+  private readonly crt = material(crtFragment, {
+    uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
+    uCurve: { value: .15 }, uScanLines: { value: 480 }, uDepth: { value: .5 }, uMask: { value: 1 }, uMaskSize: { value: 3 }, uCorners: { value: .4 }, uBezel: { value: 1 }, uBright: { value: 1.3 },
   });
   /** This frame's loop length in frames, so per-frame randomness repeats on seeks and across the loop seam. */
   private loopFrames = 300;
@@ -1463,7 +1467,7 @@ export class StudioRenderer {
     const seed = ((number(layer, 'seed', 0) % 1000) + 1000) % 1000;
     let input = source, next = 0;
     for (const stage of signalStages(original)) {
-      const program = stage === 'vhs' ? this.vhs : stage === 'drop' ? this.drop : null;
+      const program = stage === 'vhs' ? this.vhs : stage === 'drop' ? this.drop : stage === 'crt' ? this.crt : null;
       // A modulated amount can rest at zero, where there is nothing to do.
       const mix = amount(`${stage}Amount`);
       if (!program || mix <= 0) continue;
@@ -1480,6 +1484,14 @@ export class StudioRenderer {
         u.uHead.value = amount('vhsHeadSwitch'); u.uAge.value = amount('vhsAge');
         // Whole passes only, so the loop closes.
         u.uRoll.value = Math.max(0, Math.round(number(layer, 'vhsRoll', 0)));
+      } else if (stage === 'crt') {
+        const within = (key: string, low: number, high: number, fallback: number) => Math.min(high, Math.max(low, number(layer, key, fallback)));
+        u.uCurve.value = within('crtCurve', 0, .5, .15); u.uScanLines.value = within('crtLines', 120, 1080, 480);
+        u.uDepth.value = amount('crtLineDepth'); u.uCorners.value = amount('crtCorners');
+        u.uMask.value = Math.min(3, Math.max(0, Math.round(number(layer, 'crtMask', 1))));
+        u.uMaskSize.value = within('crtMaskSize', 1, 12, 3);
+        u.uBezel.value = Math.min(1, Math.max(0, Math.round(number(layer, 'crtBezel', 1))));
+        u.uBright.value = within('crtBrightness', .5, 3, 1.3);
       } else {
         u.uFrames.value = frames; u.uChance.value = amount('dropChance');
         u.uBands.value = Math.min(20, Math.max(1, Math.round(number(layer, 'dropBands', 4))));
@@ -1907,7 +1919,7 @@ export class StudioRenderer {
     }
     if (this.signalTargets && !project.layers.some(layer => layer.visible && signalActive(layer))) {
       for (const output of this.signalTargets) output.dispose();
-      this.signalTargets = null; this.vhs.uniforms.uSource.value = this.drop.uniforms.uSource.value = null;
+      this.signalTargets = null; this.vhs.uniforms.uSource.value = this.drop.uniforms.uSource.value = this.crt.uniforms.uSource.value = null;
     }
   }
 
@@ -2070,7 +2082,7 @@ export class StudioRenderer {
     this.warpTarget?.dispose(); this.warpTarget = null; this.warp.dispose();
     this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs(); this.tile.dispose(); this.cellColour.dispose();
     for (const output of this.signalTargets ?? []) output.dispose();
-    this.signalTargets = null; this.vhs.dispose(); this.drop.dispose();
+    this.signalTargets = null; this.vhs.dispose(); this.drop.dispose(); this.crt.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
