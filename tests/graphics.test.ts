@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPreset,createLayer,createProject,PRESETS,validateProject,visibleParameterDefinitions,varyLayer } from '../src/core/project';
-import { GRAPHIC_VARIANTS } from '../src/core/graphics';
+import { CELL_WAVE_KEYS, GRAPHIC_VARIANTS } from '../src/core/graphics';
 import { generateGraphicLayout,graphicLayoutKey,GraphicLayoutCache,sampleGraphicGlyphs,graphicPatternExtent } from '../src/rendering/graphic-layout';
 const looks=PRESETS.filter(p=>p.kind==='graphic');
 const layerFor=(id:string)=>applyPreset(createLayer('graphic'),id);
 
 test('all graphic looks are complete, persisted native layers with substantial family controls',()=>{
-  assert.equal(looks.length,17);
+  assert.equal(looks.length,20);
   for(const look of looks){
     const layer=layerFor(look.id),project={...createProject(),layers:[layer]};
     assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))),project);
@@ -36,6 +36,35 @@ test('seeded tile packing covers the grid exactly once, stays in bounds, and is 
     assert.ok(cells.every(x=>x===1));
     assert.notDeepEqual(layout,generateGraphicLayout({...p,seed:p.seed+1},aspect));
   }
+});
+
+test('cell waves retain their grid, animate material independently, and open old projects',()=>{
+  const aspect=9/16;
+  const ids=['graphic-mint-magenta','graphic-cross-current','graphic-ripple-glass'];
+  const frames=ids.map(id=>{
+    const layer=layerFor(id);
+    layer.params.tileResolution=16;
+    const layout=generateGraphicLayout(layer.params,aspect);
+    assert.equal(layout.columnsCount,9);
+    assert.equal(layout.tiles.length,144);
+    const inGrid=(glyphs:ReturnType<typeof sampleGraphicGlyphs>)=>glyphs.filter(g=>Math.abs(g.x)<aspect/2&&Math.abs(g.y)<.5);
+    const a=inGrid(sampleGraphicGlyphs(layer,.5,aspect,layout));
+    const b=inGrid(sampleGraphicGlyphs(layer,1.1,aspect,layout));
+    assert.equal(a.length,144);
+    const centres=(glyphs:typeof a)=>glyphs.map(({x,y})=>[x,y]);
+    assert.deepEqual(centres(a),centres(b));
+    assert.ok(a.some((g,i)=>g.hx!==b[i].hx&&g.color!==b[i].color));
+    assert.ok(a.some(g=>g.duty>.8&&g.bandPhase>.25));
+    assert.ok(a.some(g=>g.duty===0));
+    const withoutFrames=sampleGraphicGlyphs({...layer,params:{...layer.params,cellFrames:0}},.5,aspect,layout);
+    assert.ok(withoutFrames.every(g=>g.duty===0&&g.bandPhase===0));
+    return a.map(g=>g.hx);
+  });
+  assert.notDeepEqual(frames[0],frames[1]);
+  assert.notDeepEqual(frames[1],frames[2]);
+  const original=layerFor('packed-mosaic'),old=structuredClone(original);
+  for(const key of CELL_WAVE_KEYS)delete old.params[key];
+  assert.deepEqual(validateProject({...createProject(),layers:[old]}).layers[0],original);
 });
 
 test('grid paths are bounded, adjacent and self-avoiding, including mirrored and ring layouts',()=>{

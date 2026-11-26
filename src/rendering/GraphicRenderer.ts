@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { isCellWave } from '../core/graphics';
 import type { Layer } from '../shared/types';
 import { GraphicLayoutCache, sampleGraphicGlyphs, type Glyph } from './graphic-layout';
 import { graphicGridBounds } from './graphic-view';
@@ -39,7 +40,7 @@ void main(){
 const fragment = /* glsl */`
 precision highp float;
 uniform vec3 uPalette[6];
-uniform float uSoftness,uBorder,uBalance;
+uniform float uSoftness,uBorder,uBalance,uCellRim,uCellGrain;
 uniform float uPackedSolid;
 varying vec2 vPoint,vHalf;
 varying vec4 vStyle,vPaint,vExtra;
@@ -61,6 +62,16 @@ float distanceToShape(){
   vec2 q=abs(vPoint)-vHalf+r;
   return length(max(q,0.))+min(max(q.x,q.y),0.)-r;
 }
+float grainHash(vec2 p) {
+  vec3 q=fract(vec3(p.xyx)*.1031);
+  q+=dot(q,q.yzx+33.33);
+  return fract((q.x+q.y)*q.z);
+}
+float grainAt(vec2 p) {
+  vec2 i=floor(p), f=smoothstep(0.,1.,fract(p));
+  return mix(mix(grainHash(i),grainHash(i+vec2(1.,0.)),f.x),
+    mix(grainHash(i+vec2(0.,1.)),grainHash(i+1.),f.x),f.y)-.5;
+}
 void main(){
   float d=distanceToShape();
   float aa=max(fwidth(d)*.7,.0000005)*(1.+uSoftness);
@@ -69,15 +80,35 @@ void main(){
   // fading both SDF edges would leave alpha .75 at their join, a false dark grid.
   if(uPackedSolid>.5)coverage=1.;
   if(vPaint.y>.5&&vPaint.y<1.5)coverage*=smoothstep(-vPaint.z-aa,-vPaint.z+aa,d);
-  if(vPaint.y>1.5){
+  if(vPaint.y>1.5&&vPaint.y<2.5){
     float spacing=max(vPaint.w,.000001);
     float band=(abs(fract((-d+vExtra.y)/spacing)-.5)-vExtra.x*.5)*spacing;
     float resolved=1.-smoothstep(-aa,aa,band);
     coverage*=mix(resolved,vExtra.x,smoothstep(.3,.8,aa/spacing));
   }
+  vec3 color=palette(vPaint.x);
+  if(vPaint.y>2.5){
+    float halfSize=min(vHalf.x,vHalf.y);
+    float inside=max(-d/max(halfSize,.000001),0.);
+    float rimWidth=max(.14*halfSize,aa);
+    float hole=1.-smoothstep(-rimWidth-aa,-rimWidth+aa,d);
+    vec2 cellPoint=vPoint/max(vHalf,vec2(.000001));
+    float insetDist=(max(abs(cellPoint.x),abs(cellPoint.y))-.40)*halfSize;
+    float inset=(1.-smoothstep(-aa,aa,insetDist))*vExtra.y;
+    float body=mix(1.,1.-hole,vExtra.x);
+    vec2 grainUv=cellPoint*32.+vec2(vExtra.w*153.,vExtra.w*79.);
+    float resolved=1.-smoothstep(.30,1.1,length(fwidth(grainUv)));
+    float grain=grainAt(grainUv)*resolved+.4*grainAt(grainUv*.27);
+    float light=clamp(.5+.30*cellPoint.y-.24*cellPoint.x,0.,1.);
+    float highlight=(1.-smoothstep(0.,.095,inside))*light;
+    float bevel=smoothstep(.03,.18,inside)*(1.-smoothstep(.18,.45,inside));
+    color*=max(.35,1.+uCellGrain*grain-uCellRim*bevel*.38);
+    color=mix(color,vec3(1.,.98,.96),uCellRim*highlight*.37);
+    color=mix(color,palette(vPaint.x+.11),inset*(1.-body));
+    coverage*=max(body,inset);
+  }
   coverage*=vExtra.z;
   if(coverage<=.00001)discard;
-  vec3 color=palette(vPaint.x);
   if(uBorder>.5&&vPaint.y<.5){
     float edge=smoothstep(-vPaint.z-aa,-vPaint.z+aa,d);
     color=mix(color,mix(uPalette[5],uPalette[0],.35),edge);
@@ -110,7 +141,7 @@ class GlyphBatch {
     const paints=this.geometry.getAttribute('aPaint') as THREE.InstancedBufferAttribute;
     const extras=this.geometry.getAttribute('aExtra') as THREE.InstancedBufferAttribute;
     const cells=this.geometry.getAttribute('aCell') as THREE.InstancedBufferAttribute;
-    glyphs.forEach((g,i)=>{bounds.setXYZW(i,g.x,g.y,g.hx,g.hy);styles.setXYZW(i,g.type,g.roundness,g.sides,g.angle);paints.setXYZW(i,g.color,g.fill,g.stroke,g.spacing);extras.setXYZW(i,g.duty,g.bandPhase,g.alpha,0);cells.setXY(i,g.cellX??0,g.cellY??0);});
+    glyphs.forEach((g,i)=>{bounds.setXYZW(i,g.x,g.y,g.hx,g.hy);styles.setXYZW(i,g.type,g.roundness,g.sides,g.angle);paints.setXYZW(i,g.color,g.fill,g.stroke,g.spacing);extras.setXYZW(i,g.duty,g.bandPhase,g.alpha,g.textureSeed??0);cells.setXY(i,g.cellX??0,g.cellY??0);});
     for(const attr of [bounds,styles,paints,extras]){attr.clearUpdateRanges();attr.addUpdateRange(0,glyphs.length*4);attr.needsUpdate=true;}
     cells.clearUpdateRanges();cells.addUpdateRange(0,glyphs.length*2);cells.needsUpdate=true;
   }
@@ -126,7 +157,7 @@ export class GraphicRenderer {
     uPatternScale:{value:new THREE.Vector2(1,1)},uTranslation:{value:new THREE.Vector2()},uRotation:{value:0},
     uLayerScale:{value:1},uLayerRotation:{value:0},uLayerTranslation:{value:new THREE.Vector2()},
     uAspect:{value:1},uPixel:{value:1/540},uSoftness:{value:0},uBorder:{value:0},uBalance:{value:1},
-    uPackedSolid:{value:0},
+    uPackedSolid:{value:0},uCellRim:{value:0},uCellGrain:{value:0},
     uClipCell:{value:0},
     uPalette:{value:Array.from({length:6},()=>new THREE.Color())},
   };
@@ -180,7 +211,10 @@ export class GraphicRenderer {
     this.uniforms.uLayerTranslation.value.set(tr.x*aspect,-tr.y);
     this.uniforms.uAspect.value=aspect;this.uniforms.uPixel.value=1/height;
     this.uniforms.uSoftness.value=layer.params.softness;this.uniforms.uBorder.value=Number(layer.params.style===3);
-    this.uniforms.uPackedSolid.value=Number(p.style===2&&p.fill===0&&p.tileGap===0&&p.roundness===0
+    const cellWave=isCellWave(p.style,p.variant);
+    this.uniforms.uCellRim.value=cellWave?p.cellRim:0;
+    this.uniforms.uCellGrain.value=cellWave?p.cellGrain:0;
+    this.uniforms.uPackedSolid.value=Number(!cellWave&&p.style===2&&p.fill===0&&p.tileGap===0&&p.roundness===0
       &&(p.sweep===0||p.motion===0||(p.shrink===0&&p.rounding===0)));
     this.uniforms.uClipCell.value=Number(!radial&&inView);
     this.uniforms.uBalance.value=layer.params.colorBalance;

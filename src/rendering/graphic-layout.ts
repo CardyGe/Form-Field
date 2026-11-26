@@ -1,3 +1,4 @@
+import { isCellWave } from '../core/graphics';
 import { delayOrder, stagedTime } from '../core/timing';
 import type { Layer } from '../shared/types';
 import { seededRandom } from '../core/project';
@@ -9,7 +10,7 @@ export interface GraphicLayout { columns: number[]; tiles: Tile[]; paths: Point[
 export interface Glyph {
   x: number; y: number; hx: number; hy: number; type: number; roundness: number; sides: number; angle: number;
   color: number; fill: number; stroke: number; spacing: number; duty: number; bandPhase: number; alpha: number; erase: boolean;
-  cellX?: number; cellY?: number;
+  cellX?: number; cellY?: number; textureSeed?: number;
 }
 type Params = Record<string, number>;
 const clamp = (v: number, a: number, b: number) => Math.max(a,Math.min(b,v));
@@ -30,7 +31,7 @@ export function graphicPatternExtent(layer: Layer, phase: number, aspect: number
 }
 export function graphicLayoutKey(p: Params, aspect: number): string {
   const style = p.style;
-  const keys = style === 0 ? ['columns','widthScatter'] : style === 2 ? ['tileResolution','tileArea'] : style === 4 ? ['variant','pathResolution','pathLength','direction','bias'] : [];
+  const keys = style === 0 ? ['columns','widthScatter'] : style === 2 ? ['tileResolution', ...(isCellWave(style, p.variant) ? [] : ['tileArea'])] : style === 4 ? ['variant','pathResolution','pathLength','direction','bias'] : [];
   return [style,p.seed,aspect.toFixed(6),...keys.map(k => p[k])].join(':');
 }
 /** Geometry is generated from saved state only; seeking never consumes random state. */
@@ -52,6 +53,12 @@ export function generateGraphicLayout(p: Params, aspect: number): GraphicLayout 
   let cols = Math.max(2,Math.min(Math.floor(12288/rows),Math.round(rows*aspect)));
   if(mirrored)cols-=cols%2;
   result.columnsCount=cols;result.rowsCount=rows;
+  if (isCellWave(p.style, p.variant)) {
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+      result.tiles.push({ x: ((x + .5) / cols - .5) * aspect, y: .5 - (y + .5) / rows, w: aspect / cols, h: 1 / rows });
+    }
+    return result;
+  }
   const w = mirrored ? cols/2 : cols, h = mirrored ? rows/2 : rows;
   const used = new Uint8Array(w*h);
   const cells = Array.from({length:w*h},(_,i)=>i);
@@ -105,6 +112,34 @@ export class GraphicLayoutCache {
     return layout;
   }
   clear():void {this.entries.clear();}
+}
+
+function smoothBetween(low: number, high: number, value: number): number {
+  const t = clamp((value - low) / (high - low), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+/** Integer spatial harmonics keep both axes continuous when the grid is repeated. */
+function cellWaveField(variant: number, x: number, y: number, phase: number, angle: number, detail: number): number {
+  if (variant === 6) {
+    const radius = Math.hypot(Math.sin(x * .5), Math.sin(y * .5));
+    return Math.cos(radius * (7 + detail * 3) - phase) * .89 + .11 * Math.sin(x - y + phase);
+  }
+  const across = Math.cos(angle), up = Math.sin(angle);
+  // The temporal phase itself must complete an integer turn. Use the direction
+  // for spatial weighting, and blend opposing travelling waves continuously.
+  const cosPhase = Math.cos(phase), sinPhase = Math.sin(phase);
+  const fine = Math.sin(2 * x - y + phase) * detail;
+  if (variant === 5) {
+    const first = Math.sin(x - y) * cosPhase - Math.cos(x - y) * sinPhase * across;
+    const second = Math.cos(x + y) * cosPhase + Math.sin(x + y) * sinPhase * up;
+    return .5 * first + .5 * second + .09 * fine;
+  }
+  const bentX = x + .32 * Math.cos(y - phase), bentY = y + .61 * Math.sin(x + phase);
+  const waveX = Math.sin(bentX) * cosPhase - across * Math.cos(bentX) * sinPhase;
+  const waveY = Math.sin(bentY) * cosPhase - up * Math.cos(bentY) * sinPhase;
+  return (waveX * Math.abs(across) + waveY * Math.abs(up)
+    + .21 * Math.sin(x + y + phase) + .14 * fine) / (Math.abs(across) + Math.abs(up) + .35);
 }
 
 /** Pure frame sampling. All spatial units are fractions of canvas height. */
@@ -165,6 +200,34 @@ export function sampleGraphicGlyphs(layer:Layer,phase:number,aspect:number,layou
       const sign=i%2?1:-1,pivot=sign*p.orbit*r;
       const a=sign*(p.coil*index+motion*p.coilDepth*index*.12*Math.sin(tk));
       push(pivot*(1-Math.cos(a)),-pivot*Math.sin(a),r,r,colour(k),{type:1});
+    }
+  }else if(isCellWave(p.style, p.variant)){
+    const seed = (p.seed % 4093) / 4093 * TAU;
+    for (const tile of layout.tiles) {
+      const x = TAU * tile.x / aspect, y = TAU * tile.y;
+      const time = seed + staged(t, tile.x, tile.y);
+      const detail = p.sweepSpread;
+      const fieldX = x + .4 * Math.sin(y + seed), fieldY = y + .36 * Math.sin(x - seed);
+      const sample = (phase: number) => cellWaveField(p.variant, fieldX, fieldY, phase, p.sweepAngle, detail);
+      const lead = p.cellColourLead * TAU;
+      const field = sample(seed) * (1 - motion) + sample(time) * motion;
+      const pigment = sample(seed + lead) * (1 - motion) + sample(time + lead) * motion;
+      const level = Math.abs(field);
+      const edge = .23 + p.sweepWidth * .35;
+      const growth = smoothBetween(.13, edge + .22, level);
+      const frames = smoothBetween(.13, edge, level) * (1 - smoothBetween(edge + .06, edge + .24, level));
+      const speckle = .5 + .5 * Math.sin(3 * x - 5 * y + seed);
+      const diameter = p.cellMinimum * (.78 + .30 * speckle) * (1 - growth) + growth;
+      const size = Math.min(tile.w, tile.h) * (.5 - p.tileGap) * diameter;
+      const colourBand = p.variant === 4
+        ? .12 + .76 * smoothBetween(-.16, .16, pigment)
+        : .1 + .8 * smoothBetween(-.62, .62, pigment);
+      push(tile.x, tile.y, size, size, colour(colourBand + .065 * (speckle - .5)), {
+        roundness: 1 + (p.roundness - 1) * growth,
+        fill: 3, duty: p.cellFrames * frames,
+        bandPhase: p.cellInset * frames * frames * p.cellFrames,
+        textureSeed: speckle,
+      });
     }
   }else if(p.style===2){
     const cell=Math.min(aspect/layout.columnsCount,1/layout.rowsCount);
