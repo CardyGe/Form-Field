@@ -284,7 +284,7 @@ export const VHS_PARAMETERS:ParameterDefinition[]=[
 /** Dropout: bands of the picture drop out to black, noise or a held line. Off by default (Dropout 0). */
 export const DROP_PARAMETERS:ParameterDefinition[]=[
  {key:'dropAmount',label:'Dropout',min:0,max:1,step:0.01,default:0,section:'Material',description:'Blends from the plain layer to dropouts. 0 is off.'},
- {key:'dropChance',label:'Dropout chance',min:0,max:1,step:0.01,default:0.15,section:'Material',description:'The share of bands that drop out at a time.'},
+ {key:'dropChance',label:'Dropout chance',min:0,max:1,step:0.01,default:0.15,section:'Material',description:'The chance, each frame, that a dropout starts.'},
  {key:'dropBands',label:'Dropout bands',min:1,max:20,step:1,default:4,section:'Shape',description:'How many bands the picture is cut into.'},
  {key:'dropFill',label:'Dropout fill',min:0,max:2,step:1,default:0,section:'Material',description:'What a dropout shows: black, noise or a held line.'},
  {key:'dropBurst',label:'Burst length',min:1,max:8,step:1,default:1,section:'Motion',description:'How many frames a dropout lasts. Loops close exactly.'},
@@ -320,7 +320,7 @@ export const DATABEND_PARAMETERS:ParameterDefinition[]=[
  {key:'databendFeedback',label:'Feedback',min:0,max:0.95,step:0.01,default:0.55,section:'Material',description:'How much of each echo feeds the next.'},
  {key:'databendSplit',label:'Channel split',min:0,max:1,step:0.01,default:0.33,section:'Material',description:'How far the colour channels are pulled apart.'},
  {key:'databendDepth',label:'Depth',min:0,max:1,step:0.01,default:0.5,section:'Material',description:'How deep the damage cuts into the picture.'},
- {key:'databendCycles',label:'Cycles per loop',min:0,max:16,step:1,default:1,section:'Motion',description:'How many times the effect cycles per loop. Loops close exactly.'},
+ {key:'databendCycles',label:'Cycles per loop',min:0,max:16,step:1,default:1,section:'Motion',description:'How many times Comb sweeps, or Stutter jumps and returns, per loop. Loops close exactly.'},
 ];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[
  {key:'toneContrast',label:'Tonal contrast',min:.5,max:2,step:.01,default:1,section:'Material',description:'Luminance contrast around the pivot, preserving colour ratios.'},

@@ -335,7 +335,7 @@ export function streamPixel(index: number, width: number, height: number, axis: 
  * - Fold: a wavefold of the 0..1 part of the straight colour around its middle, gain 1 + 7 × Depth, the curve moved
  *   per channel by Split.
  * - Stutter: the stream cut into grains of Distance; a hashed share (Depth) of them repeats the grain before or plays
- *   backwards, re-rolled `uCycles` times per loop on the loop frame, the channels read apart by Split.
+ *   backwards, re-rolled 2 x `uCycles` times per loop on the loop frame (a stutter and its return), the channels read apart by Split.
  * - Corrupt: the 0..1 part of the straight colour as 8-bit sRGB codes, each bit flipped where a hashed mask says, one
  *   mask per run of Distance along the stream, each bit flipped with chance Depth; Split moves each channel's mask
  *   along the stream by up to one run, so the channels break apart.
@@ -436,7 +436,7 @@ vec4 stutter(vec4 plain, vec2 p) {
   float D = uDistance;
   vec3 at = cell(p, D, 0.);
   int frames = max(1, int(uFrames + .5));
-  float epoch = float(int(uFrame + .5) * int(uCycles + .5) / frames);
+  float epoch = float(int(uFrame + .5) * 2 * int(uCycles + .5) / frames);
   if (rnd(at.x, at.y, epoch, 31u) >= uDepth) return plain;
   // Repeat the grain before, or play this one backwards.
   float back = rnd(at.x, at.y, epoch, 32u) < .5 ? D : 2. * at.z - D, spread = uSplit * D * .25;

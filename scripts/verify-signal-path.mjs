@@ -988,7 +988,7 @@ const CHECKS = [
   {
     name: 'bend-loop',
     // Comb and Stutter with Cycles 2 on a moving source: each changes the render, closes its loop across the seam and
-    // repeats after a seek. On the still smooth picture over a 120-frame loop, Stutter changes on exactly 2 frames and
+    // repeats after a seek. On the still smooth picture over a 120-frame loop, Stutter changes on exactly 4 frames (2 x Cycles 2) and
     // Comb returns to its frame 0 picture at frame 60 (two whole cycles), away from it at frame 30.
     run: async ({ page }) => {
       const r = await page.evaluate(async () => {
@@ -1008,8 +1008,8 @@ const CHECKS = [
       });
       const [comb, stutter] = r;
       const verdicts = r.map(row => loopVerdict(row));
-      const ok = verdicts.every(v => v.ok) && r.every(row => row.seek && row.change > .5) && stutter.changes === 2 && comb.half < .05 && comb.quarter > .5;
-      return { ok, detail: `${r.map((row, i) => `${row.name}: ${row.change <= .5 ? 'no change, ' : ''}${verdicts[i].detail}, after seeking ${row.seek ? 'byte-identical' : 'DIFFERS'}`).join('; ')}; still picture: Stutter changes on ${stutter.changes} of 120 frames (exactly 2); Comb frame 60 against 0 ${comb.half.toFixed(3)} (under .05), frame 30 ${comb.quarter.toFixed(3)} (over .5)` };
+      const ok = verdicts.every(v => v.ok) && r.every(row => row.seek && row.change > .5) && stutter.changes === 4 && comb.half < .05 && comb.quarter > .5;
+      return { ok, detail: `${r.map((row, i) => `${row.name}: ${row.change <= .5 ? 'no change, ' : ''}${verdicts[i].detail}, after seeking ${row.seek ? 'byte-identical' : 'DIFFERS'}`).join('; ')}; still picture: Stutter changes on ${stutter.changes} of 120 frames (exactly 4, two times Cycles); Comb frame 60 against 0 ${comb.half.toFixed(3)} (under .05), frame 30 ${comb.quarter.toFixed(3)} (over .5)` };
     },
   },
   {
