@@ -47,10 +47,10 @@ export const secondaryShapeControls: Partial<Record<LayerKind, string[]>> = {
   sculpture: ['lobes', 'thickness', 'stretch', 'curl', 'foldFrequency', 'asymmetry', 'ridgeScale'],
 };
 
-export function ChoiceParameter({ label, name, options, value, onChange, disabled, resetTo }: { label: string; name: string; options: string[]; value: number; onChange: (n: number) => void; disabled?: boolean; /** Double-clicking the label returns to this value. */ resetTo?: number }) {
+export function ChoiceParameter({ label, name, options, value, onChange, disabled, resetTo, disabledOptions }: { label: string; name: string; options: string[]; value: number; onChange: (n: number) => void; disabled?: boolean; /** Choices that cannot be picked right now; they stay in the list so the numbers do not shift. */ disabledOptions?: number[]; /** Double-clicking the label returns to this value. */ resetTo?: number }) {
   // The label's click would focus the dropdown, which would then take the keyboard away from the performance keys.
   const caption = resetTo === undefined ? label : <span title="Double-click to reset" onClick={e => e.preventDefault()} onDoubleClick={() => { if (!disabled && Math.round(value) !== resetTo) onChange(resetTo); }}>{label}</span>;
-  return <label className="stacked-label">{caption}<select aria-label={name} disabled={disabled} value={Math.round(value)} onChange={e => onChange(Number(e.target.value))}>{options.map((option, index) => <option key={index} value={index}>{option}</option>)}</select></label>;
+  return <label className="stacked-label">{caption}<select aria-label={name} disabled={disabled} value={Math.round(value)} onChange={e => onChange(Number(e.target.value))}>{options.map((option, index) => <option key={index} value={index} disabled={disabledOptions?.includes(index)}>{option}</option>)}</select></label>;
 }
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {

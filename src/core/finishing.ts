@@ -102,7 +102,7 @@ export const PRINT_PARAMETERS:ParameterDefinition[]=[
  {key:'printSize',label:'Screen size',min:1,max:64,step:.25,default:8,section:'Material',description:'Dot pitch, line pitch or the size of one dither cell, in pixels at 1080 lines.'},
  {key:'printAngle',label:'Screen angle',min:-90,max:90,step:.5,default:45,section:'Material',description:'Turns the whole screen about the frame centre, in degrees.'},
  {key:'printDot',label:'Dot shape',min:0,max:3,step:1,default:0,section:'Material',description:'Round, Classic (round dots that join into a checkerboard at mid tone, then round holes), Diamond or Square.'},
- {key:'printMatrix',label:'Dither matrix',min:0,max:2,step:1,default:2,section:'Material',description:'2×2, 4×4 or 8×8 Bayer pattern.'},
+ {key:'printMatrix',label:'Dither pattern',min:0,max:2,step:1,default:2,section:'Material',description:'2×2, 4×4 or 8×8 Bayer pattern.'},
  {key:'printScroll',label:'Screen travel per loop',min:-8,max:8,step:1,default:0,section:'Motion',description:'The screen slides this many whole cells along its angle per loop; the loop closes exactly.'},
  {key:'printFloor',label:'Tone floor',min:0,max:1,step:.01,default:0,section:'Material',description:'Tones below this print nothing.'},
  {key:'printCeiling',label:'Tone ceiling',min:0,max:1,step:.01,default:1,section:'Material',description:'Tones above this print the largest mark.'},
@@ -118,7 +118,7 @@ export const PRINT_PARAMETERS:ParameterDefinition[]=[
  {key:'printEdgeSense',label:'Edge sensitivity',min:0,max:1,step:.01,default:.5,section:'Material',description:'How small a tone step counts as an edge. Higher finds fainter edges.'},
  {key:'printEdgeFeather',label:'Edge feather',min:0,max:1,step:.01,default:.25,section:'Material',description:'Softness of the boundary between screened and plain.'},
  {key:'printRetro',label:'Retro palette',min:0,max:3,step:1,default:0,section:'Material',description:'Game Boy, CGA, Teletext or Green screen, used when Screen colour is Retro palette.'},
- {key:'printShimmer',label:'Shimmer',min:0,max:1,step:1,default:0,section:'Motion',description:'On: the blue-noise pattern changes each frame, so the screen shimmers. Off: it holds still.'},
+ {key:'printShimmer',label:'Shimmer',min:0,max:1,step:1,default:0,section:'Motion',description:'On: the dither or blue-noise pattern changes each frame, so the screen shimmers. Off: it holds still.'},
 ];
 /**
  * Split: the layer's colour channels are pulled apart along a direction, so
@@ -257,7 +257,7 @@ export const CHAR_PARAMETERS:ParameterDefinition[]=[
  {key:'charInk',label:'Character ink',min:1,max:6,step:1,default:1,section:'Material',description:'Palette swatch used by Palette ink.'},
  {key:'charGaps',label:'Character background',min:0,max:7,step:1,default:1,section:'Material',description:'What shows behind the characters: transparent, black or a palette swatch.'},
  {key:'charContrast',label:'Character contrast',min:.5,max:3,step:.01,default:1,section:'Material',description:'Stretches the tone that picks each character.'},
- {key:'charSwaps',label:'Character swaps per loop',min:0,max:32,step:1,default:0,section:'Motion',description:'How often characters change to a neighbour in the set, per loop. Loops close exactly.'},
+ {key:'charSwaps',label:'Character swaps per loop',min:0,max:32,step:1,default:0,section:'Motion',description:'How often characters change to a different one, per loop. Loops close exactly.'},
  {key:'charSwapChance',label:'Swap chance',min:0,max:1,step:.01,default:.05,section:'Material',description:'The share of cells that swap each time.'},
 ];
 /** Tiles: the picture rebuilt from mosaic tiles, bricks or beads. Off by default (Tiles 0). */

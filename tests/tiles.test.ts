@@ -65,4 +65,8 @@ test('tile controls appear only for the choice that uses them', () => {
   assert.equal(tileControlVisible(on({ charAmount: .5, charSwaps: 0 }), 'charSwapChance'), false);
   assert.equal(tileControlVisible(on({ tileAmount: .5, tileStyle: 0 }), 'tileJitter'), true);
   assert.equal(tileControlVisible(on({ tileAmount: .5, tileStyle: 2 }), 'tileJitter'), false);
+  assert.equal(tileControlVisible(on({ tileAmount: .5, tileStyle: 0 }), 'tileGrout'), true);
+  assert.equal(tileControlVisible(on({ tileAmount: .5, tileStyle: 1 }), 'tileGrout'), true);
+  assert.equal(tileControlVisible(on({ tileAmount: .5, tileStyle: 2 }), 'tileGrout'), false);
+  assert.equal(tileControlVisible(on({ tileAmount: .5, tileStyle: 2 }), 'tileGaps'), true);
 });

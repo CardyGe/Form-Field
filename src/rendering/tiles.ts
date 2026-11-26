@@ -64,6 +64,8 @@ export function tileControlVisible(layer: Pick<Layer, 'params' | 'modulations'>,
   if (TILE_OWN.includes(key)) {
     if (!on('tileAmount')) return false;
     if (key === 'tileJitter') return Math.round(p.tileStyle ?? 0) === 0;
+    // Beads are round and sit apart, so Grout width does nothing; Grout colour still fills the bead hole.
+    if (key === 'tileGrout') return Math.round(p.tileStyle ?? 0) !== 2;
     return true;
   }
   return true;

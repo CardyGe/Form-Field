@@ -168,7 +168,7 @@ try {
      if(group==='Warp')assert.equal(await page.locator('.finish-picker-group button').count(),5,'The Warp filter shows five cards.');
     }
     await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:'All',exact:true}).click();
-    assert.ok(await page.locator('.finish-picker img').evaluateAll(all=>all.length===16&&all.every(i=>i.complete&&i.naturalWidth>0)),'Every effect has a thumbnail.');
+    assert.ok(await page.locator('.finish-picker img').evaluateAll(all=>all.length===19&&all.every(i=>i.complete&&i.naturalWidth>0)),'Every effect has a thumbnail.');
     await snapshot('add-effect');
     const search=page.getByLabel('Search effects',{exact:true});await search.fill('halftone');
     assert.equal(await page.locator('.finish-picker-group button').count(),1);await search.fill('');await page.keyboard.press('Escape');
@@ -187,6 +187,22 @@ try {
      }
      await page.getByRole('button',{name:'Remove',exact:true}).click();await saved(x=>x.layers[0].params[key]===0);
     }
+    await page.getByRole('button',{name:'Add effect',exact:true}).click();
+    await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:'Surface',exact:true}).click();
+    for(const title of ['LED wall','Characters','Tiles'])assert.equal(await page.getByRole('button',{name:'Add '+title,exact:true}).count(),1,'Surface lists '+title);
+    assert.ok(await page.locator('.finish-picker-group img').evaluateAll(all=>all.length>=4&&all.every(i=>i.complete&&i.naturalWidth>0)),'The Surface cards have thumbnails.');
+    assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'The Surface group with the new cards fits one screen.');
+    await page.keyboard.press('Escape');
+    for(const [title,key,hidden] of [['LED wall','ledAmount','LED pitch value'],['Characters','charAmount','Character size value'],['Tiles','tileAmount','Tile size value']]){
+     await openFinish(page,title);await saved(x=>x.layers[0].params[key]>0);
+     assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),title+' fits one screen.');
+     assert.equal(await page.getByLabel(hidden,{exact:true}).count(),1,title+' shows its own controls.');
+     await page.getByRole('button',{name:'Remove',exact:true}).click();await saved(x=>x.layers[0].params[key]===0);
+    }
+    await openFinish(page,'Print screen');await saved(x=>x.layers[0].params.printMix>0);
+    assert.ok((await page.getByLabel('Screen type',{exact:true}).locator('option').allTextContents()).includes('Blue noise'),'Print offers Blue noise.');
+    assert.ok((await page.getByLabel('Screen colour',{exact:true}).locator('option').allTextContents()).includes('Retro palette'),'Print offers Retro palette.');
+    await page.getByRole('button',{name:'Remove',exact:true}).click();await saved(x=>x.layers[0].params.printMix===0);
     await openFinish(page,'Colour split');await saved(x=>x.layers[0].params.splitAmount===8);
     assert.equal(await page.getByLabel('Split shape',{exact:true}).count(),1);
     assert.equal(await page.getByLabel('Channel order',{exact:true}).count(),1);
