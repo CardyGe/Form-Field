@@ -88,7 +88,14 @@ export function buildGlyphAtlas(glyphs: string, cellPx: number): { width: number
   context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillStyle = '#ffffff';
   list.forEach((glyph, index) => {
     context.clearRect(0, 0, cellPx, cellPx);
-    context.fillText(glyph, cellPx / 2, cellPx / 2);
+    // Block elements are as tall as the square but only a monospace advance wide: stretched across, so a run of
+    // full blocks is a solid wall and not bars with gaps between them.
+    const code = glyph.codePointAt(0) ?? 0, width = code >= 0x2580 && code <= 0x259f ? context.measureText(glyph).width : 0;
+    context.save();
+    context.translate(cellPx / 2, cellPx / 2);
+    if (width > 0) context.scale(cellPx / width, 1);
+    context.fillText(glyph, 0, 0);
+    context.restore();
     const data = context.getImageData(0, 0, cellPx, cellPx).data;
     for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3];
     const glyphField = distanceField(alpha, cellPx, cellPx, spread);

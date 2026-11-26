@@ -104,12 +104,24 @@ The glow is taken after Feedback and Time displacement, so echoes and delayed sl
 
 Finish → Print screen redraws a layer's tone as a printed screen. Every size is in pixels of a 1080-line frame, like the outline width, so a 4K or supersampled export has the same pattern as the preview. The screen is fixed to the frame: the layer moves under it. It is available for every layer except Graphic Patterns.
 
-- **Screen:** *Screen type* picks Dots, Lines or Dither. *Screen size* is the dot or line pitch, or the size of one dither cell. *Screen angle* turns the screen. *Dot shape* is Round, Classic (dots that join into a checkerboard at mid tone, then become round holes), Diamond or Square. *Dither matrix* is 2×2, 4×4 or 8×8. *Screen travel per loop* slides the screen whole cells, so the loop still closes.
+- **Screen:** *Screen type* picks Dots, Lines, Dither or Blue noise. *Screen size* is the dot or line pitch, or the size of one dither cell. *Screen angle* turns the screen. *Dot shape* is Round, Classic (dots that join into a checkerboard at mid tone, then become round holes), Diamond or Square. *Dither pattern* is 2×2, 4×4 or 8×8. *Screen travel per loop* slides the screen whole cells, so the loop still closes.
 - **Tone:** below *Tone floor* nothing prints; above *Tone ceiling* marks reach *Largest mark*, the most of a cell any mark covers. At its default of 0.8 even full-bright colours print as dots with the background between them; at 1 they print solid. *Dot gain* fattens or thins every mark. *Mark softness* blurs mark edges. *Invert* makes dark areas the big marks, like ink on paper.
 - **Colour:** *Layer colour* keeps the layer's colour, brightening each mark towards the layer's overall brightness without ever passing full value. *Palette ink* uses one swatch. *RGB light* adds three primary screens; *CMYK ink* overprints four ink screens at their classic angles. *Paper* fills the gaps with a palette swatch instead of leaving them transparent.
 - **Where it prints:** *Print area* is Everywhere, Edges only or Away from edges, so the screen can follow a layer's outline and inner creases while the rest stays smooth. *Edge width*, *Edge sensitivity* and *Edge feather* set how wide the band is, how faint an edge counts and how soft its boundary is.
 
 Every mark edge is worked out exactly and filtered to one output pixel; a screen finer than about two pixels turns into its plain tone instead of shimmering. The screen runs after Flat colour and before grading. Glow is added afterwards from the unscreened layer, so it stays soft over the dots, and the screen never enters the Feedback echo. Finishes: Halftone, Fine Halftone, Engraving, Comic Process, RGB Raster, Bitmap Dither and Halftone Edges.
+
+Print screen also has **Blue noise**, a screen with no visible grid, a **Shimmer** switch that changes the dither or blue-noise pattern every frame, and **Retro palette** colour: Game Boy, CGA, Teletext or Green screen.
+
+## LED wall, Characters and Tiles
+
+Three effects in Finish → Add effect rebuild a layer from a grid of cells, each cell taking the layer's average colour there. They work on every layer except Graphic Patterns, start off, and leave existing projects exactly as they were. Sizes are in pixels of a 1080-line frame, so a 4K export matches the preview.
+
+- **LED wall** turns the picture into glowing LEDs: Round, Square or Stripes (a red, green and blue bar per LED), with pitch, LED size, brightness (above 1 feeds Glow), background, dead LEDs, scan lines and a slow per-LED flicker.
+- **Characters** draws it in text: Density (` .:-=+*#%@`), Blocks, Binary or Dots, in the layer's colour or one palette ink, with contrast and seeded character swaps.
+- **Tiles** lays it as Mosaic, Brick (with round studs) or Beads, with grout width and colour, relief, light angle and irregularity.
+
+All three can be stacked, and loops close exactly. Mosaic is the costly one: about 7 ms more per frame at 1080 on an Apple Silicon Mac, and 27 ms at 4K. Results are in [the tiles proof](docs/tiles-proof.md); check with `node scripts/verify-tiles.mjs --baseline=<older checkout>`.
 
 ## Time displacement
 
