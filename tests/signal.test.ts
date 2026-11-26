@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { CRT_KEYS, DATABEND_KEYS, DROP_KEYS, JPEG_KEYS, VHS_KEYS } from '../src/core/finishing';
 import { layerTileBlocker } from '../src/core/tile-edges';
-import { crtCurve, loopFrame, signalActive, signalControlVisible, signalStages } from '../src/rendering/signal';
+import { crtCurve, loopFrame, signalActive, signalControlVisible, signalStages, streamIndex, streamPixel } from '../src/rendering/signal';
 
 const allKeys = [...VHS_KEYS, ...DROP_KEYS, ...CRT_KEYS, ...JPEG_KEYS, ...DATABEND_KEYS];
 const amounts = ['vhsAmount', 'dropAmount', 'crtAmount', 'jpegAmount', 'databendAmount'];
@@ -77,4 +77,15 @@ test('signal controls appear only for the choice that uses them', () => {
   assert.equal(signalControlVisible(on({ databendAmount: .5, databendMode: 2 }), 'databendRepeats'), false);
   assert.equal(signalControlVisible(on({ databendAmount: .5, databendMode: 0 }), 'databendRepeats'), true);
   assert.equal(signalControlVisible(on({ databendAmount: .5, databendMode: 0 }), 'unknownKey'), false);
+  assert.equal(signalControlVisible(on({ databendAmount: .5, databendMode: 0 }), 'databendDepth'), false);
+  assert.equal(signalControlVisible(on({ databendAmount: .5, databendMode: 4 }), 'databendDepth'), true);
+  assert.equal(signalControlVisible(on({ databendAmount: .5, databendMode: 2 }), 'databendDistance'), false);
+  assert.equal(signalControlVisible(on({ databendAmount: .5, databendMode: 2 }), 'databendAxis'), false);
+  assert.equal(signalControlVisible(on({ databendAmount: .5, databendMode: 3 }), 'databendDistance'), true);
+});
+test('the stream runs across, down or wrapping row to row', () => {
+  assert.equal(streamIndex(3, 2, 10, 5, 0), 23);
+  assert.equal(streamIndex(3, 2, 10, 5, 1), 17);
+  assert.deepEqual(streamPixel(23, 10, 5, 2), [3, 2]);
+  assert.deepEqual(streamPixel(streamIndex(9, 0, 10, 5, 2) + 1, 10, 5, 2), [0, 1]);
 });

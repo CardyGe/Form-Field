@@ -32,7 +32,7 @@ import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActiv
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
 import { CHAR_SETS, cellColourFragment, fitCellGrid, tileFragment, tilesActive } from './tiles';
-import { crtFragment, dropFragment, loopFrame, signalActive, signalStages, vhsFragment } from './signal';
+import { crtFragment, databendFragment, dropFragment, loopFrame, signalActive, signalStages, vhsFragment } from './signal';
 import { blockGrid, jpegFragments, jpegSamples, jpegSteps } from './jpeg-blocks';
 import { GLYPH_PX, GLYPH_SPREAD, buildGlyphAtlas } from './glyph-atlas';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
@@ -325,6 +325,11 @@ export class StudioRenderer {
   private readonly crt = material(crtFragment, {
     uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
     uCurve: { value: .15 }, uScanLines: { value: 480 }, uDepth: { value: .5 }, uMask: { value: 1 }, uMaskSize: { value: 5 }, uCorners: { value: .4 }, uBezel: { value: 1 }, uBright: { value: 1.3 },
+  });
+  private readonly databend = material(databendFragment, {
+    uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
+    uPhase: { value: 0 }, uFrames: { value: 1 }, uMode: { value: 0 }, uAxis: { value: 2 }, uDistance: { value: 120 }, uRepeats: { value: 4 }, uFeedback: { value: .55 },
+    uSplit: { value: .33 }, uDepth: { value: .5 }, uCycles: { value: 1 },
   });
   /**
    * JPEG damage: two grid targets (one texel per sample of every block) and one as wide as the grid and as tall as the
@@ -1490,7 +1495,7 @@ export class StudioRenderer {
     const seed = ((number(layer, 'seed', 0) % 1000) + 1000) % 1000;
     let input = source, next = 0;
     for (const stage of signalStages(original)) {
-      const program = stage === 'vhs' ? this.vhs : stage === 'drop' ? this.drop : stage === 'crt' ? this.crt : stage === 'jpeg' ? this.jpegRowsInverse : null;
+      const program = { vhs: this.vhs, drop: this.drop, crt: this.crt, jpeg: this.jpegRowsInverse, databend: this.databend }[stage];
       // A modulated amount can rest at zero, where there is nothing to do.
       const mix = amount(`${stage}Amount`);
       if (!program || mix <= 0) continue;
@@ -1506,14 +1511,21 @@ export class StudioRenderer {
       const u = program.uniforms;
       u.uSource.value = input; (u.uSize.value as THREE.Vector2).set(width, height); u.uLines.value = 1080 / height;
       u.uSeed.value = seed; u.uFrame.value = frame; u.uAmount.value = mix;
-      if (stage === 'vhs') {
+      const within = (key: string, low: number, high: number, fallback: number) => Math.min(high, Math.max(low, number(layer, key, fallback)));
+      if (stage === 'databend') {
+        u.uPhase.value = phase; u.uFrames.value = frames;
+        u.uMode.value = Math.round(within('databendMode', 0, 4, 0)); u.uAxis.value = Math.round(within('databendAxis', 0, 2, 2));
+        u.uDistance.value = within('databendDistance', 1, 960, 120); u.uRepeats.value = Math.round(within('databendRepeats', 1, 8, 4));
+        u.uFeedback.value = within('databendFeedback', 0, .95, .55); u.uSplit.value = amount('databendSplit'); u.uDepth.value = amount('databendDepth');
+        // Whole cycles only, so the loop closes.
+        u.uCycles.value = Math.round(within('databendCycles', 0, 16, 1));
+      } else if (stage === 'vhs') {
         u.uPhase.value = phase;
         u.uTracking.value = amount('vhsTracking'); u.uBleed.value = amount('vhsBleed'); u.uNoise.value = amount('vhsNoise');
         u.uHead.value = amount('vhsHeadSwitch'); u.uAge.value = amount('vhsAge');
         // Whole passes only, so the loop closes.
         u.uRoll.value = Math.max(0, Math.round(number(layer, 'vhsRoll', 0)));
       } else if (stage === 'crt') {
-        const within = (key: string, low: number, high: number, fallback: number) => Math.min(high, Math.max(low, number(layer, key, fallback)));
         u.uCurve.value = within('crtCurve', 0, .5, .15); u.uScanLines.value = within('crtLines', 120, 1080, 480);
         u.uDepth.value = amount('crtLineDepth'); u.uCorners.value = amount('crtCorners');
         u.uMask.value = Math.min(3, Math.max(0, Math.round(number(layer, 'crtMask', 1))));
@@ -2012,7 +2024,7 @@ export class StudioRenderer {
     }
     if (this.signalTargets && !project.layers.some(layer => layer.visible && signalActive(layer))) {
       for (const output of this.signalTargets) output.dispose();
-      this.signalTargets = null; this.vhs.uniforms.uSource.value = this.drop.uniforms.uSource.value = this.crt.uniforms.uSource.value = null;
+      this.signalTargets = null; this.vhs.uniforms.uSource.value = this.drop.uniforms.uSource.value = this.crt.uniforms.uSource.value = this.databend.uniforms.uSource.value = null;
       this.releaseJpeg();
     }
   }
@@ -2176,7 +2188,7 @@ export class StudioRenderer {
     this.warpTarget?.dispose(); this.warpTarget = null; this.warp.dispose();
     this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs(); this.tile.dispose(); this.cellColour.dispose();
     for (const output of this.signalTargets ?? []) output.dispose();
-    this.signalTargets = null; this.vhs.dispose(); this.drop.dispose(); this.crt.dispose();
+    this.signalTargets = null; this.vhs.dispose(); this.drop.dispose(); this.crt.dispose(); this.databend.dispose();
     this.releaseJpeg();
     for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) program.dispose();
     this.graphics.dispose(); this.instruments.dispose();

@@ -1,5 +1,5 @@
-// Real Electron/WebGL checks for the signal path finishes: VHS, Dropout, CRT and JPEG damage so far.
-// Run: node scripts/verify-signal-path.mjs --baseline=<checkout of the commit before them> [--only=neutral,vhs,drop,signal,crt,jpeg]
+// Real Electron/WebGL checks for the signal path finishes: VHS, Dropout, CRT, JPEG damage and Databend so far.
+// Run: node scripts/verify-signal-path.mjs --baseline=<checkout of the commit before them> [--only=neutral,vhs,drop,signal,crt,jpeg,bend]
 // --only takes comma-separated name prefixes. Each check prints one PASS or FAIL
 // line, and any failure makes the exit code non-zero. Output goes to work/signal-path.
 // (scripts/verify-signal.mjs is Signal Melt's GPU runner, a different feature.)
@@ -38,6 +38,10 @@ const CRT_ALONE = { crtAmount: 1, crtCurve: 0, crtLines: 480, crtLineDepth: 0, c
 const CRT_ROUGH = { crtAmount: 1, crtCurve: .4, crtLines: 160, crtLineDepth: 1, crtMask: 2, crtMaskSize: 6, crtCorners: 1, crtBezel: 1 };
 const NO_JPEG = 'JPEG damage does not change the render. ';
 const JPEG_ROUGH = { jpegAmount: 1, jpegQuality: 0, jpegChroma: 1, jpegGlitch: .3, jpegGlitchSwaps: 4 };
+const NO_BEND = 'Databend does not change the render. ';
+const BEND_MODES = ['Echo', 'Comb', 'Fold', 'Stutter', 'Corrupt'];
+// Databend Echo with nothing else: no channel split.
+const ECHO = { databendAmount: 1, databendMode: 0, databendSplit: 0 };
 
 const CHECKS = [
   {
@@ -876,6 +880,242 @@ const CHECKS = [
       return { ok, detail: `${r.full <= 1 ? NO_JPEG : ''}at .001: ${r.low.toFixed(4)} (limit 1/255); at 1: ${r.full.toFixed(2)} (over 1)` };
     },
   },
+  {
+    name: 'bend-modes',
+    // Each mode at its defaults on the smooth picture at 960x540: each changes the render by over 1/255 and each pair
+    // of modes differs by over 1/255.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, plain = await q.px(q.exact(q.project([q.smooth()]))), shots = [];
+        for (let mode = 0; mode < 5; mode++) shots.push(await q.px(q.exact(q.project([q.smooth({ databendAmount: 1, databendMode: mode })]))));
+        const pairs = [];
+        for (let a = 0; a < 5; a++) for (let b = a + 1; b < 5; b++) pairs.push([a, b, q.difference(shots[a], shots[b])]);
+        return { change: shots.map(d => q.difference(plain, d)), pairs };
+      });
+      const ok = r.change.every(c => c > 1) && r.pairs.every(p => p[2] > 1);
+      return { ok, detail: `${r.change.every(c => c < .01) ? NO_BEND : ''}change from plain ${r.change.map((c, i) => `${BEND_MODES[i]} ${c.toFixed(2)}`).join(', ')} (each over 1); least pair ${(() => { const p = r.pairs.reduce((a, b) => b[2] < a[2] ? b : a); return `${BEND_MODES[p[0]]}/${BEND_MODES[p[1]]} ${p[2].toFixed(2)}`; })()} (over 1)` };
+    },
+  },
+  {
+    name: 'bend-echo',
+    // A 4x4 dot of light 1 on black at 1920x1080 (1080-line pixels), Echo Across, Distance 100, Repeats 3, Feedback .5,
+    // read back in float from the Databend stage. The light in a box around Distance, 2 and 3 times Distance to the
+    // right of the dot each holds .45 to .55 of the one before (the dot's own box first), a box at 4 times holds none,
+    // and the copies stay on the dot's rows.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async echo => {
+        const q = window.sq, W = 1920, H = 1080, D = 100, x0 = 400, y0 = 500;
+        const f = q.bendFloat({ ...echo, databendAxis: 0, databendDistance: D, databendRepeats: 3, databendFeedback: .5 }, W, H, (x, y) => x >= x0 && x < x0 + 4 && y >= y0 && y < y0 + 4 ? [1, 1, 1, 1] : [0, 0, 0, 1]);
+        const box = (cx, rows = [y0 - 3, y0 + 7]) => { let s = 0; for (let y = rows[0]; y < rows[1]; y++) for (let x = cx - 6; x < cx + 10; x++) s += f.at(x, y)[1]; return s; };
+        const boxes = [0, 1, 2, 3, 4].map(k => box(x0 + k * D));
+        // Light off the dot's rows, anywhere in the frame.
+        let total = 0, onRows = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = f.at(x, y)[1]; total += v; if (y >= y0 && y < y0 + 4) onRows += v; }
+        return { boxes, ratios: [1, 2, 3].map(k => boxes[k] / boxes[k - 1]), off: total - onRows };
+      }, ECHO);
+      const ok = r.ratios.every(v => v >= .45 && v <= .55) && r.boxes[4] < 1e-3 && r.off < 1e-3 && r.boxes[1] > .1;
+      return { ok, detail: `${r.boxes[1] < 1e-3 ? NO_BEND : ''}light at 0/1/2/3/4 Distances ${r.boxes.map(v => v.toFixed(3)).join('/')}; each copy against the one before ${r.ratios.map(v => v.toFixed(3)).join('/')} (.45 to .55); at 4 Distances ${r.boxes[4].toFixed(4)} (none); off the dot's rows ${r.off.toFixed(4)} (none)` };
+    },
+  },
+  {
+    name: 'bend-wrap',
+    // A 4x4 dot 40 pixels from the right edge at 1920x1080, Echo with Repeats 1 and Distance 100. In Wrap the copy
+    // reappears at the start of the next row: its light centre is 60 pixels from the left edge (100 - 40) and one row
+    // lower than the dot. Across, it is lost past the edge: no light outside the dot's own box.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async echo => {
+        const q = window.sq, W = 1920, H = 1080, x0 = W - 40, y0 = 500;
+        const dot = (x, y) => x >= x0 && x < x0 + 4 && y >= y0 && y < y0 + 4 ? [1, 1, 1, 1] : [0, 0, 0, 1];
+        const out = {};
+        for (const [name, axis] of [['wrap', 2], ['across', 0]]) {
+          const f = q.bendFloat({ ...echo, databendAxis: axis, databendDistance: 100, databendRepeats: 1, databendFeedback: .5 }, W, H, dot);
+          let s = 0, sx = 0, sy = 0, away = 0;
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const v = f.at(x, y)[1];
+            if (x >= x0 - 2 && x < x0 + 6 && y >= y0 - 2 && y < y0 + 6) continue;
+            away += v; s += v; sx += v * (x + .5); sy += v * (y + .5);
+          }
+          out[name] = { away, x: sx / s, y: sy / s };
+        }
+        return out;
+      }, ECHO);
+      const w = r.wrap, dotY = 502;
+      const ok = Math.abs(w.x - 62) <= 1 && Math.abs(w.y - (dotY + 1)) <= .25 && w.away > .5 && r.across.away < 1e-3;
+      return { ok, detail: `${w.away < 1e-3 ? NO_BEND : ''}Wrap: copy's light ${w.away.toFixed(3)} centred at x ${w.x.toFixed(2)}, y ${w.y.toFixed(2)} (x 62 ± 1, y ${dotY + 1} ± .25, the dot's centre at x ${1920 - 38}, y ${dotY}); Across: light away from the dot ${r.across.away.toFixed(4)} (none)` };
+    },
+  },
+  {
+    name: 'bend-split',
+    // The Echo dot with Repeats 1 and Distance 100 at 1920x1080: with Channel split 1 the copy's red, green and blue light
+    // centres sit apart along the row, red nearest the dot and blue farthest, each at least 10 pixels from the next;
+    // with Channel split 0 within .5 of each other.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async echo => {
+        const q = window.sq, W = 1920, H = 1080, x0 = 400, y0 = 500, out = {};
+        for (const split of [0, 1]) {
+          const f = q.bendFloat({ ...echo, databendAxis: 0, databendDistance: 100, databendRepeats: 1, databendSplit: split }, W, H, (x, y) => x >= x0 && x < x0 + 4 && y >= y0 && y < y0 + 4 ? [1, 1, 1, 1] : [0, 0, 0, 1]);
+          out[split] = [0, 1, 2].map(k => { let s = 0, sx = 0; for (let y = y0; y < y0 + 4; y++) for (let x = x0 + 20; x < x0 + 200; x++) { const v = f.at(x, y)[k]; s += v; sx += v * (x + .5); } return sx / s; });
+        }
+        return out;
+      }, ECHO);
+      const [red, green, blue] = r[1], gaps = [green - red, blue - green];
+      const ok = gaps.every(g => g >= 10) && Math.max(...r[0]) - Math.min(...r[0]) <= .5;
+      return { ok, detail: `split 1: red/green/blue centres at x ${r[1].map(v => v.toFixed(1)).join('/')} (each at least 10 past the one before); split 0: ${r[0].map(v => v.toFixed(1)).join('/')} (within .5)` };
+    },
+  },
+  {
+    name: 'bend-hdr',
+    // A half-float picture of grey .2 with a 40-pixel square of 4.0 in the middle, read back in float from the Databend
+    // stage. Fold (Depth .7) and Corrupt (Depth .5) each keep the square's mean brightness over 3, and change the grey.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, W = 960, H = 540, inside = (x, y) => Math.abs(x + .5 - W / 2) < 20 && Math.abs(y + .5 - H / 2) < 20, out = [];
+        for (const [name, params] of [['Fold', { databendMode: 2, databendDepth: .7 }], ['Corrupt', { databendMode: 4, databendDepth: .5 }]]) {
+          const f = q.bendFloat({ databendAmount: 1, ...params }, W, H, (x, y) => inside(x, y) ? [4, 4, 4, 1] : [.2, .2, .2, 1]);
+          let square = 0, n = 0, grey = 0, m = 0;
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const c = f.at(x, y), v = .2126 * c[0] + .7152 * c[1] + .0722 * c[2];
+            if (inside(x, y)) { square += v; n++; } else if (x < 100) { grey += Math.abs(v - .2); m++; }
+          }
+          out.push({ name, square: square / n, grey: grey / m });
+        }
+        return out;
+      });
+      const ok = r.every(row => row.square > 3 && row.grey > .01);
+      return { ok, detail: r.map(row => `${row.name}: square mean ${row.square.toFixed(3)} (over 3), grey moved ${row.grey.toFixed(4)} on average (over .01)`).join('; ') };
+    },
+  },
+  {
+    name: 'bend-loop',
+    // Comb and Stutter with Cycles 2 on a moving source: each changes the render, closes its loop across the seam and
+    // repeats after a seek. On the still smooth picture over a 120-frame loop, Stutter changes on exactly 2 frames and
+    // Comb returns to its frame 0 picture at frame 60 (two whole cycles), away from it at frame 30.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, rows = [], plain = await q.px(q.project([q.moving()]), .9), total = 120, at = f => f * Math.PI * 2 / total;
+        for (const [name, mode] of [['Comb', 1], ['Stutter', 3]]) {
+          const params = { databendAmount: 1, databendMode: mode, databendCycles: 2, databendDepth: .8 };
+          const p = q.project([q.moving(params)]);
+          const seam = await q.loop(p);
+          const direct = await q.shot(p, at(60)); await q.shot(p, at(90)); await q.shot(p, at(10));
+          const still = q.loop120(q.exact(q.project([q.smooth(params)])));
+          const frames = []; for (let f = 0; f < total; f++) frames.push(await q.shot(still, at(f), 480, 270));
+          let changes = 0; for (let f = 0; f < total; f++) if (!q.same(frames[f], frames[(f + total - 1) % total])) changes++;
+          const px = await Promise.all([0, 30, 60].map(f => q.pixels(frames[f])));
+          rows.push({ name, ...seam, seek: q.same(direct, await q.shot(p, at(60))), change: q.difference(plain, await q.px(p, .9)), changes, half: q.difference(px[0], px[2]), quarter: q.difference(px[0], px[1]) });
+        }
+        return rows;
+      });
+      const [comb, stutter] = r;
+      const verdicts = r.map(row => loopVerdict(row));
+      const ok = verdicts.every(v => v.ok) && r.every(row => row.seek && row.change > .5) && stutter.changes === 2 && comb.half < .05 && comb.quarter > .5;
+      return { ok, detail: `${r.map((row, i) => `${row.name}: ${row.change <= .5 ? 'no change, ' : ''}${verdicts[i].detail}, after seeking ${row.seek ? 'byte-identical' : 'DIFFERS'}`).join('; ')}; still picture: Stutter changes on ${stutter.changes} of 120 frames (exactly 2); Comb frame 60 against 0 ${comb.half.toFixed(3)} (under .05), frame 30 ${comb.quarter.toFixed(3)} (over .5)` };
+    },
+  },
+  {
+    name: 'bend-alpha',
+    // Straight colour (1, .6, .3) under coverage fading from 1 at the left to nothing at x 600 of 960, read back in float
+    // from the Databend stage, each mode with Channel split 1 and Depth .8. Light never leaves coverage: no channel
+    // over alpha + .002, and none lit where alpha is 0. Fold and Corrupt keep alpha within .002; Echo, Comb and Stutter
+    // carry it with the colour, so coverage moves.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, W = 960, H = 540, rows = [];
+        const cover = x => Math.min(1, Math.max(0, (600 - x - .5) / 300 + Math.sin(x * .05) * .1));
+        for (let mode = 0; mode < 5; mode++) {
+          const f = q.bendFloat({ databendAmount: 1, databendMode: mode, databendSplit: 1, databendDepth: .8, databendDistance: 60 }, W, H, x => { const a = cover(x); return [a, .6 * a, .3 * a, a]; });
+          let over = 0, lit = 0, empty = 0, moved = 0;
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const c = f.at(x, y);
+            over = Math.max(over, c[0] - c[3], c[1] - c[3], c[2] - c[3]);
+            if (c[3] === 0) { empty++; if (c[0] || c[1] || c[2]) lit++; }
+            moved = Math.max(moved, Math.abs(c[3] - cover(x)));
+          }
+          rows.push({ over, lit, empty, moved });
+        }
+        return rows;
+      });
+      const keeps = [false, false, true, false, true];
+      const ok = r.every((row, i) => row.over <= .002 && row.lit === 0 && row.empty > 10000 && (keeps[i] ? row.moved <= .002 : row.moved > .05));
+      return { ok, detail: r.map((row, i) => `${BEND_MODES[i]}: light over alpha by ${row.over.toFixed(4)} at most (limit .002), ${row.lit} lit of ${row.empty} empty, alpha moved ${row.moved.toFixed(3)} (${keeps[i] ? 'at most .002' : 'over .05'})`).join('; ') };
+    },
+  },
+  {
+    name: 'bend-scale',
+    // The same settings for a 960 preview and a 3840 export, the export averaged down 4x4 in linear light: every mode at
+    // its defaults (Wrap), and Across, Down, split and fine variants. Distance is in 1080-line pixels, so they match.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.sq, rows = [];
+        const plain = await q.px(q.exact(q.project([q.smooth()])));
+        const on = { databendAmount: 1 };
+        const cases = [
+          ['Echo', { ...on, databendMode: 0 }], ['Comb', { ...on, databendMode: 1 }], ['Fold', { ...on, databendMode: 2 }], ['Stutter', { ...on, databendMode: 3 }], ['Corrupt', { ...on, databendMode: 4 }],
+          ['Echo Across, Distance 37.5, Repeats 8', { ...on, databendMode: 0, databendAxis: 0, databendDistance: 37.5, databendRepeats: 8, databendSplit: 1 }],
+          ['Comb Down', { ...on, databendMode: 1, databendAxis: 1, databendDepth: 1 }],
+          ['Stutter Down, Distance 24', { ...on, databendMode: 3, databendAxis: 1, databendDistance: 24, databendDepth: .8, databendSplit: 1 }],
+          // Grains and runs finer than a preview pixel: they barely move a smooth picture (Stutter), so they need only
+          // move it over .1, but they must not alias.
+          ['Stutter Wrap, Distance 1.5', { ...on, databendMode: 3, databendDistance: 1.5, databendDepth: 1 }, .1],
+          ['Corrupt Distance 1', { ...on, databendMode: 4, databendDistance: 1, databendDepth: .3 }],
+          ['Corrupt Across, Distance 2.5, split 1', { ...on, databendMode: 4, databendAxis: 0, databendDistance: 2.5, databendSplit: 1 }],
+        ];
+        for (const [name, params, least = .5] of cases) {
+          const p = q.exact(q.project([q.smooth(params)]));
+          const small = await q.px(p, .9, 960, 540), big = await q.px(p, .9, 3840, 2160);
+          rows.push({ name, least, mean: q.difference(small, q.linearDown(big, 960, 540, 4)), change: q.difference(small, plain) });
+        }
+        return rows;
+      });
+      const ok = rows.every(r => r.mean < 3 && r.change > r.least);
+      return { ok, detail: `${rows.some(r => r.change <= r.least) ? NO_BEND : ''}${rows.map(r => `${r.name}: ${r.mean.toFixed(3)} (moved ${r.change.toFixed(2)})`).join(', ')} (limit 3/255, moved over .5, or .1 where marked)` };
+    },
+  },
+  {
+    name: 'bend-cost',
+    // Report only: GPU ms per frame added over plain at 960x540, 1920x1080 and 3840x2160 for each mode at its defaults
+    // and the heaviest settings (Echo and Comb with Repeats 8 and Channel split 1).
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.sq, gl = q.renderer.renderer.getContext(), one = new Uint8Array(4), rows = [];
+        const sync = () => { q.renderer.renderer.setRenderTarget(null); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one); };
+        const time = async (p, W, H) => {
+          await q.renderer.prepare(p);
+          for (let i = 0; i < 3; i++) q.renderer.render(p, .9, W, H);
+          sync(); const start = performance.now();
+          for (let i = 0; i < 10; i++) q.renderer.render(p, .9 + i * .01, W, H);
+          sync(); return (performance.now() - start) / 10;
+        };
+        const cases = [['Echo', { databendMode: 0 }], ['Comb', { databendMode: 1 }], ['Fold', { databendMode: 2 }], ['Stutter', { databendMode: 3 }], ['Corrupt', { databendMode: 4 }],
+          ['Echo Repeats 8 split 1', { databendMode: 0, databendRepeats: 8, databendSplit: 1 }], ['Comb Repeats 8 split 1', { databendMode: 1, databendRepeats: 8, databendSplit: 1 }]];
+        for (const [W, H] of [[960, 540], [1920, 1080], [3840, 2160]]) {
+          const plain = await time(q.project([q.smooth()]), W, H);
+          const parts = [];
+          for (const [name, params] of cases) parts.push(`${name} +${((await time(q.project([q.smooth({ databendAmount: 1, ...params })]), W, H)) - plain).toFixed(1)}`);
+          rows.push(`${W} plain ${plain.toFixed(1)} ms: ${parts.join(', ')}`);
+        }
+        return rows;
+      });
+      return { ok: true, detail: `report only: ${rows.join('; ')}` };
+    },
+  },
+  {
+    name: 'bend-engage',
+    // An amount of .001 is all but plain in every mode; an amount of 1 is not.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, plain = await q.px(q.exact(q.project([q.smooth()]))), rows = [];
+        const diff = async params => q.difference(plain, await q.px(q.exact(q.project([q.smooth(params)]))));
+        for (let mode = 0; mode < 5; mode++) {
+          const rough = { databendMode: mode, databendDepth: 1, databendSplit: 1, databendRepeats: 8, databendFeedback: .9 };
+          rows.push({ low: await diff({ ...rough, databendAmount: .001 }), full: await diff({ ...rough, databendAmount: 1 }) });
+        }
+        return rows;
+      });
+      const ok = r.every(row => row.low < 1 && row.full > 1);
+      return { ok, detail: `${r.every(row => row.full < .01) ? NO_BEND : ''}${r.map((row, i) => `${BEND_MODES[i]} ${row.low.toFixed(4)} at .001, ${row.full.toFixed(2)} at 1`).join('; ')} (limit 1/255 at .001, over 1 at 1)` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -962,6 +1202,19 @@ try {
       }
       return { worst, points: points.length };
     };
+    // A half-float picture from pixel(x, y), in pixels with y from the top, through the signal pass alone and read back
+    // in float: at(x, y), y from the top, is the last stage's output (with Databend alone, Databend's).
+    const bendFloat = (params, W, H, pixel) => {
+      const T = m.THREE, layer = m.createLayer('image'); Object.assign(layer.params, params);
+      const half = new Uint16Array(W * H * 4);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const c = pixel(x, y), k = ((H - 1 - y) * W + x) * 4; for (let i = 0; i < 4; i++) half[k + i] = T.DataUtils.toHalfFloat(c[i]); }
+      const source = new T.DataTexture(half, W, H, T.RGBAFormat, T.HalfFloatType);
+      source.minFilter = source.magFilter = T.LinearFilter; source.needsUpdate = true;
+      renderer.signalSource(layer, layer, source, .9, W, H);
+      const data = readTarget(renderer.signalTargets[0], W, H);
+      source.dispose();
+      return { at: (x, y) => { const k = ((H - 1 - y) * W + x) * 4; return [data[k], data[k + 1], data[k + 2], data[k + 3]]; } };
+    };
     // (200, 120, 60), opaque to x 300 of 960, fading to nothing at x 500.
     const softUrl = await dataUrl(960, 540, x => { const at = (x + 960 / 540 / 2) * 540; return [200, 120, 60, Math.round(255 * Math.min(1, Math.max(0, (500 - at) / 200)))]; });
     const soft = (params = {}) => image(softUrl, params, 'soft');
@@ -1033,7 +1286,7 @@ try {
       }
       return reduced;
     };
-    window.sq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, line, square, readTarget, floatFrame, uvPin, soft, redBlue, blocky, waves, moving, project, loop120, exact, pixels, shot, px, difference, same, loop, litShare, toLinear, linearDown };
+    window.sq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, line, square, readTarget, floatFrame, uvPin, bendFloat, soft, redBlue, blocky, waves, moving, project, loop120, exact, pixels, shot, px, difference, same, loop, litShare, toLinear, linearDown };
   }, !!baseline);
 
   for (const check of selected) {

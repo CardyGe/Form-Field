@@ -84,6 +84,9 @@ export function signalControlVisible(layer: Pick<Layer, 'params' | 'modulations'
     const mode = Math.round(p.databendMode ?? 0);
     if (key === 'databendRepeats' || key === 'databendFeedback') return mode === 0 || mode === 1;
     if (key === 'databendCycles') return mode === 1 || mode === 3;
+    // Echo has no depth; Fold works on each pixel alone, so it has no direction or distance.
+    if (key === 'databendDepth') return mode !== 0;
+    if (key === 'databendDistance' || key === 'databendAxis') return mode !== 2;
     return true;
   }
   return false;
@@ -300,4 +303,166 @@ void main() {
   vec4 tube = vec4(c.rgb * shade * screenMask(vec2(gl_FragCoord.x, fromTop())), c.a);
   vec4 outside = vec4(0., 0., 0., uBezel > .5 ? plain.a : 0.);
   gl_FragColor = mix(plain, mix(outside, tube, screen), uAmount);
+}`;
+
+/**
+ * Databend's stream: where a pixel sits when the frame is read as one run of pixels along the axis. Across (0) and
+ * Wrap (2) read row by row from the top-left, Down (1) column by column. Across and Down clamp at the frame's edge when
+ * a tap reaches past it; Wrap runs off one row's end onto the next row. `databendFragment` runs the same maths in
+ * pixels of a 1080-line frame.
+ */
+export function streamIndex(x: number, y: number, width: number, height: number, axis: number): number {
+  return Math.round(axis) === 1 ? x * height + y : y * width + x;
+}
+
+/** The pixel at a place along the stream: the inverse of `streamIndex`. */
+export function streamPixel(index: number, width: number, height: number, axis: number): [number, number] {
+  if (Math.round(axis) === 1) { const x = Math.floor(index / height); return [x, index - x * height]; }
+  const y = Math.floor(index / width);
+  return [index - y * width, y];
+}
+
+/**
+ * Databend: the frame read as one stream of pixels along the axis and bent like sound. Places and Distance are in
+ * pixels of a 1080-line frame counted from the top-left (`uLines` per output pixel), so a 960 preview and a 4K
+ * export bend alike; rows of the stream are one 1080-line pixel tall, and a pixel keeps its place inside its row
+ * when a tap moves it to another row, so every tap is a filtered read of the same frame-fixed stream.
+ * - Echo: `uRepeats` taps at whole multiples of Distance back along the stream, tap k weighted by `uFeedback` to the
+ *   power k, the plain picture being tap 0, divided by the weights' sum so a flat field keeps its level. Split moves
+ *   the red taps nearer and the blue ones farther, so the copies fan apart in colour.
+ * - Comb: one delay line with feedback (the same taps, at multiples of one delay) whose delay swings by up to 75% of
+ *   Distance times Depth, `uCycles` whole cycles per loop; Split offsets each channel's phase by up to a third of a turn.
+ * - Fold: a wavefold of the 0..1 part of the straight colour around its middle, gain 1 + 7 × Depth, the curve moved
+ *   per channel by Split.
+ * - Stutter: the stream cut into grains of Distance; a hashed share (Depth) of them repeats the grain before or plays
+ *   backwards, re-rolled `uCycles` times per loop on the loop frame, the channels read apart by Split.
+ * - Corrupt: the 0..1 part of the straight colour as 8-bit sRGB codes, each bit flipped where a hashed mask says, one
+ *   mask per run of Distance along the stream, each bit flipped with chance Depth; Split moves each channel's mask
+ *   along the stream by up to one run, so the channels break apart.
+ * Fold and Corrupt add the over-range part back and keep alpha; Echo, Comb and Stutter carry alpha with the colour (the
+ * most of the three channels' reads, so light never leaves its coverage). Stutter and Corrupt place hashed cells, so
+ * where an output pixel covers more than one 1080-line pixel they are averaged over the 1080-line pixels it covers.
+ */
+export const databendFragment = signalCommon + /* glsl */`
+uniform float uPhase, uFrames, uMode, uAxis, uDistance, uRepeats, uFeedback, uSplit, uDepth, uCycles;
+const float TAU = 6.28318530718;
+vec2 lines() { return uSize * uLines; }
+// The source at a place in 1080-line pixels from the top-left, filtered, clamped to the edge texels' centres.
+vec4 fetch(vec2 p) {
+  vec2 o = clamp(p / uLines, vec2(.5), uSize - .5);
+  return texture2D(uSource, vec2(o.x / uSize.x, 1. - o.y / uSize.y));
+}
+// The source 'back' 1080-line pixels earlier along the stream than p (later when negative).
+vec4 earlier(vec2 p, float back) {
+  int axis = int(uAxis + .5);
+  if (axis == 0) return fetch(vec2(p.x - back, p.y));
+  if (axis == 1) return fetch(vec2(p.x, p.y - back));
+  // Wrap: off one row's end onto the next, keeping the place inside the row; the stream's two ends clamp.
+  vec2 F = lines();
+  float row = floor(p.y), x = p.x - back, moved = floor(x / F.x);
+  x -= moved * F.x;
+  float to = row + moved;
+  if (to < 0.) return fetch(vec2(0.));
+  if (to >= F.y) return fetch(F);
+  return fetch(vec2(x, to + p.y - row));
+}
+// A place along the stream cut into cells of 'size': the lane (row or column; the whole frame for Wrap), the cell
+// and the offset into it, in 1080-line pixels. 'ahead' moves the place along the stream first. The cell is the one
+// holding the middle of the 1080-line pixel, so every output pixel inside a 1080-line pixel takes the same cell and
+// a preview reading one place per 1080-line pixel sees the cells a 4K export does.
+vec3 cell(vec2 p, float size, float ahead) {
+  int axis = int(uAxis + .5);
+  float lane = 0., start = 0., along;
+  if (axis == 0) { lane = floor(p.y); along = p.x; }
+  else if (axis == 1) { lane = floor(p.x); along = p.y; }
+  // Wrap: the row's start along the stream, up to about 2 million. Its whole cells are counted apart from the short
+  // remainder plus the place in the row, so a fraction of a 1080-line pixel is never lost in a large float.
+  else { start = floor(p.y) * lines().x; along = p.x; }
+  float whole = floor(start / size), local = start - whole * size + ahead, inside = floor((local + floor(along) + .5) / size);
+  return vec3(lane, max(0., whole + inside), clamp(local + along - inside * size, 0., size));
+}
+// Echo and Comb: taps at whole multiples of each channel's delay, weighted by the feedback to the power of the tap.
+vec4 taps(vec2 p, vec3 delay) {
+  int repeats = int(uRepeats + .5);
+  vec3 rgb = vec3(0.);
+  float a = 0., w = 1., total = 0.;
+  bool split = delay.r != delay.g || delay.g != delay.b;
+  for (int k = 0; k <= 8; k++) {
+    if (k > repeats) break;
+    vec3 back = float(k) * delay;
+    vec4 g = earlier(p, back.g), r = g, b = g;
+    if (split) { r = earlier(p, back.r); b = earlier(p, back.b); }
+    rgb += w * vec3(r.r, g.g, b.b); a += w * max(g.a, max(r.a, b.a)); total += w;
+    w *= uFeedback;
+  }
+  return vec4(rgb, a) / total;
+}
+// The straight colour of premultiplied light, split into its 0..1 part and what lies above.
+void straight(vec4 c, out vec3 low, out vec3 over) {
+  vec3 s = c.a > 0. ? max(c.rgb, 0.) / c.a : vec3(0.);
+  low = clamp(s, 0., 1.); over = s - low;
+}
+// A triangle wave through 0..1: x itself inside 0..1, reflected outside. GLSL's float mod floors, so x < 0 is fine.
+vec3 tri(vec3 x) { return 1. - abs(1. - mod(x, 2.)); }
+vec4 fold(vec4 c) {
+  if (c.a <= 0.) return c;
+  vec3 low, over; straight(c, low, over);
+  vec3 bent = tri(.5 + (low - .5) * (1. + 7. * uDepth) + (vec3(-1., 0., 1.) * uSplit * .5));
+  return vec4((bent + over) * c.a, c.a);
+}
+vec3 encode(vec3 v) { return mix(12.92 * v, 1.055 * pow(v, vec3(1. / 2.4)) - .055, step(.0031308, v)); }
+vec3 decode(vec3 v) { return mix(v / 12.92, pow((v + .055) / 1.055, vec3(2.4)), step(.04045, v)); }
+// The bits a cell's mask flips: each of the eight with chance Depth, from 8-bit slices of one hash.
+uint flips(vec3 at, uint salt) {
+  uvec3 h = pcg(uvec3(uint(at.x), uint(at.y), uint(uSeed * 64.) * 64u + salt));
+  uint mask = 0u, limit = uint(uDepth * 256. + .5);
+  for (int b = 0; b < 8; b++) {
+    uint v = ((b < 4 ? h.x : h.y) >> uint(8 * (b % 4))) & 255u;
+    if (v < limit) mask |= 1u << uint(b);
+  }
+  return mask;
+}
+vec4 corrupt(vec4 c, vec2 p) {
+  if (c.a <= 0.) return c;
+  vec3 low, over; straight(c, low, over);
+  uvec3 code = uvec3(floor(encode(low) * 255. + .5));
+  float D = uDistance, ahead = uSplit * D;
+  code.r ^= flips(cell(p, D, 0.), 41u);
+  code.g ^= flips(cell(p, D, ahead), 41u);
+  code.b ^= flips(cell(p, D, 2. * ahead), 41u);
+  return vec4((decode(vec3(code & 255u) / 255.) + over) * c.a, c.a);
+}
+vec4 stutter(vec4 plain, vec2 p) {
+  float D = uDistance;
+  vec3 at = cell(p, D, 0.);
+  int frames = max(1, int(uFrames + .5));
+  float epoch = float(int(uFrame + .5) * int(uCycles + .5) / frames);
+  if (rnd(at.x, at.y, epoch, 31u) >= uDepth) return plain;
+  // Repeat the grain before, or play this one backwards.
+  float back = rnd(at.x, at.y, epoch, 32u) < .5 ? D : 2. * at.z - D, spread = uSplit * D * .25;
+  vec4 g = earlier(p, back), r = earlier(p, back - spread), b = earlier(p, back + spread);
+  return vec4(r.r, g.g, b.b, max(g.a, max(r.a, b.a)));
+}
+void main() {
+  vec4 plain = texture2D(uSource, vUv), bent;
+  vec2 p = vec2(gl_FragCoord.x, fromTop()) * uLines;
+  int mode = int(uMode + .5);
+  if (mode == 0) bent = taps(p, uDistance * (1. + vec3(-1., 0., 1.) * uSplit * .25));
+  else if (mode == 1) {
+    vec3 turn = uCycles * uPhase + vec3(0., 1., 2.) * uSplit * TAU / 3.;
+    bent = taps(p, uDistance * (1. + .75 * uDepth * sin(turn)));
+  }
+  else if (mode == 2) bent = fold(plain);
+  else {
+    // One read per 1080-line pixel the output pixel covers, up to 4 x 4.
+    int n = int(clamp(ceil(uLines - .01), 1., 4.));
+    bent = vec4(0.);
+    for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
+      if (i >= n || j >= n) continue;
+      vec2 q = p + ((vec2(float(i), float(j)) + .5) / float(n) - .5) * uLines;
+      bent += mode == 3 ? stutter(plain, q) : corrupt(plain, q);
+    }
+    bent /= float(n * n);
+  }
+  gl_FragColor = mix(plain, bent, uAmount);
 }`;
