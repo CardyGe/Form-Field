@@ -121,7 +121,7 @@ function surfaceUniforms(): Uniforms {
   return {
     ...viewUniforms(),
     uPalette: { value: DEFAULT_PALETTE.map((hex) => new THREE.Color(hex)) },
-    uAspect: { value: 1 }, uPhase: { value: 0 }, uSeed: { value: 0 },
+    uAspect: { value: 1 }, uPhase: { value: 0 }, uLoopPhase: { value: 0 }, uSeed: { value: 0 },
     uResolution:{value:new THREE.Vector2(1,1)},
     ...Object.fromEntries(Object.entries(SURFACE_DEFAULTS).map(([key,value])=>[`u${key[0].toUpperCase()}${key.slice(1)}`,{value}])),
   };
@@ -1007,7 +1007,7 @@ export class StudioRenderer {
     } else if (layer.kind === 'surface') {
       const u = surface.uniforms;
       (u.uResolution.value as THREE.Vector2).set(this.width,this.height);
-      u.uAspect.value = aspect; u.uPhase.value = localPhase;
+      u.uAspect.value = aspect; u.uPhase.value = localPhase; u.uLoopPhase.value = phase;
       u.uSeed.value = number(layer, 'seed', 0) % 1_000_003;
       for (const [key, fallback] of Object.entries(SURFACE_DEFAULTS)) {
         u[`u${key[0].toUpperCase()}${key.slice(1)}`].value = number(layer, key, fallback);

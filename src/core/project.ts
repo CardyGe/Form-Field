@@ -35,10 +35,16 @@ export const SURFACE_FOLD = 4;
 export const SURFACE_VARIANTS = [['Flow', 'Braids', 'Ribbons'], ['Terrace', 'Ripples', 'Vortex'],
   ['Melt', 'Beads', 'Strands'], ['Portal', 'Twin Portals', 'Lens'], ['Offset Fold']];
 export const FOLD_DIRECTIONS = ['Forward', 'Reverse'];
+export const FOLD_SHAPES = ['Offset Fold', 'Twin Fold', 'S-Curve', 'Spiral'];
+export const FOLD_PATHS = ['Fixed', 'Drift', 'Orbit'];
+
+const FOLD_SHAPE_KEYS = ['foldSeparation', 'foldCurve', 'foldPitch'];
+const FOLD_PATH_KEYS = ['foldPathAmount', 'foldPathCycles'];
 
 // The fold controls stay out of the inspector for earlier Surface families.
 const FOLD_KEYS = ['foldX', 'foldY', 'foldSize', 'foldStretch', 'foldTilt', 'foldSpacing', 'foldPinch',
-  'foldPhase', 'foldDirection'];
+  'foldPhase', 'foldDirection', 'foldShape', 'foldPath', 'foldBrightness', 'foldRimLight',
+  ...FOLD_SHAPE_KEYS, ...FOLD_PATH_KEYS];
 const FOLD_SHARED_KEYS = ['style', 'variant', 'cycles', 'softness', 'contrast', 'saturation', 'hue', 'exposure'];
 
 export const FRACTAL_FAMILIES = ['Folded Lace', 'Julia Bloom', 'Mandelbox', 'Portal'];
@@ -193,9 +199,18 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('foldSize', 'Opening size', .2, 2.5, .01, 1, 'Shape'),
     parameter('foldStretch', 'Opening stretch', .4, 2.5, .01, 1, 'Shape'),
     parameter('foldTilt', 'Opening tilt', -Math.PI, Math.PI, .001, .439, 'Shape'),
+    parameter('foldShape', 'Fold shape', 0, FOLD_SHAPES.length - 1, 1, 0, 'Shape'),
+    parameter('foldSeparation', 'Twin separation', .3, 2.2, .01, 1.24, 'Shape'),
+    parameter('foldCurve', 'Curve depth', .15, 2, .01, .85, 'Shape'),
+    parameter('foldPitch', 'Spiral pitch', .3, 2.6, .01, 1, 'Shape'),
+    parameter('foldBrightness', 'Brightness (stops)', -2, 2, .01, 0, 'Material'),
+    parameter('foldRimLight', 'Rim light', 0, 1, .01, .18, 'Material'),
     parameter('foldSpacing', 'Band spacing', .35, 3, .01, 1, 'Material'),
     parameter('foldPinch', 'Pinch', 0, 1, .01, .86, 'Material'),
     parameter('foldPhase', 'Colour phase', 0, 1, .01, 0, 'Motion'),
+    parameter('foldPath', 'Opening motion', 0, FOLD_PATHS.length - 1, 1, 0, 'Motion'),
+    parameter('foldPathAmount', 'Path size', 0, .65, .01, .22, 'Motion'),
+    parameter('foldPathCycles', 'Path cycles per loop', 1, 8, 1, 1, 'Motion'),
     parameter('foldDirection', 'Flow direction', 0, 1, 1, 0, 'Motion'),
     parameter('scale', 'Scale', 0.5, 12, 0.01, 4, 'Shape'),
     parameter('warp', 'Flow', 0, 1, 0.01, 0.45, 'Shape'),
@@ -554,9 +569,11 @@ const SIGNAL_ALL_KEYS = [...VHS_KEYS, ...DROP_KEYS, ...CRT_KEYS, ...JPEG_KEYS, .
 /** Every control of the warp pass: hidden on layers that take no warp. */
 const WARP_ALL_KEYS = [...WARP_KEYS, ...LIQUID_KEYS, ...LUMA_WARP_KEYS, ...POLAR_KEYS, ...MIRROR_KEYS];
 export function surfaceParameterVisible(params: Layer['params'], key: string): boolean {
-  return params.style === SURFACE_FOLD
-    ? FOLD_KEYS.includes(key) || FOLD_SHARED_KEYS.includes(key) || FINISH_KEYS.includes(key)
-    : !FOLD_KEYS.includes(key);
+  if (params.style !== SURFACE_FOLD) return !FOLD_KEYS.includes(key);
+  const shapeOnly = FOLD_SHAPE_KEYS.indexOf(key);
+  if (shapeOnly >= 0) return params.foldShape === shapeOnly + 1;
+  if (FOLD_PATH_KEYS.includes(key)) return (params.foldPath ?? 0) > 0;
+  return FOLD_KEYS.includes(key) || FOLD_SHARED_KEYS.includes(key) || FINISH_KEYS.includes(key);
 }
 
 export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[] {
@@ -882,7 +899,7 @@ export function clampParameter(value: number, definition: ParameterDefinition): 
 }
 
 // Identity, coverage and Julia topology are deliberate composition choices.
-const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'input','group','motif','spiral','spiralA','spiralB','zoomCycles','colorRun','morphTo','morphs','scopeMode','emberPhrases','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'foldX', 'foldY', 'foldDirection', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
+const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'input','group','motif','spiral','spiralA','spiralB','zoomCycles','colorRun','morphTo','morphs','scopeMode','emberPhrases','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'foldX', 'foldY', 'foldDirection', 'foldShape', 'foldPath', 'foldPathCycles', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
 const VARIATION_OFF_VALUES: Record<string, number> = { slitChroma: 0, slitZoom: 0, slitReach: 1, glowSpread: 0, glowStreak: 0 };
 export type VariationLocks = { palette: boolean; structure: boolean; motion: boolean; material: boolean };
 

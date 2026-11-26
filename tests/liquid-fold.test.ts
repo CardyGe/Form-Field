@@ -58,3 +58,22 @@ test('older Surface layers load with hidden Fold controls and inactive Fold MIDI
   assert.equal(activeParameterLink(reference.layers[0], 'foldX'), true);
   assert.equal(activeParameterLink(reference.layers[0], 'foldDirection'), false);
 });
+
+test('shapes and travel expose only their own controls and round-trip independently of colour', () => {
+  const original = reference.layers[0];
+  const shapeKeys = ['foldSeparation', 'foldCurve', 'foldPitch'];
+  for (const foldShape of [0, 1, 2, 3]) {
+    const params = { ...original.params, foldShape, foldPath: 2, foldPathCycles: 3, foldBrightness: .75 };
+    const saved = validateProject({ ...reference, layers: [{ ...original, params }] }).layers[0];
+    const visible = new Set(visibleParameterDefinitions(saved).map(def => def.key));
+    assert.deepEqual(shapeKeys.filter(key => visible.has(key)), foldShape === 0 ? [] : [shapeKeys[foldShape - 1]]);
+    assert.ok(visible.has('foldPathAmount') && visible.has('foldBrightness') && visible.has('foldRimLight'));
+    assert.deepEqual(saved.palette, original.palette);
+    assert.equal(saved.params.foldBrightness, .75);
+    assert.equal(saved.params.foldPathCycles, 3);
+    assert.equal(varyLayer(saved, .9, locks).params.foldShape, foldShape);
+  }
+  assert.ok(!visibleParameterDefinitions(original).some(def => def.key === 'foldPathAmount'));
+  assert.equal(activeParameterLink(original, 'foldBrightness'), true);
+  assert.equal(activeParameterLink(original, 'foldPitch'), false);
+});
