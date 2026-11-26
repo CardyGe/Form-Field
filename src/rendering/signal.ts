@@ -95,7 +95,7 @@ export function signalControlVisible(layer: Pick<Layer, 'params' | 'modulations'
  * and a cell this size covers whole pixels of a 960 preview and of a 4K export alike, so the two match once the
  * export is averaged down. All randomness is a stateless hash of the seed (wrapped to 0..999), a place and the loop frame.
  */
-const signalCommon = /* glsl */`
+export const signalCommon = /* glsl */`
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D uSource;

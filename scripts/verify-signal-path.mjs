@@ -1,5 +1,5 @@
-// Real Electron/WebGL checks for the signal path finishes: VHS, Dropout and CRT so far.
-// Run: node scripts/verify-signal-path.mjs --baseline=<checkout of the commit before them> [--only=neutral,vhs,drop,signal,crt]
+// Real Electron/WebGL checks for the signal path finishes: VHS, Dropout, CRT and JPEG damage so far.
+// Run: node scripts/verify-signal-path.mjs --baseline=<checkout of the commit before them> [--only=neutral,vhs,drop,signal,crt,jpeg]
 // --only takes comma-separated name prefixes. Each check prints one PASS or FAIL
 // line, and any failure makes the exit code non-zero. Output goes to work/signal-path.
 // (scripts/verify-signal.mjs is Signal Melt's GPU runner, a different feature.)
@@ -36,6 +36,8 @@ const CRT_ALONE = { crtAmount: 1, crtCurve: 0, crtLines: 480, crtLineDepth: 0, c
 // 160 lines stay over 2.25 preview pixels apart across the curved screen; finer ones fade flat on the preview by
 // design, where an export averaged down would alias them instead.
 const CRT_ROUGH = { crtAmount: 1, crtCurve: .4, crtLines: 160, crtLineDepth: 1, crtMask: 2, crtMaskSize: 6, crtCorners: 1, crtBezel: 1 };
+const NO_JPEG = 'JPEG damage does not change the render. ';
+const JPEG_ROUGH = { jpegAmount: 1, jpegQuality: 0, jpegChroma: 1, jpegGlitch: .3, jpegGlitchSwaps: 4 };
 
 const CHECKS = [
   {
@@ -327,13 +329,14 @@ const CHECKS = [
   },
   {
     name: 'signal-cost',
-    // Report only: GPU time of a 1920x1080 and a 3840x2160 frame with VHS (Colour bleed 0, .5 and 1) and Dropout Hold line, against plain.
+    // Report only: GPU time of a 1920x1080 and a 3840x2160 frame with VHS (Colour bleed 0, .5 and 1), Dropout Hold line
+    // and JPEG damage (defaults, the smallest and largest blocks, rough), against plain.
     run: async ({ page }) => {
       const rows = await page.evaluate(async () => {
         // Reading a pixel back waits for the GPU to finish every queued draw.
         const q = window.sq, gl = q.renderer.renderer.getContext(), rows = [], one = new Uint8Array(4);
         const sync = () => { q.renderer.renderer.setRenderTarget(null); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one); };
-        for (const [name, params] of [['plain', {}], ['VHS bleed 0', { vhsAmount: 1, vhsBleed: 0 }], ['VHS bleed .5 (default)', { vhsAmount: 1 }], ['VHS bleed 1', { vhsAmount: 1, vhsBleed: 1 }], ['Dropout Hold line, 20 bands, burst 8', { dropAmount: 1, dropChance: .5, dropFill: 2, dropBands: 20, dropBurst: 8 }]]) {
+        for (const [name, params] of [['plain', {}], ['VHS bleed 0', { vhsAmount: 1, vhsBleed: 0 }], ['VHS bleed .5 (default)', { vhsAmount: 1 }], ['VHS bleed 1', { vhsAmount: 1, vhsBleed: 1 }], ['Dropout Hold line, 20 bands, burst 8', { dropAmount: 1, dropChance: .5, dropFill: 2, dropBands: 20, dropBurst: 8 }], ['JPEG defaults', { jpegAmount: 1 }], ['JPEG Block 4', { jpegAmount: 1, jpegBlock: 4 }], ['JPEG Block 64', { jpegAmount: 1, jpegBlock: 64 }], ['JPEG rough', { jpegAmount: 1, jpegQuality: 0, jpegChroma: 1, jpegGlitch: .3 }]]) {
           const p = q.project([q.smooth(params)]);
           await q.renderer.prepare(p);
           const ms = [];
@@ -599,6 +602,194 @@ const CHECKS = [
       return { ok, detail: `${r.full <= 1 ? NO_CRT : ''}at .001: ${r.low.toFixed(4)} (limit 1/255); at 1: ${r.full.toFixed(2)} (over 1)` };
     },
   },
+  {
+    name: 'jpeg-blocks',
+    // Waves of brightness and colour at Quality 0, Colour damage 1, read back in float from the JPEG stage (the export's dither would
+    // hide flat blocks). The step in brightness (sRGB-encoded, 0..255) between neighbouring pixels along rows and
+    // columns, averaged: at block edges, every Block size 1080-line pixels from the frame's top-left, it must be over
+    // 4/255 and over 4 times the step inside blocks, at 1920x1080 with Block size 8 (8 output pixels) and at 960x540
+    // with Block size 12 (6). At Quality 1 every channel of the export must be within 4/255 of plain at 960x540.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, out = [];
+        const encode = v => 255 * (v <= .0031308 ? 12.92 * v : 1.055 * Math.max(v, 0) ** (1 / 2.4) - .055);
+        const steps = (f, W, H, B) => {
+          const Y = new Float32Array(W * H);
+          for (let i = 0; i < W * H; i++) Y[i] = .299 * encode(f[i * 4]) + .587 * encode(f[i * 4 + 1]) + .114 * encode(f[i * 4 + 2]);
+          let edge = 0, ne = 0, inner = 0, ni = 0;
+          const add = (v, isEdge) => { if (isEdge) { edge += v; ne++; } else { inner += v; ni++; } };
+          // Float rows start at the bottom: row y is H - 1 - y from the top.
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const i = y * W + x, top = H - 1 - y;
+            if (x + 1 < W) add(Math.abs(Y[i + 1] - Y[i]), (x + 1) % B === 0);
+            if (top + 1 < H) add(Math.abs(Y[i - W] - Y[i]), (top + 1) % B === 0);
+          }
+          return { edge: edge / ne, inner: inner / ni };
+        };
+        for (const [W, H, block] of [[1920, 1080, 8], [960, 540, 12]]) {
+          const f = await q.floatFrame(q.project([q.waves({ jpegAmount: 1, jpegQuality: 0, jpegChroma: 1, jpegBlock: block })]), W, H);
+          out.push({ W, block, ...steps(f, W, H, block * H / 1080) });
+        }
+        const plain = await q.px(q.exact(q.project([q.waves()]))), fine = await q.px(q.exact(q.project([q.waves({ jpegAmount: 1, jpegQuality: 1 })])));
+        let worst = 0; for (let i = 0; i < plain.length; i++) worst = Math.max(worst, Math.abs(plain[i] - fine[i]));
+        return { out, worst };
+      });
+      const ok = r.out.every(o => o.edge > 4 && o.edge > 4 * o.inner) && r.worst <= 4;
+      return { ok, detail: `${r.out.every(o => o.edge < .01) ? NO_JPEG : ''}${r.out.map(o => `${o.W} Block ${o.block}: edge step ${o.edge.toFixed(3)}, inside ${o.inner.toFixed(3)}`).join('; ')} (edge over 4 and over 4x inside); Quality 1 worst ${r.worst}/255 (limit 4)` };
+    },
+  },
+  {
+    name: 'jpeg-colour',
+    // A picture of flat 8-pixel blocks of random colour at 1920x1080 (Block size 8), Quality 0. Over each 2x2 group of
+    // blocks (a 16-pixel colour block from the top-left), how far each block's mean colour difference (sRGB Cb, Cr) and
+    // brightness (Y) sit from the group's mean, against plain. Colour damage 1: colour spread under 25% of plain, so
+    // colour is shared across 2-block areas, and brightness spread over 80%. Colour damage 0: colour spread over 80%.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, W = 1920, H = 1080, B = 8, blocky = await q.blocky();
+        const spread = d => {
+          const mean = (bx, by) => {
+            let y = 0, cb = 0, cr = 0;
+            for (let j = 0; j < B; j++) for (let i = 0; i < B; i++) {
+              // Exported rows start at the top.
+              const k = ((by * B + j) * W + bx * B + i) * 4, R = d[k], G = d[k + 1], Bl = d[k + 2], L = .299 * R + .587 * G + .114 * Bl;
+              y += L; cb += .5643 * (Bl - L); cr += .7133 * (R - L);
+            }
+            return [y / 64, cb / 64, cr / 64];
+          };
+          let luma = 0, colour = 0, n = 0;
+          for (let gy = 0; gy + 1 < H / B; gy += 2) for (let gx = 0; gx + 1 < W / B; gx += 2) {
+            const m = [mean(gx, gy), mean(gx + 1, gy), mean(gx, gy + 1), mean(gx + 1, gy + 1)];
+            const c = [0, 1, 2].map(k => m.reduce((s, v) => s + v[k], 0) / 4);
+            for (const v of m) { luma += Math.abs(v[0] - c[0]); colour += Math.hypot(v[1] - c[1], v[2] - c[2]); n++; }
+          }
+          return { luma: luma / n, colour: colour / n };
+        };
+        const plain = spread(await q.px(q.exact(q.project([blocky()])), .9, W, H));
+        const smeared = spread(await q.px(q.exact(q.project([blocky({ jpegAmount: 1, jpegQuality: 0, jpegChroma: 1 })])), .9, W, H));
+        const kept = spread(await q.px(q.exact(q.project([blocky({ jpegAmount: 1, jpegQuality: 0, jpegChroma: 0 })])), .9, W, H));
+        return { colour: smeared.colour / plain.colour, luma: smeared.luma / plain.luma, keptColour: kept.colour / plain.colour };
+      });
+      const ok = r.colour < .25 && r.luma > .8 && r.keptColour > .8;
+      return { ok, detail: `${r.colour > .99 && r.luma > .99 ? NO_JPEG : ''}Colour damage 1: colour spread ${(r.colour * 100).toFixed(1)}% of plain (under 25%), brightness ${(r.luma * 100).toFixed(1)}% (over 80%); Colour damage 0: colour spread ${(r.keptColour * 100).toFixed(1)}% (over 80%)` };
+    },
+  },
+  {
+    name: 'jpeg-hdr',
+    // A half-float picture of grey .2 with a 40-pixel square of 4.0 in the middle, through JPEG damage alone at Quality 0
+    // and read back in float: the square's mean brightness must stay over 3, and the grey around it must stay under 1.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, T = q.m.THREE, W = 960, H = 540, layer = q.m.createLayer('image');
+        Object.assign(layer.params, { jpegAmount: 1, jpegQuality: 0 });
+        const half = new Uint16Array(W * H * 4), inside = (i, j) => Math.abs(i + .5 - W / 2) < 20 && Math.abs(j + .5 - H / 2) < 20;
+        for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) { const v = T.DataUtils.toHalfFloat(inside(i, j) ? 4 : .2), k = (j * W + i) * 4; half[k] = half[k + 1] = half[k + 2] = v; half[k + 3] = T.DataUtils.toHalfFloat(1); }
+        const source = new T.DataTexture(half, W, H, T.RGBAFormat, T.HalfFloatType);
+        source.minFilter = source.magFilter = T.LinearFilter; source.needsUpdate = true;
+        q.renderer.signalSource(layer, layer, source, .9, W, H);
+        const f = q.readTarget(q.renderer.signalTargets[0], W, H);
+        source.dispose();
+        let square = 0, n = 0, around = 0;
+        for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+          const k = (j * W + i) * 4, y = .2126 * f[k] + .7152 * f[k + 1] + .0722 * f[k + 2];
+          if (inside(i, j)) { square += y; n++; } else if (!inside(i - 16, j) && !inside(i + 16, j) && !inside(i, j - 16) && !inside(i, j + 16)) around = Math.max(around, y);
+        }
+        return { square: square / n, around };
+      });
+      const ok = r.square > 3 && r.around < 1;
+      return { ok, detail: `square mean ${r.square.toFixed(3)} (over 3); brightest grey away from it ${r.around.toFixed(3)} (under 1)` };
+    },
+  },
+  {
+    name: 'jpeg-glitch',
+    // Random-colour blocks at Quality 1, Colour damage 0. (1) At 1920x1080, Broken blocks .3 against 0: 30 ± 8% of the
+    // 8-pixel blocks change. (2) Over a 120-frame loop at 480x270 (Block size 16), the picture changes on exactly 4 frames
+    // with 4 changes per loop, and on none with 0 changes or with Broken blocks 0. (3) A moving source closes its loop.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, W = 1920, H = 1080, B = 8, blocky = await q.blocky(), base = { jpegAmount: 1, jpegQuality: 1, jpegChroma: 0 };
+        const whole = await q.px(q.exact(q.project([blocky({ ...base, jpegGlitch: 0 })])), .9, W, H), broken = await q.px(q.exact(q.project([blocky({ ...base, jpegGlitch: .3 })])), .9, W, H);
+        let changed = 0, blocks = 0;
+        for (let by = 0; by < H / B; by++) for (let bx = 0; bx < W / B; bx++) {
+          let s = 0;
+          for (let j = 0; j < B; j++) for (let i = 0; i < B; i++) { const k = ((by * B + j) * W + bx * B + i) * 4; for (let c = 0; c < 3; c++) s += Math.abs(whole[k + c] - broken[k + c]); }
+          blocks++; if (s / (B * B * 3) > 3) changed++;
+        }
+        const changes = async params => {
+          const p = q.loop120(q.exact(q.project([blocky({ ...base, jpegBlock: 16, ...params })]))), N = 120, frames = [];
+          for (let f = 0; f < N; f++) frames.push(await q.shot(p, f * Math.PI * 2 / N, 480, 270));
+          let n = 0; for (let f = 0; f < N; f++) if (!q.same(frames[f], frames[(f + N - 1) % N])) n++;
+          return n;
+        };
+        const four = await changes({ jpegGlitch: .3, jpegGlitchSwaps: 4 }), none = await changes({ jpegGlitch: .3, jpegGlitchSwaps: 0 }), off = await changes({ jpegGlitch: 0, jpegGlitchSwaps: 4 });
+        const seam = await q.loop(q.project([q.moving({ jpegAmount: 1, jpegGlitch: .3, jpegGlitchSwaps: 4 })]));
+        return { share: changed / blocks, four, none, off, seam };
+      });
+      const loop = loopVerdict(r.seam);
+      const ok = Math.abs(r.share - .3) <= .08 && r.four === 4 && r.none === 0 && r.off === 0 && loop.ok;
+      return { ok, detail: `${r.share === 0 ? NO_JPEG : ''}${(r.share * 100).toFixed(1)}% of blocks broken (30 ± 8); changes per 120-frame loop: ${r.four} with 4 per loop (exactly 4), ${r.none} with 0, ${r.off} with Broken blocks 0 (none); moving source ${loop.detail}` };
+    },
+  },
+  {
+    name: 'jpeg-alpha',
+    // The soft layer (straight colour 200, 120, 60, fading to nothing) with the rough settings, at three frames: wherever
+    // the transparent export has no coverage the export over black is exactly black, and wherever it has coverage of at
+    // least 8/255 no straight channel passes 200 + 4. Inside coverage the damage must show (a flat colour only shows
+    // the broken blocks, so the mean change over the frame need only pass .2/255).
+    run: async ({ page }) => {
+      const r = await page.evaluate(async rough => {
+        const q = window.sq, settings = { ...rough, jpegQuality: .2, jpegChroma: .5 };
+        let leaks = 0, empty = 0, most = 0, plainMost = 0;
+        const plainAlpha = await q.px(q.exact(q.project([q.soft()], true)));
+        for (let i = 0; i < plainAlpha.length; i += 4) if (plainAlpha[i + 3] >= 8) plainMost = Math.max(plainMost, plainAlpha[i], plainAlpha[i + 1], plainAlpha[i + 2]);
+        for (const phase of [.9, 2.3, 4.4]) {
+          const alpha = await q.px(q.exact(q.project([q.soft(settings)], true)), phase), over = await q.px(q.exact(q.project([q.soft(settings)])), phase);
+          for (let i = 0; i < alpha.length; i += 4) {
+            if (alpha[i + 3] === 0) { empty++; if (over[i] || over[i + 1] || over[i + 2]) leaks++; }
+            else if (alpha[i + 3] >= 8) most = Math.max(most, alpha[i], alpha[i + 1], alpha[i + 2]);
+          }
+        }
+        const plainOver = await q.px(q.exact(q.project([q.soft()]))), damaged = await q.px(q.exact(q.project([q.soft(settings)])));
+        return { leaks, empty, most, plainMost, change: q.difference(plainOver, damaged) };
+      }, JPEG_ROUGH);
+      const ok = r.leaks === 0 && r.empty > 100000 && r.most <= 204 && r.change > .2;
+      return { ok, detail: `${r.change <= .2 ? NO_JPEG : ''}${r.leaks} lit pixels of ${r.empty} with no coverage (limit 0); brightest straight channel ${r.most} (plain ${r.plainMost}, limit 204); change ${r.change.toFixed(2)}` };
+    },
+  },
+  {
+    name: 'jpeg-scale',
+    // The same settings for a 960 preview and a 3840 export, the export averaged down 4x4 in linear light, on the smooth
+    // picture (which JPEG damage moves only a little) and on the random-colour blocks.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async rough => {
+        const q = window.sq, rows = [], blocky = await q.blocky();
+        for (const [name, source] of [['smooth', q.smooth], ['blocks', blocky]]) {
+          const plain = await q.px(q.exact(q.project([source()])));
+          for (const [label, params] of [['defaults', { jpegAmount: 1 }], ['rough', rough], ['Block 24', { jpegAmount: 1, jpegBlock: 24, jpegQuality: 0 }], ['Block 4', { jpegAmount: 1, jpegBlock: 4, jpegQuality: 0 }]]) {
+            const p = q.exact(q.project([source(params)]));
+            const small = await q.px(p, .9, 960, 540), big = await q.px(p, .9, 3840, 2160);
+            rows.push({ name: `${name} ${label}`, mean: q.difference(small, q.linearDown(big, 960, 540, 4)), change: q.difference(small, plain) });
+          }
+        }
+        return rows;
+      }, JPEG_ROUGH);
+      const ok = rows.every(r => r.mean < 3 && r.change > .5);
+      return { ok, detail: `${rows.some(r => r.change <= .5) ? NO_JPEG : ''}${rows.map(r => `${r.name}: ${r.mean.toFixed(3)} (moved ${r.change.toFixed(2)})`).join(', ')} (limit 3/255, moved over .5)` };
+    },
+  },
+  {
+    name: 'jpeg-engage',
+    // An amount of .001 is all but plain; an amount of 1 is not.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async rough => {
+        const q = window.sq, plain = await q.px(q.exact(q.project([q.smooth()])));
+        const diff = async params => q.difference(plain, await q.px(q.exact(q.project([q.smooth(params)]))));
+        return { low: await diff({ ...rough, jpegAmount: .001 }), full: await diff({ ...rough, jpegAmount: 1 }) };
+      }, JPEG_ROUGH);
+      const ok = r.low < 1 && r.full > 1;
+      return { ok, detail: `${r.full <= 1 ? NO_JPEG : ''}at .001: ${r.low.toFixed(4)} (limit 1/255); at 1: ${r.full.toFixed(2)} (over 1)` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -692,6 +883,25 @@ try {
       redBlueUrl ??= await dataUrl(1920, 1080, x => x < 0 ? [255, 0, 0, 255] : [0, 0, 255, 255]);
       return (params = {}) => image(redBlueUrl, params, 'red-blue', 1920, 1080);
     };
+    // Brightness and colour waves about 120 1080-line pixels long, steep enough that flattened blocks step clearly.
+    const wavesUrl = await dataUrl(960, 540, (x, y) => [
+      Math.round(128 + 100 * Math.sin(x * 57 + .3)), Math.round(128 + 100 * Math.sin(y * 48 - .8)), Math.round(128 + 90 * Math.sin((x + y) * 40)), 255,
+    ]);
+    const waves = (params = {}) => image(wavesUrl, params, 'waves');
+    // Flat blocks of random colour, 8 pixels of a 1080-line frame each from the top-left, at 1920x1080.
+    let blockyUrl = null;
+    const blocky = async () => {
+      blockyUrl ??= await dataUrl(1920, 1080, (x, y) => {
+        const bx = Math.floor((x + 1920 / 1080 / 2) * 1080 / 8), by = Math.floor((y + .5) * 1080 / 8);
+        let h = (bx * 73856093 ^ by * 19349663) >>> 0;
+        const next = () => { h = (Math.imul(h, 1664525) + 1013904223) >>> 0; return h >>> 24; };
+        // Brightness 70..185 and colour difference within 35 either way: in range however neighbours' colours mix.
+        next(); const Y = 70 + next() * 115 / 255, cb = (next() - 127.5) * 70 / 255, cr = (next() - 127.5) * 70 / 255;
+        const R = Y + 1.402 * cr, B = Y + 1.772 * cb;
+        return [Math.round(R), Math.round((Y - .299 * R - .114 * B) / .587), Math.round(B), 255];
+      });
+      return (params = {}) => image(blockyUrl, params, 'blocky', 1920, 1080);
+    };
     // An animated source that closes its loop.
     const moving = (params = {}) => { const l = m.applyPreset(m.createLayer('surface'), m.PRESETS.find(p => p.kind === 'surface').id); l.id = 'moving-proof'; Object.assign(l.params, params); return l; };
     const project = (layers, transparent = false) => { const p = m.createProject(); p.id = 'signal-proof'; p.layers = layers; p.background = '#000000'; p.transparent = transparent; return p; };
@@ -734,7 +944,7 @@ try {
       }
       return reduced;
     };
-    window.sq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, line, square, floatFrame, uvPin, soft, redBlue, moving, project, loop120, exact, pixels, shot, px, difference, same, loop, litShare, toLinear, linearDown };
+    window.sq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, line, square, readTarget, floatFrame, uvPin, soft, redBlue, blocky, waves, moving, project, loop120, exact, pixels, shot, px, difference, same, loop, litShare, toLinear, linearDown };
   }, !!baseline);
 
   for (const check of selected) {

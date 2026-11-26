@@ -33,6 +33,7 @@ import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights,
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
 import { CHAR_SETS, cellColourFragment, fitCellGrid, tileFragment, tilesActive } from './tiles';
 import { crtFragment, dropFragment, loopFrame, signalActive, signalStages, vhsFragment } from './signal';
+import { blockGrid, jpegFragments, jpegSteps } from './jpeg-blocks';
 import { GLYPH_PX, GLYPH_SPREAD, buildGlyphAtlas } from './glyph-atlas';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
@@ -135,6 +136,11 @@ function target(depth = false, bytes = false): THREE.WebGLRenderTarget {
   });
   result.texture.colorSpace = bytes ? THREE.NoColorSpace : THREE.LinearSRGBColorSpace;
   return result;
+}
+
+/** The uniforms every JPEG damage pass shares (signalCommon's and the block size). */
+function jpegUniforms(): Uniforms {
+  return { uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 }, uBlock: { value: 8 }, uChromaX: { value: 8 } };
 }
 
 function number(layer: Layer, key: string, fallback: number): number {
@@ -319,6 +325,17 @@ export class StudioRenderer {
   private readonly crt = material(crtFragment, {
     uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
     uCurve: { value: .15 }, uScanLines: { value: 480 }, uDepth: { value: .5 }, uMask: { value: 1 }, uMaskSize: { value: 5 }, uCorners: { value: .4 }, uBezel: { value: 1 }, uBright: { value: 1.3 },
+  });
+  /**
+   * JPEG damage: two grid targets (one texel per sample of every block) and one as wide as the grid and as tall as the
+   * frame. They grow and never shrink while in use, each pass drawing into its own corner, and go with the signal targets.
+   */
+  private jpegTargets: { grid: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget]; columns: THREE.WebGLRenderTarget } | null = null;
+  private readonly jpegRows = material(jpegFragments.rowsForward, jpegUniforms());
+  private readonly jpegColumns = material(jpegFragments.columnsForward, { ...jpegUniforms(), uGrid: { value: null }, uSteps: { value: new Array(128).fill(1) } });
+  private readonly jpegColumnsInverse = material(jpegFragments.columnsInverse, { ...jpegUniforms(), uTerms: { value: null } });
+  private readonly jpegRowsInverse = material(jpegFragments.rowsInverse, {
+    ...jpegUniforms(), uTerms: { value: null }, uColumns: { value: null }, uBlocks: { value: new THREE.Vector2(1, 1) }, uChroma: { value: .5 }, uGlitch: { value: 0 }, uSlot: { value: 0 },
   });
   /** This frame's loop length in frames, so per-frame randomness repeats on seeks and across the loop seam. */
   private loopFrames = 300;
@@ -1467,7 +1484,7 @@ export class StudioRenderer {
     const seed = ((number(layer, 'seed', 0) % 1000) + 1000) % 1000;
     let input = source, next = 0;
     for (const stage of signalStages(original)) {
-      const program = stage === 'vhs' ? this.vhs : stage === 'drop' ? this.drop : stage === 'crt' ? this.crt : null;
+      const program = stage === 'vhs' ? this.vhs : stage === 'drop' ? this.drop : stage === 'crt' ? this.crt : stage === 'jpeg' ? this.jpegRowsInverse : null;
       // A modulated amount can rest at zero, where there is nothing to do.
       const mix = amount(`${stage}Amount`);
       if (!program || mix <= 0) continue;
@@ -1475,6 +1492,11 @@ export class StudioRenderer {
       const output = this.signalTargets[next];
       if (output.width !== width || output.height !== height) output.setSize(width, height);
       setWrap(output, this.tiling);
+      if (stage === 'jpeg') {
+        this.jpegStage(layer, input, output, { width, height, seed, frame, frames, mix });
+        input = output.texture; next = 1 - next;
+        continue;
+      }
       const u = program.uniforms;
       u.uSource.value = input; (u.uSize.value as THREE.Vector2).set(width, height); u.uLines.value = 1080 / height;
       u.uSeed.value = seed; u.uFrame.value = frame; u.uAmount.value = mix;
@@ -1502,6 +1524,51 @@ export class StudioRenderer {
       input = output.texture; next = 1 - next;
     }
     return input;
+  }
+
+  /**
+   * JPEG damage in four passes (see jpeg-blocks.ts): rows forward and columns forward with quantising into the grid,
+   * columns inverse into a grid-wide, frame-tall target, then rows inverse into this stage's output with broken blocks
+   * and the mix. Broken blocks change on `jpegGlitchSwaps` slots of the loop: the loop frame (nearest, with the closing
+   * frame mapped back to 0) picks its slot, so seeks repeat and the seam closes.
+   */
+  private jpegStage(layer: Layer, input: THREE.Texture, output: THREE.WebGLRenderTarget, at: { width: number; height: number; seed: number; frame: number; frames: number; mix: number }): void {
+    const { width, height } = at;
+    const within = (key: string, low: number, high: number, fallback: number) => Math.min(high, Math.max(low, number(layer, key, fallback)));
+    const block = within('jpegBlock', 4, 64, 8), chroma = within('jpegChroma', 0, 1, .5), swaps = Math.round(within('jpegGlitchSwaps', 0, 32, 4));
+    const { cols, rows } = blockGrid(width, height, block);
+    // Brightness blocks 8x8 texels each from the left, then colour blocks (2x2 brightness blocks each) 8x8 texels each.
+    const chromaX = cols * 8, gridW = chromaX + Math.ceil(cols / 2) * 8, gridH = rows * 8;
+    const fit = (rt: THREE.WebGLRenderTarget, w: number, h: number) => {
+      if (rt.width < w || rt.height < h) rt.setSize(Math.max(rt.width, w), Math.max(rt.height, h));
+      rt.viewport.set(0, 0, w, h);
+    };
+    this.jpegTargets ??= { grid: [target(), target()], columns: target() };
+    const [rowTerms, terms] = this.jpegTargets.grid, columns = this.jpegTargets.columns;
+    fit(rowTerms, gridW, gridH); fit(terms, gridW, gridH); fit(columns, gridW, height);
+    for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) {
+      const u = program.uniforms;
+      u.uSource.value = input; (u.uSize.value as THREE.Vector2).set(width, height); u.uLines.value = 1080 / height;
+      u.uSeed.value = at.seed; u.uFrame.value = at.frame; u.uAmount.value = at.mix; u.uBlock.value = block; u.uChromaX.value = chromaX;
+    }
+    this.draw(this.jpegRows, rowTerms);
+    this.jpegColumns.uniforms.uGrid.value = rowTerms.texture;
+    this.jpegColumns.uniforms.uSteps.value = jpegSteps(within('jpegQuality', 0, 1, .2), chroma);
+    this.draw(this.jpegColumns, terms);
+    this.jpegColumnsInverse.uniforms.uTerms.value = terms.texture;
+    this.draw(this.jpegColumnsInverse, columns);
+    const u = this.jpegRowsInverse.uniforms;
+    u.uTerms.value = terms.texture; u.uColumns.value = columns.texture; (u.uBlocks.value as THREE.Vector2).set(cols, rows);
+    u.uChroma.value = chroma; u.uGlitch.value = within('jpegGlitch', 0, 1, 0);
+    u.uSlot.value = swaps > 0 ? Math.floor(at.frame * swaps / at.frames) : 0;
+    this.draw(this.jpegRowsInverse, output);
+  }
+
+  private releaseJpeg(): void {
+    if (this.jpegTargets) { for (const rt of [...this.jpegTargets.grid, this.jpegTargets.columns]) rt.dispose(); this.jpegTargets = null; }
+    for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) {
+      for (const key of ['uSource', 'uGrid', 'uTerms', 'uColumns']) if (program.uniforms[key]) program.uniforms[key].value = null;
+    }
   }
 
   /** A character set's glyphs as edge distances, one channel, built once and kept until the tile targets go. */
@@ -1920,6 +1987,7 @@ export class StudioRenderer {
     if (this.signalTargets && !project.layers.some(layer => layer.visible && signalActive(layer))) {
       for (const output of this.signalTargets) output.dispose();
       this.signalTargets = null; this.vhs.uniforms.uSource.value = this.drop.uniforms.uSource.value = this.crt.uniforms.uSource.value = null;
+      this.releaseJpeg();
     }
   }
 
@@ -2083,6 +2151,8 @@ export class StudioRenderer {
     this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs(); this.tile.dispose(); this.cellColour.dispose();
     for (const output of this.signalTargets ?? []) output.dispose();
     this.signalTargets = null; this.vhs.dispose(); this.drop.dispose(); this.crt.dispose();
+    this.releaseJpeg();
+    for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) program.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
