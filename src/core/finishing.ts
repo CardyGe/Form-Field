@@ -271,6 +271,57 @@ export const TILE_PARAMETERS:ParameterDefinition[]=[
  {key:'tileLight',label:'Light angle',min:-180,max:180,step:1,default:135,section:'Material',description:'The direction the relief light comes from, in degrees.'},
  {key:'tileJitter',label:'Irregularity',min:0,max:1,step:.01,default:.3,section:'Material',description:'How far each mosaic tile strays from the grid.'},
 ];
+/** VHS: worn videotape with wobbling lines, bleeding colour, noise bands and a torn bottom edge. Off by default (VHS 0). */
+export const VHS_PARAMETERS:ParameterDefinition[]=[
+ {key:'vhsAmount',label:'VHS',min:0,max:1,step:0.01,default:0,section:'Material',description:'Blends from the plain layer to worn videotape. 0 is off.'},
+ {key:'vhsTracking',label:'Tracking wobble',min:0,max:1,step:0.01,default:0.4,section:'Material',description:'How far lines wobble sideways.'},
+ {key:'vhsBleed',label:'Colour bleed',min:0,max:1,step:0.01,default:0.5,section:'Material',description:'How far colour smears sideways from edges.'},
+ {key:'vhsNoise',label:'Noise bands',min:0,max:1,step:0.01,default:0.3,section:'Material',description:'Strength of the noisy bands drifting through the picture.'},
+ {key:'vhsHeadSwitch',label:'Head switching',min:0,max:1,step:0.01,default:0.4,section:'Material',description:'How torn and shifted the bottom edge of the picture is.'},
+ {key:'vhsAge',label:'Tape age',min:0,max:1,step:0.01,default:0.3,section:'Material',description:'Overall wear: fade, grain and drift.'},
+ {key:'vhsRoll',label:'Rolling bar per loop',min:0,max:8,step:1,default:0,section:'Motion',description:'How many times a rolling bar crosses the picture per loop. Loops close exactly.'},
+];
+/** Dropout: bands of the picture drop out to black, noise or a held line. Off by default (Dropout 0). */
+export const DROP_PARAMETERS:ParameterDefinition[]=[
+ {key:'dropAmount',label:'Dropout',min:0,max:1,step:0.01,default:0,section:'Material',description:'Blends from the plain layer to dropouts. 0 is off.'},
+ {key:'dropChance',label:'Dropout chance',min:0,max:1,step:0.01,default:0.15,section:'Material',description:'The share of bands that drop out at a time.'},
+ {key:'dropBands',label:'Dropout bands',min:1,max:20,step:1,default:4,section:'Shape',description:'How many bands the picture is cut into.'},
+ {key:'dropFill',label:'Dropout fill',min:0,max:2,step:1,default:0,section:'Material',description:'What a dropout shows: black, noise or a held line.'},
+ {key:'dropBurst',label:'Burst length',min:1,max:8,step:1,default:1,section:'Motion',description:'How many frames a dropout lasts. Loops close exactly.'},
+];
+/** CRT: an old tube screen with curved glass, scan lines, a colour mask and dark corners. Off by default (CRT 0). */
+export const CRT_PARAMETERS:ParameterDefinition[]=[
+ {key:'crtAmount',label:'CRT',min:0,max:1,step:0.01,default:0,section:'Material',description:'Blends from the plain layer to a tube screen. 0 is off.'},
+ {key:'crtCurve',label:'Screen curve',min:0,max:0.5,step:0.01,default:0.15,section:'Shape',description:'How far the glass bulges.'},
+ {key:'crtLines',label:'Scan lines',min:120,max:1080,step:1,default:480,section:'Shape',description:'How many scan lines the screen has.'},
+ {key:'crtLineDepth',label:'Scan line depth',min:0,max:1,step:0.01,default:0.5,section:'Material',description:'How dark the gaps between scan lines are.'},
+ {key:'crtMask',label:'Screen mask',min:0,max:3,step:1,default:1,section:'Shape',description:'None, Stripes, Slots or Dots.'},
+ {key:'crtMaskSize',label:'Mask size',min:1,max:12,step:0.25,default:3,section:'Shape',description:'Size of one mask cell, in pixels at 1080 lines.'},
+ {key:'crtCorners',label:'Dark corners',min:0,max:1,step:0.01,default:0.4,section:'Material',description:'How much the corners of the screen darken.'},
+ {key:'crtBezel',label:'Outside the screen',min:0,max:1,step:1,default:1,section:'Material',description:'What shows beyond the curved glass: transparent or black.'},
+ {key:'crtBrightness',label:'CRT brightness',min:0.5,max:3,step:0.01,default:1.3,section:'Material',description:'Makes up for the light the lines and mask take away.'},
+];
+/** JPEG damage: heavy picture compression with blocky detail, smeared colour and broken blocks. Off by default (JPEG damage 0). */
+export const JPEG_PARAMETERS:ParameterDefinition[]=[
+ {key:'jpegAmount',label:'JPEG damage',min:0,max:1,step:0.01,default:0,section:'Material',description:'Blends from the plain layer to compression damage. 0 is off.'},
+ {key:'jpegQuality',label:'Quality',min:0,max:1,step:0.01,default:0.2,section:'Material',description:'How much detail survives. Low is blockier.'},
+ {key:'jpegBlock',label:'Block size',min:4,max:64,step:0.25,default:8,section:'Shape',description:'Size of one block, in pixels at 1080 lines.'},
+ {key:'jpegChroma',label:'Colour damage',min:0,max:1,step:0.01,default:0.5,section:'Material',description:'How much colour is smeared and lost.'},
+ {key:'jpegGlitch',label:'Broken blocks',min:0,max:1,step:0.01,default:0,section:'Material',description:'The share of blocks replaced with other blocks.'},
+ {key:'jpegGlitchSwaps',label:'Block changes per loop',min:0,max:32,step:1,default:4,section:'Motion',description:'How often broken blocks change, per loop. Loops close exactly.'},
+];
+/** Databend: treats the picture as sound, with echoes, combs, folds, stutters and corruption. Off by default (Databend 0). */
+export const DATABEND_PARAMETERS:ParameterDefinition[]=[
+ {key:'databendAmount',label:'Databend',min:0,max:1,step:0.01,default:0,section:'Material',description:'Blends from the plain layer to the bent picture. 0 is off.'},
+ {key:'databendMode',label:'Databend mode',min:0,max:4,step:1,default:0,section:'Shape',description:'Echo, Comb, Fold, Stutter or Corrupt.'},
+ {key:'databendAxis',label:'Direction',min:0,max:2,step:1,default:2,section:'Shape',description:'Across, Down or Wrap.'},
+ {key:'databendDistance',label:'Distance',min:1,max:960,step:0.5,default:120,section:'Shape',description:'How far each echo or fold reaches, in pixels at 1080 lines.'},
+ {key:'databendRepeats',label:'Repeats',min:1,max:8,step:1,default:4,section:'Material',description:'How many echoes are laid down.'},
+ {key:'databendFeedback',label:'Feedback',min:0,max:0.95,step:0.01,default:0.55,section:'Material',description:'How much of each echo feeds the next.'},
+ {key:'databendSplit',label:'Channel split',min:0,max:1,step:0.01,default:0.33,section:'Material',description:'How far the colour channels are pulled apart.'},
+ {key:'databendDepth',label:'Depth',min:0,max:1,step:0.01,default:0.5,section:'Material',description:'How deep the damage cuts into the picture.'},
+ {key:'databendCycles',label:'Cycles per loop',min:0,max:16,step:1,default:1,section:'Motion',description:'How many times the effect cycles per loop. Loops close exactly.'},
+];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[
  {key:'toneContrast',label:'Tonal contrast',min:.5,max:2,step:.01,default:1,section:'Material',description:'Luminance contrast around the pivot, preserving colour ratios.'},
  {key:'tonePivot',label:'Contrast pivot',min:.05,max:.75,step:.01,default:.18,section:'Material',description:'Anchor for Tonal contrast. Neutral contrast leaves the pivot inactive.'},
@@ -286,6 +337,11 @@ export const FINISH_PARAMETERS:ParameterDefinition[]=[
  ...LED_PARAMETERS,
  ...CHAR_PARAMETERS,
  ...TILE_PARAMETERS,
+ ...VHS_PARAMETERS,
+ ...DROP_PARAMETERS,
+ ...CRT_PARAMETERS,
+ ...JPEG_PARAMETERS,
+ ...DATABEND_PARAMETERS,
  ...SPLIT_PARAMETERS,
  ...GRADIENT_PARAMETERS,
  ...GRADE_PARAMETERS,
@@ -305,6 +361,11 @@ export const PRINT_KEYS=PRINT_PARAMETERS.map(p=>p.key);
 export const LED_KEYS=LED_PARAMETERS.map(p=>p.key);
 export const CHAR_KEYS=CHAR_PARAMETERS.map(p=>p.key);
 export const TILE_KEYS=TILE_PARAMETERS.map(p=>p.key);
+export const VHS_KEYS=VHS_PARAMETERS.map(p=>p.key);
+export const DROP_KEYS=DROP_PARAMETERS.map(p=>p.key);
+export const CRT_KEYS=CRT_PARAMETERS.map(p=>p.key);
+export const JPEG_KEYS=JPEG_PARAMETERS.map(p=>p.key);
+export const DATABEND_KEYS=DATABEND_PARAMETERS.map(p=>p.key);
 export const SPLIT_KEYS=SPLIT_PARAMETERS.map(p=>p.key);
 export const GRADIENT_KEYS=GRADIENT_PARAMETERS.map(p=>p.key);
 export const GRADE_KEYS=GRADE_PARAMETERS.map(p=>p.key);

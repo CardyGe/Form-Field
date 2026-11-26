@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { FINISH_KEYS } from '../src/core/finishing';
 import { warpControlVisible, visibleBelow } from '../src/rendering/warp';
 import { createLayer, visibleParameterDefinitions } from '../src/core/project';
-import { FINISH_EFFECTS, addFinishEffect, pickerEffects, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, powerLocked, resetFinishEffect, searchFinishEffects, toggleFinishEffect } from '../src/ui/finish-rack';
+import { FINISH_GROUPS, FINISH_EFFECTS, addFinishEffect, pickerEffects, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, powerLocked, resetFinishEffect, searchFinishEffects, toggleFinishEffect } from '../src/ui/finish-rack';
 
 const effect = (id: string) => FINISH_EFFECTS.find(item => item.id === id)!;
 const defs = (layer = createLayer('surface')) => visibleParameterDefinitions(layer);
@@ -182,4 +182,9 @@ test('Print controls follow the screen and colour choices', async () => {
   // Everything but the amount hides while Print is off.
   assert.equal(printControlShown(layer({ printMix: 0 }), 'printType'), false);
   assert.equal(printControlShown(layer({ printMix: 0 }), 'printMix'), true);
+});
+
+test('the Signal group is last and lists the five signal effects in order', () => {
+  assert.equal(FINISH_GROUPS[FINISH_GROUPS.length - 1], 'Signal');
+  assert.deepEqual(FINISH_EFFECTS.filter(item => item.group === 'Signal').map(item => item.id), ['vhs', 'drop', 'crt', 'jpeg', 'databend']);
 });

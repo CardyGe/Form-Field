@@ -2,18 +2,19 @@
  * The Finish list: which effects a layer can take, whether each is doing anything, what its row says, and how its
  * switch turns it off and back on without losing the settings. Pure, so the rules are tested apart from the panel.
  */
-import { CHAR_KEYS, FEEDBACK_KEYS, LED_KEYS, TILE_KEYS, GLOW_KEYS, GRADE_KEYS, GRADIENT_KEYS, KEY_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, PRINT_KEYS, SLIT_KEYS, SPLIT_KEYS, TOON_KEYS, WARP_KEYS } from '../core/finishing';
+import { CHAR_KEYS, FEEDBACK_KEYS, LED_KEYS, TILE_KEYS, VHS_KEYS, DROP_KEYS, CRT_KEYS, JPEG_KEYS, DATABEND_KEYS, GLOW_KEYS, GRADE_KEYS, GRADIENT_KEYS, KEY_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, PRINT_KEYS, SLIT_KEYS, SPLIT_KEYS, TOON_KEYS, WARP_KEYS } from '../core/finishing';
 import { supportsGlow } from '../rendering/bloom';
 import { GRADIENT_PALETTES, supportsLens } from '../rendering/colour-lens';
 import { KALEIDOSCOPE_INPUT } from '../core/project';
 import { kaleidoscopeInput, supportsFeedback } from '../rendering/feedback';
 import { supportsPrint } from '../rendering/print-screen';
 import { CHAR_SETS, LED_SHAPES, TILE_STYLES, supportsTiles } from '../rendering/tiles';
+import { CRT_MASKS, DATABEND_AXES, DATABEND_MODES, DROP_FILLS, supportsSignal } from '../rendering/signal';
 import { SLIT_MODES, supportsSlitScan } from '../rendering/slitscan';
 import { LIQUID_STYLES, LUMA_SOURCES, MIRROR_MODES, POLAR_MODES, WARP_FIELDS, supportsWarp } from '../rendering/warp';
 import type { Layer, ParameterDefinition } from '../shared/types';
 
-export const FINISH_GROUPS = ['Colour', 'Light', 'Warp', 'Surface', 'Time'] as const;
+export const FINISH_GROUPS = ['Colour', 'Light', 'Warp', 'Surface', 'Time', 'Signal'] as const;
 export type FinishGroup = typeof FINISH_GROUPS[number];
 
 export interface FinishEffect {
@@ -52,6 +53,11 @@ export const FINISH_EFFECTS: FinishEffect[] = [
   { id: 'flat', label: 'Flat colour & outlines', group: 'Surface', description: "Hard palette bands and contour lines. For the cleanest edges, lower the source's Relief and Softness.", keys: TOON_KEYS, power: { toonMix: 1 }, supported: always, summary: p => `${Math.round(p.toonBands ?? 5)} bands` },
   { id: 'time', label: 'Time displacement', group: 'Time', description: 'Parts of the frame show other moments of the loop. Loops close exactly; each slice renders the source once more.', keys: SLIT_KEYS, power: { slitShift: 1 }, supported: supportsSlitScan, summary: p => SLIT_MODES[Math.round(p.slitMode ?? 0)] ?? '' },
   { id: 'feedback', label: 'Feedback', group: 'Time', description: 'Each frame keeps a faded, moved echo of the last. Loops close exactly; exports warm up before the first frame.', keys: FEEDBACK_KEYS, power: { echo: .8 }, supported: supportsFeedback, summary: p => percent(p.echo ?? 0) },
+  { id: 'vhs', label: 'VHS', group: 'Signal', description: 'Worn videotape: wobbling lines, bleeding colour, noise and a torn bottom edge.', keys: VHS_KEYS, power: { vhsAmount: 1 }, supported: supportsSignal },
+  { id: 'drop', label: 'Dropout', group: 'Signal', description: 'Bands of the picture drop out to black, noise or a held line.', keys: DROP_KEYS, power: { dropAmount: 1 }, supported: supportsSignal, summary: p => DROP_FILLS[Math.round(p.dropFill ?? 0)] ?? '' },
+  { id: 'crt', label: 'CRT', group: 'Signal', description: 'An old tube screen: curved glass, scan lines, a colour mask and dark corners.', keys: CRT_KEYS, power: { crtAmount: 1 }, supported: supportsSignal, summary: p => CRT_MASKS[Math.round(p.crtMask ?? 0)] ?? '' },
+  { id: 'jpeg', label: 'JPEG damage', group: 'Signal', description: 'Heavy picture compression: blocky detail, smeared colour and broken blocks.', keys: JPEG_KEYS, power: { jpegAmount: 1 }, supported: supportsSignal },
+  { id: 'databend', label: 'Databend', group: 'Signal', description: 'Treats the picture as sound: echoes, combs, folds, stutters and corruption.', keys: DATABEND_KEYS, power: { databendAmount: 1 }, supported: supportsSignal, summary: p => `${DATABEND_MODES[Math.round(p.databendMode ?? 0)] ?? ''}, ${DATABEND_AXES[Math.round(p.databendAxis ?? 2)] ?? ''}` },
 ];
 
 /** The effects this layer shows: supported, with at least one of their settings available. */
