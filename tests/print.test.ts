@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PRESETS, applyFinish, applyPreset, createLayer, createProject, finishSupported, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { PRINT_KEYS, FINISH_KEYS } from '../src/core/finishing';
-import { bayerThreshold, classicLevel, printActive, printCoverage, printInkScale, printMarkSize, printShimmerShift, printUniforms, retroColour, shimmerOffset, supportsPrint } from '../src/rendering/print-screen';
+import { bayerThreshold, classicLevel, printActive, printCoverage, printInkScale, printMarkSize, printShimmerShift, printUniforms, relativeLuminance, retroColour, retroColours, shimmerOffset, supportsPrint } from '../src/rendering/print-screen';
+import { RETRO_PALETTES } from '../src/rendering/tiles';
 
 test('print screen is off by default and older projects migrate without it', () => {
   const project = createProject();
@@ -159,6 +160,14 @@ test('retro colours step through the palette by tone', () => {
   assert.equal(retroColour(0, 0), '#0f380f');
   assert.equal(retroColour(1, 0), '#9bbc0f');
   assert.equal(retroColour(.5, 3), '#00ff41');
+});
+
+test('retro palettes map tone to brightness in order, so Teletext and CGA ramp evenly', () => {
+  const teletext = [0, 1, 2, 3, 4, 5, 6, 7].map(i => relativeLuminance(retroColour(i / 7, 2)));
+  for (let i = 1; i < teletext.length; i++) assert.ok(teletext[i] > teletext[i - 1], `Teletext step ${i} is not brighter: ${teletext}`);
+  assert.equal(retroColour(1 / 7, 2), '#0000ff');
+  assert.deepEqual(retroColours(1), ['#000000', '#ff55ff', '#55ffff', '#ffffff']);
+  assert.deepEqual(retroColours(0), RETRO_PALETTES[0].colours);
 });
 
 test('shimmer offsets are whole texels and differ frame to frame', () => {

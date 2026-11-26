@@ -27,8 +27,7 @@ import { SmokeCloudRenderer } from './SmokeCloud';
 import { compositesPlainly, plainOverFragment } from './smoke-cloud-composite';
 import { MeridianRenderer, type MeridianRuntime } from './MeridianRenderer';
 import { MeridianGovernor, type MeridianQuality } from '../meridian/governor';
-import { BLUE_NOISE_SIZE, blueNoise, printActive, printShimmerShift, printUniforms } from './print-screen';
-import { RETRO_PALETTES } from './tiles';
+import { BLUE_NOISE_SIZE, blueNoise, printActive, printShimmerShift, printUniforms, retroColours } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
@@ -1494,8 +1493,8 @@ export class StudioRenderer {
     u.uPrintCells.value = screen.cells; u.uPrintAngles.value = screen.angles; u.uPrintOffset.value = screen.scroll;
     // Shimmer moves the threshold pattern by whole cells once per loop frame.
     (u.uPrintShift.value as THREE.Vector2).fromArray(printShimmerShift(layer, loopPhase, frames));
-    // Retro palettes are sRGB hex; Color.set converts them to the linear light the composite works in.
-    const colours = RETRO_PALETTES[Math.min(Math.max(Math.round(number(layer, 'printRetro', 0)), 0), RETRO_PALETTES.length - 1)].colours;
+    // Retro palettes are sRGB hex, dark to light; Color.set converts them to the linear light the composite works in.
+    const colours = retroColours(number(layer, 'printRetro', 0));
     const slots = u.uPrintRetroColours.value as THREE.Color[];
     for (let i = 0; i < slots.length; i++) slots[i].set(colours[Math.min(i, colours.length - 1)]);
     u.uPrintRetroCount.value = colours.length;

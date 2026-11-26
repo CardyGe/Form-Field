@@ -246,8 +246,7 @@ vec2 printToFrame(vec2 s,float a){
 vec4 printSource(vec2 frameUv){return sampleSource(layerUv(frameUv));}
 /** Tone of a pixel for one screen, 0–1, scaled by coverage so marks shrink at
  * the layer's silhouette. Channel -1 is the brightest channel; 0–2 are red, green, blue
- * (RGB light) or cyan, magenta, yellow (CMYK ink); 3 is black; 4 is the
- * retro screen, which reads the brightest channel like -1. */
+ * (RGB light) or cyan, magenta, yellow (CMYK ink); 3 is black. */
 float printTone(vec4 pixel,int channel){
   vec3 straight=max(pixel.rgb/max(pixel.a,.000001),vec3(0.));
   vec3 v=min(1.35*straight/(.35+straight),vec3(1.));
@@ -255,7 +254,7 @@ float printTone(vec4 pixel,int channel){
   // The whole-colour screen follows the brightest channel, not luminance: a
   // mark brightened by 1/coverage then never passes full value, so saturated
   // colours keep their hue and their light instead of clipping.
-  if(channel<0||channel==4)t=max(v.r,max(v.g,v.b));
+  if(channel<0)t=max(v.r,max(v.g,v.b));
   else if(uPrintColour<2.5)t=channel==0?v.r:channel==1?v.g:v.b;
   else{
     // Inks are separated from the linear colour: their overprinted marks
@@ -274,15 +273,10 @@ float printRetroLevel(float tone){
   if(uPrintGain!=0.)x=pow(x,exp2(-1.5*uPrintGain));
   return (uPrintInvert>.5?1.-x:x)*(uPrintRetroCount-1.);
 }
-/** Tone to the share of a cell its mark covers, at most Largest mark (printCoverage).
- * Channel 4 is the retro screen: its mark is the step between the two palette
- * colours either side of the tone (printRetroLevel), so it is rewritten before
- * the shared last line. Changing that line instead shifts the other screens'
- * compiled maths by a byte here and there, so it stays exactly as it was. */
+/** Tone to the share of a cell its mark covers, at most Largest mark (printCoverage). */
 float printCurve(float tone,int channel){
   float x=uPrintCeiling<=uPrintFloor?step(uPrintFloor+.000001,tone):clamp((tone-uPrintFloor)/max(uPrintCeiling-uPrintFloor,.001),0.,1.);
   if(uPrintGain!=0.)x=pow(x,exp2(-1.5*uPrintGain));
-  if(channel==4){float level=(uPrintInvert>.5?1.-x:x)*(uPrintRetroCount-1.);x=(level-min(floor(level),uPrintRetroCount-2.))/uPrintMax;}
   return (channel<0&&uPrintInvert>.5?1.-x:x)*uPrintMax;
 }
 float printClassicLevel(float c){
@@ -412,6 +406,37 @@ float printMark(float angle,int channel,out vec2 centreUv,out vec4 centrePixel,o
   // A screen finer than about two output pixels becomes its plain tone.
   return mix(coverage,target,smoothstep(.35,.6,pixel));
 }
+/**
+ * Retro palette index at this pixel. Each dither or blue-noise cell, line or
+ * dot reads one tone, takes the two palette levels either side of it, and its
+ * screen mark picks the upper one. The pair and the threshold always come from
+ * the same tone, so a pixel never shows a level outside its own cell's pair.
+ * Marks stay inside their own cell and are not filtered, so only palette
+ * colours print. Kept apart from printMark so the other screens' compiled maths
+ * stays exactly as it was. centreUv is the governing sample, for Print area.
+ */
+float printRetro(float angle,out vec2 centreUv){
+  vec2 s=printToScreen(vUv,angle),cell=floor(s)+.5;
+  bool lines=uPrintType>.5&&uPrintType<1.5;
+  centreUv=printToFrame(lines?vec2(s.x,cell.y):cell,angle);
+  float tone=printTone(printSource(centreUv),-1);
+  if(uPrintType<.5){
+    // Dots read five taps, as printMark does, so a dot does not flicker.
+    for(int i=0;i<4;i++){
+      vec2 o=i==0?vec2(.25,0.):i==1?vec2(-.25,0.):i==2?vec2(0.,.25):vec2(0.,-.25);
+      tone+=printTone(printSource(printToFrame(cell+o,angle)),-1);
+    }
+    tone*=.2;
+  }
+  float level=printRetroLevel(tone),base=min(floor(level),uPrintRetroCount-2.),rise=level-base;
+  // A screen finer than about two output pixels becomes its nearest level.
+  if(uPrintCells*uTexel.y>.475)return floor(level+.5);
+  float on;
+  if(uPrintType>1.5)on=step(printThreshold(floor(s)),rise-.000001);
+  else if(lines)on=step(abs(s.y-cell.y),rise*.5);
+  else on=step(printDotDistance(s-cell,rise),0.);
+  return base+on;
+}
 /** Edge strength of the layer's tone around a frame position, 0–1. The
  * silhouette counts, because tone carries the layer's coverage. */
 float printEdge(vec2 frameUv){
@@ -493,13 +518,9 @@ vec4 printScreen(vec4 plain){
     if(paper)screened=vec4(colour*a,a);
     else screened=vec4(colour*a*(1.-clear),a*(1.-clear));
   }else{
-    // Retro palette: the screen decides between the two palette colours either
-    // side of the cell's tone, and each pixel then takes the nearer of them, so
-    // only the palette's own colours print. Paper does not apply.
-    float coverage=printMark(uPrintAngles[2],4,centreUv,centrePixel,target);
-    maskUv=centreUv;
-    float base=min(floor(printRetroLevel(printTone(centrePixel,4))),uPrintRetroCount-2.);
-    vec3 colour=uPrintRetroColours[int(base+step(.5,coverage)+.5)];
+    // Retro palette: one screen at the K angle picks a palette colour for each
+    // pixel (printRetro). Paper does not apply.
+    vec3 colour=uPrintRetroColours[int(printRetro(uPrintAngles[3],maskUv)+.5)];
     screened=vec4(colour*plain.a,plain.a);
   }
   float mask=1.;

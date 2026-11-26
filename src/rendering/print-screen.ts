@@ -96,9 +96,21 @@ export function blueNoise(): Uint8Array {
   return noise.slice();
 }
 
-/** Retro palette colour (sRGB hex) for a tone 0–1: the nearest of the palette's colours. */
+/** Relative luminance of an sRGB hex colour (linear Rec. 709 weights). */
+export function relativeLuminance(hex: string): number {
+  const linear = (i: number) => { const v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+  return .2126 * linear(1) + .7152 * linear(3) + .0722 * linear(5);
+}
+
+const retroOrder = RETRO_PALETTES.map(p => [...p.colours].sort((a, b) => relativeLuminance(a) - relativeLuminance(b)));
+/** A retro palette's colours from dark to light, so a tone ramp maps to a brightness ramp. */
+export function retroColours(palette: number): string[] {
+  return retroOrder[Math.min(Math.max(Math.round(palette), 0), RETRO_PALETTES.length - 1)].slice();
+}
+
+/** Retro palette colour (sRGB hex) for a tone 0–1: the nearest of the palette's colours, dark to light. */
 export function retroColour(tone: number, palette: number): string {
-  const colours = RETRO_PALETTES[Math.min(Math.max(Math.round(palette), 0), RETRO_PALETTES.length - 1)].colours;
+  const colours = retroColours(palette);
   return colours[Math.round(Math.min(Math.max(tone, 0), 1) * (colours.length - 1))];
 }
 

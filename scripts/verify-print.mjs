@@ -13,7 +13,8 @@ await fs.mkdir(out, { recursive: true });
 await build({ stdin: { contents: `export {StudioRenderer} from './src/rendering/StudioRenderer';
 export {createProject,createLayer,applyPreset,PRESETS} from './src/core/project';
 export {encodePNG} from './src/rendering/png';
-export {RETRO_PALETTES} from './src/rendering/tiles';`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'renderer.js'), nodePaths: [path.join(root, 'node_modules')] });
+export {RETRO_PALETTES} from './src/rendering/tiles';
+export {retroColours} from './src/rendering/print-screen';`, resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, 'renderer.js'), nodePaths: [path.join(root, 'node_modules')] });
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
 app.setPath('userData',${JSON.stringify(path.join(out, 'user-data'))});app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -187,6 +188,38 @@ try {
         retro.push({ palette, type: params.printType, worst, opaque, used: used.map(n => n / (a.length / 4)) });
       }
     }
+    // print-retro-levels: on a smooth ramp, each pixel prints one of the two palette levels either
+    // side of the tone its own cell (or line) was screened from, never a level further out. The
+    // single retro screen runs at the K angle (Screen angle + 45°); the cell geometry is rebuilt here.
+    const toLin = v => { v = Math.min(Math.max(v, 0), 255) / 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+    const levelOf = (byte, n) => { const l = toLin(byte); return Math.min(1.35 * l / (.35 + l), 1) * (n - 1); };
+    const levels = [];
+    for (const palette of [2, 1]) {
+      const colours = q.m.retroColours(palette).map(hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))), n = colours.length;
+      for (const params of [{ printType: 3, printSize: 8 }, { printType: 2, printSize: 10 }, { printType: 0, printSize: 12 }, { printType: 0, printSize: 12, printDot: 3 }, { printType: 1, printSize: 10 }])
+        for (const printAngle of [-45, 0]) {
+          const p = q.project([q.ramp({ ...on, printColour: 4, printRetro: palette, printAngle, ...params })]); p.highlights = 'exact';
+          const a = await px(p), cells = 1080 / params.printSize, aspect = 960 / 540, angle = (printAngle + 45) * Math.PI / 180, c = Math.cos(angle), sn = Math.sin(angle);
+          const byteAt = t => { const u = (c * t[0] + sn * t[1]) / (cells * aspect) + .5; return 255 * Math.min(Math.max(u * 960 - .5, 0), 959) / 959; };
+          const bracket = (s0, s1) => {
+            const cx = Math.floor(s0) + .5, cy = Math.floor(s1) + .5;
+            const taps = params.printType === 1 ? [[s0, cy]] : params.printType === 0 ? [[cx, cy], [cx + .25, cy], [cx - .25, cy], [cx, cy + .25], [cx, cy - .25]] : [[cx, cy]];
+            const bytes = taps.map(byteAt);
+            return [Math.floor(levelOf(Math.min(...bytes) - 1, n)), Math.ceil(levelOf(Math.max(...bytes) + 1, n))];
+          };
+          // A pixel centre within 1e-3 cell of a cell edge may land in either cell on the GPU (float32).
+          const near = [[1e-3, 0], [-1e-3, 0], [0, 1e-3], [0, -1e-3], [1e-3, 1e-3], [-1e-3, -1e-3], [1e-3, -1e-3], [-1e-3, 1e-3]];
+          let bad = 0, sample = null;
+          for (let y = 0; y < 540; y++) for (let x = 0; x < 960; x++) {
+            const ux = ((x + .5) / 960 - .5) * aspect * cells, vy = (.5 - (y + .5) / 540) * cells, s0 = c * ux - sn * vy, s1 = sn * ux + c * vy;
+            const i = (y * 960 + x) * 4; let best = 1e9, index = 0;
+            for (let k = 0; k < n; k++) { const d = Math.max(Math.abs(a[i] - colours[k][0]), Math.abs(a[i + 1] - colours[k][1]), Math.abs(a[i + 2] - colours[k][2])); if (d < best) { best = d; index = k; } }
+            const fits = ([lo, hi]) => index >= lo && index <= hi, own = bracket(s0, s1);
+            if (!fits(own) && !near.some(([e0, e1]) => fits(bracket(s0 + e0, s1 + e1)))) { bad++; sample ??= { x, y, index, lo: own[0], hi: own[1] }; }
+          }
+          levels.push({ palette, type: params.printType, dot: params.printDot ?? 0, printAngle, bad, sample });
+        }
+    }
     // print-shimmer: consecutive loop frames differ, seeks repeat, the loop closes, and it is off by default.
     // Cells of 8 (4 output pixels) so the screen is drawn rather than flattened to its tone.
     const shimmer = { frames: {}, loops: {}, seek: {} };
@@ -203,7 +236,7 @@ try {
     shimmer.offByDefault = q.m.createLayer('liquid').params.printShimmer === 0 && q.same(await q.shot(held, 0), await q.shot(held, TAU / heldFrames));
     // Shimmer on a dot or line screen does nothing.
     shimmer.dotsIgnore = q.difference(await px(liquid({ ...looks['dots-round'], printShimmer: 1 }), 1 / 300 * TAU), await px(liquid(looks['dots-round']), 1 / 300 * TAU));
-    return { blue, retro, shimmer, zeroIsNeutral: q.difference(off, zero), plainMean: q.linearMean(off), means, changed,
+    return { blue, retro, levels, shimmer, zeroIsNeutral: q.difference(off, zero), plainMean: q.linearMean(off), means, changed,
       wrap: q.difference(start, end), seek: q.difference(start, again), move: q.difference(start, elsewhere),
       sizes, supersample: q.difference(one, two), roughness: { fine, coarse, smooth },
       alpha: { opaqueOff, holes, partial, darkFringe, outside, partialOff, darkFringeOff }, area: { whole, edge, away }, graphicIgnores, frameMs };
@@ -232,6 +265,7 @@ try {
     assert.ok(r.worst <= 2 && r.opaque, `Retro palette ${r.palette} (type ${r.type}) prints a colour outside the palette: ${JSON.stringify(r)}`);
     assert.ok(r.used.every(share => share > .01), `Retro palette ${r.palette} (type ${r.type}) leaves a colour out of the ramp: ${JSON.stringify(r)}`);
   }
+  for (const r of c.levels) assert.equal(r.bad, 0, `Retro palette ${r.palette} (type ${r.type}, dot ${r.dot}, angle ${r.printAngle}) prints a level outside its cell's bracket: ${JSON.stringify(r)}`);
   // print-shimmer
   for (const [name, steps] of Object.entries(c.shimmer.frames)) assert.ok(steps.every(d => d > 1), `${name} shimmer holds a frame: ${JSON.stringify(steps)}`);
   for (const [name, l] of Object.entries(c.shimmer.loops)) for (const [source, r] of Object.entries(l))
