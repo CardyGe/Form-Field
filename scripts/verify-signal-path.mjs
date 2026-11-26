@@ -383,7 +383,6 @@ const CHECKS = [
         const q = window.sq, W = 960, H = 540, curve = { ...alone, crtCurve: .3 };
         const pin = await q.uvPin(curve, W, H, [[.5, .5], [.3, .4], [.7, .62], [.2, .8], [.85, .3], [.6, .15], [.12, .5], [.5, .9], [.42, .66]]);
         const line = await q.px(q.exact(q.project([q.line(curve)])));
-        // The line's brightest row in a column, counted from the top (the read-back pixels start at the bottom row).
         // The line's brightest row in a column, counted from the top (exported rows start at the top), and how far it
         // sits from the frame's middle row.
         const rowAt = x => { let best = -1, most = 0; for (let y = 0; y < H; y++) { const v = line[(y * W + x) * 4]; if (v > most) { most = v; best = y; } } return best; };
@@ -811,8 +810,9 @@ const CHECKS = [
   },
   {
     name: 'jpeg-shrink',
-    // The JPEG targets follow the frame: a 960x540 frame at the defaults right after a 3840x2160 frame at Block 4 must
-    // hold no more than twice what a 960x540 frame at the defaults holds alone.
+    // The JPEG targets follow the frame: after a 3840x2160 frame at Block 4, two 960x540 frames at the defaults (the
+    // targets shrink at the start of a frame, against what the frame before needed) leave them holding no more than
+    // twice what a 960x540 frame at the defaults holds alone.
     run: async ({ page }) => {
       const r = await page.evaluate(async () => {
         const q = window.sq;
@@ -821,11 +821,46 @@ const CHECKS = [
         q.renderer.releaseJpeg();
         await frame({ jpegAmount: 1 }, 960, 540); const alone = held();
         await frame({ jpegAmount: 1, jpegBlock: 4 }, 3840, 2160); const big = held();
-        await frame({ jpegAmount: 1 }, 960, 540);
+        await frame({ jpegAmount: 1 }, 960, 540); await frame({ jpegAmount: 1 }, 960, 540);
         return { alone, big, after: held() };
       });
       const ok = r.after > 0 && r.after <= 2 * r.alone;
-      return { ok, detail: `960 defaults alone ${r.alone.toFixed(1)} MB; after a 4K Block 4 frame (${r.big.toFixed(1)} MB) ${r.after.toFixed(1)} MB (at most ${(2 * r.alone).toFixed(1)})` };
+      return { ok, detail: `960 defaults alone ${r.alone.toFixed(1)} MB; after a 4K Block 4 frame (${r.big.toFixed(1)} MB) and two 960 frames ${r.after.toFixed(1)} MB (at most ${(2 * r.alone).toFixed(1)})` };
+    },
+  },
+  {
+    name: 'jpeg-shared',
+    // Two JPEG layers in one 3840x2160 frame, Block 4 below and Block 64 above (the soft layer: opaque on the left,
+    // empty on the right), share the targets. After the first frame, 5 more frames reallocate them 0 times. Where the
+    // top layer is empty the frame matches the bottom layer alone, and where it is opaque the top layer alone, within
+    // 1/255.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq, W = 3840, H = 2160;
+        const sizes = () => { const t = q.renderer.jpegTargets; return t ? [...t.grid, t.columns].map(rt => `${rt.width}x${rt.height}`).join(' ') : ''; };
+        const bottom = () => q.smooth({ jpegAmount: 1, jpegBlock: 4, jpegQuality: 0 }), top = () => { const l = q.soft({ jpegAmount: 1, jpegBlock: 64, jpegQuality: 0 }); l.id = 'soft-top'; return l; };
+        const both = q.exact(q.project([bottom(), top()]));
+        await q.renderer.prepare(both);
+        q.renderer.render(both, .9, W, H);
+        let changes = 0, last = sizes();
+        // Reallocations are counted by the renderer; a size change between frames counts too.
+        const before = q.renderer.jpegReallocations ?? 0;
+        for (let i = 0; i < 5; i++) { q.renderer.render(both, .9, W, H); const now = sizes(); if (now !== last) changes++; last = now; }
+        const reallocated = (q.renderer.jpegReallocations ?? 0) - before + changes;
+        const w = 960, h = 540, pair = await q.px(both, .9, w, h);
+        const lower = await q.px(q.exact(q.project([bottom()])), .9, w, h), upper = await q.px(q.exact(q.project([top()])), .9, w, h);
+        const soft = await q.px(q.exact(q.project([q.soft()], true)), .9, w, h);
+        let worstLower = 0, worstUpper = 0, nLower = 0, nUpper = 0;
+        for (let i = 0; i < pair.length; i += 4) {
+          const a = soft[i + 3], against = a === 0 ? lower : a === 255 ? upper : null;
+          if (!against) continue;
+          let d = 0; for (let k = 0; k < 3; k++) d = Math.max(d, Math.abs(pair[i + k] - against[i + k]));
+          if (a === 0) { worstLower = Math.max(worstLower, d); nLower++; } else { worstUpper = Math.max(worstUpper, d); nUpper++; }
+        }
+        return { reallocated, worstLower, worstUpper, nLower, nUpper };
+      });
+      const ok = r.reallocated === 0 && r.worstLower <= 1 && r.worstUpper <= 1 && r.nLower > 1000 && r.nUpper > 1000;
+      return { ok, detail: `${r.reallocated} reallocations over 5 frames after the first (limit 0); bottom layer alone ${r.worstLower}/255 over ${r.nLower} pixels, top layer alone ${r.worstUpper}/255 over ${r.nUpper} (limit 1)` };
     },
   },
   {

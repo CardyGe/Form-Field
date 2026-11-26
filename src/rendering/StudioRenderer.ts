@@ -328,10 +328,14 @@ export class StudioRenderer {
   });
   /**
    * JPEG damage: two grid targets (one texel per sample of every block) and one as wide as the grid and as tall as the
-   * frame. They grow to fit, shrink when a frame needs under half of them, each pass drawing into its own corner, and
-   * go with the signal targets.
+   * frame. They grow to fit at once, shrink at the start of a frame when the last frame needed under half of them,
+   * each pass drawing into its own corner, and go with the signal targets.
    */
   private jpegTargets: { grid: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget]; columns: THREE.WebGLRenderTarget } | null = null;
+  /** How many times the JPEG targets were reallocated, for the checks. */
+  jpegReallocations = 0;
+  /** The largest size each JPEG target (grid, grid, columns) was asked for this frame. */
+  private jpegNeed: [number, number][] = [[0, 0], [0, 0], [0, 0]];
   private readonly jpegRows = material(jpegFragments.rowsForward, jpegUniforms());
   private readonly jpegColumns = material(jpegFragments.columnsForward, { ...jpegUniforms(), uGrid: { value: null }, uSteps: { value: new Array(128).fill(1) } });
   private readonly jpegColumnsInverse = material(jpegFragments.columnsInverse, { ...jpegUniforms(), uTerms: { value: null } });
@@ -1126,6 +1130,7 @@ export class StudioRenderer {
     this.tiling = project.tileEdges === true && tileBlockers(project).length === 0;
     // Tiled sources wrap, so Glow and outlines read across the frame edges.
     setWrap(this.source, this.tiling);
+    this.shrinkJpeg();
     this.renderer.info.reset();
     this.renderer.setClearColor(0, 0);
     this.renderer.setRenderTarget(this.accumA); this.renderer.clear();
@@ -1541,17 +1546,19 @@ export class StudioRenderer {
     const { cols, rows } = blockGrid(width, height, block), { n, nc } = jpegSamples(block, height);
     // Brightness blocks n x n texels each from the left, then colour blocks (2x2 brightness blocks each) nc x nc each.
     const chromaX = cols * n, gridW = chromaX + Math.ceil(cols / 2) * nc, gridH = Math.max(rows * n, Math.ceil(rows / 2) * nc);
-    // Grow to fit; shrink to fit when the frame needs under half the target.
-    const fit = (rt: THREE.WebGLRenderTarget, w: number, h: number) => {
-      if (rt.width < w || rt.height < h) rt.setSize(Math.max(rt.width, w), Math.max(rt.height, h));
-      if (w * h < rt.width * rt.height / 2) rt.setSize(w, h);
+    // Grow to fit at once and note the need; shrinking waits for the next frame (see shrinkJpeg), so layers of
+    // different sizes in one frame share the targets without reallocating them.
+    const need = this.jpegNeed;
+    const fit = (rt: THREE.WebGLRenderTarget, w: number, h: number, i: number) => {
+      if (rt.width < w || rt.height < h) { rt.setSize(Math.max(rt.width, w), Math.max(rt.height, h)); this.jpegReallocations++; }
+      need[i] = [Math.max(need[i][0], w), Math.max(need[i][1], h)];
       rt.viewport.set(0, 0, w, h);
     };
     // Two channels are enough: a brightness term, or two colour terms.
     const pair = () => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, format: THREE.RGFormat, depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
     this.jpegTargets ??= { grid: [pair(), pair()], columns: pair() };
     const [rowTerms, terms] = this.jpegTargets.grid, columns = this.jpegTargets.columns;
-    fit(rowTerms, gridW, gridH); fit(terms, gridW, gridH); fit(columns, gridW, height);
+    fit(rowTerms, gridW, gridH, 0); fit(terms, gridW, gridH, 1); fit(columns, gridW, height, 2);
     for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) {
       const u = program.uniforms;
       u.uSource.value = input; (u.uSize.value as THREE.Vector2).set(width, height); u.uLines.value = 1080 / height;
@@ -1568,6 +1575,19 @@ export class StudioRenderer {
     u.uChroma.value = chroma; u.uGlitch.value = within('jpegGlitch', 0, 1, 0);
     u.uSlot.value = swaps > 0 ? Math.floor(at.frame * swaps / at.frames) : 0;
     this.draw(this.jpegRowsInverse, output);
+  }
+
+  /**
+   * At the start of a frame: a JPEG target more than twice what the last frame needed of it shrinks to that need.
+   * The new frame grows it again only if it needs more.
+   */
+  private shrinkJpeg(): void {
+    const targets = this.jpegTargets;
+    if (targets) [...targets.grid, targets.columns].forEach((rt, i) => {
+      const [w, h] = this.jpegNeed[i];
+      if (w > 0 && h > 0 && w * h < rt.width * rt.height / 2) { rt.setSize(w, h); this.jpegReallocations++; }
+    });
+    this.jpegNeed = [[0, 0], [0, 0], [0, 0]];
   }
 
   private releaseJpeg(): void {
