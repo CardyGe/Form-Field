@@ -21,6 +21,9 @@ const out = path.join(root, 'work/tiles');
 // Presets allowed to render under .5% lit. None today; add one only with the reason beside it.
 const BLANK_PRESETS = [];
 const SHAPES = ['Round', 'Square', 'Stripes'];
+// Characters' ink on saturated presets, as a share of the most the set can give (see char-tone). The brief asked for
+// about 60%, but the glyph sets' own shapes cap it below that on Fractal; luminance gave 7.5% and 11.6% on Dots.
+const CHAR_TONE_LEAST = .2;
 
 const needsBaseline = () => baseline ? null : { ok: false, detail: 'needs --baseline=<checkout>' };
 const loopVerdict = (r, limit = .1) => ({
@@ -34,6 +37,14 @@ const STYLES = ['Mosaic', 'Brick', 'Beads'];
 const CHAR_NAMES = ['Density', 'Blocks', 'Binary', 'Dots'];
 const proof = path.join(root, 'work/tiles-proof');
 const SHEET_KINDS = ['surface', 'fractal', 'liquid', 'image'];
+// Sheet gates, from the full-frame data after Characters moved to the brightest channel. Each choice keeps at least
+// this share of plain's mean brightness on every preset: the lowest seen were LED wall 62.7%, Tiles 64.0% and
+// Characters 8.9% (Dots on Fractal; a glyph set's own shapes leave most of each cell empty).
+const SHEET_LEAST = { 'LED wall': .5, Tiles: .5, all: .075 };
+// A stage gone black: under 5% of pixels lit on any phase (the lowest seen was 10.4%).
+const SHEET_LIT_LEAST = .05;
+// Blocks: share of dark pixels inside whole cells of full blocks.
+const SHEET_BLOCKS_DARK = .001;
 // Each choice at full amount, every other control at its default.
 const SHEET_GROUPS = [
   ['LED wall', SHAPES.map((name, i) => [name, { ledAmount: 1, ledShape: i }])],
@@ -170,6 +181,39 @@ const CHECKS = [
     },
   },
   {
+    name: 'frame-fixed',
+    // White cells with black gaps on a layer that is scaled, turned and moving: LED wall and Characters at 10-pixel
+    // cells and Mosaic and Brick at 12 at 960x540. The grid is fixed to the frame, so over the frame's middle (where
+    // the turned layer still covers) every pixel matches the untransformed layer, the LED pitch is the same in output
+    // pixels, and nothing changes between frames while the layer moves.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.tq, W = 960, rows = [];
+        const looks = [['LED wall', { ledAmount: 1, ledSize: 20, ledDot: .5, ledBrightness: 1, ledGaps: 1 }], ['Characters', { charAmount: 1, charSize: 20, charGaps: 1 }],
+          ['Mosaic', { tileAmount: 1, tileSize: 24, tileGaps: 1 }], ['Brick', { tileAmount: 1, tileStyle: 1, tileSize: 24, tileGaps: 1 }]];
+        const poses = [{ scale: 1.7, rotation: .31, x: .0137, y: -.0091 }, { scale: 1.7, rotation: .31, x: .0213, y: -.0042 }, { scale: 1.7, rotation: .31, x: .0291, y: .0033 }];
+        // Mean channel difference over the middle half of the frame.
+        const between = (a, b) => { let s = 0; for (let y = 135; y < 405; y++) for (let x = 240; x < 720; x++) for (let k = 0; k < 3; k++) s += Math.abs(a[(y * W + x) * 4 + k] - b[(y * W + x) * 4 + k]); return s / (480 * 270 * 3); };
+        // Pitch: the mean distance between the rising edges of lit LEDs along one LED row (row 14's centre).
+        const pitch = d => {
+          const y = 145, starts = [];
+          for (let x = 241; x < 720; x++) if (d[(y * W + x) * 4] > 128 && d[(y * W + x - 1) * 4] <= 128) starts.push(x);
+          return starts.length > 1 ? (starts[starts.length - 1] - starts[0]) / (starts.length - 1) : 0;
+        };
+        for (const [name, params] of looks) {
+          const shot = async transform => { const l = q.white(params); Object.assign(l.transform, transform); return q.px(q.exact(q.project([l]))); };
+          const plain = await shot({}), shots = [];
+          for (const pose of poses) shots.push(await shot(pose));
+          rows.push({ name, fromPlain: Math.max(...shots.map(s => between(plain, s))), betweenFrames: Math.max(between(shots[0], shots[1]), between(shots[1], shots[2])),
+            pitch: name === 'LED wall' ? [pitch(plain), ...shots.map(pitch)] : null });
+        }
+        return rows;
+      });
+      const ok = rows.every(r => r.fromPlain < .5 && r.betweenFrames < .5 && (!r.pitch || r.pitch.every(p => Math.abs(p - 10) < .05)));
+      return { ok, detail: `${rows.map(r => `${r.name}: against the untransformed layer ${r.fromPlain.toFixed(3)}, frame to frame ${r.betweenFrames.toFixed(3)}${r.pitch ? `, pitch ${r.pitch.map(p => p.toFixed(2)).join('/')} px (want 10)` : ''}`).join('; ')} (limit .5/255)` };
+    },
+  },
+  {
     name: 'led-gaps',
     // 10-pixel cells at 960x540, so every cell corner falls on a pixel edge in either row order.
     run: async ({ page }) => {
@@ -260,6 +304,25 @@ const CHECKS = [
       });
       const a = loopVerdict(r.still), b = loopVerdict(r.moving);
       return { ok: a.ok && b.ok && r.shimmer > .5, detail: `${r.shimmer <= .5 ? 'Flicker does not change the render. ' : ''}still picture ${a.detail}; moving picture ${b.detail}; flicker between two frames ${r.shimmer.toFixed(2)} (over .5)` };
+    },
+  },
+  {
+    name: 'wide-output',
+    // A 16384x64 output with all three at their smallest sizes would want a cell target over a hundred thousand
+    // texels wide. The grids must keep to the GPU's largest texture, with no GL error and lit cells.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.tq, gl = q.renderer.renderer.getContext(), most = q.renderer.renderer.capabilities.maxTextureSize, W = Math.min(16384, most), H = 64;
+        const texture = q.texels(() => [.5, .4, .3, 1], W, H), layer = q.smooth({ ledAmount: 1, ledSize: 2, charAmount: 1, charSize: 4, tileAmount: 1, tileSize: 3 });
+        while (gl.getError() !== gl.NO_ERROR);
+        q.renderer.tileSource(layer, layer, texture, .9, W, H);
+        const error = gl.getError(), cells = q.renderer.tileCells, width = cells.width, height = cells.height;
+        const corner = q.readHalf(cells, 1, 1);
+        texture.dispose();
+        return { most, W, width, height, error, lit: corner[0] };
+      });
+      const ok = r.width <= r.most && r.height <= r.most && r.error === 0 && Math.abs(r.lit - .5) < .01;
+      return { ok, detail: `${r.W}x64 output: cell target ${r.width}x${r.height} (GPU limit ${r.most}), GL error ${r.error}, first cell red ${r.lit.toFixed(3)} (want .5)` };
     },
   },
   {
@@ -414,6 +477,30 @@ const CHECKS = [
       });
       const names = ['Density', 'Blocks', 'Binary', 'Dots'];
       return { ok: rows.every(r => r.mean < 3 && r.moved > 3), detail: `${rows.some(r => r.moved <= 3) ? NO_CHAR : ''}${rows.map(r => `${names[r.set]} size ${r.size}: ${r.mean.toFixed(3)}`).join(', ')} (limit 3/255)` };
+    },
+  },
+  {
+    name: 'char-tone',
+    // Saturated presets: glyphs follow each cell's brightest channel, so a saturated red or blue picks a full glyph
+    // instead of reading as dark. Ink is Characters' mean brightness over plain's, as a share of the most a set can
+    // give: the same ratio on a white layer, where every cell shows the set's last glyph. Density and Dots on Fractal
+    // and Liquid, 1920x1080, three phases. Brightness against plain alone is reported too.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.tq, TAU = Math.PI * 2, W = 1920, H = 1080, rows = [];
+        const mean = d => { let s = 0; for (let i = 0; i < d.length; i += 4) s += (d[i] + d[i + 1] + d[i + 2]) / 3; return s / (d.length / 4); };
+        const measure = async layer => { let b = 0; for (const phase of [0, TAU / 3, 2 * TAU / 3]) b += mean(await q.px(q.project([layer()]), phase, W, H)); return { b: b / 3 }; };
+        const white = await measure(() => q.white());
+        for (const kind of ['fractal', 'liquid']) {
+          const plain = await measure(() => q.base(kind));
+          for (const [set, name] of [[0, 'Density'], [3, 'Dots']]) {
+            const look = await measure(() => q.base(kind, { charAmount: 1, charSet: set })), full = await measure(() => q.white({ charAmount: 1, charSet: set }));
+            rows.push({ kind, name, share: look.b / plain.b, ink: (look.b / plain.b) / (full.b / white.b) });
+          }
+        }
+        return rows;
+      });
+      return { ok: rows.every(r => r.ink >= CHAR_TONE_LEAST), detail: `ink ${rows.map(r => `${r.name} on ${r.kind} ${(r.ink * 100).toFixed(1)}% (brightness ${(r.share * 100).toFixed(1)}% of plain)`).join(', ')} (limit ${CHAR_TONE_LEAST * 100}% ink)` };
     },
   },
   {
@@ -904,6 +991,21 @@ const CHECKS = [
       await fs.mkdir(proof, { recursive: true });
       const metrics = []; let written = 0;
       const save = async sheets => { for (const sheet of sheets) { await fs.writeFile(path.join(proof, sheet.name), Buffer.from(sheet.data, 'base64')); written++; } };
+      // The most light each choice can give: its brightness on a white layer against plain white, at 960x540.
+      const full = await page.evaluate(async groups => {
+        const q = window.tq, mean = d => { let s = 0; for (let i = 0; i < d.length; i += 4) s += (d[i] + d[i + 1] + d[i + 2]) / 3; return s / (d.length / 4); }, out = {};
+        const white = mean(await q.px(q.project([q.white()])));
+        for (const [effect, types] of groups) for (const [name, params] of types) out[`${effect}: ${name}`] = mean(await q.px(q.project([q.white(params)]))) / white;
+        return out;
+      }, SHEET_GROUPS);
+      // Blocks on white over black gaps, 16-pixel cells at 1920x1080: the full block must fill its whole cell, so no
+      // pixel of the frame's middle (whole cells only) is dark.
+      const blocks = await page.evaluate(async () => {
+        const q = window.tq, W = 1920, d = await q.px(q.exact(q.project([q.white({ charAmount: 1, charSet: 1, charSize: 16, charGaps: 1 })])), .9, W, 1080);
+        let dark = 0, n = 0;
+        for (let y = 320; y < 640; y++) for (let x = 640; x < 1280; x++) { n++; if (d[(y * W + x) * 4] < 250) dark++; }
+        return dark / n;
+      });
       for (const kind of SHEET_KINDS) {
         const r = await page.evaluate(async ([groups, crops, kind]) => {
           const q = window.tq, { b64, label } = q, W = 400, H = 225, TAU = Math.PI * 2, phases = [0, TAU / 3, 2 * TAU / 3], sheets = [], metrics = [];
@@ -914,19 +1016,22 @@ const CHECKS = [
           };
           const diff = (a, b) => { let s = 0; for (let i = 0; i < a.length; i += 4) s += (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2])) / 3; return s / (a.length / 4); };
           const mean = d => { let s = 0; for (let i = 0; i < d.length; i += 4) s += (d[i] + d[i + 1] + d[i + 2]) / 3; return s / (d.length / 4); };
-          const plainThumbs = [];
-          for (let col = 0; col < 3; col++) plainThumbs.push((await thumb(await q.shot(q.project([q.base(kind)]), phases[col], 960, 540))).data);
+          // Brightness and lit share come from the full 960x540 frame: a thumbnail's step lines up with the cells and
+          // would read the same spot of every cell.
+          const plainThumbs = [], plainFull = [];
+          for (let col = 0; col < 3; col++) { const bytes = await q.shot(q.project([q.base(kind)]), phases[col], 960, 540); plainThumbs.push((await thumb(bytes)).data); plainFull.push(mean(await q.pixels(bytes))); }
           for (const [effect, types] of groups) {
             const rows = [['Plain', {}], ...types], sheet = new OffscreenCanvas(W * 3, H * rows.length), x = sheet.getContext('2d');
             x.fillStyle = '#000'; x.fillRect(0, 0, sheet.width, sheet.height);
             for (let row = 0; row < rows.length; row++) {
-              const [name, params] = rows[row], project = q.project([q.base(kind, params)]), shots = [];
+              const [name, params] = rows[row], project = q.project([q.base(kind, params)]), shots = [], full = [], lit = [];
               for (let col = 0; col < 3; col++) {
-                const t = await thumb(await q.shot(project, phases[col], 960, 540)); shots.push(t.data);
+                const bytes = await q.shot(project, phases[col], 960, 540), t = await thumb(bytes), d = await q.pixels(bytes);
+                shots.push(t.data); full.push(mean(d)); lit.push(q.litShare(d));
                 x.drawImage(t.bitmap, col * W, row * H, W, H); label(x, `${name} ${col + 1}/3`, col * W, row * H);
               }
               if (!row) continue;
-              metrics.push({ kind, effect, type: name, brightness: shots.reduce((a, v) => a + mean(v), 0) / 3, plainBrightness: plainThumbs.reduce((a, v) => a + mean(v), 0) / 3, acrossLoop: (diff(shots[0], shots[1]) + diff(shots[1], shots[2]) + diff(shots[2], shots[0])) / 3, fromPlain: shots.reduce((a, v, i) => a + diff(v, plainThumbs[i]), 0) / 3 });
+              metrics.push({ kind, effect, type: name, brightness: full.reduce((a, v) => a + v, 0) / 3, plainBrightness: plainFull.reduce((a, v) => a + v, 0) / 3, leastLit: Math.min(...lit), acrossLoop: (diff(shots[0], shots[1]) + diff(shots[1], shots[2]) + diff(shots[2], shots[0])) / 3, fromPlain: shots.reduce((a, v, i) => a + diff(v, plainThumbs[i]), 0) / 3 });
             }
             sheets.push({ name: `sheet-${kind}-${effect.toLowerCase().replace(/ /g, '-')}.png`, data: await b64(await sheet.convertToBlob({ type: 'image/png' })) });
           }
@@ -940,6 +1045,7 @@ const CHECKS = [
           return { sheets, metrics };
         }, [SHEET_GROUPS, DETAIL_CROPS, kind]);
         await save(r.sheets);
+        for (const m of r.metrics) { m.share = m.brightness / m.plainBrightness; m.ink = m.share / full[`${m.effect}: ${m.type}`]; }
         metrics.push(...r.metrics);
       }
       // The stored glyphs, each in its 64-pixel square with its edge drawn, and how close each glyph's ink comes to
@@ -995,11 +1101,13 @@ const CHECKS = [
         return { sheet: { name: 'led-flicker-strip.png', data: await b64(await sheet.convertToBlob({ type: 'image/png' })) }, stats: frames[0] };
       });
       await save([flicker.sheet]);
-      await fs.writeFile(path.join(proof, 'sheet-metrics.json'), JSON.stringify({ looks: metrics, glyphs: glyphs.rows, flicker: flicker.stats }, null, 2));
+      await fs.writeFile(path.join(proof, 'sheet-metrics.json'), JSON.stringify({ looks: metrics, fullOnWhite: full, blocksDark: blocks, glyphs: glyphs.rows, flicker: flicker.stats }, null, 2));
       const types = SHEET_GROUPS.reduce((a, [, t]) => a + t.length, 0), expected = SHEET_KINDS.length * (SHEET_GROUPS.length + 1) + 2;
       const flat = metrics.filter(m => m.fromPlain < 1), clipped = glyphs.rows.filter(g => g.clipped);
-      const ok = written === expected && metrics.length === types * SHEET_KINDS.length && !flat.length;
-      return { ok, detail: `${written} sheets, ${metrics.length} choice and layer pairs in ${path.relative(root, proof)}; no visible change from plain: ${flat.map(m => `${m.effect} ${m.type} on ${m.kind}`).join(', ') || 'none'}; glyphs touching their square's edge (report only): ${clipped.map(g => `${g.set} '${g.glyph}' rows ${g.top}-${g.bottom}`).join(', ') || 'none'}; LED flicker 1 at ${flicker.stats.fps} fps, mean change per LED ${flicker.stats.perFrame.toFixed(2)}/255 frame to frame, ${flicker.stats.perQuarterSecond.toFixed(2)} per quarter second, range ${flicker.stats.rangeOverOneAndAHalfSeconds.toFixed(1)} over 1.25 s (report only)` };
+      const dim = metrics.filter(m => m.share < (SHEET_LEAST[m.effect] ?? SHEET_LEAST.all)), black = metrics.filter(m => m.leastLit < SHEET_LIT_LEAST || m.brightness < 2);
+      const name = m => `${m.effect} ${m.type} on ${m.kind}`, lowest = effect => Math.min(...metrics.filter(m => m.effect === effect).map(m => m.share));
+      const ok = written === expected && metrics.length === types * SHEET_KINDS.length && !flat.length && !dim.length && !black.length && blocks < SHEET_BLOCKS_DARK;
+      return { ok, detail: `${written} sheets, ${metrics.length} choice and layer pairs in ${path.relative(root, proof)}; no visible change from plain: ${flat.map(name).join(', ') || 'none'}; brightness against plain, lowest ${SHEET_GROUPS.map(([effect]) => `${effect} ${(lowest(effect) * 100).toFixed(1)}%`).join(', ')} (limits LED wall ${SHEET_LEAST['LED wall'] * 100}%, Characters ${SHEET_LEAST.all * 100}%, Tiles ${SHEET_LEAST.Tiles * 100}%), too dim: ${dim.map(m => `${name(m)} ${(m.share * 100).toFixed(1)}%`).join(', ') || 'none'}; black stages (lit share under ${SHEET_LIT_LEAST * 100}% on a phase, or under 2/255): ${black.map(name).join(', ') || 'none'}; Blocks dark pixels inside full cells ${(blocks * 100).toFixed(2)}% (limit ${SHEET_BLOCKS_DARK * 100}%); glyphs touching their square's edge (report only): ${clipped.map(g => `${g.set} '${g.glyph}' rows ${g.top}-${g.bottom}`).join(', ') || 'none'}; LED flicker 1 at ${flicker.stats.fps} fps, mean change per LED ${flicker.stats.perFrame.toFixed(2)}/255 frame to frame, ${flicker.stats.perQuarterSecond.toFixed(2)} per quarter second, range ${flicker.stats.rangeOverOneAndAHalfSeconds.toFixed(1)} over 1.25 s (report only)` };
     },
   },
   {

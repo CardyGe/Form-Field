@@ -1325,7 +1325,10 @@ const CHECKS = [
   },
   {
     name: 'old-file',
-    // A project written by the older build's own code goes to disk, is read back, and opens in both.
+    // A project written by the older build's own code goes to disk, is read back, and opens in both. A baseline from
+    // before Warp must write no warp keys. A baseline that already has Warp writes its layers with Warp, Liquid, Luma
+    // Warp, Polar and Mirror switched on, so the file is an old Warp file: every render of it must match the older
+    // build's byte for byte.
     run: async ({ page }) => {
       const missing = needsBaseline(); if (missing) return missing;
       await fs.mkdir(proof, { recursive: true });
@@ -1340,6 +1343,11 @@ const CHECKS = [
         };
         p.id = 'old-file-proof'; p.name = 'Baseline project'; p.background = '#000000';
         p.layers = [add('surface', 'finish-tunnel'), add('fractal', 'finish-terraces', { opacity: .7, blend: 'screen' }), add('liquid', 'finish-soft-glow', { opacity: .6, blend: 'screen' }), add('image', 'finish-halftone', { opacity: .5 })];
+        if ('bendAmount' in o.createLayer('surface').params) {
+          const warps = [{ bendAmount: .2, bendField: 1 }, { liquidAmount: .25, lumaWarpAmount: .15 }, { polarAmount: .6 }, { mirrorAmount: 1, mirrorMode: 1 }];
+          p.layers.forEach((l, i) => Object.assign(l.params, warps[i]));
+          p.layers[3].transform = { ...p.layers[3].transform, x: .1, rotation: .3, scale: .8 };
+        }
         return JSON.stringify(o.validateProject(p), null, 2);
       });
       await fs.writeFile(file, saved);
@@ -1347,8 +1355,9 @@ const CHECKS = [
       const r = await page.evaluate(async text => {
         const q = window.wq, before = new q.old.StudioRenderer(document.querySelector('#b')), changed = [], blank = [], offDefault = [];
         const raw = JSON.parse(text), now = q.m.validateProject(JSON.parse(text)), then = q.old.validateProject(JSON.parse(text));
-        let added = 0, compared = 0, lowest = 1, warpKeysInFile = 0;
+        let added = 0, compared = 0, lowest = 1, warpKeysInFile = 0, warpsOn = 0;
         raw.layers.forEach(l => { for (const key of Object.keys(l.params)) if (/^(bend|liquid[A-Z]|lumaWarp|polar|mirror[A-Z])/.test(key)) warpKeysInFile++; });
+        raw.layers.forEach(l => { for (const key of ['bendAmount', 'liquidAmount', 'lumaWarpAmount', 'polarAmount', 'mirrorAmount']) if ((l.params[key] ?? 0) > 0) warpsOn++; });
         now.layers.forEach((l, i) => {
           const defs = q.m.parameterDefinitions(l.kind);
           for (const key of Object.keys(l.params)) if (!(key in raw.layers[i].params)) { added++; const d = defs.find(x => x.key === key); if (!d || l.params[key] !== d.default) offDefault.push(`${l.kind}.${key}`); }
@@ -1365,11 +1374,13 @@ const CHECKS = [
           }
         }
         before.dispose();
-        return { schema: raw.schemaVersion, savedSchema: now.schemaVersion, kinds: now.layers.map(l => l.kind), added, offDefault, compared, changed, blank, lowest, warpKeysInFile };
+        return { schema: raw.schemaVersion, savedSchema: now.schemaVersion, kinds: now.layers.map(l => l.kind), added, offDefault, compared, changed, blank, lowest, warpKeysInFile, warpsOn };
       }, text);
-      // The file must hold no warp keys, or it is not an older file; opening it must fill them in at their defaults.
-      const ok = r.compared === 15 && !r.blank.length && !r.changed.length && !r.offDefault.length && r.added > 0 && r.warpKeysInFile === 0 && r.savedSchema === r.schema;
-      return { ok, detail: `${path.relative(root, file)}: schema ${r.schema} in the file, ${r.savedSchema} once opened, layers ${r.kinds.join(', ')}; ${r.warpKeysInFile} warp keys in the file; ${r.added} new keys filled in, ${r.offDefault.length} off default; ${r.compared} renders ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'byte-identical'}; lowest lit share ${(r.lowest * 100).toFixed(2)}% (limit .5%); blank: ${r.blank.join(', ') || 'none'}` };
+      // From a baseline before Warp the file must hold no warp keys, or it is not an older file; opening it must fill
+      // them in at their defaults. From a baseline with Warp, all five warps must be on in the file.
+      const before = r.warpKeysInFile === 0, oldWarp = r.warpKeysInFile > 0 && r.warpsOn === 5;
+      const ok = r.compared === 15 && !r.blank.length && !r.changed.length && !r.offDefault.length && (before ? r.added > 0 : oldWarp) && r.savedSchema === r.schema;
+      return { ok, detail: `${path.relative(root, file)}: schema ${r.schema} in the file, ${r.savedSchema} once opened, layers ${r.kinds.join(', ')}; ${r.warpKeysInFile} warp keys in the file, ${r.warpsOn} warps on (${before ? 'a file from before Warp' : 'an old Warp file: want 5'}); ${r.added} new keys filled in, ${r.offDefault.length} off default; ${r.compared} renders ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'byte-identical'}; lowest lit share ${(r.lowest * 100).toFixed(2)}% (limit .5%); blank: ${r.blank.join(', ') || 'none'}` };
     },
   },
   {

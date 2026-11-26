@@ -157,7 +157,7 @@ test('any amount or an animated amount runs the tile pass, never on graphic laye
 });
 test('a tiled layer cannot use Tile Edges', () => {
   const layer = createLayer('surface'); layer.params.tileAmount = .5;
-  assert.match(layerTileBlocker(layer) ?? '', /Tiles can't tile/);
+  assert.match(layerTileBlocker(layer) ?? '', /Tiles can't use Tile Edges/);
 });
 test('the cell grid is sized in 1080-line pixels at any render size', () => {
   assert.deepEqual(cellGrid(1920, 1080, 10).cols, 192);
@@ -214,7 +214,7 @@ Expected: FAIL, `src/rendering/tiles` cannot be resolved.
 - `glyphForTone`: clamp to `[0, 1]`, then `round(tone * (count - 1))`.
 - Spread the new groups into `FINISH_PARAMETERS`. In `project.ts`, hide the keys for unsupported layers, require support in `finishSupported`, and skip them in `varyLayer`.
 - Do not add tile keys to `FINISH_LOOK_KEYS`.
-- Add `${n}: Tiles can't tile.` to `layerTileBlocker`.
+- Add a blocker naming the effect in use to `layerTileBlocker`, e.g. `${n}: LED wall can't use Tile Edges.`
 - Add three effects to the `Surface` group in `finish-rack.ts`, after Print screen:
 
 | id | Label | Switch starts at | Description |
@@ -346,7 +346,7 @@ Expected: FAIL, `glyph-atlas` cannot be resolved.
 
 - `distanceField`: two-pass Euclidean distance transform on inside and outside masks, mapped to `0.5 + signed / (2 * spread)` and clamped.
 - `buildGlyphAtlas`: draws each glyph with Canvas 2D in `ui-monospace, Menlo, Consolas, monospace` at 64 px per glyph, then runs `distanceField` with spread 8. Build once per set, cache it, upload it as a single-channel float texture, and release it with the tile targets.
-- **Glyph choice:** each cell picks a glyph by `glyphForTone` of perceptual tone after `charContrast`.
+- **Glyph choice:** each cell picks a glyph by `glyphForTone` of its tone after `charContrast`. Tone is the cell's brightest channel, unpremultiplied, held to 1 and sRGB-encoded (Ruling 20: luminance left saturated presets nearly black).
 - **Swaps:** they pick a seeded random glyph, re-rolled `charSwaps` times per loop.
 - **Edges:** threshold at .5 with `fwidth` smoothing.
 
