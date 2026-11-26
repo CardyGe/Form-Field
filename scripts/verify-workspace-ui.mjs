@@ -217,6 +217,11 @@ try {
      if(title==='CRT'){
       assert.deepEqual(await page.getByLabel('Screen mask',{exact:true}).locator('option').allTextContents(),['None','Stripes','Slots','Dots']);
       assert.deepEqual(await page.getByLabel('Outside the screen',{exact:true}).locator('option').allTextContents(),['Transparent','Black']);
+      for(const mask of ['1','2','3']){
+       await page.getByLabel('Screen mask',{exact:true}).selectOption(mask);await saved(x=>x.layers[0].params.crtMask===Number(mask));
+       assert.equal(await page.getByLabel('Mask size value',{exact:true}).count(),1,'A mask shows Mask size.');
+       assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'CRT with mask '+mask+' fits one screen.');
+      }
       await page.getByLabel('Screen mask',{exact:true}).selectOption('0');await saved(x=>x.layers[0].params.crtMask===0);
       assert.equal(await page.getByLabel('Mask size value',{exact:true}).count(),0,'No mask hides Mask size.');
      }
@@ -228,6 +233,11 @@ try {
      if(title==='Databend'){
       assert.deepEqual(await page.getByLabel('Databend mode',{exact:true}).locator('option').allTextContents(),['Echo','Comb','Fold','Stutter','Corrupt']);
       assert.deepEqual(await page.getByLabel('Direction',{exact:true}).locator('option').allTextContents(),['Across','Down','Wrap']);
+      for(const label of ['Repeats value','Feedback value','Distance value','Channel split value'])assert.equal(await page.getByLabel(label,{exact:true}).count(),1,'Echo shows '+label);
+      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Databend Echo with Repeats and Feedback fits one screen.');
+      await page.getByLabel('Databend mode',{exact:true}).selectOption('3');await saved(x=>x.layers[0].params.databendMode===3);
+      for(const label of ['Cycles per loop value','Depth value','Distance value'])assert.equal(await page.getByLabel(label,{exact:true}).count(),1,'Stutter shows '+label);
+      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Databend Stutter fits one screen.');
       await page.getByLabel('Databend mode',{exact:true}).selectOption('1');await saved(x=>x.layers[0].params.databendMode===1);
       assert.equal(await page.getByLabel('Cycles per loop value',{exact:true}).count(),1,'Comb shows Cycles.');
       assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Databend Comb fits one screen.');

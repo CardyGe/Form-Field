@@ -1,5 +1,5 @@
-// Real Electron/WebGL checks for the signal path finishes: VHS, Dropout, CRT, JPEG damage and Databend so far.
-// Run: node scripts/verify-signal-path.mjs --baseline=<checkout of the commit before them> [--only=neutral,vhs,drop,signal,crt,jpeg,bend]
+// Real Electron/WebGL checks for the signal path finishes: VHS, Dropout, CRT, JPEG damage and Databend, and the whole-branch proof.
+// Run: node scripts/verify-signal-path.mjs --baseline=<checkout of the commit before them> [--only=neutral,vhs,drop,signal,crt,jpeg,bend,all-presets,old-file,stack,sheet,preview-cost]
 // --only takes comma-separated name prefixes. Each check prints one PASS or FAIL
 // line, and any failure makes the exit code non-zero. Output goes to work/signal-path.
 // (scripts/verify-signal.mjs is Signal Melt's GPU runner, a different feature.)
@@ -42,6 +42,44 @@ const NO_BEND = 'Databend does not change the render. ';
 const BEND_MODES = ['Echo', 'Comb', 'Fold', 'Stutter', 'Corrupt'];
 // Databend Echo with nothing else: no channel split.
 const ECHO = { databendAmount: 1, databendMode: 0, databendSplit: 0 };
+const BEND_AXES = ['Across', 'Down', 'Wrap'];
+
+// Whole-branch proof: sheets, the old file and the preview cost.
+const proof = path.join(root, 'work/signal-proof');
+const SHEET_KINDS = ['surface', 'fractal', 'liquid', 'image'];
+// Sheet gates. Each choice keeps at least this share of plain's mean brightness on every layer kind, over three phases.
+const SHEET_LEAST = { CRT: .6, 'JPEG damage': .6, all: .4 };
+// A stage gone black: under 5% of pixels lit on any phase, or a mean under 2/255.
+const SHEET_LIT_LEAST = .05;
+// A choice that differs from plain: mean change over 1/255 on 120x68 thumbnails, over three phases.
+const SHEET_CHANGE_LEAST = 1;
+// Each choice at full amount, every other control at its default, except Dropout chance .5 so a dropout shows on the
+// sheet's three phases (at the default .15 most frames are plain).
+const SHEET_GROUPS = [
+  ['VHS', [['Amount .4', { vhsAmount: .4 }], ['Defaults', { vhsAmount: 1 }], ['Heavy', { vhsAmount: 1, vhsTracking: .9, vhsBleed: 1, vhsNoise: .8, vhsHeadSwitch: 1, vhsAge: .8, vhsRoll: 1 }]]],
+  ['Dropout', ['Black', 'Noise', 'Hold line'].map((name, i) => [name, { dropAmount: 1, dropChance: .5, dropFill: i }])],
+  ['CRT', ['None', 'Stripes', 'Slots', 'Dots'].map((name, i) => [name, { crtAmount: 1, crtMask: i }])],
+  ['JPEG damage', [['Quality 0', { jpegAmount: 1, jpegQuality: 0 }], ['Quality .2 (default)', { jpegAmount: 1 }], ['Quality .35', { jpegAmount: 1, jpegQuality: .35 }]]],
+  ['Databend', BEND_MODES.map((name, i) => [`${name} Wrap`, { databendAmount: 1, databendMode: i }])],
+  ['Databend direction', BEND_MODES.flatMap((name, i) => i === 2 ? [] : [0, 1].map(axis => [`${name} ${BEND_AXES[axis]}`, { databendAmount: 1, databendMode: i, databendAxis: axis }]))],
+];
+// All five signal effects with LED wall, Warp, Split, Gradient, Glow, Feedback and Time.
+const STACK = {
+  databendAmount: 1, databendMode: 0, jpegAmount: .8, vhsAmount: 1, vhsRoll: 1, dropAmount: 1, dropChance: .6, dropFill: 1, crtAmount: 1,
+  ledAmount: 1, ledSize: 12, bendAmount: .2, bendField: 1, splitAmount: 6, gradMix: .6, glowMix: .6, echo: .6, slitShift: .5,
+};
+const ALL_FIVE = { vhsAmount: 1, dropAmount: 1, crtAmount: 1, jpegAmount: 1, databendAmount: 1 };
+const COST_CASES = [
+  ['Plain', {}],
+  ['VHS (defaults)', { vhsAmount: 1 }], ['VHS Colour bleed 1', { vhsAmount: 1, vhsBleed: 1 }],
+  ['Dropout (defaults)', { dropAmount: 1 }],
+  ['CRT (defaults)', { crtAmount: 1 }],
+  ['JPEG damage (defaults)', { jpegAmount: 1 }], ['JPEG damage Block 4', { jpegAmount: 1, jpegBlock: 4 }],
+  ['Databend Echo (defaults)', { databendAmount: 1 }], ['Databend Echo Repeats 8 Split 1', { databendAmount: 1, databendRepeats: 8, databendSplit: 1 }],
+  ['All five (defaults)', ALL_FIVE],
+  ['All five, heaviest', { ...ALL_FIVE, vhsBleed: 1, jpegBlock: 4, databendRepeats: 8, databendSplit: 1 }],
+];
+const COST_SIZES = [[1280, 720], [1920, 1080], [3840, 2160]];
 
 const CHECKS = [
   {
@@ -1116,6 +1154,282 @@ const CHECKS = [
       return { ok, detail: `${r.every(row => row.full < .01) ? NO_BEND : ''}${r.map((row, i) => `${BEND_MODES[i]} ${row.low.toFixed(4)} at .001, ${row.full.toFixed(2)} at 1`).join('; ')} (limit 1/255 at .001, over 1 at 1)` };
     },
   },
+  {
+    name: 'all-presets-neutral',
+    // Every preset in the older checkout, at one phase, byte for byte against the same preset now, and none blank.
+    run: async ({ page }) => {
+      const missing = needsBaseline(); if (missing) return missing;
+      const r = await page.evaluate(async () => {
+        const q = window.sq, before = new q.old.StudioRenderer(document.querySelector('#b')), changed = [], blank = [];
+        const current = new Set(q.m.PRESETS.map(p => p.id));
+        const make = (m, preset) => { const l = m.applyPreset(m.createLayer(preset.kind), preset.id); l.id = 'preset-proof'; const p = m.createProject(); p.id = 'preset-proof'; p.layers = [l]; p.background = '#000000'; return p; };
+        let compared = 0, lowest = 1;
+        for (const preset of q.old.PRESETS) {
+          if (!current.has(preset.id)) continue;
+          const now = make(q.m, preset), then = make(q.old, preset);
+          await q.renderer.prepare(now); await before.prepare(then);
+          const a = await q.renderer.exportPNG(now, .9, 960, 540);
+          if (!q.same(a, await before.exportPNG(then, .9, 960, 540))) changed.push(preset.id);
+          const share = q.litShare(await q.pixels(a)); lowest = Math.min(lowest, share); if (share < .005) blank.push(preset.id);
+          compared++;
+        }
+        before.dispose();
+        return { total: q.old.PRESETS.length, now: current.size, compared, missing: q.old.PRESETS.map(p => p.id).filter(id => !current.has(id)), changed, blank, lowest };
+      });
+      const unexpected = r.blank.filter(id => !BLANK_PRESETS.includes(id));
+      const ok = r.compared === r.total && r.compared > 0 && !r.changed.length && !r.missing.length && !unexpected.length;
+      return { ok, detail: `${r.compared} of ${r.total} baseline presets compared at phase .9, 960x540 (${r.now} presets now); ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'all byte-identical'}${r.missing.length ? `; missing now: ${r.missing.join(', ')}` : ''}; lowest lit share ${(r.lowest * 100).toFixed(2)}% (limit .5%); blank: ${r.blank.join(', ') || 'none'}` };
+    },
+  },
+  {
+    name: 'old-file',
+    // A project written by the older build's own code, with LED wall, Characters, Tiles, Warp, Liquid, Luma Warp,
+    // Polar and Mirror on, goes to disk, is read back and opens in both builds. The file holds no signal keys; opening
+    // it fills them in at their defaults, and every render matches the older build's byte for byte.
+    run: async ({ page }) => {
+      const missing = needsBaseline(); if (missing) return missing;
+      await fs.mkdir(proof, { recursive: true });
+      const file = path.join(proof, 'baseline-project.formfield');
+      const saved = await page.evaluate(() => {
+        const q = window.sq, o = q.old, p = o.createProject();
+        const add = (kind, finish, extra = {}) => {
+          const preset = o.PRESETS.find(x => x.kind === kind);
+          let l = preset ? o.applyPreset(o.createLayer(kind), preset.id) : o.createLayer(kind);
+          if (kind === 'image') l.image = { name: 'tiny.png', dataUrl: q.tinyUrl, width: 64, height: 36, fit: 'contain' };
+          l = o.applyFinish(l, finish); Object.assign(l, extra); return l;
+        };
+        p.id = 'old-file-proof'; p.name = 'Baseline project'; p.background = '#000000';
+        p.layers = [add('surface', 'finish-tunnel'), add('fractal', 'finish-terraces', { opacity: .7, blend: 'screen' }), add('liquid', 'finish-soft-glow', { opacity: .6, blend: 'screen' }), add('image', 'finish-halftone', { opacity: .5 })];
+        const looks = [
+          { ledAmount: 1, ledSize: 12, bendAmount: .2, bendField: 1 },
+          { charAmount: .6, charSize: 18, liquidAmount: .25, lumaWarpAmount: .15 },
+          { tileAmount: 1, tileStyle: 1, tileSize: 22, polarAmount: .6 },
+          { tileAmount: .8, tileSize: 16, mirrorAmount: 1, mirrorMode: 1 },
+        ];
+        p.layers.forEach((l, i) => Object.assign(l.params, looks[i]));
+        return JSON.stringify(o.validateProject(p), null, 2);
+      });
+      await fs.writeFile(file, saved);
+      const text = await fs.readFile(file, 'utf8');
+      const r = await page.evaluate(async text => {
+        const q = window.sq, before = new q.old.StudioRenderer(document.querySelector('#b')), changed = [], blank = [], offDefault = [];
+        const raw = JSON.parse(text), now = q.m.validateProject(JSON.parse(text)), then = q.old.validateProject(JSON.parse(text));
+        const signalKeys = new Set([...q.m.VHS_KEYS, ...q.m.DROP_KEYS, ...q.m.CRT_KEYS, ...q.m.JPEG_KEYS, ...q.m.DATABEND_KEYS]);
+        let added = 0, compared = 0, lowest = 1, signalInFile = 0, signalOpened = 0, tilesOn = 0, warpsOn = 0;
+        raw.layers.forEach(l => {
+          for (const key of Object.keys(l.params)) if (signalKeys.has(key)) signalInFile++;
+          for (const key of ['ledAmount', 'charAmount', 'tileAmount']) if ((l.params[key] ?? 0) > 0) tilesOn++;
+          for (const key of ['bendAmount', 'liquidAmount', 'lumaWarpAmount', 'polarAmount', 'mirrorAmount']) if ((l.params[key] ?? 0) > 0) warpsOn++;
+        });
+        now.layers.forEach((l, i) => {
+          const defs = q.m.parameterDefinitions(l.kind);
+          for (const key of Object.keys(l.params)) {
+            if (signalKeys.has(key)) signalOpened++;
+            if (!(key in raw.layers[i].params)) { added++; const d = defs.find(x => x.key === key); if (!d || l.params[key] !== d.default) offDefault.push(`${l.kind}.${key}`); }
+          }
+        });
+        const scenes = [['all layers', p => p], ...now.layers.map((l, i) => [l.kind, p => ({ ...p, layers: [p.layers[i]] })])];
+        for (const [name, pick] of scenes) {
+          const a = pick(now), b = pick(then);
+          await q.renderer.prepare(a); await before.prepare(b);
+          for (const phase of [0, 2.1, 4.2]) {
+            compared++;
+            const shot = await q.renderer.exportPNG(a, phase, 960, 540);
+            if (!q.same(shot, await before.exportPNG(b, phase, 960, 540))) changed.push(`${name}@${phase}`);
+            const share = q.litShare(await q.pixels(shot)); lowest = Math.min(lowest, share); if (share < .005) blank.push(`${name}@${phase}`);
+          }
+        }
+        before.dispose();
+        return { schema: raw.schemaVersion, savedSchema: now.schemaVersion, kinds: now.layers.map(l => l.kind), added, offDefault, compared, changed, blank, lowest, signalInFile, signalOpened, tilesOn, warpsOn };
+      }, text);
+      const ok = r.compared === 15 && !r.blank.length && !r.changed.length && !r.offDefault.length && r.added > 0 && r.signalInFile === 0 && r.signalOpened > 0 && r.tilesOn === 4 && r.warpsOn === 5 && r.savedSchema === r.schema;
+      return { ok, detail: `${path.relative(root, file)}: schema ${r.schema} in the file, ${r.savedSchema} once opened, layers ${r.kinds.join(', ')}; ${r.tilesOn} tile finishes and ${r.warpsOn} warps on in the file (want 4: LED wall, Characters and two Tiles; and 5); ${r.signalInFile} signal keys in the file, ${r.signalOpened} once opened; ${r.added} new keys filled in, ${r.offDefault.length} off default${r.offDefault.length ? ` (${r.offDefault.slice(0, 8).join(', ')})` : ''}; ${r.compared} renders ${r.changed.length ? `changed: ${r.changed.join(', ')}` : 'byte-identical'}; lowest lit share ${(r.lowest * 100).toFixed(2)}% (limit .5%); blank: ${r.blank.join(', ') || 'none'}` };
+    },
+  },
+  {
+    name: 'stack',
+    // All five signal effects with LED wall, Warp, Split, Gradient, Glow, Feedback and Time on one Surface layer:
+    // non-blank, the same bytes after seeking away and back, and taking out any one effect changes the render at one
+    // of three phases (a render that ignored it would not change).
+    run: async ({ page }) => {
+      const r = await page.evaluate(async full => {
+        const q = window.sq, phases = [.9, 3.3, 5.1];
+        const make = params => q.project([q.base('surface', params)]);
+        const firsts = [];
+        for (const phase of phases) firsts.push(await q.shot(make(full), phase));
+        const again = await q.shot(make(full), phases[0]);
+        const inert = [];
+        for (const key of Object.keys(full)) {
+          if (!/Amount$|^echo$|^slitShift$|Mix$/.test(key)) continue;
+          let same = true;
+          for (let i = 0; i < phases.length && same; i++) same = q.same(firsts[i], await q.shot(make({ ...full, [key]: 0 }), phases[i]));
+          if (same) inert.push(key);
+        }
+        const lit = await Promise.all(firsts.map(async b => q.litShare(await q.pixels(b))));
+        return { same: q.same(firsts[0], again), lit: Math.min(...lit), inert, effects: Object.keys(full).filter(k => /Amount$|^echo$|^slitShift$|Mix$/.test(k)).length };
+      }, STACK);
+      const ok = r.same && r.lit > .05 && !r.inert.length && r.effects === 12;
+      return { ok, detail: `${r.effects} effects on (want 12); seek ${r.same ? 'byte-identical' : 'DIFFERS'}; least lit share ${(r.lit * 100).toFixed(1)}% over 3 phases (over 5%); effects with no effect in the stack: ${r.inert.join(', ') || 'none'}` };
+    },
+  },
+  {
+    name: 'sheet',
+    // Contact sheets for judging by eye: one per effect and layer kind, three phases, plus 1:1 crops of a 1080 frame and
+    // the eye-review sheets. Gates: every choice keeps at least SHEET_LEAST of plain's brightness, no stage goes black
+    // (SHEET_LIT_LEAST), and every choice differs from plain by over SHEET_CHANGE_LEAST.
+    run: async ({ page }) => {
+      await fs.mkdir(proof, { recursive: true });
+      const metrics = []; let written = 0;
+      const save = async sheets => { for (const sheet of sheets) { await fs.writeFile(path.join(proof, sheet.name), Buffer.from(sheet.data, 'base64')); written++; } };
+      for (const kind of SHEET_KINDS) {
+        const r = await page.evaluate(async ([groups, kind]) => {
+          const q = window.sq, { b64, label } = q, W = 400, H = 225, TAU = Math.PI * 2, phases = [0, TAU / 3, 2 * TAU / 3], sheets = [], metrics = [];
+          const thumb = async bytes => {
+            const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+            const c = new OffscreenCanvas(120, 68), x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(bitmap, 0, 0, 120, 68);
+            return { bitmap, data: x.getImageData(0, 0, 120, 68).data };
+          };
+          const diff = (a, b) => { let s = 0; for (let i = 0; i < a.length; i += 4) s += (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2])) / 3; return s / (a.length / 4); };
+          const mean = d => { let s = 0; for (let i = 0; i < d.length; i += 4) s += (d[i] + d[i + 1] + d[i + 2]) / 3; return s / (d.length / 4); };
+          const plainThumbs = [], plainFull = [];
+          for (let col = 0; col < 3; col++) { const bytes = await q.shot(q.project([q.base(kind)]), phases[col], 960, 540); plainThumbs.push((await thumb(bytes)).data); plainFull.push(mean(await q.pixels(bytes))); }
+          for (const [effect, types] of groups) {
+            const rows = [['Plain', {}], ...types], sheet = new OffscreenCanvas(W * 3, H * rows.length), x = sheet.getContext('2d');
+            x.fillStyle = '#000'; x.fillRect(0, 0, sheet.width, sheet.height);
+            for (let row = 0; row < rows.length; row++) {
+              const [name, params] = rows[row], project = q.project([q.base(kind, params)]), shots = [], full = [], lit = [];
+              for (let col = 0; col < 3; col++) {
+                const bytes = await q.shot(project, phases[col], 960, 540), t = await thumb(bytes), d = await q.pixels(bytes);
+                shots.push(t.data); full.push(mean(d)); lit.push(q.litShare(d));
+                x.drawImage(t.bitmap, col * W, row * H, W, H); label(x, `${name} ${col + 1}/3`, col * W, row * H);
+              }
+              if (!row) continue;
+              metrics.push({ kind, effect, type: name, brightness: full.reduce((a, v) => a + v, 0) / 3, plainBrightness: plainFull.reduce((a, v) => a + v, 0) / 3, leastLit: Math.min(...lit), leastMean: Math.min(...full), acrossLoop: (diff(shots[0], shots[1]) + diff(shots[1], shots[2]) + diff(shots[2], shots[0])) / 3, fromPlain: shots.reduce((a, v, i) => a + diff(v, plainThumbs[i]), 0) / 3 });
+            }
+            sheets.push({ name: `sheet-${kind}-${effect.toLowerCase().replace(/ /g, '-')}.png`, data: await b64(await sheet.convertToBlob({ type: 'image/png' })) });
+          }
+          const looks = groups.flatMap(([effect, types]) => types.map(([name, params]) => [`${effect}: ${name}`, params]));
+          const crop = new OffscreenCanvas(480 * 4, 270 * Math.ceil(looks.length / 4)), c = crop.getContext('2d');
+          for (let i = 0; i < looks.length; i++) {
+            const bitmap = await createImageBitmap(new Blob([await q.shot(q.project([q.base(kind, looks[i][1])]), phases[1], 1920, 1080)], { type: 'image/png' }));
+            const X = (i % 4) * 480, Y = (i >> 2) * 270; c.drawImage(bitmap, 720, 405, 480, 270, X, Y, 480, 270); label(c, looks[i][0], X, Y);
+          }
+          sheets.push({ name: `crop-1080-${kind}.png`, data: await b64(await crop.convertToBlob({ type: 'image/png' })) });
+          return { sheets, metrics };
+        }, [SHEET_GROUPS, kind]);
+        await save(r.sheets);
+        for (const m of r.metrics) m.share = m.brightness / m.plainBrightness;
+        metrics.push(...r.metrics);
+      }
+      // Eye-review sheets for the open items: report only.
+      const eye = await page.evaluate(async () => {
+        const q = window.sq, { b64, label } = q, TAU = Math.PI * 2, sheets = [];
+        const bitmapOf = async bytes => createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+        // (1) CRT at a 960 preview, 1:1 and shown 2x so single pixels can be judged, at the defaults and each mask.
+        {
+          const looks = [['CRT defaults (Stripes, size 5)', { crtAmount: 1 }], ['CRT Slots', { crtAmount: 1, crtMask: 2 }], ['CRT Dots', { crtAmount: 1, crtMask: 3 }], ['CRT no mask', { crtAmount: 1, crtMask: 0 }]];
+          const s = new OffscreenCanvas(960, 540 * looks.length), x = s.getContext('2d'); x.imageSmoothingEnabled = false;
+          for (let i = 0; i < looks.length; i++) {
+            const b = await bitmapOf(await q.shot(q.project([q.base('surface', looks[i][1])]), TAU / 3, 960, 540));
+            x.drawImage(b, 0, 0, 960, 540, 0, i * 540, 960, 540); x.drawImage(b, 360, 200, 240, 135, 480, i * 540 + 270, 480, 270); label(x, `${looks[i][0]}, 960 preview (inset 2x)`, 0, i * 540, 420);
+          }
+          sheets.push({ name: 'eye-crt-960.png', data: await b64(await s.convertToBlob({ type: 'image/png' })) });
+        }
+        // (2) JPEG Quality on a smooth gradient and on the poster, 1:1 crops of a 1080 frame.
+        {
+          const looks = [['Plain', {}], ['Quality 0', { jpegAmount: 1, jpegQuality: 0 }], ['Quality .2 (default)', { jpegAmount: 1 }], ['Quality .5', { jpegAmount: 1, jpegQuality: .5 }]];
+          const s = new OffscreenCanvas(480 * looks.length, 270 * 2), x = s.getContext('2d');
+          for (let i = 0; i < looks.length; i++) {
+            for (const [row, layer] of [[0, q.gradient(looks[i][1])], [1, q.base('image', looks[i][1])]]) {
+              const b = await bitmapOf(await q.shot(q.project([layer]), .9, 1920, 1080));
+              x.drawImage(b, 720, 405, 480, 270, i * 480, row * 270, 480, 270); label(x, `${looks[i][0]} ${row ? 'poster' : 'gradient'}`, i * 480, row * 270);
+            }
+          }
+          sheets.push({ name: 'eye-jpeg-gradient.png', data: await b64(await s.convertToBlob({ type: 'image/png' })) });
+        }
+        // (3) Databend Corrupt at Depth .25 (default), .5 and 1, at Split 0 and 1, on Surface, at 960x540.
+        {
+          const looks = [['Plain', {}], ['Corrupt Depth .25 (default)', { databendAmount: 1, databendMode: 4 }], ['Corrupt Depth .5', { databendAmount: 1, databendMode: 4, databendDepth: .5 }], ['Corrupt Depth 1', { databendAmount: 1, databendMode: 4, databendDepth: 1 }],
+            ['Corrupt Split 0', { databendAmount: 1, databendMode: 4, databendSplit: 0 }], ['Corrupt Split 1', { databendAmount: 1, databendMode: 4, databendSplit: 1 }]];
+          const s = new OffscreenCanvas(480 * 3, 270 * 4), x = s.getContext('2d');
+          for (let i = 0; i < looks.length; i++) for (const [k, kind] of [[0, 'surface'], [1, 'image']]) {
+            const b = await bitmapOf(await q.shot(q.project([q.base(kind, looks[i][1])]), TAU / 3, 960, 540));
+            const X = (i % 3) * 480, Y = (Math.floor(i / 3) * 2 + k) * 270; x.drawImage(b, X, Y, 480, 270); label(x, `${looks[i][0]} ${kind}`, X, Y, 300);
+          }
+          sheets.push({ name: 'eye-databend-corrupt.png', data: await b64(await s.convertToBlob({ type: 'image/png' })) });
+        }
+        // (4) VHS at its defaults on every kind at 960x540, full frame.
+        {
+          const kinds = ['surface', 'fractal', 'liquid', 'image'], s = new OffscreenCanvas(960 * 2, 540 * 4), x = s.getContext('2d');
+          for (let i = 0; i < kinds.length; i++) for (const [col, params] of [[0, {}], [1, { vhsAmount: 1 }]]) {
+            const b = await bitmapOf(await q.shot(q.project([q.base(kinds[i], params)]), TAU / 3, 960, 540));
+            x.drawImage(b, col * 960, i * 540); label(x, `${kinds[i]} ${col ? 'VHS defaults' : 'plain'}`, col * 960, i * 540);
+          }
+          sheets.push({ name: 'eye-vhs-defaults.png', data: await b64(await s.convertToBlob({ type: 'image/png' })) });
+        }
+        // (5) Torn VHS rows on hard edges: the 960 preview against a 3840 export averaged down 4x4 in linear light, and
+        // their difference times 4, on the poster with Tracking wobble .8.
+        {
+          const p = q.exact(q.project([q.base('image', { vhsAmount: 1, vhsTracking: .8 })]));
+          const small = await q.px(p, .9, 960, 540), big = q.linearDown(await q.px(p, .9, 3840, 2160), 960, 540, 4);
+          const img = (fn) => { const d = new ImageData(960, 540); for (let y = 0; y < 540; y++) for (let x2 = 0; x2 < 960; x2++) { const src = (y * 960 + x2) * 4, dst = (y * 960 + x2) * 4; for (let k = 0; k < 3; k++) d.data[dst + k] = fn(src + k); d.data[dst + 3] = 255; } return d; };
+          let worst = 0, sum = 0, over8 = 0;
+          for (let i = 0; i < small.length; i += 4) { let m = 0; for (let k = 0; k < 3; k++) m = Math.max(m, Math.abs(small[i + k] - big[i + k])); worst = Math.max(worst, m); sum += m; if (m > 8) over8++; }
+          const s = new OffscreenCanvas(960, 540 * 3), x = s.getContext('2d');
+          x.putImageData(img(i => small[i]), 0, 0); x.putImageData(img(i => Math.round(big[i])), 0, 540); x.putImageData(img(i => Math.min(255, 4 * Math.abs(small[i] - big[i]))), 0, 1080);
+          label(x, 'VHS tracking .8, 960 preview', 0, 0, 300); label(x, '3840 export, averaged down 4x4', 0, 540, 300); label(x, 'difference x4', 0, 1080, 300);
+          sheets.push({ name: 'eye-vhs-torn-rows.png', data: await b64(await s.convertToBlob({ type: 'image/png' })) });
+          return { sheets, torn: { worst, mean: sum / (small.length / 4), over8: over8 / (small.length / 4) } };
+        }
+      });
+      await save(eye.sheets);
+      await fs.writeFile(path.join(proof, 'sheet-metrics.json'), JSON.stringify({ looks: metrics, tornRows: eye.torn }, null, 2));
+      const types = SHEET_GROUPS.reduce((a, [, t]) => a + t.length, 0), expected = SHEET_KINDS.length * (SHEET_GROUPS.length + 1) + eye.sheets.length;
+      const least = m => SHEET_LEAST[m.effect] ?? SHEET_LEAST.all;
+      const flat = metrics.filter(m => m.fromPlain <= SHEET_CHANGE_LEAST), dim = metrics.filter(m => m.share < least(m)), black = metrics.filter(m => m.leastLit < SHEET_LIT_LEAST || m.leastMean < 2);
+      const name = m => `${m.effect} ${m.type} on ${m.kind}`;
+      const lowest = effect => Math.min(...metrics.filter(m => m.effect === effect).map(m => m.share));
+      const ok = written === expected && metrics.length === types * SHEET_KINDS.length && !flat.length && !dim.length && !black.length;
+      return { ok, detail: `${written} sheets, ${metrics.length} choice and layer pairs in ${path.relative(root, proof)}; no visible change from plain (${SHEET_CHANGE_LEAST}/255 or less): ${flat.map(m => `${name(m)} ${m.fromPlain.toFixed(2)}`).join(', ') || 'none'}; brightness against plain, lowest ${SHEET_GROUPS.map(([effect]) => `${effect} ${(lowest(effect) * 100).toFixed(1)}%`).join(', ')} (limits CRT and JPEG damage ${SHEET_LEAST.CRT * 100}%, others ${SHEET_LEAST.all * 100}%), too dim: ${dim.map(m => `${name(m)} ${(m.share * 100).toFixed(1)}%`).join(', ') || 'none'}; black stages (lit share under ${SHEET_LIT_LEAST * 100}% on a phase, or a mean under 2/255): ${black.map(name).join(', ') || 'none'}; torn VHS rows, preview against export averaged down (report only): worst ${eye.torn.worst.toFixed(1)}/255, mean ${eye.torn.mean.toFixed(3)}, ${(eye.torn.over8 * 100).toFixed(3)}% of pixels over 8` };
+    },
+  },
+  {
+    name: 'preview-cost',
+    // A report, not a gate. The mean frame time on a Surface layer for each effect at its defaults and at its heaviest
+    // common setting, and all five together, at three sizes. Each frame is forced to finish on the GPU, so the time is
+    // the real draw. Every case runs in each round, so warm-up and drift land on all of them alike; the first round
+    // only warms, and the median of the other rounds is reported.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async ([cases, sizes]) => {
+        const q = window.sq, canvas = document.createElement('canvas'), R = new q.m.StudioRenderer(canvas), gl = R.renderer.getContext(), ROUNDS = 4, pixel = new Uint8Array(4), rows = [];
+        const median = list => [...list].sort((a, b) => a - b)[list.length >> 1];
+        try {
+          for (const [w, h] of sizes) {
+            const FRAMES = w > 2000 ? 30 : 60, WARM = 8, times = cases.map(() => []);
+            for (let round = 0; round < ROUNDS; round++) for (let c = 0; c < cases.length; c++) {
+              const p = q.project([q.base('surface', cases[c][1])]); await R.prepare(p);
+              let total = 0;
+              for (let f = 0; f < WARM + FRAMES; f++) {
+                const start = performance.now();
+                R.render(p, f / (WARM + FRAMES) * Math.PI * 2, w, h); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+                if (f >= WARM) total += performance.now() - start;
+              }
+              if (round) times[c].push(total / FRAMES);
+            }
+            cases.forEach(([name], c) => rows.push({ size: `${w}x${h}`, frames: FRAMES, name, ms: median(times[c]), low: Math.min(...times[c]), high: Math.max(...times[c]) }));
+          }
+        } finally { R.dispose(); }
+        return rows;
+      }, [COST_CASES, COST_SIZES]);
+      await fs.mkdir(proof, { recursive: true });
+      await fs.writeFile(path.join(proof, 'preview-cost.json'), JSON.stringify(rows, null, 2));
+      const text = COST_SIZES.map(([w, h]) => {
+        const set = rows.filter(r => r.size === `${w}x${h}`), plain = set[0].ms;
+        return `${w}x${h} (median of 3 rounds of ${set[0].frames} frames): Plain ${plain.toFixed(2)} ms (${set[0].low.toFixed(2)} to ${set[0].high.toFixed(2)}); ${set.slice(1).map(r => `${r.name} ${r.ms.toFixed(2)} (${r.ms >= plain ? '+' : ''}${(r.ms - plain).toFixed(2)})`).join(', ')}`;
+      }).join(' | ');
+      return { ok: rows.length === COST_CASES.length * COST_SIZES.length, detail: `Surface, report only. ${text}` };
+    },
+  },
 ];
 
 const selected = only ? CHECKS.filter(c => only.some(prefix => c.name.startsWith(prefix))) : CHECKS;
@@ -1129,8 +1443,8 @@ export {encodePNG} from './src/rendering/png';${extra}`, resolveDir: dir, loader
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
-await bundle(root, 'renderer.js', `\nexport {crtCurve} from './src/rendering/signal';\nexport * as THREE from 'three';`);
-if (baseline) await bundle(path.resolve(baseline), 'baseline.js');
+await bundle(root, 'renderer.js', `\nexport {crtCurve} from './src/rendering/signal';\nexport * as THREE from 'three';\nexport {applyFinish,validateProject,parameterDefinitions} from './src/core/project';\nexport {VHS_KEYS,DROP_KEYS,CRT_KEYS,JPEG_KEYS,DATABEND_KEYS} from './src/core/finishing';`);
+if (baseline) await bundle(path.resolve(baseline), 'baseline.js', `\nexport {applyFinish,validateProject} from './src/core/project';`);
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');
 app.setPath('userData',${JSON.stringify(path.join(out, 'user-data'))});app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -1286,7 +1600,25 @@ try {
       }
       return reduced;
     };
-    window.sq = { m, old, renderer, tinyUrl, urlOf, image, smooth, white, line, square, readTarget, floatFrame, uvPin, bendFloat, soft, redBlue, blocky, waves, moving, project, loop120, exact, pixels, shot, px, difference, same, loop, litShare, toLinear, linearDown };
+    // A neon poster with thin dark rings, for the sheets' Image rows.
+    const NEON = [[255, 0, 120], [255, 200, 0], [0, 230, 120], [0, 150, 255], [170, 0, 255], [255, 70, 0]];
+    const posterUrl = await dataUrl(960, 540, (x, y) => {
+      if (Math.abs(Math.sin(Math.hypot(x, y) * 14)) < .1) return [8, 8, 12, 255];
+      const c = NEON[((Math.floor(3 * (x + .9) + 2 * Math.sin(3 * y)) % 6) + 6) % 6];
+      return [c[0], c[1], c[2], 255];
+    });
+    // The first preset of a kind, or the poster for Image, with these params.
+    const base = (kind, params = {}) => {
+      if (kind === 'image') return image(posterUrl, params, 'poster');
+      const l = m.applyPreset(m.createLayer(kind), m.PRESETS.find(p => p.kind === kind).id); l.id = `${kind}-proof`; Object.assign(l.params, params); return l;
+    };
+    // A soft diagonal gradient from deep blue to orange, for judging blocks on smooth tone.
+    const gradientUrl = await dataUrl(1920, 1080, (x, y) => { const t = Math.min(1, Math.max(0, (x + .9) / 1.8 * .7 + (y + .5) * .3)); return [Math.round(20 + 220 * t), Math.round(40 + 90 * t), Math.round(160 - 120 * t), 255]; });
+    const gradient = (params = {}) => image(gradientUrl, params, 'gradient', 1920, 1080);
+    // Sheets: a PNG blob as base64, and a caption box.
+    const b64 = async blob => { const u = new Uint8Array(await blob.arrayBuffer()); let t = ''; for (let i = 0; i < u.length; i += 8192) t += String.fromCharCode(...u.subarray(i, i + 8192)); return btoa(t); };
+    const label = (x, text, X, Y, w = 220) => { x.font = '600 15px sans-serif'; x.fillStyle = 'rgba(0,0,0,.7)'; x.fillRect(X, Y, w, 22); x.fillStyle = '#fff'; x.fillText(text, X + 5, Y + 16); };
+    window.sq = { m, old, renderer, tinyUrl, urlOf, image, base, gradient, b64, label, smooth, white, line, square, readTarget, floatFrame, uvPin, bendFloat, soft, redBlue, blocky, waves, moving, project, loop120, exact, pixels, shot, px, difference, same, loop, litShare, toLinear, linearDown };
   }, !!baseline);
 
   for (const check of selected) {

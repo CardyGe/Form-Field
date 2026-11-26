@@ -319,7 +319,7 @@ export const DATABEND_PARAMETERS:ParameterDefinition[]=[
  {key:'databendRepeats',label:'Repeats',min:1,max:8,step:1,default:4,section:'Material',description:'How many echoes are laid down.'},
  {key:'databendFeedback',label:'Feedback',min:0,max:0.95,step:0.01,default:0.55,section:'Material',description:'How much of each echo feeds the next.'},
  {key:'databendSplit',label:'Channel split',min:0,max:1,step:0.01,default:0.33,section:'Material',description:'How far the colour channels are pulled apart.'},
- {key:'databendDepth',label:'Depth',min:0,max:1,step:0.01,default:0.5,section:'Material',description:'How deep the damage cuts into the picture.'},
+ {key:'databendDepth',label:'Depth',min:0,max:1,step:0.01,default:0.25,section:'Material',description:'How deep the damage cuts into the picture.'},
  {key:'databendCycles',label:'Cycles per loop',min:0,max:16,step:1,default:1,section:'Motion',description:'How many times Comb sweeps, or Stutter jumps and returns, per loop. Loops close exactly.'},
 ];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[

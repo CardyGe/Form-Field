@@ -26,6 +26,8 @@
 - Colour split and RGB shift, which are already in Colour and Lens.
 - The Cell engine, which the owner dropped.
 
+> **Changed during the build.** The render-check script is `scripts/verify-signal-path.mjs`, because `scripts/verify-signal.mjs` already belongs to Signal Melt (Ruling 3). Read every `verify-signal.mjs` below as `verify-signal-path.mjs`. `crtMaskSize` defaults to 5, not 3, so the mask shows on a 960 preview (Ruling 9). `jpegGlitchSwaps` steps by 2, since a closing loop cannot change exactly once (Ruling 11). `databendDepth` defaults to .25, not .5, after the Task 7 eye review: at .5 Corrupt flips half of every bit and the picture turns to grey noise. The tables below show the built values.
+
 ## Global Constraints
 
 - **Branch:** build on a new branch `signal-path` from `material-tiles` at `6f2bfb7`, in the worktree `/Users/grego/Documents/ChatGPT/three VJ - Signal`. Both branches change the same render stage, so building on Tiles avoids a conflict. If Tiles is dropped, rebase onto main.
@@ -99,7 +101,7 @@ All keys use `section:'Material'` unless marked M (`'Motion'`) or S (`'Shape'`).
 | `crtLines` S | Scan lines | 120 | 1080 | 1 | 480 |
 | `crtLineDepth` | Scan line depth | 0 | 1 | .01 | .5 |
 | `crtMask` S | Screen mask | 0 | 3 | 1 | 1 |
-| `crtMaskSize` S | Mask size | 1 | 12 | .25 | 3 |
+| `crtMaskSize` S | Mask size | 1 | 12 | .25 | 5 |
 | `crtCorners` | Dark corners | 0 | 1 | .01 | .4 |
 | `crtBezel` | Outside the screen | 0 | 1 | 1 | 1 |
 | `crtBrightness` | CRT brightness | .5 | 3 | .01 | 1.3 |
@@ -108,7 +110,7 @@ All keys use `section:'Material'` unless marked M (`'Motion'`) or S (`'Shape'`).
 | `jpegBlock` S | Block size | 4 | 64 | .25 | 8 |
 | `jpegChroma` | Colour damage | 0 | 1 | .01 | .5 |
 | `jpegGlitch` | Broken blocks | 0 | 1 | .01 | 0 |
-| `jpegGlitchSwaps` M | Block changes per loop | 0 | 32 | 1 | 4 |
+| `jpegGlitchSwaps` M | Block changes per loop | 0 | 32 | 2 | 4 |
 | `databendAmount` | Databend | 0 | 1 | .01 | 0 |
 | `databendMode` S | Databend mode | 0 | 4 | 1 | 0 |
 | `databendAxis` S | Direction | 0 | 2 | 1 | 2 |
@@ -116,7 +118,7 @@ All keys use `section:'Material'` unless marked M (`'Motion'`) or S (`'Shape'`).
 | `databendRepeats` | Repeats | 1 | 8 | 1 | 4 |
 | `databendFeedback` | Feedback | 0 | .95 | .01 | .55 |
 | `databendSplit` | Channel split | 0 | 1 | .01 | .33 |
-| `databendDepth` | Depth | 0 | 1 | .01 | .5 |
+| `databendDepth` | Depth | 0 | 1 | .01 | .25 |
 | `databendCycles` M | Cycles per loop | 0 | 16 | 1 | 1 |
 
 - [ ] **Step 1: Create the worktrees and record the baseline**

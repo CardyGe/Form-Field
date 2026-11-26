@@ -17,7 +17,8 @@ const RECIPES = {
   warp: { bendAmount: .09, bendField: 0, bendScale: 4, bendAngle: 20 }, liquid: { liquidAmount: .3, liquidStyle: 0, liquidScale: 1.6 },
   led: { ledAmount: 1, ledSize: 30, ledShape: 0 }, chars: { charAmount: 1, charSize: 40, charContrast: 1.6, charSet: 0 }, tiles: { tileAmount: 1, tileStyle: 0, tileSize: 40 },
   lumaWarp: { lumaWarpAmount: .16, lumaWarpMode: 0, lumaWarpAngle: 60 }, polar: { polarAmount: 1, polarMode: 0 }, mirror: { mirrorAmount: 1, mirrorMode: 3, mirrorSegments: 6 },
-  vhs: { vhsAmount: 1, vhsTracking: 1, vhsBleed: .9, vhsNoise: .9, vhsHeadSwitch: 1, vhsAge: .7, vhsRoll: 1 },
+  // The source turned near upright, so the sideways tape wobble and torn rows cut across its bands and read at 240 px.
+  vhs: { rotation: 1.2, vhsAmount: 1, vhsTracking: 1, vhsBleed: 1, vhsNoise: 1, vhsHeadSwitch: 1, vhsAge: .6, vhsRoll: 1 },
   drop: { dropAmount: 1, dropChance: .45, dropBands: 9, dropFill: 1 },
   crt: { crtAmount: 1, crtCurve: .3, crtLines: 120, crtLineDepth: .9, crtMask: 1, crtMaskSize: 10, crtCorners: .7, crtBezel: 1 },
   jpeg: { jpegAmount: 1, jpegQuality: 0, jpegBlock: 28, jpegChroma: 1, jpegGlitch: .3 },
