@@ -238,13 +238,10 @@ void main() {
  * and lifted by `uBright` to make up for the light the lines and mask take away.
  * - Scan lines are a raised cosine across each line. Each is averaged over the output pixel, and lines finer than
  *   2 output pixels fade to a flat darkening of the same mean, so they never beat against the pixel grid.
- * - The mask's cell is one triad, `uMaskSize` 1080-line pixels across, counted from the frame's top-left. Every
- *   phosphor profile has a mean of 1, so a white field keeps its mean brightness before `uBright`; each harmonic is
- *   averaged over the output pixel (a box filter), so a 960 preview matches a 4K export averaged down.
- * - Bloom: a bright beam spreads past the mask, so the mask eases off as the light rises, just enough that its
- *   brightest phosphor stays in range wherever the light is in range (judged on the unaveraged mask, so a
- *   preview and an export ease alike). The display would otherwise clip the peaks
- *   and lose light the preview keeps; light already over range shows no mask and stays over range.
+ * - The mask's cell is one triad, `uMaskSize` 1080-line pixels across, counted from the frame's top-left. Each
+ *   phosphor is a raised cosine with a mean of 1, so a white field keeps its mean brightness before `uBright`, and
+ *   every mask peaks at 2, the same at every light level. Like the scan lines, each cosine is averaged over the
+ *   output pixel and fades to its flat mean below 2 output pixels, so a fine mask never beats against the pixel grid.
  * - Outside the screen is transparent, or black where the layer has coverage: the alpha of the unwarped pixel,
  *   so a Black bezel never adds light or cover where the layer is empty. The screen edge is filtered over one output pixel.
  * Light is never clamped.
@@ -258,35 +255,32 @@ vec2 curved(vec2 uv) {
   vec2 aspect = vec2(uSize.x / uSize.y, 1.), d = (uv - .5) * aspect;
   return .5 + d * (1. + uCurve * dot(d, d)) / aspect;
 }
-// The share of a cosine of this period, in output pixels, left after averaging over one output pixel.
-float boxed(float period) { float w = PI / max(period, 1e-3); return sin(w) / w; }
-// A phosphor of a period of this many output pixels at phase x (in periods): (1 + cos)² / 1.5, mean 1, peak at x = 0.
-float phosphor(float x, float period) {
-  float t = 2. * PI * x;
-  return 1. + 4. / 3. * boxed(period) * cos(t) + 1. / 3. * boxed(period * .5) * cos(2. * t);
-}
-// The colour mask at a place in output pixels from the frame's top-left, and the most any phosphor of it reaches
-// before averaging over the pixel, so bloom eases a preview and an export alike.
-vec3 screenMask(vec2 p, out float most) {
-  most = 1.;
+// The share of a cosine of this period, in output pixels, left after averaging over one output pixel, faded to
+// nothing below 2 output pixels so it never beats against the pixel grid.
+float kept(float period) { float w = PI / max(period, 1e-3); return sin(w) / w * clamp((period - 2.) * 4., 0., 1.); }
+// A phosphor of a period of this many output pixels at phase x (in periods): 1 + depth * cos, mean 1, peak at x = 0.
+float phosphor(float x, float period, float depth) { return 1. + depth * kept(period) * cos(2. * PI * x); }
+// The colour mask at a place in output pixels from the frame's top-left. Each kind peaks at 2. Red, green and blue
+// sit at the middle of each third of the cell, so at 3 output pixels a cell each pixel holds one colour.
+vec3 screenMask(vec2 p) {
   int kind = int(uMask + .5);
   if (kind == 0) return vec3(1.);
   float cell = uMaskSize / uLines;
   vec2 at = p / cell;
-  vec3 m = vec3(phosphor(at.x, cell), phosphor(at.x - 1. / 3., cell), phosphor(at.x - 2. / 3., cell));
-  most = 8. / 3.;
-  // Slots: each column of triads is cut into slots, neighbouring columns half a slot apart. The cut averages to
-  // nothing down a column, so the mean holds.
+  vec3 third = at.x - vec3(1., 3., 5.) / 6.;
+  // Stripes: full-depth columns.
+  if (kind == 1) return vec3(phosphor(third.r, cell, 1.), phosphor(third.g, cell, 1.), phosphor(third.b, cell, 1.));
+  // Slots: shallower columns (peak 1.6), each column of triads cut into slots, neighbouring columns half a slot apart
+  // (peak 1.25). The cut averages to nothing down a column, so the mean holds.
   if (kind == 2) {
-    m *= 1. - .7 * boxed(cell) * boxed(2. * cell) * cos(2. * PI * at.y) * cos(PI * (at.x - 1. / 3.));
-    most *= 1.7;
+    vec3 m = vec3(phosphor(third.r, cell, .6), phosphor(third.g, cell, .6), phosphor(third.b, cell, .6));
+    return m * (1. - .25 * kept(cell) * kept(2. * cell) * cos(2. * PI * at.y) * cos(PI * (at.x - .5)));
   }
-  // Dots: a triad of round dots, green half a row from red and blue. Rows and columns average apart, so the mean holds.
-  else if (kind == 3) {
-    m *= vec3(phosphor(at.y, cell), phosphor(at.y - .5, cell), phosphor(at.y, cell));
-    most *= most;
-  }
-  return m;
+  // Dots: a triad of round dots, green half a row from red and blue, each axis peaking at sqrt 2. Rows and columns
+  // average apart, so the mean holds.
+  const float D = .41421356;
+  vec3 across = vec3(phosphor(third.r, cell, D), phosphor(third.g, cell, D), phosphor(third.b, cell, D));
+  return across * vec3(phosphor(at.y, cell, D), phosphor(at.y - .5, cell, D), phosphor(at.y, cell, D));
 }
 void main() {
   vec4 plain = texture2D(uSource, vUv);
@@ -299,16 +293,11 @@ void main() {
   vec4 c = texture2D(uSource, clamp(s, texel, 1. - texel));
   // Scan lines down the bent picture, bright at each line's middle.
   float line = (1. - s.y) * uScanLines, period = 1. / (uScanLines * rate.y);
-  float keep = boxed(period) * clamp((period - 2.) * 4., 0., 1.);
-  float lines = 1. - uDepth * .5 * (1. - keep * cos(2. * PI * (line - .5)));
+  float lines = 1. - uDepth * .5 * (1. - kept(period) * cos(2. * PI * (line - .5)));
   // Corners: a smooth falloff from the curved edge, 1 at the centre.
   float inner = pow(clamp(16. * s.x * (1. - s.x) * s.y * (1. - s.y), 0., 1.), .3);
-  vec3 light = c.rgb * lines * (1. - uCorners * (1. - inner)) * uBright;
-  float most, peak = max(max(light.r, light.g), light.b);
-  vec3 m = screenMask(vec2(gl_FragCoord.x, fromTop()), most);
-  // Bloom: the share of the mask that keeps the brightest phosphor at 1 or under; all of it for dim light.
-  float bloom = peak * most <= 1. ? 1. : clamp((1. / peak - 1.) / (most - 1.), 0., 1.);
-  vec4 tube = vec4(light * (1. + bloom * (m - 1.)), c.a);
+  float shade = lines * (1. - uCorners * (1. - inner)) * uBright;
+  vec4 tube = vec4(c.rgb * shade * screenMask(vec2(gl_FragCoord.x, fromTop())), c.a);
   vec4 outside = vec4(0., 0., 0., uBezel > .5 ? plain.a : 0.);
   gl_FragColor = mix(plain, mix(outside, tube, screen), uAmount);
 }`;
