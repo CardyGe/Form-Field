@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { PRESETS, applyPreset, createLayer, createProject, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { CHAR_KEYS, LED_KEYS, TILE_KEYS } from '../src/core/finishing';
 import { layerTileBlocker } from '../src/core/tile-edges';
-import { CHAR_SETS, RETRO_PALETTES, cellGrid, glyphForTone, tileControlVisible, tilesActive } from '../src/rendering/tiles';
+import { CHAR_SETS, RETRO_PALETTES, cellGrid, fitCellGrid, glyphForTone, tileControlVisible, tilesActive } from '../src/rendering/tiles';
 
 const allKeys = [...LED_KEYS, ...CHAR_KEYS, ...TILE_KEYS];
 test('tile effects are off by default and older projects migrate without them', () => {
@@ -23,8 +23,13 @@ test('any amount or an animated amount runs the tile pass, never on graphic laye
   assert.equal(visibleParameterDefinitions(graphic).some(d => allKeys.includes(d.key)), false);
 });
 test('a tiled layer cannot use Tile Edges', () => {
-  const layer = createLayer('surface'); layer.params.tileAmount = .5;
-  assert.match(layerTileBlocker(layer) ?? '', /Tiles can't tile/);
+  // The message names the effect in use.
+  for (const [key, name] of [['ledAmount', 'LED wall'], ['charAmount', 'Characters'], ['tileAmount', 'Tiles']]) {
+    const layer = createLayer('surface'); layer.params[key] = .5;
+    assert.match(layerTileBlocker(layer) ?? '', new RegExp(`: ${name} can't use Tile Edges\\.$`), key);
+    const animated = createLayer('surface'); animated.modulations[key] = {} as never;
+    assert.match(layerTileBlocker(animated) ?? '', new RegExp(`: ${name} can't use Tile Edges\\.$`), `${key} animated`);
+  }
 });
 test('the cell grid is sized in 1080-line pixels at any render size', () => {
   assert.deepEqual(cellGrid(1920, 1080, 10).cols, 192);
@@ -69,4 +74,18 @@ test('tile controls appear only for the choice that uses them', () => {
   assert.equal(tileControlVisible(on({ tileAmount: .5, tileStyle: 1 }), 'tileGrout'), true);
   assert.equal(tileControlVisible(on({ tileAmount: .5, tileStyle: 2 }), 'tileGrout'), false);
   assert.equal(tileControlVisible(on({ tileAmount: .5, tileStyle: 2 }), 'tileGaps'), true);
+});
+test('a very wide output keeps each cell grid inside the GPU limit', () => {
+  // Within the limit, the grid is the plain one.
+  assert.deepEqual(fitCellGrid(3840, 2160, 2, 4096), cellGrid(3840, 2160, 2));
+  // 32768x1080 at 2-pixel LEDs wants 16384 columns; a third of a 16384 target holds 5461.
+  for (const [w, h, size, most] of [[32768, 1080, 2, 5461], [16384, 1080, 4, 2000], [20000, 1000, 3, 7]]) {
+    const grid = fitCellGrid(w, h, size, most);
+    assert.ok(grid.cols <= most && grid.cols >= most - 1, `${w}x${h} at ${size}: ${grid.cols}`);
+    assert.ok(grid.cellUv[1] * 1080 >= size, 'cells only grow');
+  }
+});
+test('a cell grid never needs more rows than the GPU allows', () => {
+  const grid = fitCellGrid(1920, 1080, .25, 1e9, 4096);
+  assert.ok(grid.rows <= 4096, String(grid.rows));
 });

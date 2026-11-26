@@ -41,6 +41,17 @@ export function cellGrid(width: number, height: number, cellPx: number): { cols:
   return { cols, rows, cellUv: [1 / cols, size / 1080] };
 }
 
+/**
+ * `cellGrid`, with cells grown just enough that the grid is at most `maxCols` across. The grids share one target, so
+ * a very wide output at the smallest sizes would otherwise need a target wider than the GPU allows.
+ */
+export function fitCellGrid(width: number, height: number, cellPx: number, maxCols: number, maxRows = Infinity): ReturnType<typeof cellGrid> {
+  const grid = cellGrid(width, height, cellPx);
+  if (grid.cols <= maxCols && grid.rows <= maxRows) return grid;
+  const least = Math.max(1080 * (width / Math.max(height, 1)) / Math.max(1, maxCols), 1080 / Math.max(1, maxRows));
+  return cellGrid(width, height, Math.max(cellPx, least * (1 + 1e-6)));
+}
+
 /** Tone (0–1) to a glyph index, from the empty first glyph to the full last one. */
 export function glyphForTone(tone: number, count: number): number {
   return Math.round(Math.min(Math.max(tone, 0), 1) * (count - 1));
@@ -236,9 +247,11 @@ vec4 ledStage(vec2 uv) {
   return sum + vec4(uLedGap, 1.) * uLedGapOn * gap;
 }
 
-// Perceptual tone of a premultiplied linear colour: its luminance, encoded as the display would.
+// Tone of a premultiplied linear colour: its brightest channel, unpremultiplied, held to full value and encoded as
+// the display would. A saturated red or blue is as bright as white here, so it picks a full glyph, not a dark one.
 float tone(vec4 c) {
-  float y = max(0., dot(c.rgb / max(c.a, 1e-4), vec3(.2126, .7152, .0722)));
+  vec3 straight = max(c.rgb / max(c.a, 1e-4), vec3(0.));
+  float y = min(max(straight.r, max(straight.g, straight.b)), 1.);
   return y <= .0031308 ? 12.92 * y : 1.055 * pow(y, 1. / 2.4) - .055;
 }
 
@@ -370,7 +383,8 @@ vec4 tileStage(vec2 uv) {
 
 void main() {
   vec4 result = texture2D(uSource, vUv);
-  // LED wall first, then Characters, then Tiles; each is built from the plain layer's cells.
+  // LED wall first, then Characters, then Tiles. Each is built from the plain layer's cells and cross-fades over the
+  // result so far, so a later stage at full amount replaces the earlier ones.
   if (uLedAmount > 0.) result = mix(result, ledStage(vUv), uLedAmount);
   if (uCharAmount > 0.) result = mix(result, charStage(vUv), uCharAmount);
   if (uTileAmount > 0.) result = mix(result, tileStage(vUv), uTileAmount);

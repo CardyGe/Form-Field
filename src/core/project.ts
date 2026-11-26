@@ -526,9 +526,9 @@ const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
 // continue to use the complete instrument definition.
 /** Every control of the per-layer lens pass: hidden on layers that take no lens. */
 const LENS_KEYS = [...SPLIT_KEYS, ...GRADIENT_KEYS, ...GRADE_KEYS, ...KEY_KEYS];
-/** Every control of the warp pass: hidden on layers that take no warp. */
 /** Every control of the tile pass: hidden on layers that take no tiles. */
 const TILE_ALL_KEYS = [...LED_KEYS, ...CHAR_KEYS, ...TILE_KEYS];
+/** Every control of the warp pass: hidden on layers that take no warp. */
 const WARP_ALL_KEYS = [...WARP_KEYS, ...LIQUID_KEYS, ...LUMA_WARP_KEYS, ...POLAR_KEYS, ...MIRROR_KEYS];
 export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const visible = familyParameterDefinitions(layer);

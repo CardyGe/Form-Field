@@ -31,7 +31,7 @@ import { BLUE_NOISE_SIZE, blueNoise, printActive, printShimmerShift, printUnifor
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
-import { CHAR_SETS, cellColourFragment, cellGrid, tileFragment, tilesActive } from './tiles';
+import { CHAR_SETS, cellColourFragment, fitCellGrid, tileFragment, tilesActive } from './tiles';
 import { GLYPH_PX, GLYPH_SPREAD, buildGlyphAtlas } from './glyph-atlas';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
@@ -1346,8 +1346,10 @@ export class StudioRenderer {
     const amount = (key: string) => Math.min(1, Math.max(0, number(layer, key, 0)));
     const led = amount('ledAmount'), chars = amount('charAmount'), tiles = amount('tileAmount');
     if (led <= 0 && chars <= 0 && tiles <= 0) return source;
-    const ledGrid = cellGrid(width, height, number(layer, 'ledSize', 10)), charGrid = cellGrid(width, height, number(layer, 'charSize', 16));
-    const tileGrid = cellGrid(width, height, number(layer, 'tileSize', 18)), style = Math.min(2, Math.max(0, Math.round(number(layer, 'tileStyle', 0))));
+    // The grids sit side by side in one target, so each keeps to its share of the widest target the GPU allows.
+    const share = Math.floor(this.maxTargetSize / ((led > 0 ? 1 : 0) + (chars > 0 ? 1 : 0) + (tiles > 0 ? 1 : 0))), most = this.maxTargetSize;
+    const ledGrid = fitCellGrid(width, height, number(layer, 'ledSize', 10), share, most), charGrid = fitCellGrid(width, height, number(layer, 'charSize', 16), share, most);
+    const tileGrid = fitCellGrid(width, height, number(layer, 'tileSize', 18), share - 1, most), style = Math.min(2, Math.max(0, Math.round(number(layer, 'tileStyle', 0))));
     // LED cells sit at the target's left edge, character cells to their right and tile cells after those. Tiles keep
     // a spare column, so Brick's offset rows have a cell for the part brick at each end.
     const ledCols = led > 0 ? ledGrid.cols : 0, charCols = chars > 0 ? charGrid.cols : 0, tileCols = tiles > 0 ? tileGrid.cols + 1 : 0;
@@ -1362,7 +1364,7 @@ export class StudioRenderer {
     if (cells.width < cols || cells.height < rows) cells.setSize(Math.max(cells.width, cols), Math.max(cells.height, rows));
     const c = this.cellColour.uniforms;
     c.uSource.value = source; (c.uSourceSize.value as THREE.Vector2).set(width, height);
-    const average = (grid: ReturnType<typeof cellGrid>, origin: number, columns = grid.cols, oddShift = 0) => {
+    const average = (grid: ReturnType<typeof fitCellGrid>, origin: number, columns = grid.cols, oddShift = 0) => {
       cells.viewport.set(origin, 0, columns, grid.rows);
       (c.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]); c.uRows.value = grid.rows;
       (c.uOrigin.value as THREE.Vector2).set(origin, 0); c.uOddShift.value = oddShift;

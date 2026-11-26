@@ -7,7 +7,7 @@ import { TOON_KEYS, FEEDBACK_KEYS, GLOW_KEYS } from '../core/finishing';
 import { SLIT_MODES, SLIT_SHAPES, slitControlVisible } from '../rendering/slitscan';
 import { KALEIDOSCOPE_INPUT } from '../core/project';
 import { kaleidoscopeInput } from '../rendering/feedback';
-import { FINISH_GROUPS, pickerEffects, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, hasPower, powerLocked, resetFinishEffect, toggleFinishEffect, type FinishEffect, type FinishGroup } from './finish-rack';
+import { FINISH_GROUPS, pickerEffects, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, hasPower, powerLocked, printControlShown, printDisabledOptions, resetFinishEffect, toggleFinishEffect, type FinishEffect, type FinishGroup } from './finish-rack';
 import { FINISH_THUMBS } from './finish-thumbs';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Parameter } from './LayerControls';
@@ -31,20 +31,6 @@ const PRINT_GROUPS: [string, string[]][] = [
   ['Colour', ['printColour', 'printInk', 'printRetro', 'printPaper']],
   ['Where it prints', ['printArea', 'printEdgeWidth', 'printEdgeSense', 'printEdgeFeather']],
 ];
-/** Whether a print control applies, given the layer's other print choices. */
-function printControlShown(layer: Layer, key: string): boolean {
-  const p = layer.params, type = Math.round(p.printType ?? 0), colour = Math.round(p.printColour ?? 0);
-  if (key === 'printMix') return true;
-  if (!((p.printMix ?? 0) > 0 || !!layer.modulations.printMix)) return false;
-  if (key === 'printDot') return type === 0;
-  if (key === 'printMatrix') return type === 2;
-  if (key === 'printInk') return colour === 1;
-  if (key === 'printRetro') return colour === 4;
-  if (key === 'printShimmer') return type === 2 || type === 3;
-  if (key === 'printInvert') return colour < 2;
-  if (key.startsWith('printEdge')) return Math.round(p.printArea ?? 0) > 0;
-  return true;
-}
 export function PrintScreenSection({ layer, definitions, edit, animate, onStart, onEnd, extra, readOnly }: FinishProps) {
   const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
   const on = (layer.params.printMix ?? 0) > 0 || !!layer.modulations.printMix;
@@ -56,7 +42,7 @@ export function PrintScreenSection({ layer, definitions, edit, animate, onStart,
         const d = definitions.find(item => item.key === key);
         if (!d) return null;
         // Retro palette draws the Classic dot as Round, so that choice is not offered with it.
-        if (PRINT_CHOICES[key]) return <ChoiceParameter key={key} label={d.label} name={d.label} options={PRINT_CHOICES[key]} value={layer.params[key] ?? d.default} disabled={readOnly?.(d) ?? false} disabledOptions={key === 'printDot' && Math.round(layer.params.printColour ?? 0) === 4 ? [1] : undefined} onChange={n => set(key, n)} />;
+        if (PRINT_CHOICES[key]) return <ChoiceParameter key={key} label={d.label} name={d.label} options={PRINT_CHOICES[key]} value={layer.params[key] ?? d.default} disabled={readOnly?.(d) ?? false} disabledOptions={printDisabledOptions(layer, key)} onChange={n => set(key, n)} />;
         return <Parameter key={key} definition={d} value={layer.params[key] ?? d.default} animated={!!layer.modulations[key]} readOnly={readOnly?.(d) ?? false} onChange={n => set(key, n)} onAnimate={animate && d.step !== 1 ? () => animate(key) : undefined} extra={extra?.(d)} onStart={onStart} onEnd={onEnd} />;
       })}</div>;
     })}

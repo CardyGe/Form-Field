@@ -28,7 +28,10 @@ export function layerTileBlocker(layer: Layer): string | null {
   if (feedbackActive(layer)) return `${n}: Feedback can't tile.`;
   if (slitActive(layer)) return `${n}: Time displacement can't tile.`;
   if (printActive(layer)) return `${n}: Print screen can't tile.`;
-  if (tilesActive(layer)) return `${n}: Tiles can't tile.`;
+  if (tilesActive(layer)) {
+    const on = (key: string) => (p[key] ?? 0) > 0 || !!m[key];
+    return `${n}: ${on('ledAmount') ? 'LED wall' : on('charAmount') ? 'Characters' : 'Tiles'} can't use Tile Edges.`;
+  }
   if (warpActive(layer)) return `${n}: Warp can't tile.`;
   return null;
 }
