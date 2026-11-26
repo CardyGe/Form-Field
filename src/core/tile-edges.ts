@@ -1,6 +1,7 @@
 import type { Layer, Project } from '../shared/types';
 import { feedbackActive } from '../rendering/feedback';
 import { printActive } from '../rendering/print-screen';
+import { signalActive } from '../rendering/signal';
 import { slitActive } from '../rendering/slitscan';
 import { tilesActive } from '../rendering/tiles';
 import { warpActive } from '../rendering/warp';
@@ -31,6 +32,11 @@ export function layerTileBlocker(layer: Layer): string | null {
   if (tilesActive(layer)) {
     const on = (key: string) => (p[key] ?? 0) > 0 || !!m[key];
     return `${n}: ${on('ledAmount') ? 'LED wall' : on('charAmount') ? 'Characters' : 'Tiles'} can't use Tile Edges.`;
+  }
+  if (signalActive(layer)) {
+    const on = (key: string) => (p[key] ?? 0) > 0 || !!m[key];
+    const name = on('vhsAmount') ? 'VHS' : on('dropAmount') ? 'Dropout' : on('crtAmount') ? 'CRT' : on('jpegAmount') ? 'JPEG damage' : 'Databend';
+    return `${n}: ${name} can't use Tile Edges.`;
   }
   if (warpActive(layer)) return `${n}: Warp can't tile.`;
   return null;

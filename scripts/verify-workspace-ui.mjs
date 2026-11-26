@@ -162,13 +162,20 @@ try {
    await page.getByRole('button',{name:'Add effect',exact:true}).click();
    for(const title of titles)assert.equal(await page.getByRole('button',{name:'Add '+title,exact:true}).count(),expected?1:0,kind+': '+title);
    if(expected){
-    for(const group of ['Colour','Light','Warp','Surface','Time']){
+    for(const group of ['Colour','Light','Warp','Surface','Time','Signal']){
      await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:group,exact:true}).click();
      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'The '+group+' group of Add effect fits one screen.');
      if(group==='Warp')assert.equal(await page.locator('.finish-picker-group button').count(),5,'The Warp filter shows five cards.');
     }
-    await page.getByRole('group',{name:'Effect groups',exact:true}).getByRole('button',{name:'All',exact:true}).click();
-    assert.ok(await page.locator('.finish-picker img').evaluateAll(all=>all.length===19&&all.every(i=>i.complete&&i.naturalWidth>0)),'Every effect has a thumbnail.');
+    const groupRow=page.getByRole('group',{name:'Effect groups',exact:true});
+    assert.equal(await groupRow.getByRole('button').count(),7,'The picker has All and six groups.');
+    assert.equal(await groupRow.getByRole('button').evaluateAll(all=>new Set(all.map(b=>Math.round(b.getBoundingClientRect().top))).size),1,'All six groups sit on one row.');
+    await groupRow.getByRole('button',{name:'Signal',exact:true}).click();
+    for(const title of ['VHS','Dropout','CRT','JPEG damage','Databend'])assert.equal(await page.getByRole('button',{name:'Add '+title,exact:true}).count(),1,'Signal lists '+title);
+    assert.equal(await page.locator('.finish-picker-group button').count(),5,'The Signal filter shows five cards.');
+    assert.ok(await page.locator('.finish-picker-group img').evaluateAll(all=>all.length===5&&all.every(i=>i.complete&&i.naturalWidth>0)),'The Signal cards have thumbnails.');
+    await groupRow.getByRole('button',{name:'All',exact:true}).click();
+    assert.ok(await page.locator('.finish-picker img').evaluateAll(all=>all.length===24&&all.every(i=>i.complete&&i.naturalWidth>0)),'Every effect has a thumbnail.');
     await snapshot('add-effect');
     const search=page.getByLabel('Search effects',{exact:true});await search.fill('halftone');
     assert.equal(await page.locator('.finish-picker-group button').count(),1);await search.fill('');await page.keyboard.press('Escape');
@@ -197,6 +204,46 @@ try {
      await openFinish(page,title);await saved(x=>x.layers[0].params[key]>0);
      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),title+' fits one screen.');
      assert.equal(await page.getByLabel(hidden,{exact:true}).count(),1,title+' shows its own controls.');
+     await page.getByRole('button',{name:'Remove',exact:true}).click();await saved(x=>x.layers[0].params[key]===0);
+    }
+    const banned=/YUV|DCT|coefficient|quantis|luma|XOR|serpentine/i;
+    for(const [title,key,shown,absent] of [['VHS','vhsAmount',['Tracking wobble value','Rolling bar per loop value'],[]],['Dropout','dropAmount',['Dropout chance value','Dropout bands value'],['Dropout fill value']],['CRT','crtAmount',['Screen curve value','Scan lines value','Mask size value'],['Screen mask value','Outside the screen value']],['JPEG damage','jpegAmount',['Quality value','Block size value'],['Block changes per loop value']],['Databend','databendAmount',['Distance value','Repeats value','Feedback value'],['Databend mode value','Direction value']]]){
+     await openFinish(page,title);await saved(x=>x.layers[0].params[key]>0);
+     assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),title+' fits one screen.');
+     for(const label of shown)assert.equal(await page.getByLabel(label,{exact:true}).count(),1,title+' shows '+label);
+     for(const label of absent)assert.equal(await page.getByLabel(label,{exact:true}).count(),0,title+' has no slider called '+label);
+     assert.ok(!banned.test(await panel.innerText()),title+' uses plain words.');
+     if(title==='Dropout'){await page.getByLabel('Dropout fill',{exact:true}).selectOption('2');await saved(x=>x.layers[0].params.dropFill===2);}
+     if(title==='CRT'){
+      assert.deepEqual(await page.getByLabel('Screen mask',{exact:true}).locator('option').allTextContents(),['None','Stripes','Slots','Dots']);
+      assert.deepEqual(await page.getByLabel('Outside the screen',{exact:true}).locator('option').allTextContents(),['Transparent','Black']);
+      for(const mask of ['1','2','3']){
+       await page.getByLabel('Screen mask',{exact:true}).selectOption(mask);await saved(x=>x.layers[0].params.crtMask===Number(mask));
+       assert.equal(await page.getByLabel('Mask size value',{exact:true}).count(),1,'A mask shows Mask size.');
+       assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'CRT with mask '+mask+' fits one screen.');
+      }
+      await page.getByLabel('Screen mask',{exact:true}).selectOption('0');await saved(x=>x.layers[0].params.crtMask===0);
+      assert.equal(await page.getByLabel('Mask size value',{exact:true}).count(),0,'No mask hides Mask size.');
+     }
+     if(title==='JPEG damage'){
+      const g=page.getByLabel('Broken blocks value',{exact:true});await g.fill('.5');await g.press('Enter');await saved(x=>x.layers[0].params.jpegGlitch===.5);
+      assert.equal(await page.getByLabel('Block changes per loop value',{exact:true}).count(),1,'Broken blocks shows its change rate.');
+      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'JPEG damage with broken blocks fits one screen.');
+     }
+     if(title==='Databend'){
+      assert.deepEqual(await page.getByLabel('Databend mode',{exact:true}).locator('option').allTextContents(),['Echo','Comb','Fold','Stutter','Corrupt']);
+      assert.deepEqual(await page.getByLabel('Direction',{exact:true}).locator('option').allTextContents(),['Across','Down','Wrap']);
+      for(const label of ['Repeats value','Feedback value','Distance value','Channel split value'])assert.equal(await page.getByLabel(label,{exact:true}).count(),1,'Echo shows '+label);
+      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Databend Echo with Repeats and Feedback fits one screen.');
+      await page.getByLabel('Databend mode',{exact:true}).selectOption('3');await saved(x=>x.layers[0].params.databendMode===3);
+      for(const label of ['Cycles per loop value','Depth value','Distance value'])assert.equal(await page.getByLabel(label,{exact:true}).count(),1,'Stutter shows '+label);
+      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Databend Stutter fits one screen.');
+      await page.getByLabel('Databend mode',{exact:true}).selectOption('1');await saved(x=>x.layers[0].params.databendMode===1);
+      assert.equal(await page.getByLabel('Cycles per loop value',{exact:true}).count(),1,'Comb shows Cycles.');
+      assert.ok(await panel.evaluate(e=>e.scrollHeight<=e.clientHeight),'Databend Comb fits one screen.');
+      await page.getByLabel('Databend mode',{exact:true}).selectOption('2');await saved(x=>x.layers[0].params.databendMode===2);
+      assert.equal(await page.getByLabel('Direction',{exact:true}).count(),0,'Fold has no direction.');
+     }
      await page.getByRole('button',{name:'Remove',exact:true}).click();await saved(x=>x.layers[0].params[key]===0);
     }
     await openFinish(page,'Print screen');await saved(x=>x.layers[0].params.printMix>0);

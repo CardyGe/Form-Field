@@ -32,6 +32,8 @@ import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActiv
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
 import { CHAR_SETS, cellColourFragment, fitCellGrid, tileFragment, tilesActive } from './tiles';
+import { crtFragment, databendFragment, dropFragment, loopFrame, signalActive, signalStages, vhsFragment } from './signal';
+import { blockGrid, jpegFragments, jpegSamples, jpegSteps } from './jpeg-blocks';
 import { GLYPH_PX, GLYPH_SPREAD, buildGlyphAtlas } from './glyph-atlas';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
@@ -134,6 +136,11 @@ function target(depth = false, bytes = false): THREE.WebGLRenderTarget {
   });
   result.texture.colorSpace = bytes ? THREE.NoColorSpace : THREE.LinearSRGBColorSpace;
   return result;
+}
+
+/** The uniforms every JPEG damage pass shares (signalCommon's and the block size). */
+function jpegUniforms(): Uniforms {
+  return { uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 }, uBlock: { value: 8 }, uChromaX: { value: 8 }, uN: { value: 8 }, uNc: { value: 8 } };
 }
 
 function number(layer: Layer, key: string, fallback: number): number {
@@ -305,6 +312,44 @@ export class StudioRenderer {
   });
   /** This frame's loop length in seconds, so LED flicker keeps its pace on long and short loops. */
   private loopSeconds = 10;
+  /** Signal path: two targets the stages ping-pong between, shared by all layers and built on first use. */
+  private signalTargets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget] | null = null;
+  private readonly vhs = material(vhsFragment, {
+    uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
+    uPhase: { value: 0 }, uTracking: { value: .4 }, uBleed: { value: .5 }, uNoise: { value: .3 }, uHead: { value: .4 }, uAge: { value: .3 }, uRoll: { value: 0 },
+  });
+  private readonly drop = material(dropFragment, {
+    uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
+    uFrames: { value: 1 }, uChance: { value: .15 }, uBands: { value: 4 }, uFill: { value: 0 }, uBurst: { value: 1 },
+  });
+  private readonly crt = material(crtFragment, {
+    uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
+    uCurve: { value: .15 }, uScanLines: { value: 480 }, uDepth: { value: .5 }, uMask: { value: 1 }, uMaskSize: { value: 5 }, uCorners: { value: .4 }, uBezel: { value: 1 }, uBright: { value: 1.3 },
+  });
+  private readonly databend = material(databendFragment, {
+    uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
+    uPhase: { value: 0 }, uFrames: { value: 1 }, uMode: { value: 0 }, uAxis: { value: 2 }, uDistance: { value: 120 }, uRepeats: { value: 4 }, uFeedback: { value: .55 },
+    uSplit: { value: .33 }, uDepth: { value: .5 }, uCycles: { value: 1 },
+  });
+  /**
+   * JPEG damage: two grid targets (one texel per sample of every block) and one as wide as the grid and as tall as the
+   * frame. They grow to fit at once, shrink at the start of a frame when the last frame needed under half of them,
+   * each pass drawing into its own corner, and go with the signal targets.
+   */
+  private jpegTargets: { grid: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget]; columns: THREE.WebGLRenderTarget } | null = null;
+  /** How many times the JPEG targets were reallocated, for the checks. */
+  jpegReallocations = 0;
+  /** The largest size each JPEG target (grid, grid, columns) was asked for this frame. */
+  private jpegNeed: [number, number][] = [[0, 0], [0, 0], [0, 0]];
+  private readonly jpegRows = material(jpegFragments.rowsForward, jpegUniforms());
+  private readonly jpegStepTable = new Float32Array(128).fill(1);
+  private readonly jpegColumns = material(jpegFragments.columnsForward, { ...jpegUniforms(), uGrid: { value: null }, uSteps: { value: this.jpegStepTable } });
+  private readonly jpegColumnsInverse = material(jpegFragments.columnsInverse, { ...jpegUniforms(), uTerms: { value: null } });
+  private readonly jpegRowsInverse = material(jpegFragments.rowsInverse, {
+    ...jpegUniforms(), uTerms: { value: null }, uColumns: { value: null }, uBlocks: { value: new THREE.Vector2(1, 1) }, uChroma: { value: .5 }, uGlitch: { value: 0 }, uSlot: { value: 0 },
+  });
+  /** This frame's loop length in frames, so per-frame randomness repeats on seeks and across the loop seam. */
+  private loopFrames = 300;
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
@@ -1091,6 +1136,7 @@ export class StudioRenderer {
     this.tiling = project.tileEdges === true && tileBlockers(project).length === 0;
     // Tiled sources wrap, so Glow and outlines read across the frame edges.
     setWrap(this.source, this.tiling);
+    this.shrinkJpeg();
     this.renderer.info.reset();
     this.renderer.setClearColor(0, 0);
     this.renderer.setRenderTarget(this.accumA); this.renderer.clear();
@@ -1100,6 +1146,7 @@ export class StudioRenderer {
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
     this.loopSeconds = duration;
+    this.loopFrames = total;
     this.meridianRuntime.loopFrames = total;
     this.releaseFeedback(project);
     this.releaseTimeTargets(project);
@@ -1129,19 +1176,20 @@ export class StudioRenderer {
       const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
       const lensed = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
       const finished = tilesActive(original) ? this.tileSource(original, layer, lensed, wrapped, width, height) : lensed;
+      const signalled = signalActive(original) ? this.signalSource(original, layer, finished, wrapped, width, height) : finished;
       // Exports always use the full compositor; a live untouched Smoke Cloud does not need its cost at 4K.
       // A layer with a tile amount above zero is not untouched, so only the plain source reaches this path.
       if (!this.exporting && !this.fullCompositorOnly && compositesPlainly(layer, this.tiling)) {
         // Alone in the frame, it is already the finished composite: drawing it over nothing changes no pixel.
-        if (project.layers.filter(item => item.visible).length === 1) { soleSource = finished; continue; }
+        if (project.layers.filter(item => item.visible).length === 1) { soleSource = signalled; continue; }
         this.plainOver ??= new THREE.ShaderMaterial({ vertexShader: fullscreenVertex, fragmentShader: plainOverFragment, uniforms: { uBelow: { value: null }, uSource: { value: null } }, depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false });
-        this.plainOver.uniforms.uBelow.value = below.texture; this.plainOver.uniforms.uSource.value = finished;
+        this.plainOver.uniforms.uBelow.value = below.texture; this.plainOver.uniforms.uSource.value = signalled;
         this.draw(this.plainOver, next);
         [below, next] = [next, below];
         continue;
       }
       const u = this.composite.uniforms;
-      u.uBelow.value = below.texture; u.uSource.value = finished;
+      u.uBelow.value = below.texture; u.uSource.value = signalled;
       (u.uTranslation.value as THREE.Vector2).set(layer.transform.x, -layer.transform.y);
       (u.uTexel.value as THREE.Vector2).set(1 / width, 1 / height);
       u.uAspect.value = width / height; u.uScale.value = layer.transform.scale;
@@ -1163,7 +1211,7 @@ export class StudioRenderer {
       u.uMaskSize.value = layer.mask.size; u.uMaskSoftness.value = layer.mask.softness;
       u.uMaskInvert.value = Number(layer.mask.invert);
       u.uGlow.value = number(layer, 'glow', layer.kind === 'sculpture' ? .12 : 0);
-      this.bindGlow(original, layer, finished, width, height);
+      this.bindGlow(original, layer, signalled, width, height);
       this.bindPrint(original, layer, wrapped, total);
       for(const d of FINISH_PARAMETERS)u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=number(layer,d.key,d.default);
       u.uSaturation.value=number(layer,'saturation',1);u.uHue.value=number(layer,'hue',0);
@@ -1432,6 +1480,134 @@ export class StudioRenderer {
     }
     this.draw(this.tile, output);
     return output.texture;
+  }
+
+  /**
+   * Signal path: damages the finished layer like a worn broadcast after the tile pass and before Glow, so CRT light
+   * can glow. Each active stage runs in pass order, ping-ponging between two targets of its own, so it never enters
+   * the echo history, and is mixed with its input by that effect's amount. Sizes are in pixels of a 1080-line frame;
+   * per-frame randomness hashes the loop frame, so seeks and the loop seam repeat.
+   */
+  signalSource(original: Layer, layer: Layer, source: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
+    if (!signalActive(original)) return source;
+    const amount = (key: string) => Math.min(1, Math.max(0, number(layer, key, 0)));
+    const frames = Math.max(1, this.loopFrames), frame = loopFrame(phase, frames);
+    // Wrapped to 0..1000: a negative seed would make the shader's unsigned hash input undefined.
+    const seed = ((number(layer, 'seed', 0) % 1000) + 1000) % 1000;
+    let input = source, next = 0;
+    for (const stage of signalStages(original)) {
+      const program = { vhs: this.vhs, drop: this.drop, crt: this.crt, jpeg: this.jpegRowsInverse, databend: this.databend }[stage];
+      // A modulated amount can rest at zero, where there is nothing to do.
+      const mix = amount(`${stage}Amount`);
+      if (!program || mix <= 0) continue;
+      this.signalTargets ??= [target(), target()];
+      const output = this.signalTargets[next];
+      if (output.width !== width || output.height !== height) output.setSize(width, height);
+      setWrap(output, this.tiling);
+      if (stage === 'jpeg') {
+        this.jpegStage(layer, input, output, { width, height, seed, frame, frames, mix });
+        input = output.texture; next = 1 - next;
+        continue;
+      }
+      const u = program.uniforms;
+      u.uSource.value = input; (u.uSize.value as THREE.Vector2).set(width, height); u.uLines.value = 1080 / height;
+      u.uSeed.value = seed; u.uFrame.value = frame; u.uAmount.value = mix;
+      const within = (key: string, low: number, high: number, fallback: number) => Math.min(high, Math.max(low, number(layer, key, fallback)));
+      if (stage === 'databend') {
+        u.uPhase.value = phase; u.uFrames.value = frames;
+        u.uMode.value = Math.round(within('databendMode', 0, 4, 0)); u.uAxis.value = Math.round(within('databendAxis', 0, 2, 2));
+        u.uDistance.value = within('databendDistance', 1, 960, 120); u.uRepeats.value = Math.round(within('databendRepeats', 1, 8, 4));
+        u.uFeedback.value = within('databendFeedback', 0, .95, .55); u.uSplit.value = amount('databendSplit'); u.uDepth.value = amount('databendDepth');
+        // Whole cycles only, so the loop closes.
+        u.uCycles.value = Math.round(within('databendCycles', 0, 16, 1));
+      } else if (stage === 'vhs') {
+        u.uPhase.value = phase;
+        u.uTracking.value = amount('vhsTracking'); u.uBleed.value = amount('vhsBleed'); u.uNoise.value = amount('vhsNoise');
+        u.uHead.value = amount('vhsHeadSwitch'); u.uAge.value = amount('vhsAge');
+        // Whole passes only, so the loop closes.
+        u.uRoll.value = Math.max(0, Math.round(number(layer, 'vhsRoll', 0)));
+      } else if (stage === 'crt') {
+        u.uCurve.value = within('crtCurve', 0, .5, .15); u.uScanLines.value = within('crtLines', 120, 1080, 480);
+        u.uDepth.value = amount('crtLineDepth'); u.uCorners.value = amount('crtCorners');
+        u.uMask.value = Math.min(3, Math.max(0, Math.round(number(layer, 'crtMask', 1))));
+        u.uMaskSize.value = within('crtMaskSize', 1, 12, 5);
+        u.uBezel.value = Math.min(1, Math.max(0, Math.round(number(layer, 'crtBezel', 1))));
+        u.uBright.value = within('crtBrightness', .5, 3, 1.3);
+      } else {
+        u.uFrames.value = frames; u.uChance.value = amount('dropChance');
+        u.uBands.value = Math.min(20, Math.max(1, Math.round(number(layer, 'dropBands', 4))));
+        u.uFill.value = Math.min(2, Math.max(0, Math.round(number(layer, 'dropFill', 0))));
+        u.uBurst.value = Math.min(8, Math.max(1, Math.round(number(layer, 'dropBurst', 1))));
+      }
+      this.draw(program, output);
+      input = output.texture; next = 1 - next;
+    }
+    return input;
+  }
+
+  /**
+   * JPEG damage in four passes (see jpeg-blocks.ts): rows forward and columns forward with quantising into the grid,
+   * columns inverse into a grid-wide, frame-tall target, then rows inverse into this stage's output with broken blocks
+   * and the mix. Broken blocks change on `jpegGlitchSwaps` slots of the loop: the loop frame (nearest, with the closing
+   * frame mapped back to 0) picks its slot, so seeks repeat and the seam closes.
+   */
+  private jpegStage(layer: Layer, input: THREE.Texture, output: THREE.WebGLRenderTarget, at: { width: number; height: number; seed: number; frame: number; frames: number; mix: number }): void {
+    const { width, height } = at;
+    const within = (key: string, low: number, high: number, fallback: number) => Math.min(high, Math.max(low, number(layer, key, fallback)));
+    // Changes come in pairs: a closing loop cannot change exactly once.
+    const block = within('jpegBlock', 4, 64, 8), chroma = within('jpegChroma', 0, 1, .5), swaps = 2 * Math.round(within('jpegGlitchSwaps', 0, 32, 4) / 2);
+    const { cols, rows } = blockGrid(width, height, block), { n, nc } = jpegSamples(block, height);
+    // Brightness blocks n x n texels each from the left, then colour blocks (2x2 brightness blocks each) nc x nc each.
+    const chromaX = cols * n, gridW = chromaX + Math.ceil(cols / 2) * nc, gridH = Math.max(rows * n, Math.ceil(rows / 2) * nc);
+    // Grow to fit at once and note the need; shrinking waits for the next frame (see shrinkJpeg), so layers of
+    // different sizes in one frame share the targets without reallocating them.
+    const need = this.jpegNeed;
+    const fit = (rt: THREE.WebGLRenderTarget, w: number, h: number, i: number) => {
+      if (rt.width < w || rt.height < h) { rt.setSize(Math.max(rt.width, w), Math.max(rt.height, h)); this.jpegReallocations++; }
+      need[i] = [Math.max(need[i][0], w), Math.max(need[i][1], h)];
+      rt.viewport.set(0, 0, w, h);
+    };
+    // Two channels are enough: a brightness term, or two colour terms.
+    const pair = () => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, format: THREE.RGFormat, depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+    this.jpegTargets ??= { grid: [pair(), pair()], columns: pair() };
+    const [rowTerms, terms] = this.jpegTargets.grid, columns = this.jpegTargets.columns;
+    fit(rowTerms, gridW, gridH, 0); fit(terms, gridW, gridH, 1); fit(columns, gridW, height, 2);
+    for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) {
+      const u = program.uniforms;
+      u.uSource.value = input; (u.uSize.value as THREE.Vector2).set(width, height); u.uLines.value = 1080 / height;
+      u.uSeed.value = at.seed; u.uFrame.value = at.frame; u.uAmount.value = at.mix; u.uBlock.value = block; u.uChromaX.value = chromaX; u.uN.value = n; u.uNc.value = nc;
+    }
+    this.draw(this.jpegRows, rowTerms);
+    this.jpegColumns.uniforms.uGrid.value = rowTerms.texture;
+    jpegSteps(within('jpegQuality', 0, 1, .2), chroma, this.jpegStepTable);
+    this.draw(this.jpegColumns, terms);
+    this.jpegColumnsInverse.uniforms.uTerms.value = terms.texture;
+    this.draw(this.jpegColumnsInverse, columns);
+    const u = this.jpegRowsInverse.uniforms;
+    u.uTerms.value = terms.texture; u.uColumns.value = columns.texture; (u.uBlocks.value as THREE.Vector2).set(cols, rows);
+    u.uChroma.value = chroma; u.uGlitch.value = within('jpegGlitch', 0, 1, 0);
+    u.uSlot.value = swaps > 0 ? Math.floor(at.frame * swaps / at.frames) : 0;
+    this.draw(this.jpegRowsInverse, output);
+  }
+
+  /**
+   * At the start of a frame: a JPEG target more than twice what the last frame needed of it shrinks to that need.
+   * The new frame grows it again only if it needs more.
+   */
+  private shrinkJpeg(): void {
+    const targets = this.jpegTargets;
+    if (targets) [...targets.grid, targets.columns].forEach((rt, i) => {
+      const [w, h] = this.jpegNeed[i];
+      if (w > 0 && h > 0 && w * h < rt.width * rt.height / 2) { rt.setSize(w, h); this.jpegReallocations++; }
+    });
+    this.jpegNeed = [[0, 0], [0, 0], [0, 0]];
+  }
+
+  private releaseJpeg(): void {
+    if (this.jpegTargets) { for (const rt of [...this.jpegTargets.grid, this.jpegTargets.columns]) rt.dispose(); this.jpegTargets = null; }
+    for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) {
+      for (const key of ['uSource', 'uGrid', 'uTerms', 'uColumns']) if (program.uniforms[key]) program.uniforms[key].value = null;
+    }
   }
 
   /** A character set's glyphs as edge distances, one channel, built once and kept until the tile targets go. */
@@ -1847,6 +2023,11 @@ export class StudioRenderer {
       this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs();
       this.tile.uniforms.uSource.value = this.tile.uniforms.uCells.value = this.cellColour.uniforms.uSource.value = null;
     }
+    if (this.signalTargets && !project.layers.some(layer => layer.visible && signalActive(layer))) {
+      for (const output of this.signalTargets) output.dispose();
+      this.signalTargets = null; this.vhs.uniforms.uSource.value = this.drop.uniforms.uSource.value = this.crt.uniforms.uSource.value = this.databend.uniforms.uSource.value = null;
+      this.releaseJpeg();
+    }
   }
 
   /**
@@ -2007,6 +2188,10 @@ export class StudioRenderer {
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.warpTarget?.dispose(); this.warpTarget = null; this.warp.dispose();
     this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs(); this.tile.dispose(); this.cellColour.dispose();
+    for (const output of this.signalTargets ?? []) output.dispose();
+    this.signalTargets = null; this.vhs.dispose(); this.drop.dispose(); this.crt.dispose(); this.databend.dispose();
+    this.releaseJpeg();
+    for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) program.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();

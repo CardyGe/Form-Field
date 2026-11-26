@@ -123,6 +123,18 @@ Three effects in Finish → Add effect rebuild a layer from a grid of cells, eac
 
 All three can be stacked, and loops close exactly. Mosaic is the costly one: about 7 ms more per frame at 1080 on an Apple Silicon Mac, and 27 ms at 4K. Results are in [the tiles proof](docs/tiles-proof.md); check with `node scripts/verify-tiles.mjs --baseline=<older checkout>`.
 
+## Signal: VHS, Dropout, CRT, JPEG damage and Databend
+
+Five effects in Finish → Add effect → Signal damage a layer like a worn broadcast or a broken file. They work on every layer except Graphic Patterns, start off, and leave existing projects exactly as they were. They run after LED wall, Characters and Tiles and before Glow, always in this order: Databend, JPEG damage, VHS, Dropout, then CRT, so a CRT's highlights can glow. Sizes are in pixels of a 1080-line frame, so a 4K export matches the preview, and every flicker, tear and stutter repeats exactly across the loop and after a seek.
+
+- **VHS:** tracking wobble with rare torn rows, colour bleed, noise bands, head switching at the bottom edge, tape age (fade, warmth, grain) and a rolling bar a whole number of times per loop.
+- **Dropout:** bands of the picture drop to black, noise or a held line, with a chance per frame and a burst length.
+- **CRT:** curved glass, scan lines, a Stripes, Slots or Dots mask, dark corners, a transparent or black surround, and a brightness control that makes up for the light the lines and mask take.
+- **JPEG damage:** block compression with quality, block size, colour damage and broken blocks that change a set number of times per loop.
+- **Databend:** treats the picture as sound: Echo, Comb, Fold, Stutter or Corrupt, running Across, Down, or Wrap (off the end of one row onto the next), with the colour channels pulled apart by Channel split.
+
+All five together at their defaults add about 8 ms per frame at 1080 on an Apple Silicon Mac and 22 ms at 4K; VHS Colour bleed and small JPEG blocks are the costly settings at 4K. Results are in [the signal proof](docs/signal-proof.md); check with `node scripts/verify-signal-path.mjs --baseline=<older checkout>`.
+
 ## Time displacement
 
 Finish → Time displacement makes parts of the frame show the layer as it was some frames ago. This is the slit-scan look: stepped terraces, tears and block-shuffled time. It's available for every layer except Graphic Patterns and Ink *Evolving*.

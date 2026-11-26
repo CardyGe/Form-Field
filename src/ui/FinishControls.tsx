@@ -13,6 +13,7 @@ import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Parameter } from './LayerControls';
 import { LiquidSection, LumaWarpSection, MirrorSection, PolarSection, WarpSection } from './WarpSections';
 import { CharactersSection, LedSection, TilesSection } from './TileSections';
+import { CrtSection, DatabendSection, DropoutSection, JpegSection, VhsSection } from './SignalSections';
 import { ColourSplitSection, GradientMapSection, ColourBalanceSection, KeySection } from './ColourSections';
 
 const SLIT_MODE_HELP = ['Each part of the frame lags by its own delay, set by the delay map.', 'Every slice is layered on top, the newest strongest, so motion leaves fading echoes.', 'Median keeps the middle value of the slices, so moving things drop out and still things stay.', 'Keeps the darkest value of the slices, so dark shapes leave trails.', 'Keeps the brightest value of the slices, so bright shapes leave trails.'];
@@ -164,6 +165,11 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
       case 'chars': return <CharactersSection {...sectionProps} />;
       case 'tiles': return <TilesSection {...sectionProps} />;
       case 'print': return <PrintScreenSection {...sectionProps} />;
+      case 'vhs': return <VhsSection {...sectionProps} />;
+      case 'drop': return <DropoutSection {...sectionProps} />;
+      case 'crt': return <CrtSection {...sectionProps} />;
+      case 'jpeg': return <JpegSection {...sectionProps} />;
+      case 'databend': return <DatabendSection {...sectionProps} />;
       case 'glow': return <>{definitions.filter(d => GLOW_KEYS.includes(d.key) && (d.key === 'glowMix' || (p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((d.key !== 'glowStreakAngle' && d.key !== 'glowStreakShape') || (p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && d.key !== 'glowStreakShape').map(d => row(d, true))}
         {((p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && choice('Streak shape', ['Line', 'Cross'], 'glowStreakShape')}</>;
       case 'flat': return definitions.filter(d => TOON_KEYS.includes(d.key) && (d.key === 'toonMix' || (p.toonMix ?? 0) > 0) && (d.key !== 'toonOutlineColor' || (p.toonOutline ?? 0) > 0)).map(d => row(d, true));

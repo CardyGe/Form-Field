@@ -1147,6 +1147,46 @@ try {
     await studio.locator('.map-effect-parts').getByRole('button', { name: 'Settings', exact: true }).click();
   });
 
+  await check('Signal finishes in the Effect tab: every choice, slider and number box is disabled while the shape is locked', async () => {
+    await clearStage();
+    await tool('Rectangle'); await dragOn([.2, .2], [.6, .6]);
+    await tool('Select');
+    await playLook(studio, 'preset:porcelain-shutters');
+    await openSection(studio, 'effect');
+    const settings = studio.locator('.map-effect-settings');
+    await studio.locator('.map-effect-parts').getByRole('button', { name: 'Finish', exact: true }).click();
+    await settings.getByRole('button', { name: 'Add effect', exact: true }).click();
+    await settings.getByRole('group', { name: 'Effect groups', exact: true }).getByRole('button', { name: 'Signal', exact: true }).click();
+    const names = ['VHS', 'Dropout', 'CRT', 'JPEG damage', 'Databend'];
+    for (const name of names) assert.equal(await settings.getByRole('button', { name: `Add ${name}`, exact: true }).count() + await settings.getByRole('button', { name: `Open ${name}`, exact: true }).count(), 1, `Add effect has no "${name}"`);
+    // Added once each; the list keeps them while the shape is locked.
+    for (const name of names) {
+      const add = settings.getByRole('button', { name: `Add ${name}`, exact: true });
+      if (!await add.count()) await settings.getByRole('button', { name: 'Add effect', exact: true }).click();
+      if (await settings.getByRole('button', { name: `Add ${name}`, exact: true }).count()) await settings.getByRole('button', { name: `Add ${name}`, exact: true }).click();
+      await settings.getByRole('button', { name: 'All finishes', exact: true }).click();
+    }
+    await studio.getByRole('button', { name: 'Lock Shape 1' }).click();
+    // Every control each effect shows at its defaults once added: sliders (each with its number box) and choices.
+    // The counts keep the check from passing on an empty panel, for effects with no choices too.
+    const least = { VHS: [7, 0], Dropout: [4, 1], CRT: [7, 2], 'JPEG damage': [5, 0], Databend: [5, 2] };
+    for (const name of names) {
+      await settings.getByRole('button', { name: `${name} settings`, exact: true }).click();
+      const [sliders, choices] = least[name];
+      const selects = settings.locator('select'), ranges = settings.locator('input[type="range"]'), numbers = settings.locator('input[type="number"]');
+      assert.ok(await selects.count() >= choices, `${name} shows its ${choices} choices (found ${await selects.count()})`);
+      assert.ok(await ranges.count() >= sliders, `${name} shows its ${sliders} sliders (found ${await ranges.count()})`);
+      assert.ok(await numbers.count() >= sliders, `${name} shows a number box for each of its ${sliders} sliders (found ${await numbers.count()})`);
+      for (const [what, list] of [['choice', selects], ['slider', ranges], ['number box', numbers]]) {
+        const open = await list.evaluateAll(all => all.filter(e => !(e.disabled || !!e.closest('fieldset:disabled'))).map(e => e.getAttribute('aria-label') || e.tagName));
+        assert.deepEqual(open, [], `${name} has a ${what} that is not disabled while locked: ${open.join(', ')}`);
+      }
+      await settings.getByRole('button', { name: 'All finishes', exact: true }).click();
+    }
+    await studio.getByRole('button', { name: 'Unlock Shape 1' }).click();
+    await studio.locator('.map-effect-parts').getByRole('button', { name: 'Settings', exact: true }).click();
+  });
+
   await check('Escape in the output window closes it', async () => {
     const closed = output.waitForEvent('close', { timeout: 10000 });
     // The operator would click the projector window; here the window is focused directly.
