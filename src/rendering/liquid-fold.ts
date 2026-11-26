@@ -28,7 +28,7 @@ float foldCoordinate(vec2 world) {
   float nearSide = .5 + .5*tanh(clamp((p.x + .08)*2.1, -8., 8.));
   // The loose side turns back into the carrier without a second hard edge.
   float looseSide = 1. - smoothstep(.05, .88, nearSide);
-  float width = .006 + .25*looseSide + .07*uSoftness*uSoftness;
+  float width = .014 + .29*looseSide + .095*uSoftness*uSoftness;
   // The tails are saturated here. Bound the argument so implementations
   // that lower tanh to exponentials cannot produce NaNs far from the rim.
   float edge = (radius - 1.)/max(width, .65*fwidth(radius));
@@ -53,9 +53,14 @@ vec3 liquidFold(vec2 world) {
   float footprint = fwidth(phase);
   vec3 colour = foldPalette(phase);
   if (footprint < .02) return colour;
-  float spread = min(footprint, 1.)*.33;
-  vec3 filtered = (foldPalette(phase - spread) + colour + foldPalette(phase + spread))/3.;
-  vec3 average = (uPalette[0]+uPalette[1]+uPalette[2]+uPalette[3]+uPalette[4]+uPalette[5])/6.;
-  return mix(filtered, average, smoothstep(.55, 1.1, footprint));
+  // Average across the pixel where the near-side turn compresses the bands.
+  // Cross into filtering smoothly so the rim stays stable when dragged.
+  float spread = min(footprint, 1.)*.2;
+  vec3 filtered = (foldPalette(phase - 2.*spread) + foldPalette(phase - spread) + colour
+    + foldPalette(phase + spread) + foldPalette(phase + 2.*spread))*.2;
+  // The wash and return occupy unequal shares of one period.
+  vec3 average = .126*uPalette[0] + .139*uPalette[1] + .2585*uPalette[2]
+    + .24*uPalette[3] + .1315*uPalette[4] + .105*uPalette[5];
+  return mix(mix(colour, filtered, smoothstep(.02, .075, footprint)), average, smoothstep(.55, 1.1, footprint));
 }
 `;

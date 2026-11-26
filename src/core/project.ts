@@ -1,7 +1,7 @@
 import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS, PRINT_KEYS, LED_KEYS, CHAR_KEYS, TILE_KEYS, VHS_KEYS, DROP_KEYS, CRT_KEYS, JPEG_KEYS, DATABEND_KEYS, SPLIT_KEYS, GRADIENT_KEYS, GRADE_KEYS, KEY_KEYS, WARP_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, POLAR_KEYS, MIRROR_KEYS} from './finishing';
 import { isSimplePolygon } from './surface-layout';
 import { TIMING_PARAMETERS, TIMING_KEYS } from './timing';
-import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW, LASER_GARDEN, ULTRAVIOLET, VAPOR, SUNSET_RAVE, DEEP_REEF, MOLTEN, PRISM, TOXIC, AURORA, BUBBLEGUM, ICE_FIRE, PSYCH_70S, ELECTRIC_LIME, BLOOD_ORANGE, MINT_MAGENTA, CRIMSON_TEAL } from './palettes';
+import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW, LASER_GARDEN, ULTRAVIOLET, VAPOR, SUNSET_RAVE, DEEP_REEF, MOLTEN, PRISM, TOXIC, AURORA, BUBBLEGUM, ICE_FIRE, PSYCH_70S, ELECTRIC_LIME, BLOOD_ORANGE, MINT_MAGENTA, CRIMSON_TEAL, FOLD_PALETTES } from './palettes';
 import { kaleidoscopeInput, supportsFeedback } from '../rendering/feedback';
 import { supportsSlitScan } from '../rendering/slitscan';
 import { supportsGlow } from '../rendering/bloom';
@@ -756,7 +756,7 @@ PRESETS.push(
   preset('recursion-tunnel', 'Recursion Tunnel', 'Flat neon frames nest inside each other and turn into the distance.', 'surface', NEON_STRATA, { style: 0, variant: 0, scale: 3.2, warp: 0.55, detail: 0.35, roundness: 0.7, relief: 0, softness: 0, contrast: 0.7, offset: 0.2, reveal: 0, toonMix: 1, toonBands: 6, toonOutline: 3, echo: 0.95, echoZoom: 0.9, echoRotate: 1.5, echoHue: 6, echoFrame: 0.62, echoBlend: 1 }),
   preset('time-terraces', 'Time Terraces', 'Neon strata cut into horizontal terraces, each a moment further in the past.', 'surface', NEON_STRATA, { style: 0, variant: 0, scale: 3.2, warp: 0.55, detail: 0.35, roundness: 0.7, relief: 0, softness: 0, contrast: 0.7, offset: 0.2, reveal: 0, toonMix: 1, toonBands: 6, toonOutline: 3, cycles: 4, slitShift: 1, slitSpan: 60, slitShape: 0, slitSlices: 9 }),
   preset('offset-fold', 'Offset Fold', 'Coral and magenta bands fold around a tilted opening.', 'surface',
-    ['#3f0020', '#ed7369', '#ef8ce7', '#390023', '#f07868', '#ee86df'],
+    FOLD_PALETTES[0].colors,
     { style: SURFACE_FOLD, cycles: 4, softness: .1, contrast: .35 }),
 );
 
