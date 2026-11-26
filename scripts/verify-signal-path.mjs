@@ -65,8 +65,8 @@ const CHECKS = [
   },
   {
     name: 'vhs-tracking',
-    // Tracking wobble alone. Each output row must be the plain row moved sideways (to the nearest whole pixel, with the
-    // edge pixel repeating where the row runs out), within 2/255, and rows must not all move alike.
+    // Tracking wobble alone. Rows move by whole output pixels, so each output row must be the plain row moved sideways
+    // (the edge pixel repeating where the row runs out), within 2/255, and rows must not all move alike.
     run: async ({ page }) => {
       const r = await page.evaluate(async alone => {
         const q = window.sq, W = 960, H = 540;
@@ -180,9 +180,7 @@ const CHECKS = [
   {
     name: 'vhs-alpha',
     // A soft-edged layer with every VHS control up: wherever the transparent export has no coverage, the export over
-    // black must be exactly black, at three frames. Inside coverage the noise and tears must show. Rows move by
-    // fractions of a pixel, so a pixel beside coverage can hold alpha too small for a byte while its light still
-    // shows over black; no coverage therefore means no alpha in the pixel and its two neighbours along the row.
+    // black must be exactly black, at three frames. Inside coverage the noise and tears must show.
     run: async ({ page }) => {
       const r = await page.evaluate(async () => {
         const q = window.sq, rough = { vhsAmount: 1, vhsTracking: .8, vhsBleed: 1, vhsNoise: 1, vhsHeadSwitch: 1, vhsAge: 1, vhsRoll: 2 };
@@ -191,8 +189,7 @@ const CHECKS = [
           const alpha = await q.px(q.exact(q.project([q.soft(rough)], true)), phase), over = await q.px(q.exact(q.project([q.soft(rough)])), phase);
           const plain = await q.px(q.exact(q.project([q.soft()])), phase);
           for (let i = 0; i < alpha.length; i += 4) {
-            const x = (i / 4) % 960, clear = alpha[i + 3] === 0 && (x === 0 || alpha[i - 1] === 0) && (x === 959 || alpha[i + 7] === 0);
-            if (clear) { empty++; if (over[i] || over[i + 1] || over[i + 2]) leaks++; }
+            if (alpha[i + 3] === 0) { empty++; if (over[i] || over[i + 1] || over[i + 2]) leaks++; }
             else if (alpha[i + 3] > 0 && Math.abs(over[i] - plain[i]) + Math.abs(over[i + 1] - plain[i + 1]) + Math.abs(over[i + 2] - plain[i + 2]) > 24) inside++;
           }
         }
@@ -320,6 +317,33 @@ const CHECKS = [
       });
       const ok = rows.every(r => r.mean < 3 && r.change > 1);
       return { ok, detail: `${rows.some(r => r.change <= 1) ? NO_VHS : ''}${rows.map(r => `${r.name}: ${r.mean.toFixed(3)} (moved ${r.change.toFixed(2)})`).join(', ')} (limit 3/255)` };
+    },
+  },
+  {
+    name: 'signal-cost',
+    // Report only: GPU time of a 1920x1080 and a 3840x2160 frame with VHS (Colour bleed 0, .5 and 1) and Dropout Hold line, against plain.
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        // Reading a pixel back waits for the GPU to finish every queued draw.
+        const q = window.sq, gl = q.renderer.renderer.getContext(), rows = [], one = new Uint8Array(4);
+        const sync = () => { q.renderer.renderer.setRenderTarget(null); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one); };
+        for (const [name, params] of [['plain', {}], ['VHS bleed 0', { vhsAmount: 1, vhsBleed: 0 }], ['VHS bleed .5 (default)', { vhsAmount: 1 }], ['VHS bleed 1', { vhsAmount: 1, vhsBleed: 1 }], ['Dropout Hold line, 20 bands, burst 8', { dropAmount: 1, dropChance: .5, dropFill: 2, dropBands: 20, dropBurst: 8 }]]) {
+          const p = q.project([q.smooth(params)]);
+          await q.renderer.prepare(p);
+          const ms = [];
+          for (const [W, H] of [[1920, 1080], [3840, 2160]]) {
+            for (let i = 0; i < 3; i++) q.renderer.render(p, .9, W, H);
+            sync();
+            const start = performance.now();
+            for (let i = 0; i < 10; i++) q.renderer.render(p, .9 + i * .01, W, H);
+            sync();
+            ms.push((performance.now() - start) / 10);
+          }
+          rows.push({ name, ms });
+        }
+        return rows;
+      });
+      return { ok: true, detail: `report only, ms per frame at 1080p / 4K: ${rows.map(r => `${r.name} ${r.ms.map(v => v.toFixed(1)).join(' / ')}`).join(', ')}` };
     },
   },
   {

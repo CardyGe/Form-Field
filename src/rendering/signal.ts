@@ -118,7 +118,8 @@ float grainColumn() { return floor(gl_FragCoord.x * uLines * .5); }
 /**
  * VHS: worn videotape, in linear light. Rows wobble and now and then tear sideways, the colour part of a broadcast
  * split smears along the row while brightness stays sharp, noisy bands drift through, the bottom edge tears where the
- * heads switch, a rolling bar crosses `uRoll` whole times per loop, and tape age fades, cools the colour and warms it.
+ * heads switch, a rolling bar crosses `uRoll` whole times per loop, and tape age desaturates, warms and fades the picture.
+ * Rows move by whole output pixels, so a moved row is the plain row exactly, with its alpha.
  * Moved rows carry their alpha, and every added light is scaled by coverage, so nothing appears where the layer is
  * empty. Light is never clamped above; only negative values from the colour split are cut.
  */
@@ -134,8 +135,8 @@ void main() {
   vec4 plain = texture2D(uSource, vUv);
   float row = tapeLine(), k = 1. / uLines, frame = floor(uFrame + .5), shift = 0.;
   if (uTracking > 0.) shift += (rnd(row, frame, 0., 1u) - .5) * 80. * uTracking * k;
-  // Rare rows tear up to 40% of the frame width; worn tape tears more.
-  if (rnd(row, frame, 0., 2u) < .04 * uTracking * uTracking + .02 * uAge) shift += (rnd(row, frame, 0., 3u) - .5) * .8 * uSize.x;
+  // Rare rows tear up to 40% of the frame width.
+  if (rnd(row, frame, 0., 2u) < .04 * uTracking * uTracking) shift += (rnd(row, frame, 0., 3u) - .5) * .8 * uSize.x;
   // Head switching: the bottom 8% times the amount, pulled further sideways toward the bottom.
   float strip = 540. * .08 * uHead, headTop = 540. - strip;
   bool head = uHead > 0. && row >= headTop;
@@ -148,15 +149,18 @@ void main() {
     bar = abs(d) < .06 ? .5 + .5 * cos(3.14159265 * d / .06) : 0.;
     shift += bar * (rnd(row, frame, 0., 6u) - .5) * 12. * k;
   }
-  float x = gl_FragCoord.x - shift;
+  float x = gl_FragCoord.x - floor(shift + .5);
   vec4 c = along(x);
   vec3 rgb = c.rgb;
   if (uBleed > 0.) {
-    // Colour per unit of coverage, blurred along the row, then laid back on this pixel's own coverage.
+    // Colour per unit of coverage, blurred along the row, then laid back on this pixel's own coverage. Taps sit at
+    // most 2 output pixels apart (at least 32 of them), so a 4K export samples the same triangle as finely as 1080p.
     float radius = 60. * uBleed * k, total = 0., cover = 0.;
+    int taps = int(clamp(ceil(radius), 32., 128.));
     vec2 split = vec2(0.);
-    for (int i = 0; i < 32; i++) {
-      float o = (float(i) + .5) / 16. - 1., w = 1. - abs(o);
+    for (int i = 0; i < 128; i++) {
+      if (i >= taps) break;
+      float o = (float(i) + .5) / float(taps) * 2. - 1., w = 1. - abs(o);
       vec4 s = along(x + o * radius);
       split += w * chroma(s.rgb); cover += w * s.a; total += w;
     }
@@ -201,7 +205,8 @@ bool dropped(float band) {
   int frames = max(1, int(uFrames + .5)), frame = int(uFrame + .5);
   for (int k = 0; k < 8; k++) {
     if (float(k) >= uBurst) break;
-    int start = ((frame - k) % frames + frames) % frames;
+    // Both operands stay non-negative: % of a negative int is undefined in GLSL ES 3.00. frame < frames and k < 8.
+    int start = (frame - k + 8 * frames) % frames;
     if (rnd(float(start), 0., 0., 20u) < uChance && dropsBand(start, band)) return true;
   }
   return false;
