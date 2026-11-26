@@ -318,7 +318,7 @@ export class StudioRenderer {
   });
   private readonly crt = material(crtFragment, {
     uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 },
-    uCurve: { value: .15 }, uScanLines: { value: 480 }, uDepth: { value: .5 }, uMask: { value: 1 }, uMaskSize: { value: 3 }, uCorners: { value: .4 }, uBezel: { value: 1 }, uBright: { value: 1.3 },
+    uCurve: { value: .15 }, uScanLines: { value: 480 }, uDepth: { value: .5 }, uMask: { value: 1 }, uMaskSize: { value: 5 }, uCorners: { value: .4 }, uBezel: { value: 1 }, uBright: { value: 1.3 },
   });
   /** This frame's loop length in frames, so per-frame randomness repeats on seeks and across the loop seam. */
   private loopFrames = 300;
@@ -1489,7 +1489,7 @@ export class StudioRenderer {
         u.uCurve.value = within('crtCurve', 0, .5, .15); u.uScanLines.value = within('crtLines', 120, 1080, 480);
         u.uDepth.value = amount('crtLineDepth'); u.uCorners.value = amount('crtCorners');
         u.uMask.value = Math.min(3, Math.max(0, Math.round(number(layer, 'crtMask', 1))));
-        u.uMaskSize.value = within('crtMaskSize', 1, 12, 3);
+        u.uMaskSize.value = within('crtMaskSize', 1, 12, 5);
         u.uBezel.value = Math.min(1, Math.max(0, Math.round(number(layer, 'crtBezel', 1))));
         u.uBright.value = within('crtBrightness', .5, 3, 1.3);
       } else {

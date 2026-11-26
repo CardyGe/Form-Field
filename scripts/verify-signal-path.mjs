@@ -470,14 +470,16 @@ const CHECKS = [
   },
   {
     name: 'crt-mask-default',
-    // Stripes at every other CRT default (Mask size 3, brightness 1.3, 480 lines at depth .5) on a white field, read back
-    // in float from the CRT stage at 1920x1080 and 3840x2160, so display clipping cannot hide the mask. Along a row at a
-    // line's middle and a row at a gap between lines, at least 25% of columns each have red, green or blue at least 1.5
-    // times each other channel, at both sizes: the mask holds at every light level.
+    // Stripes at every other CRT default (Mask size 5, brightness 1.3, 480 lines at depth .5) on a white field, read back
+    // in float from the CRT stage at 960x540 (the preview, a cell of 2.5 pixels), 1920x1080 and 3840x2160, so display
+    // clipping cannot hide the mask. Along a row at a line's middle and a row at a gap between lines, at least 15% of
+    // columns each have red, green or blue at least 1.4 times each other channel, at all sizes: at least one clear
+    // single-colour pixel per colour in every 5- or 2.5-pixel cell (the pixels between are two-colour mixes), at every
+    // light level. At 960 the scan lines average flat, so both rows are the same.
     run: async ({ page }) => {
       const r = await page.evaluate(async () => {
         const q = window.sq, out = [];
-        for (const [W, H] of [[1920, 1080], [3840, 2160]]) {
+        for (const [W, H] of [[960, 540], [1920, 1080], [3840, 2160]]) {
           const f = await q.floatFrame(q.project([q.white({ crtAmount: 1, crtCurve: 0, crtCorners: 0 })]), W, H);
           // Row means, to find a line's middle (the brightest row) and a gap (the darkest) near the frame's middle.
           let bright = -1, dark = -1, most = -Infinity, least = Infinity;
@@ -486,15 +488,15 @@ const CHECKS = [
             const share = [0, 0, 0];
             for (let x = 0; x < W; x++) {
               const i = (y * W + x) * 4, c = [f[i], f[i + 1], f[i + 2]];
-              for (let k = 0; k < 3; k++) if (c[k] >= 1.5 * c[(k + 1) % 3] && c[k] >= 1.5 * c[(k + 2) % 3]) share[k]++;
+              for (let k = 0; k < 3; k++) if (c[k] >= 1.4 * c[(k + 1) % 3] && c[k] >= 1.4 * c[(k + 2) % 3]) share[k]++;
             }
             out.push({ size: W, row: y === bright ? 'line' : 'gap', share: share.map(v => v / W) });
           }
         }
         return out;
       });
-      const ok = r.every(row => row.share.every(v => v >= .25));
-      return { ok, detail: r.map(row => `${row.size} ${row.row}: R/G/B ${row.share.map(v => `${(v * 100).toFixed(1)}%`).join('/')}`).join('; ') + ' (each at least 25%, dominant at least 1.5x)' };
+      const ok = r.every(row => row.share.every(v => v >= .15));
+      return { ok, detail: r.map(row => `${row.size} ${row.row}: R/G/B ${row.share.map(v => `${(v * 100).toFixed(1)}%`).join('/')}`).join('; ') + ' (each at least 15%, dominant at least 1.4x)' };
     },
   },
   {
@@ -566,14 +568,14 @@ const CHECKS = [
   },
   {
     name: 'crt-scale',
-    // The same settings for a 960 preview and a 3840 export, the export averaged down 4x4 in linear light. Mask size 6
-    // keeps a mask cell at 3 preview pixels: finer masks fade flat on the preview by design (crt-mask-fine), where an
-    // export averaged down would alias them instead.
+    // The same settings for a 960 preview and a 3840 export, the export averaged down 4x4 in linear light. Every mask
+    // cell here is at least 2.5 preview pixels (the default Mask size 5, or 6): finer masks fade flat on the preview by
+    // design (crt-mask-fine), where an export averaged down would alias them instead.
     run: async ({ page }) => {
       const rows = await page.evaluate(async rough => {
         const q = window.sq, rows = [];
         const plain = await q.px(q.exact(q.project([q.smooth()])));
-        for (const [name, params] of [['CRT defaults, Mask size 6', { crtAmount: 1, crtMaskSize: 6 }], ['CRT rough', rough], ['CRT Dots, Mask size 6', { crtAmount: 1, crtMask: 3, crtMaskSize: 6 }]]) {
+        for (const [name, params] of [['CRT defaults', { crtAmount: 1 }], ['CRT rough', rough], ['CRT Dots', { crtAmount: 1, crtMask: 3 }]]) {
           const p = q.exact(q.project([q.smooth(params)]));
           const small = await q.px(p, .9, 960, 540), big = await q.px(p, .9, 3840, 2160);
           rows.push({ name, mean: q.difference(small, q.linearDown(big, 960, 540, 4)), change: q.difference(small, plain) });

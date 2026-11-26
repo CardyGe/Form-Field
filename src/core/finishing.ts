@@ -296,7 +296,7 @@ export const CRT_PARAMETERS:ParameterDefinition[]=[
  {key:'crtLines',label:'Scan lines',min:120,max:1080,step:1,default:480,section:'Shape',description:'How many scan lines the screen has.'},
  {key:'crtLineDepth',label:'Scan line depth',min:0,max:1,step:0.01,default:0.5,section:'Material',description:'How dark the gaps between scan lines are.'},
  {key:'crtMask',label:'Screen mask',min:0,max:3,step:1,default:1,section:'Shape',description:'None, Stripes, Slots or Dots.'},
- {key:'crtMaskSize',label:'Mask size',min:1,max:12,step:0.25,default:3,section:'Shape',description:'Size of one mask cell, in pixels at 1080 lines.'},
+ {key:'crtMaskSize',label:'Mask size',min:1,max:12,step:0.25,default:5,section:'Shape',description:'Size of one mask cell, in pixels at 1080 lines.'},
  {key:'crtCorners',label:'Dark corners',min:0,max:1,step:0.01,default:0.4,section:'Material',description:'How much the corners of the screen darken.'},
  {key:'crtBezel',label:'Outside the screen',min:0,max:1,step:1,default:1,section:'Material',description:'What shows beyond the curved glass: transparent or black.'},
  {key:'crtBrightness',label:'CRT brightness',min:0.5,max:3,step:0.01,default:1.3,section:'Material',description:'Makes up for the light the lines and mask take away.'},
