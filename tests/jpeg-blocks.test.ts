@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { blockGrid, dct8, idct8, jpegSamples, quantStep } from '../src/rendering/jpeg-blocks';
+import { blockGrid, dct8, idct8, jpegSamples, jpegSteps, quantStep } from '../src/rendering/jpeg-blocks';
 
 test('the 8-point transform round-trips', () => {
   const row = [0, .1, .5, .9, 1, .3, .2, .7];
@@ -40,4 +40,20 @@ test('a block under 8 output pixels takes one sample per output pixel, so the gr
   assert.deepEqual(jpegSamples(4, 2160), { n: 8, nc: 8 });
   assert.deepEqual(jpegSamples(4, 270), { n: 1, nc: 2 });
   assert.deepEqual(jpegSamples(7, 540), { n: 4, nc: 7 });
+});
+
+test('colour damage coarsens colour steps up to 8 times, never the first (DC) term or brightness', () => {
+  const plain = jpegSteps(.4, 0), full = jpegSteps(.4, 1), half = jpegSteps(.4, .5);
+  for (let i = 0; i < 64; i++) assert.equal(full[i], plain[i], `brightness ${i}`);
+  assert.equal(full[64], plain[64], 'colour first term unscaled');
+  assert.equal(full[64], quantStep(0, .4, true));
+  for (let i = 1; i < 64; i++) {
+    assert.ok(Math.abs(full[64 + i] / plain[64 + i] - 8) < 1e-9, `colour ${i} at 1`);
+    assert.ok(Math.abs(half[64 + i] / plain[64 + i] - 2 ** 1.5) < 1e-9, `colour ${i} at .5`);
+  }
+});
+test('step tables can be filled in place', () => {
+  const table = new Float32Array(128), back = jpegSteps(.3, .7, table);
+  assert.equal(back, table);
+  assert.ok(table.every(v => v > 0));
 });

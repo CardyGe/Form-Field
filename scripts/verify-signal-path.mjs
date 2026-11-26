@@ -16,6 +16,8 @@ import { _electron as electron } from 'playwright';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const option = name => process.argv.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const baseline = option('baseline');
+// --current=<checkout> builds the "current" side from another checkout, so --baseline can be compared with itself (all-presets only).
+const current = option('current');
 const only = option('only')?.split(',').map(s => s.trim()).filter(Boolean);
 const out = path.join(root, 'work/signal-path');
 // Presets allowed to render under .5% lit. None today; add one only with the reason beside it.
@@ -72,8 +74,8 @@ const ALL_FIVE = { vhsAmount: 1, dropAmount: 1, crtAmount: 1, jpegAmount: 1, dat
 const COST_CASES = [
   ['Plain', {}],
   ['VHS (defaults)', { vhsAmount: 1 }], ['VHS Colour bleed 1', { vhsAmount: 1, vhsBleed: 1 }],
-  ['Dropout (defaults)', { dropAmount: 1 }],
-  ['CRT (defaults)', { crtAmount: 1 }],
+  ['Dropout (defaults)', { dropAmount: 1 }], ['Dropout Hold line, 20 bands, burst 8', { dropAmount: 1, dropFill: 2, dropBands: 20, dropBurst: 8 }],
+  ['CRT (defaults)', { crtAmount: 1 }], ['CRT Dots, 1080 lines, curve .5', { crtAmount: 1, crtMask: 3, crtLines: 1080, crtCurve: .5 }],
   ['JPEG damage (defaults)', { jpegAmount: 1 }], ['JPEG damage Block 4', { jpegAmount: 1, jpegBlock: 4 }],
   ['Databend Echo (defaults)', { databendAmount: 1 }], ['Databend Echo Repeats 8 Split 1', { databendAmount: 1, databendRepeats: 8, databendSplit: 1 }],
   ['All five (defaults)', ALL_FIVE],
@@ -1443,7 +1445,7 @@ export {encodePNG} from './src/rendering/png';${extra}`, resolveDir: dir, loader
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', outfile: path.join(out, file),
   nodePaths: [path.join(root, 'node_modules')], logLevel: 'silent',
 });
-await bundle(root, 'renderer.js', `\nexport {crtCurve} from './src/rendering/signal';\nexport * as THREE from 'three';\nexport {applyFinish,validateProject,parameterDefinitions} from './src/core/project';\nexport {VHS_KEYS,DROP_KEYS,CRT_KEYS,JPEG_KEYS,DATABEND_KEYS} from './src/core/finishing';`);
+await bundle(current ? path.resolve(current) : root, 'renderer.js', current ? `\nexport * as THREE from 'three';\nexport {applyFinish,validateProject} from './src/core/project';` : `\nexport {crtCurve} from './src/rendering/signal';\nexport * as THREE from 'three';\nexport {applyFinish,validateProject,parameterDefinitions} from './src/core/project';\nexport {VHS_KEYS,DROP_KEYS,CRT_KEYS,JPEG_KEYS,DATABEND_KEYS} from './src/core/finishing';`);
 if (baseline) await bundle(path.resolve(baseline), 'baseline.js', `\nexport {applyFinish,validateProject} from './src/core/project';`);
 await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><meta charset="utf-8"><canvas id="a" width="960" height="540"></canvas><canvas id="b" width="960" height="540"></canvas>');
 await fs.writeFile(path.join(out, 'main.cjs'), `const {app,BrowserWindow}=require('electron');

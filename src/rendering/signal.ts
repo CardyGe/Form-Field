@@ -114,7 +114,7 @@ uvec3 pcg(uvec3 v) {
 // 0..1 for whole numbers a, b and c, under this layer's seed.
 float rnd(float a, float b, float c, uint salt) {
   uvec3 h = pcg(uvec3(uint(a), uint(b) + uint(c) * 4099u, uint(uSeed * 64.) * 64u + salt));
-  return float(h.x) / 4294967296.;
+  return float(h.x >> 8u) / 16777216.;
 }
 // Distance from the frame's top in output pixels, the tape line (0..539) and the grain column.
 float fromTop() { return uSize.y - gl_FragCoord.y; }

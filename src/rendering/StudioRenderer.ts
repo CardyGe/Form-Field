@@ -342,7 +342,8 @@ export class StudioRenderer {
   /** The largest size each JPEG target (grid, grid, columns) was asked for this frame. */
   private jpegNeed: [number, number][] = [[0, 0], [0, 0], [0, 0]];
   private readonly jpegRows = material(jpegFragments.rowsForward, jpegUniforms());
-  private readonly jpegColumns = material(jpegFragments.columnsForward, { ...jpegUniforms(), uGrid: { value: null }, uSteps: { value: new Array(128).fill(1) } });
+  private readonly jpegStepTable = new Float32Array(128).fill(1);
+  private readonly jpegColumns = material(jpegFragments.columnsForward, { ...jpegUniforms(), uGrid: { value: null }, uSteps: { value: this.jpegStepTable } });
   private readonly jpegColumnsInverse = material(jpegFragments.columnsInverse, { ...jpegUniforms(), uTerms: { value: null } });
   private readonly jpegRowsInverse = material(jpegFragments.rowsInverse, {
     ...jpegUniforms(), uTerms: { value: null }, uColumns: { value: null }, uBlocks: { value: new THREE.Vector2(1, 1) }, uChroma: { value: .5 }, uGlitch: { value: 0 }, uSlot: { value: 0 },
@@ -1578,7 +1579,7 @@ export class StudioRenderer {
     }
     this.draw(this.jpegRows, rowTerms);
     this.jpegColumns.uniforms.uGrid.value = rowTerms.texture;
-    this.jpegColumns.uniforms.uSteps.value = jpegSteps(within('jpegQuality', 0, 1, .2), chroma);
+    jpegSteps(within('jpegQuality', 0, 1, .2), chroma, this.jpegStepTable);
     this.draw(this.jpegColumns, terms);
     this.jpegColumnsInverse.uniforms.uTerms.value = terms.texture;
     this.draw(this.jpegColumnsInverse, columns);

@@ -13,6 +13,9 @@ const CHOICES: Record<string, string[]> = {
   databendAxis: DATABEND_AXES,
 };
 
+/** Only continuous controls can be animated: whole counts (step 1 or more, such as Block changes per loop) must stay whole to close the loop. */
+export const signalAnimatable = (d: { step: number }) => d.step < 1;
+
 function Section({ keys, layer, definitions, edit, animate, onStart, onEnd, extra, readOnly, children }: WarpSectionProps & { keys: string[]; children?: ReactNode }) {
   const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
   return <>
@@ -21,7 +24,7 @@ function Section({ keys, layer, definitions, edit, animate, onStart, onEnd, extr
       if (!d) return null;
       const value = layer.params[key] ?? d.default, options = CHOICES[key];
       if (options) return <ChoiceParameter key={key} label={d.label} name={d.label} options={options} value={value} disabled={readOnly?.(d) ?? false} onChange={n => set(key, n)} />;
-      return <Parameter key={key} definition={d} value={value} animated={!!layer.modulations[key]} readOnly={readOnly?.(d) ?? false} onChange={n => set(key, n)} onAnimate={animate && d.step !== 1 ? () => animate(key) : undefined} extra={extra?.(d)} onStart={onStart} onEnd={onEnd} />;
+      return <Parameter key={key} definition={d} value={value} animated={!!layer.modulations[key]} readOnly={readOnly?.(d) ?? false} onChange={n => set(key, n)} onAnimate={animate && signalAnimatable(d) ? () => animate(key) : undefined} extra={extra?.(d)} onStart={onStart} onEnd={onEnd} />;
     })}
     {children}
   </>;

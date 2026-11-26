@@ -49,11 +49,10 @@ export function blockGrid(width: number, height: number, blockPx: number): { col
  * The step table for the shader: 64 brightness steps, then 64 colour steps made coarser by Colour damage (up to 8
  * times at 1). The colour's first term keeps its own step, so flat colours hold.
  */
-export function jpegSteps(quality: number, chroma: number): number[] {
-  const steps: number[] = [];
-  for (let i = 0; i < 64; i++) steps.push(quantStep(i, quality, false));
-  for (let i = 0; i < 64; i++) steps.push(quantStep(i, quality, true) * (i === 0 ? 1 : 2 ** (3 * chroma)));
-  return steps;
+export function jpegSteps(quality: number, chroma: number, into: number[] | Float32Array = new Array<number>(128)): number[] | Float32Array {
+  for (let i = 0; i < 64; i++) into[i] = quantStep(i, quality, false);
+  for (let i = 0; i < 64; i++) into[64 + i] = quantStep(i, quality, true) * (i === 0 ? 1 : 2 ** (3 * chroma));
+  return into;
 }
 
 /**
@@ -163,13 +162,13 @@ void main() {
 }`;
 
 /**
- * Pass 2, columns forward with quantising, grid to grid: each term rounded to its step from `uSteps`. The steps are
+ * Pass 2, columns forward with quantising, grid to grid: each term rounded to its step from `uSteps`. The steps (128 floats, packed four to a vec4) are
  * for 8x8 blocks; a block of n samples has terms n/8 the size (the orthonormal transform grows with the square root
  * of the samples on each axis), so its steps shrink alike and it is quantised as its 8x8 self would be.
  */
 const columnsForward = jpegCommon + /* glsl */`
 uniform sampler2D uGrid;
-uniform float uSteps[128];
+uniform vec4 uSteps[32];
 void main() {
   ivec2 g = ivec2(gl_FragCoord.xy);
   int chromaX = int(uChromaX);
@@ -178,7 +177,8 @@ void main() {
   vec2 sum = vec2(0.);
   for (int j = 0; j < 8; j++) sum += j < n ? texelFetch(uGrid, ivec2(g.x, top + j), 0).rg * dctTerm(v, float(j), float(n)) : vec2(0.);
   // Brightness steps are the first 64, colour steps the next.
-  float step = uSteps[(colour ? 64 : 0) + v * 8 + u] * float(n) / 8.;
+  int at = (colour ? 64 : 0) + v * 8 + u;
+  float step = uSteps[at >> 2][at & 3] * float(n) / 8.;
   gl_FragColor = vec4(floor(sum / step + .5) * step, 0., 1.);
 }`;
 

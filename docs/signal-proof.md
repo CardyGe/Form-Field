@@ -8,21 +8,23 @@ Every result is listed, reruns included. "Final code" is the committed code; the
 
 | Command | Result |
 | --- | --- |
-| `node scripts/verify-signal-path.mjs --baseline=<baseline>` | 47 passed, 1 failed. The failure was `all-presets-neutral`: `meridian-evolve-orrery` differed once. See below |
+| `node scripts/verify-signal-path.mjs --baseline=<baseline>` (first full run) | 47 passed, 1 failed. The failure was `all-presets-neutral`: `meridian-evolve-orrery` differed once. See below |
+| Same, after the final-review fixes (whole counts not animatable, 24-bit hash fractions, packed JPEG step table, two more cost cases) | **48 passed, 0 failed**, one full run, 175 of 175 presets byte-identical |
+| `... --baseline=<baseline> --current=<baseline> --only=all-presets` (baseline against itself, ten times) | passed ten times, 175 of 175 byte-identical; `meridian-evolve-orrery` never differed |
 | `... --only=all-presets` (twice) | passed both times, 175 of 175 byte-identical |
 | `... --only=jpeg,bend,all-presets` (the heavy checks first, as in the full run) | 21 passed, 0 failed |
 | `... --baseline=<this branch> --only=all-presets` (the branch against itself, three times) | passed all three times |
 | `... --only=sheet` (again, after the mutation runs had overwritten the sheets) | passed |
 | `npx tsc --noEmit` | clean |
-| `npm test` | 1562 unit and 106 Electron tests pass, 0 fail |
-| `npm run test:workspace` | 14 passed, 0 failed, first run (no "Focus preview" timeout) |
-| `npm run test:map` | 70 ok, 0 FAIL, first run |
+| `npm test` | 1562 unit and 106 Electron tests pass, 0 fail; after the final-review fixes 1565 unit and 106 Electron, 0 fail |
+| `npm run test:workspace` | 14 passed, 0 failed, first run (no "Focus preview" timeout); again after the final-review fixes: 14 passed, 0 failed, first run |
+| `npm run test:map` | 70 ok, 0 FAIL, first run; again after the final-review fixes: 70 ok, 0 FAIL, first run |
 | `node scripts/verify-print.mjs` | run 1 failed its speed gate: `cmyk-edges-flat` 20.7 ms per 1080p frame (limit 16.7). Runs 2 and 3 passed (15.5 and 16.5 ms). The baseline checkout, run once for comparison, passed at 15.7 ms. Print is unchanged on this branch and the signal pass does not run with every amount at 0; the gate has little headroom on this Mac |
 | `node scripts/verify-tiles.mjs --baseline=<baseline>` | 39 passed, 1 failed: `old-file`, by design. See below |
 | `node scripts/verify-warp.mjs --baseline=<baseline>` | 76 passed, 0 failed, first run |
 | `node scripts/verify-colour-time.mjs --baseline=<baseline>` | 52 passed, 0 failed |
 
-**The one Meridian difference.** In the full run, `meridian-evolve-orrery` rendered differently from the baseline once. It did not happen again in six more runs: twice alone, once after the same heavy JPEG and Databend checks that preceded it, and three times comparing the branch with itself. Every signal amount is 0 on presets, so the signal pass does not run for it. The cause was not found. It looks like an intermittent difference in Meridian's own render, not this branch, but that is not proven.
+**The one Meridian difference.** In the first full run, `meridian-evolve-orrery` rendered differently from the baseline once. It did not happen in the six runs after it, nor in the final full run after the review fixes (48 of 48, 175 of 175 byte-identical). To see whether the baseline alone does this, the harness gained `--current=<checkout>`, which builds the "current" side from another checkout: `--baseline=<baseline> --current=<baseline> --only=all-presets` compares the baseline with itself. Run ten times, `all-presets-neutral` passed ten times, 175 of 175 byte-identical, with `meridian-evolve-orrery` never differing (0 of 10). So a baseline-against-baseline difference was not reproduced either, and the single difference was not reproduced in 17 runs of the branch or baseline in all. Every signal amount is 0 on presets, so the signal pass does not run for it. Conclusion: one unexplained, unrepeatable difference, most likely a one-off in Meridian's own render (this branch changes nothing it draws), at a rate below roughly 1 in 10 to 1 in 20 runs. Not proven, and the cause was not found.
 
 **verify-tiles `old-file` against this baseline.** That check was written for a baseline from before Tiles, and requires the old file to hold no LED, Characters or Tiles keys. This baseline already has Tiles, so the file holds 104 of them and the check fails on that clause alone. Its other clauses held: 144 new keys filled in, 0 off default, 15 renders byte-identical. The signal path's own `old-file` covers an old Tiles and Warp file.
 
@@ -95,29 +97,39 @@ No Fail remains. The one Fail was Databend Corrupt at the old default Depth .5, 
 
 ## Preview cost
 
-A report, not a gate. A Surface layer, each frame forced to finish on the GPU. Each case runs once in each of 4 rounds, the first only warms, and the median of the other 3 is shown, in ms per frame, with the difference from plain. 60 frames a round at 1280x720 and 1920x1080, 30 at 3840x2160. Plain's range across rounds (in brackets) shows the noise: differences under about .5 ms at 720 and 2 ms at 4K are within it (Dropout's -1.34 at 4K is noise).
+A report, not a gate. A Surface layer, each frame forced to finish on the GPU. Each case runs once in each of 4 rounds, the first only warms, and the median of the other 3 is shown, in ms per frame, with the difference from plain. 60 frames a round at 1280x720 and 1920x1080, 30 at 3840x2160. Plain's range across rounds (in brackets) shows the noise: differences under about .5 ms at 720 and 2 ms at 4K are within it.
 
 | Case | 1280x720 | 1920x1080 | 3840x2160 |
 | --- | ---: | ---: | ---: |
-| Plain | 3.68 (3.27 to 3.77) | 5.20 (5.17 to 5.50) | 15.34 (13.40 to 15.48) |
-| VHS (defaults) | 4.72 (+1.04) | 7.22 (+2.02) | 24.04 (+8.70) |
-| VHS Colour bleed 1 | 4.71 (+1.03) | 8.16 (+2.95) | 32.40 (+17.06) |
-| Dropout (defaults) | 3.68 (+0.00) | 5.61 (+0.40) | 14.00 (-1.34) |
-| CRT (defaults) | 3.90 (+0.22) | 5.91 (+0.70) | 15.39 (+0.05) |
-| JPEG damage (defaults) | 7.29 (+3.61) | 9.84 (+4.63) | 22.28 (+6.94) |
-| JPEG damage Block 4 | 6.69 (+3.01) | 9.38 (+4.18) | 28.52 (+13.18) |
-| Databend Echo (defaults) | 4.52 (+0.84) | 6.25 (+1.05) | 18.37 (+3.03) |
-| Databend Echo Repeats 8 Split 1 | 4.91 (+1.23) | 7.36 (+2.15) | 21.78 (+6.44) |
-| All five (defaults) | 8.77 (+5.09) | 12.88 (+7.67) | 36.95 (+21.61) |
-| All five, heaviest | 8.98 (+5.30) | 14.49 (+9.29) | 52.60 (+37.26) |
+| Plain | 3.29 (3.26 to 3.34) | 4.66 (4.56 to 4.96) | 13.13 (12.75 to 13.46) |
+| VHS (defaults) | 3.94 (+0.65) | 6.49 (+1.83) | 23.44 (+10.31) |
+| VHS Colour bleed 1 | 4.23 (+0.94) | 7.76 (+3.10) | 31.17 (+18.04) |
+| Dropout (defaults) | 3.61 (+0.31) | 4.96 (+0.29) | 13.59 (+0.46) |
+| Dropout Hold line, 20 bands, burst 8 | 3.64 (+0.35) | 5.47 (+0.81) | 15.33 (+2.20) |
+| CRT (defaults) | 3.53 (+0.23) | 5.39 (+0.73) | 14.58 (+1.45) |
+| CRT Dots, 1080 lines, curve .5 | 3.52 (+0.23) | 5.22 (+0.56) | 14.29 (+1.16) |
+| JPEG damage (defaults) | 6.38 (+3.09) | 9.05 (+4.39) | 20.93 (+7.80) |
+| JPEG damage Block 4 | 5.92 (+2.63) | 8.80 (+4.13) | 27.28 (+14.15) |
+| Databend Echo (defaults) | 3.85 (+0.56) | 5.95 (+1.29) | 17.22 (+4.09) |
+| Databend Echo Repeats 8 Split 1 | 4.20 (+0.91) | 7.07 (+2.41) | 20.28 (+7.15) |
+| All five (defaults) | 8.39 (+5.09) | 12.77 (+8.10) | 35.99 (+22.86) |
+| All five, heaviest | 8.35 (+5.06) | 14.41 (+9.75) | 50.68 (+37.55) |
 
-All five at their defaults add about 5 ms at 720p, 8 ms at 1080p and 22 ms at 4K. VHS Colour bleed is the most costly single control at 4K (+17 ms at 1). JPEG damage costs about the same at every size because its block grid is set by Block size; Block 4 is the worst at 4K (+13 ms). Databend Echo stays under +7 ms at 4K even with Repeats 8 and Split 1. A 4K preview with all five at their heaviest common settings runs at about 19 frames a second on this Mac. `signal-cost` and `bend-cost` in the same run agree: VHS bleed .5/1 at 4K +12/+21 ms, JPEG defaults +10 ms, Echo +6.7 ms.
+All five at their defaults add about 5 ms at 720p, 8 ms at 1080p and 23 ms at 4K. VHS Colour bleed is the most costly single control at 4K (+18 ms at 1). JPEG damage costs about the same at every size because its block grid is set by Block size; Block 4 is the worst at 4K (+14 ms). Databend Echo stays under +8 ms at 4K even with Repeats 8 and Split 1. The two heaviest common cases added after review stay small: Dropout with Hold line, 20 bands and burst 8 adds +2.2 ms at 4K (+0.8 at 1080p), and CRT with Dots, 1080 lines and curve .5 adds +1.2 ms at 4K (+0.6 at 1080p), so neither is a cost worry. A 4K preview with all five at their heaviest common settings runs at about 20 frames a second on this Mac (50.7 ms a frame).
+
+## Live set at 4K
+
+Measured at 4K (3840x2160) on this one Apple Silicon Mac, in the run above:
+
+- All five effects at their defaults add about 23 ms a frame per layer (22.9 ms measured; the earlier run gave 21.6 ms). The heaviest common settings add about 38 ms (37.6 ms measured). VHS Colour bleed at 1 alone adds about 18 ms.
+- A frame has about 33 ms at 30 frames a second and about 17 ms at 60. Plain 4K is already 13 ms here, so **two layers with signal effects at 4K drop below 30 fps**, and one layer with all five at the heaviest settings is about 20 fps. For a live set at 4K, run one signal layer, and only the effects it needs, or work at 1080p, where all five at defaults add about 8 ms.
+- Memory per 4K Map slot: about 130 MB, and a JPEG damage layer adds 50 to 200 MB while it is on (Block 8 about 47 MB, Block 4 about 142 MB at 4K in the `jpeg-cost` and `jpeg-shrink` checks). Several 4K slots with JPEG damage on can reach a gigabyte or more.
 
 ## Not verified
 
 - Cost on any machine but this one Apple Silicon Mac, and in the packaged app's live preview rather than the render harness.
 - A projector. Rule 6 was judged from 1:1 crops of 1080 frames on a monitor.
-- The cause of the single `meridian-evolve-orrery` difference.
+- The cause of the single `meridian-evolve-orrery` difference (not reproduced in ten baseline-against-baseline runs or in the later branch runs).
 - Every combination of controls: the sheets cover each choice with other controls at default, plus the stack.
 - Live and Perform outputs: unchanged by design and not rerun here (`npm run test:live` and `test:perform` were not run).
 - The new VHS card was judged at 240 px in this session only; the owner has not seen it.

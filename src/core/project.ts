@@ -872,7 +872,7 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
       !['flowMode','inkMode','reliefMode','style','variant','form','mode','colorMode','profile','fill','sweep','pattern','axis'].includes(key) || p.params[key] === layer.params[key]));
   // Stay near the closest authored structure, rather than walking every slider
   // towards an extreme after repeated clicks. One recipe drives the whole look.
-  const distance = (p: Preset) => definitions.filter(d => d.section === 'Shape' && !VARIATION_FIXED.has(d.key))
+  const distance = (p: Preset) => definitions.filter(d => d.section === 'Shape' && !VARIATION_FIXED.has(d.key) && !SIGNAL_ALL_KEYS.includes(d.key))
     .reduce((n,d) => n + ((layer.params[d.key] - p.params[d.key]) / (d.max-d.min)) ** 2, 0);
   const anchor = recipes.sort((a,b) => distance(a)-distance(b))[0];
   const inactive = layer.kind === 'kaleidoscope' ? kaleidoscopeHidden(layer.params) : null;
