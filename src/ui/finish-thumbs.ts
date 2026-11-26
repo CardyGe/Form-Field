@@ -13,7 +13,10 @@ import lumaWarp from './assets/finish/lumaWarp.jpg';
 import mirror from './assets/finish/mirror.jpg';
 import polar from './assets/finish/polar.jpg';
 import warp from './assets/finish/warp.jpg';
+import led from './assets/finish/led.jpg';
+import chars from './assets/finish/chars.jpg';
+import tiles from './assets/finish/tiles.jpg';
 import time from './assets/finish/time.jpg';
 import tone from './assets/finish/tone.jpg';
 
-export const FINISH_THUMBS: Record<string, string> = { balance, colour, feedback, flat, glow, gradient, key, liquid, lumaWarp, mirror, polar, print, split, time, tone, warp };
+export const FINISH_THUMBS: Record<string, string> = { balance, colour, feedback, flat, glow, gradient, key, led, chars, tiles, liquid, lumaWarp, mirror, polar, print, split, time, tone, warp };

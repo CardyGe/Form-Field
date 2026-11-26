@@ -59,6 +59,10 @@ uniform float uPrintOn,uPrintCells,uPrintOffset;
 uniform float uPrintAngles[4];
 uniform float uPrintMix,uPrintType,uPrintDot,uPrintMatrix,uPrintFloor,uPrintCeiling,uPrintMax,uPrintGain,uPrintSoft,uPrintInvert;
 uniform float uPrintColour,uPrintInk,uPrintPaper,uPrintArea,uPrintEdgeWidth,uPrintEdgeSense,uPrintEdgeFeather;
+uniform sampler2D uPrintNoise;
+uniform vec2 uPrintShift;
+uniform vec3 uPrintRetroColours[8];
+uniform float uPrintRetroCount;
 const vec3 GRADE_LUMA=vec3(.2126,.7152,.0722);
 float stepIntegral(float x){float n=floor(x);return n*(n-1.)*.5+n*fract(x);}
 float strokeIntegral(float x,float width){return floor(x)*width*2.+min(fract(x),width)+max(fract(x)-(1.-width),0.);}
@@ -225,7 +229,7 @@ vec2 layerUv(vec2 frameUv) {
   return p/vec2(uAspect,1.)+.5;
 }
 // ---- Print screen finish ---------------------------------------------------
-// Halftone dots, line screens and ordered dither, drawn analytically. The grid
+// Halftone dots, line screens, ordered dither and blue noise, drawn analytically. The grid
 // is built from the frame coordinate, in cells of a 1080-line frame, so it is
 // fixed to the frame and identical at every render size. Every mark edge is a
 // signed reach in cells, filtered to exactly one output pixel. The mark
@@ -261,6 +265,13 @@ float printTone(vec4 pixel,int channel){
     else{float x=channel==0?l.r:channel==1?l.g:l.b;t=k>.9999?0.:(1.-x-k)/(1.-k);}
   }
   return t*pixel.a;
+}
+/** Retro palette level of a tone: 0 is the first colour, count-1 the last.
+ * The whole tone range spans the palette, so Largest mark does not apply. */
+float printRetroLevel(float tone){
+  float x=uPrintCeiling<=uPrintFloor?step(uPrintFloor+.000001,tone):clamp((tone-uPrintFloor)/max(uPrintCeiling-uPrintFloor,.001),0.,1.);
+  if(uPrintGain!=0.)x=pow(x,exp2(-1.5*uPrintGain));
+  return (uPrintInvert>.5?1.-x:x)*(uPrintRetroCount-1.);
 }
 /** Tone to the share of a cell its mark covers, at most Largest mark (printCoverage). */
 float printCurve(float tone,int channel){
@@ -299,6 +310,14 @@ float printBayer(vec2 cell){
   }
   return (float(index)+.5)/(n*n);
 }
+/** Threshold of a dither or blue-noise cell in (0, 1). Shimmer moves the
+ * pattern by whole cells each loop frame; the shift is 0 when it is off. */
+float printThreshold(vec2 cell){
+  cell+=uPrintShift;
+  if(uPrintType<2.5)return printBayer(cell);
+  // Blue noise: one texel of the 64x64 tile is one cell, read exactly.
+  return (texelFetch(uPrintNoise,ivec2(mod(cell,64.)),0).r*255.+.5)/256.;
+}
 /**
  * Coverage of one screen at this pixel. Returns the frame position, source
  * pixel and target coverage of the cell that governs the pixel, so the caller
@@ -311,7 +330,7 @@ float printMark(float angle,int channel,out vec2 centreUv,out vec4 centrePixel,o
   float width=max(pixel,uPrintSoft*.5);
   float coverage;
   if(uPrintType>1.5){
-    // Ordered dither: each cell is on or off; cell edges are box-filtered.
+    // Ordered dither and blue noise: each cell is on or off; cell edges are box-filtered.
     vec2 q=s-.5,base=floor(q);
     vec2 weight=clamp(.5+(s-(base+1.))/pixel,0.,1.);
     coverage=0.;
@@ -322,7 +341,7 @@ float printMark(float angle,int channel,out vec2 centreUv,out vec4 centrePixel,o
       vec2 uv=printToFrame(cell+.5,angle);
       vec4 texel=printSource(uv);
       float c=printCurve(printTone(texel,channel),channel);
-      coverage+=share*step(printBayer(cell),c-.000001);
+      coverage+=share*step(printThreshold(cell),c-.000001);
       if(share>best){best=share;centreUv=uv;centrePixel=texel;target=c;}
     }
     return mix(coverage,target,smoothstep(.35,.6,pixel));
@@ -386,6 +405,37 @@ float printMark(float angle,int channel,out vec2 centreUv,out vec4 centrePixel,o
   coverage=clamp(.5-reach/width,0.,1.)*clamp(target/(pixel*pixel),0.,1.);
   // A screen finer than about two output pixels becomes its plain tone.
   return mix(coverage,target,smoothstep(.35,.6,pixel));
+}
+/**
+ * Retro palette index at this pixel. Each dither or blue-noise cell, line or
+ * dot reads one tone, takes the two palette levels either side of it, and its
+ * screen mark picks the upper one. The pair and the threshold always come from
+ * the same tone, so a pixel never shows a level outside its own cell's pair.
+ * Marks stay inside their own cell and are not filtered, so only palette
+ * colours print. Kept apart from printMark so the other screens' compiled maths
+ * stays exactly as it was. centreUv is the governing sample, for Print area.
+ */
+float printRetro(float angle,out vec2 centreUv){
+  vec2 s=printToScreen(vUv,angle),cell=floor(s)+.5;
+  bool lines=uPrintType>.5&&uPrintType<1.5;
+  centreUv=printToFrame(lines?vec2(s.x,cell.y):cell,angle);
+  float tone=printTone(printSource(centreUv),-1);
+  if(uPrintType<.5){
+    // Dots read five taps, as printMark does, so a dot does not flicker.
+    for(int i=0;i<4;i++){
+      vec2 o=i==0?vec2(.25,0.):i==1?vec2(-.25,0.):i==2?vec2(0.,.25):vec2(0.,-.25);
+      tone+=printTone(printSource(printToFrame(cell+o,angle)),-1);
+    }
+    tone*=.2;
+  }
+  float level=printRetroLevel(tone),base=min(floor(level),uPrintRetroCount-2.),rise=level-base;
+  // A screen finer than about two output pixels becomes its nearest level.
+  if(uPrintCells*uTexel.y>.475)return floor(level+.5);
+  float on;
+  if(uPrintType>1.5)on=step(printThreshold(floor(s)),rise-.000001);
+  else if(lines)on=step(abs(s.y-cell.y),rise*.5);
+  else on=step(printDotDistance(s-cell,rise),0.);
+  return base+on;
 }
 /** Edge strength of the layer's tone around a frame position, 0–1. The
  * silhouette counts, because tone carries the layer's coverage. */
@@ -453,7 +503,7 @@ vec4 printScreen(vec4 plain){
     float a=plain.a;
     if(paper)screened=vec4((paperColour*(1.-most)+light)*a,a);
     else screened=vec4(light*a,a*most);
-  }else{
+  }else if(uPrintColour<3.5){
     // CMYK ink: four screens overprinted on paper. Each ink removes its
     // complement; black is the part all three share.
     vec3 colour=paperColour;float clear=1.;
@@ -467,6 +517,11 @@ vec4 printScreen(vec4 plain){
     float a=plain.a;
     if(paper)screened=vec4(colour*a,a);
     else screened=vec4(colour*a*(1.-clear),a*(1.-clear));
+  }else{
+    // Retro palette: one screen at the K angle picks a palette colour for each
+    // pixel (printRetro). Paper does not apply.
+    vec3 colour=uPrintRetroColours[int(printRetro(uPrintAngles[3],maskUv)+.5)];
+    screened=vec4(colour*plain.a,plain.a);
   }
   float mask=1.;
   if(uPrintArea>.5){

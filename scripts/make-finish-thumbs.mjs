@@ -15,6 +15,7 @@ const RECIPES = {
   split: { splitAmount: 34, splitSamples: 9 }, print: { printMix: 1, printSize: 15 }, flat: { toonMix: 1, toonBands: 4, toonOutline: 2.5 },
   time: { slitShift: 1, slitSpan: 70, slitShape: 4, slitBlocks: 5, slitSlices: 8 }, feedback: { echo: .95, echoZoom: .88, echoRotate: 2, echoFrame: .55 },
   warp: { bendAmount: .09, bendField: 0, bendScale: 4, bendAngle: 20 }, liquid: { liquidAmount: .3, liquidStyle: 0, liquidScale: 1.6 },
+  led: { ledAmount: 1, ledSize: 30, ledShape: 0 }, chars: { charAmount: 1, charSize: 40, charContrast: 1.6, charSet: 0 }, tiles: { tileAmount: 1, tileStyle: 0, tileSize: 40 },
   lumaWarp: { lumaWarpAmount: .16, lumaWarpMode: 0, lumaWarpAngle: 60 }, polar: { polarAmount: 1, polarMode: 0 }, mirror: { mirrorAmount: 1, mirrorMode: 3, mirrorSegments: 6 },
 };
 // --only=warp,liquid renders just those, so the thumbnails already in the app stay byte for byte.

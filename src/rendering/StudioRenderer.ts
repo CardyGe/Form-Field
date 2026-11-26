@@ -27,10 +27,12 @@ import { SmokeCloudRenderer } from './SmokeCloud';
 import { compositesPlainly, plainOverFragment } from './smoke-cloud-composite';
 import { MeridianRenderer, type MeridianRuntime } from './MeridianRenderer';
 import { MeridianGovernor, type MeridianQuality } from '../meridian/governor';
-import { printActive, printUniforms } from './print-screen';
+import { BLUE_NOISE_SIZE, blueNoise, printActive, printShimmerShift, printUniforms, retroColours } from './print-screen';
 import { BLOOM_HEIGHTS, BloomPyramid, StreakBlur, bloomChannelWeights, glowActive, glowBrightFragment, lightTarget, setWrap } from './bloom';
 import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights, whiteBalance } from './colour-lens';
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
+import { CHAR_SETS, cellColourFragment, fitCellGrid, tileFragment, tilesActive } from './tiles';
+import { GLYPH_PX, GLYPH_SPREAD, buildGlyphAtlas } from './glyph-atlas';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
 import { finiteEvolving } from '../core/playback';
@@ -279,6 +281,30 @@ export class StudioRenderer {
     uMirrorAmount: { value: 0 }, uMirrorMode: { value: 0 }, uMirrorSegments: { value: 6 }, uMirrorTurn: { value: 0 },
     uLayerView: { value: new THREE.Matrix3() }, uLayerInverse: { value: new THREE.Matrix3() }, uLayerMoved: { value: 0 }, uLayerBounded: { value: 0 }, uLayerExtent: { value: new THREE.Vector2(1, 1) }, uPictureInset: { value: new THREE.Vector2(0, 0) },
   });
+  /** Material tiles: the cell colours and the rebuilt layer, shared by all layers and built on first use. */
+  private tileCells: THREE.WebGLRenderTarget | null = null;
+  private tileTarget: THREE.WebGLRenderTarget | null = null;
+  private readonly cellColour = material(cellColourFragment, {
+    uSource: { value: null }, uSourceSize: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) }, uRows: { value: 1 },
+    uOrigin: { value: new THREE.Vector2() }, uOddShift: { value: 0 },
+  });
+  /** Characters: each set's glyphs, drawn on first use and kept until the tile targets are released. */
+  private readonly glyphTextures = new Map<string, { texture: THREE.DataTexture; count: number; columns: number }>();
+  private readonly tile = material(tileFragment, {
+    uSource: { value: null }, uCells: { value: null }, uGrid: { value: new THREE.Vector2(1, 1) }, uCellsSize: { value: new THREE.Vector2(1, 1) }, uCellUv: { value: new THREE.Vector2(1, 1) },
+    uCellPx: { value: new THREE.Vector2(1, 1) }, uSeed: { value: 0 }, uPhase: { value: 0 },
+    uLedAmount: { value: 0 }, uLedDot: { value: .75 }, uLedShape: { value: 0 }, uLedBrightness: { value: 1.5 }, uLedDead: { value: 0 },
+    uLedScan: { value: 0 }, uLedFlicker: { value: 0 }, uLedCycles: { value: 10 }, uLedGapOn: { value: 1 }, uLedGap: { value: new THREE.Color() },
+    uGlyphs: { value: null }, uCharGrid: { value: new THREE.Vector2(1, 1) }, uCharCellUv: { value: new THREE.Vector2(1, 1) }, uCharCellPx: { value: new THREE.Vector2(1, 1) },
+    uCharOrigin: { value: 0 }, uCharAmount: { value: 0 }, uCharCount: { value: 2 }, uCharColumns: { value: 2 }, uCharGlyphPx: { value: GLYPH_PX }, uCharSpread: { value: GLYPH_SPREAD },
+    uCharContrast: { value: 1 }, uCharInkOn: { value: 0 }, uCharGapOn: { value: 1 }, uCharSwaps: { value: 0 }, uCharSwapChance: { value: 0 },
+    uCharInk: { value: new THREE.Color() }, uCharGap: { value: new THREE.Color() },
+    uTileGrid: { value: new THREE.Vector2(1, 1) }, uTileCellUv: { value: new THREE.Vector2(1, 1) }, uTileCellPx: { value: new THREE.Vector2(1, 1) }, uTileLight: { value: new THREE.Vector2(-1, 0) },
+    uTileOrigin: { value: 0 }, uTileAmount: { value: 0 }, uTileStyle: { value: 0 }, uTileGrout: { value: .12 }, uTileRelief: { value: .5 }, uTileJitter: { value: .3 },
+    uTileGapOn: { value: 1 }, uTileGap: { value: new THREE.Color() },
+  });
+  /** This frame's loop length in seconds, so LED flicker keeps its pace on long and short loops. */
+  private loopSeconds = 10;
   private readonly feedbackStates = new Map<string, FeedbackState>();
   /** Exports need the full steady state; the preview may approximate after a seek. */
   private exactFeedback = false;
@@ -307,6 +333,8 @@ export class StudioRenderer {
   };
   private readonly assets = new Map<string, Asset>();
   private readonly fallback: THREE.DataTexture;
+  /** Print screen's blue-noise threshold tile: one red byte per cell, read exactly. */
+  private readonly printNoise: THREE.DataTexture;
   private width = 1;
   private height = 1;
   private disposed = false;
@@ -348,6 +376,10 @@ export class StudioRenderer {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.fallback = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
     this.fallback.needsUpdate = true;
+    this.printNoise = new THREE.DataTexture(blueNoise(), BLUE_NOISE_SIZE, BLUE_NOISE_SIZE, THREE.RedFormat, THREE.UnsignedByteType);
+    this.printNoise.magFilter = this.printNoise.minFilter = THREE.NearestFilter;
+    this.printNoise.wrapS = this.printNoise.wrapT = THREE.RepeatWrapping;
+    this.printNoise.unpackAlignment = 1; this.printNoise.generateMipmaps = false; this.printNoise.needsUpdate = true;
 
     this.surface = material(surfaceFragment, surfaceUniforms());
     this.fractal = material(fractalFragment, {
@@ -412,6 +444,8 @@ export class StudioRenderer {
       ...Object.fromEntries(BLOOM_HEIGHTS.map((_, i) => [`uGlowLevel${i}`, { value: this.fallback }])),
       uGlowChannels: { value: [0, 1, 2, 3, 4].map(() => new THREE.Vector3()) }, uGlowStreakMap: { value: this.fallback }, uGlowColour: { value: new THREE.Color() }, uGlowOn: { value: 0 },
       uPrintOn: { value: 0 }, uPrintCells: { value: 135 }, uPrintOffset: { value: 0 }, uPrintAngles: { value: [0, 0, 0, 0] },
+      uPrintNoise: { value: this.printNoise }, uPrintShift: { value: new THREE.Vector2() },
+      uPrintRetroColours: { value: Array.from({ length: 8 }, () => new THREE.Color()) }, uPrintRetroCount: { value: 2 },
       ...Object.fromEntries(FINISH_PARAMETERS.map(d=>['u'+d.key[0].toUpperCase()+d.key.slice(1),{value:d.default}])),
       uSaturation: {value:1}, uHue: {value:0}, uExposure:{value:1},
       uColorMode:{value:0},uColorSteps:{value:6},uColorMix:{value:1},uColorOffset:{value:0},
@@ -1065,6 +1099,7 @@ export class StudioRenderer {
     const wrapped = ((phase % TAU) + TAU) % TAU;
     const duration = frameCount(project) * project.fps.den / project.fps.num;
     const total = frameCount(project);
+    this.loopSeconds = duration;
     this.meridianRuntime.loopFrames = total;
     this.releaseFeedback(project);
     this.releaseTimeTargets(project);
@@ -1092,8 +1127,10 @@ export class StudioRenderer {
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
         : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
       const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
-      const finished = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
+      const lensed = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
+      const finished = tilesActive(original) ? this.tileSource(original, layer, lensed, wrapped, width, height) : lensed;
       // Exports always use the full compositor; a live untouched Smoke Cloud does not need its cost at 4K.
+      // A layer with a tile amount above zero is not untouched, so only the plain source reaches this path.
       if (!this.exporting && !this.fullCompositorOnly && compositesPlainly(layer, this.tiling)) {
         // Alone in the frame, it is already the finished composite: drawing it over nothing changes no pixel.
         if (project.layers.filter(item => item.visible).length === 1) { soleSource = finished; continue; }
@@ -1127,7 +1164,7 @@ export class StudioRenderer {
       u.uMaskInvert.value = Number(layer.mask.invert);
       u.uGlow.value = number(layer, 'glow', layer.kind === 'sculpture' ? .12 : 0);
       this.bindGlow(original, layer, finished, width, height);
-      this.bindPrint(original, layer, wrapped);
+      this.bindPrint(original, layer, wrapped, total);
       for(const d of FINISH_PARAMETERS)u['u'+d.key[0].toUpperCase()+d.key.slice(1)].value=number(layer,d.key,d.default);
       u.uSaturation.value=number(layer,'saturation',1);u.uHue.value=number(layer,'hue',0);
       // Original Fractal exposure stays in its original source pass; new colour
@@ -1298,6 +1335,126 @@ export class StudioRenderer {
   }
 
   /**
+   * Material tiles: rebuilds the layer from a grid of cells after Warp and
+   * Colour and Lens and before Glow, so LED light can glow. Its targets are its
+   * own, so it never enters the echo history. Cells are sized in pixels of a
+   * 1080-line frame and fixed to the frame, so previews and 4K exports match.
+   */
+  tileSource(original: Layer, layer: Layer, source: THREE.Texture, phase: number, width: number, height: number): THREE.Texture {
+    if (!tilesActive(original)) return source;
+    // A modulated amount can rest at zero, where there is nothing to do.
+    const amount = (key: string) => Math.min(1, Math.max(0, number(layer, key, 0)));
+    const led = amount('ledAmount'), chars = amount('charAmount'), tiles = amount('tileAmount');
+    if (led <= 0 && chars <= 0 && tiles <= 0) return source;
+    // The grids sit side by side in one target, so each keeps to its share of the widest target the GPU allows.
+    const share = Math.floor(this.maxTargetSize / ((led > 0 ? 1 : 0) + (chars > 0 ? 1 : 0) + (tiles > 0 ? 1 : 0))), most = this.maxTargetSize;
+    const ledGrid = fitCellGrid(width, height, number(layer, 'ledSize', 10), share, most), charGrid = fitCellGrid(width, height, number(layer, 'charSize', 16), share, most);
+    const tileGrid = fitCellGrid(width, height, number(layer, 'tileSize', 18), share - 1, most), style = Math.min(2, Math.max(0, Math.round(number(layer, 'tileStyle', 0))));
+    // LED cells sit at the target's left edge, character cells to their right and tile cells after those. Tiles keep
+    // a spare column, so Brick's offset rows have a cell for the part brick at each end.
+    const ledCols = led > 0 ? ledGrid.cols : 0, charCols = chars > 0 ? charGrid.cols : 0, tileCols = tiles > 0 ? tileGrid.cols + 1 : 0;
+    const rows = Math.max(led > 0 ? ledGrid.rows : 0, chars > 0 ? charGrid.rows : 0, tiles > 0 ? tileGrid.rows : 0);
+    if (!this.tileCells) {
+      this.tileCells = target();
+      this.tileCells.texture.minFilter = this.tileCells.texture.magFilter = THREE.NearestFilter;
+    }
+    const cells = this.tileCells;
+    // Grow only: layers at different sizes share the target, each drawing into its corner of it.
+    const cols = ledCols + charCols + tileCols;
+    if (cells.width < cols || cells.height < rows) cells.setSize(Math.max(cells.width, cols), Math.max(cells.height, rows));
+    const c = this.cellColour.uniforms;
+    c.uSource.value = source; (c.uSourceSize.value as THREE.Vector2).set(width, height);
+    const average = (grid: ReturnType<typeof fitCellGrid>, origin: number, columns = grid.cols, oddShift = 0) => {
+      cells.viewport.set(origin, 0, columns, grid.rows);
+      (c.uCellUv.value as THREE.Vector2).set(grid.cellUv[0], grid.cellUv[1]); c.uRows.value = grid.rows;
+      (c.uOrigin.value as THREE.Vector2).set(origin, 0); c.uOddShift.value = oddShift;
+      // A clear empties the whole target, so the second grid must not clear the first.
+      if (origin > 0) this.drawOnto(this.cellColour, cells); else this.draw(this.cellColour, cells);
+    };
+    if (led > 0) average(ledGrid, 0);
+    if (chars > 0) average(charGrid, ledCols);
+    // Brick's odd rows average the half-cell-offset footprint of each brick, so its colour is the brick's own.
+    if (tiles > 0) average(tileGrid, ledCols + charCols, tileCols, style === 1 ? .5 : 0);
+    this.tileTarget ??= target();
+    const output = this.tileTarget;
+    if (output.width !== width || output.height !== height) output.setSize(width, height);
+    setWrap(output, this.tiling);
+    const u = this.tile.uniforms;
+    u.uSource.value = source; u.uCells.value = cells.texture;
+    (u.uCellsSize.value as THREE.Vector2).set(cells.width, cells.height);
+    // Wrapped to 0..1000: a negative seed would make the shader's unsigned hash input undefined.
+    u.uSeed.value = ((number(layer, 'seed', 0) % 1000) + 1000) % 1000; u.uPhase.value = phase;
+    // Background fill: 0 Transparent, 1 Black, then the layer's palette swatches.
+    const fill = (key: string, on: { value: unknown }, colour: { value: unknown }) => {
+      const gaps = Math.round(number(layer, key, 1));
+      on.value = Number(gaps >= 1);
+      (colour.value as THREE.Color).set(gaps >= 2 ? layer.palette[gaps - 2] ?? DEFAULT_PALETTE[gaps - 2] : '#000000');
+    };
+    u.uLedAmount.value = led;
+    if (led > 0) {
+      (u.uGrid.value as THREE.Vector2).set(ledGrid.cols, ledGrid.rows);
+      (u.uCellUv.value as THREE.Vector2).set(ledGrid.cellUv[0], ledGrid.cellUv[1]);
+      (u.uCellPx.value as THREE.Vector2).set(ledGrid.cellUv[0] * width, ledGrid.cellUv[1] * height);
+      u.uLedDot.value = number(layer, 'ledDot', .75);
+      u.uLedShape.value = Math.round(number(layer, 'ledShape', 0)); u.uLedBrightness.value = Math.max(0, number(layer, 'ledBrightness', 1.5));
+      u.uLedDead.value = number(layer, 'ledDead', 0); u.uLedScan.value = number(layer, 'ledScan', 0);
+      u.uLedFlicker.value = number(layer, 'ledFlicker', 0);
+      // About one shimmer a second, as whole cycles per loop.
+      u.uLedCycles.value = Math.max(1, Math.round(this.loopSeconds));
+      fill('ledGaps', u.uLedGapOn, u.uLedGap);
+    }
+    u.uCharAmount.value = chars;
+    if (chars > 0) {
+      const set = CHAR_SETS[Math.min(CHAR_SETS.length - 1, Math.max(0, Math.round(number(layer, 'charSet', 0))))], glyphs = this.glyphTexture(set.glyphs);
+      u.uGlyphs.value = glyphs.texture; u.uCharCount.value = glyphs.count; u.uCharColumns.value = glyphs.columns;
+      (u.uCharGrid.value as THREE.Vector2).set(charGrid.cols, charGrid.rows); u.uCharOrigin.value = ledCols;
+      (u.uCharCellUv.value as THREE.Vector2).set(charGrid.cellUv[0], charGrid.cellUv[1]);
+      (u.uCharCellPx.value as THREE.Vector2).set(charGrid.cellUv[0] * width, charGrid.cellUv[1] * height);
+      u.uCharContrast.value = number(layer, 'charContrast', 1);
+      // 0 Layer colour, 1 Palette ink: swatch 1..6 of the layer's palette.
+      const inkOn = Math.round(number(layer, 'charColour', 0)) === 1, ink = Math.min(6, Math.max(1, Math.round(number(layer, 'charInk', 1)))) - 1;
+      u.uCharInkOn.value = Number(inkOn); (u.uCharInk.value as THREE.Color).set(layer.palette[ink] ?? DEFAULT_PALETTE[ink]);
+      fill('charGaps', u.uCharGapOn, u.uCharGap);
+      u.uCharSwaps.value = Math.max(0, Math.round(number(layer, 'charSwaps', 0))); u.uCharSwapChance.value = Math.min(1, Math.max(0, number(layer, 'charSwapChance', .05)));
+    }
+    u.uTileAmount.value = tiles;
+    if (tiles > 0) {
+      (u.uTileGrid.value as THREE.Vector2).set(tileCols, tileGrid.rows); u.uTileOrigin.value = ledCols + charCols; u.uTileStyle.value = style;
+      (u.uTileCellUv.value as THREE.Vector2).set(tileGrid.cellUv[0], tileGrid.cellUv[1]);
+      (u.uTileCellPx.value as THREE.Vector2).set(tileGrid.cellUv[0] * width, tileGrid.cellUv[1] * height);
+      u.uTileGrout.value = Math.min(1, Math.max(0, number(layer, 'tileGrout', .12)));
+      u.uTileRelief.value = Math.min(1, Math.max(0, number(layer, 'tileRelief', .5)));
+      u.uTileJitter.value = Math.min(1, Math.max(0, number(layer, 'tileJitter', .3)));
+      // Light angle in degrees on screen: 0 from the right, counter-clockwise, 90 from the top. The shader's y runs down.
+      const angle = number(layer, 'tileLight', 135) * Math.PI / 180;
+      (u.uTileLight.value as THREE.Vector2).set(Math.cos(angle), -Math.sin(angle));
+      fill('tileGaps', u.uTileGapOn, u.uTileGap);
+    }
+    this.draw(this.tile, output);
+    return output.texture;
+  }
+
+  /** A character set's glyphs as edge distances, one channel, built once and kept until the tile targets go. */
+  private glyphTexture(glyphs: string): { texture: THREE.DataTexture; count: number; columns: number } {
+    let entry = this.glyphTextures.get(glyphs);
+    if (!entry) {
+      const atlas = buildGlyphAtlas(glyphs, GLYPH_PX);
+      // Half floats, which every WebGL2 device filters; the distances need far less precision than they give.
+      const texture = new THREE.DataTexture(Uint16Array.from(atlas.field, v => THREE.DataUtils.toHalfFloat(v)), atlas.width, atlas.height, THREE.RedFormat, THREE.HalfFloatType);
+      texture.minFilter = texture.magFilter = THREE.LinearFilter; texture.generateMipmaps = false;
+      texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping; texture.needsUpdate = true;
+      entry = { texture, count: Array.from(glyphs).length, columns: atlas.columns };
+      this.glyphTextures.set(glyphs, entry);
+    }
+    return entry;
+  }
+
+  private releaseGlyphs(): void {
+    for (const entry of this.glyphTextures.values()) entry.texture.dispose();
+    this.glyphTextures.clear(); this.tile.uniforms.uGlyphs.value = null;
+  }
+
+  /**
    * Glow finish: blurs the bright light of the layer's finished source for the
    * composite pass. It reads the source after Feedback and Time displacement
    * and writes only to its own targets, so it never enters the echo history.
@@ -1330,12 +1487,19 @@ export class StudioRenderer {
    * needs no targets of its own and never enters the echo history. Its
    * geometry is in frame units, the same at every render size.
    */
-  private bindPrint(original: Layer, layer: Layer, loopPhase: number): void {
+  private bindPrint(original: Layer, layer: Layer, loopPhase: number, frames: number): void {
     const u = this.composite.uniforms, on = printActive(original) && number(layer, 'printMix', 0) > 0;
     u.uPrintOn.value = Number(on);
     if (!on) return;
     const screen = printUniforms(layer, loopPhase);
     u.uPrintCells.value = screen.cells; u.uPrintAngles.value = screen.angles; u.uPrintOffset.value = screen.scroll;
+    // Shimmer moves the threshold pattern by whole cells once per loop frame.
+    (u.uPrintShift.value as THREE.Vector2).fromArray(printShimmerShift(layer, loopPhase, frames));
+    // Retro palettes are sRGB hex, dark to light; Color.set converts them to the linear light the composite works in.
+    const colours = retroColours(number(layer, 'printRetro', 0));
+    const slots = u.uPrintRetroColours.value as THREE.Color[];
+    for (let i = 0; i < slots.length; i++) slots[i].set(colours[Math.min(i, colours.length - 1)]);
+    u.uPrintRetroCount.value = colours.length;
   }
 
   private sourcePhase(original: Layer, wrapped: number, duration: number): number {
@@ -1679,6 +1843,10 @@ export class StudioRenderer {
     if (!needs.driver && this.slitDriverTarget) { this.slitDriverTarget.dispose(); this.slitDriverTarget = null; slit.uDriver.value = this.fallback; }
     if (this.lensTarget && !project.layers.some(layer => layer.visible && lensActive(layer))) { this.lensTarget.dispose(); this.lensTarget = null; }
     if (this.warpTarget && !project.layers.some(layer => layer.visible && warpActive(layer))) { this.warpTarget.dispose(); this.warpTarget = null; }
+    if ((this.tileTarget || this.tileCells) && !project.layers.some(layer => layer.visible && tilesActive(layer))) {
+      this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs();
+      this.tile.uniforms.uSource.value = this.tile.uniforms.uCells.value = this.cellColour.uniforms.uSource.value = null;
+    }
   }
 
   /**
@@ -1838,6 +2006,7 @@ export class StudioRenderer {
     this.tiledSurface?.dispose(); this.tiledSurface = null;
     this.lensTarget?.dispose(); this.lensTarget = null; this.lens.dispose();
     this.warpTarget?.dispose(); this.warpTarget = null; this.warp.dispose();
+    this.tileTarget?.dispose(); this.tileTarget = null; this.tileCells?.dispose(); this.tileCells = null; this.releaseGlyphs(); this.tile.dispose(); this.cellColour.dispose();
     this.graphics.dispose(); this.instruments.dispose();
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
@@ -1850,7 +2019,7 @@ export class StudioRenderer {
     this.sliceSourceSmooth?.dispose(); this.sliceSourceSmooth = null;
     for (const texture of this.liquidLayouts.values()) texture.dispose();
     this.liquidLayouts.clear();
-    this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.filmThickness.dispose();
+    this.sculptureGeometry.dispose(); this.sculptureTorusGeometry.dispose(); this.quadGeometry.dispose(); this.fallback.dispose(); this.printNoise.dispose(); this.filmThickness.dispose();
     this.keyLight.shadow.dispose();
     this.renderer.dispose();
   }

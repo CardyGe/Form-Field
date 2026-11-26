@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PRESETS, applyFinish, applyPreset, createLayer, createProject, finishSupported, validateProject, varyLayer, visibleParameterDefinitions } from '../src/core/project';
 import { PRINT_KEYS, FINISH_KEYS } from '../src/core/finishing';
-import { bayerThreshold, classicLevel, printActive, printCoverage, printInkScale, printMarkSize, printUniforms, supportsPrint } from '../src/rendering/print-screen';
+import { bayerThreshold, classicLevel, printActive, printCoverage, printInkScale, printMarkSize, printShimmerShift, printUniforms, relativeLuminance, retroColour, retroColours, shimmerOffset, supportsPrint } from '../src/rendering/print-screen';
+import { RETRO_PALETTES } from '../src/rendering/tiles';
 
 test('print screen is off by default and older projects migrate without it', () => {
   const project = createProject();
@@ -13,13 +14,13 @@ test('print screen is off by default and older projects migrate without it', () 
   }
   const migrated = validateProject(JSON.parse(JSON.stringify(project)));
   assert.deepEqual(PRINT_KEYS.map(k => migrated.layers[0].params[k]),
-    [0, 0, 8, 45, 0, 2, 0, 0, 1, .8, 0, 0, 0, 0, 1, 0, 0, 12, .5, .25]);
+    [0, 0, 8, 45, 0, 2, 0, 0, 1, .8, 0, 0, 0, 0, 1, 0, 0, 12, .5, .25, 0, 0]);
 });
 
 test('print keys are finish keys in the spec order', () => {
   assert.deepEqual(PRINT_KEYS, ['printMix','printType','printSize','printAngle','printDot','printMatrix','printScroll',
     'printFloor','printCeiling','printMax','printGain','printSoft','printInvert','printColour','printInk','printPaper',
-    'printArea','printEdgeWidth','printEdgeSense','printEdgeFeather']);
+    'printArea','printEdgeWidth','printEdgeSense','printEdgeFeather','printRetro','printShimmer']);
   assert.equal(PRINT_KEYS.every(k => FINISH_KEYS.includes(k)), true);
 });
 
@@ -144,4 +145,45 @@ test('vary never switches the screen or its stepped choices, and keeps it near w
     for (const key of stepped) assert.equal(varied.params[key], on.params[key], key);
     assert.ok(Math.abs(varied.params.printSize - 8) <= 63 * .1201, `size ${varied.params.printSize}`);
   }
+});
+
+test('retro and blue-noise choices validate and the new keys migrate off', () => {
+  const project = createProject();
+  const layer = project.layers[0];
+  delete layer.params.printRetro; delete layer.params.printShimmer;
+  layer.params.printType = 3; layer.params.printColour = 4;
+  const migrated = validateProject(JSON.parse(JSON.stringify(project))).layers[0].params;
+  assert.deepEqual([migrated.printRetro, migrated.printShimmer, migrated.printType, migrated.printColour], [0, 0, 3, 4]);
+});
+
+test('retro colours step through the palette by tone', () => {
+  assert.equal(retroColour(0, 0), '#0f380f');
+  assert.equal(retroColour(1, 0), '#9bbc0f');
+  assert.equal(retroColour(.5, 3), '#00ff41');
+});
+
+test('retro palettes map tone to brightness in order, so Teletext and CGA ramp evenly', () => {
+  const teletext = [0, 1, 2, 3, 4, 5, 6, 7].map(i => relativeLuminance(retroColour(i / 7, 2)));
+  for (let i = 1; i < teletext.length; i++) assert.ok(teletext[i] > teletext[i - 1], `Teletext step ${i} is not brighter: ${teletext}`);
+  assert.equal(retroColour(1 / 7, 2), '#0000ff');
+  assert.deepEqual(retroColours(1), ['#000000', '#ff55ff', '#55ffff', '#ffffff']);
+  assert.deepEqual(retroColours(0), RETRO_PALETTES[0].colours);
+});
+
+test('shimmer offsets are whole texels and differ frame to frame', () => {
+  const a = shimmerOffset(0), b = shimmerOffset(1);
+  assert.ok(a.every(Number.isInteger) && b.every(Number.isInteger));
+  assert.notDeepEqual(a, b);
+  for (let f = 0; f < 300; f++) assert.ok(shimmerOffset(f).every(v => v >= 0 && v < 64));
+});
+
+test('shimmer steps once per loop frame, only for Dither and Blue noise, and closes the loop', () => {
+  const TAU = Math.PI * 2, params = (extra: Record<string, number>) => ({ params: { printType: 3, printShimmer: 1, ...extra } });
+  assert.deepEqual(printShimmerShift(params({ printShimmer: 0 }), 1.3, 300), [0, 0]);
+  for (const type of [0, 1]) assert.deepEqual(printShimmerShift(params({ printType: type }), 1.3, 300), [0, 0]);
+  // Exact frame phases land on their own frame; the seam just before TAU is frame 0 again.
+  for (const frame of [0, 1, 7, 299]) assert.deepEqual(printShimmerShift(params({}), frame / 300 * TAU, 300), shimmerOffset(frame));
+  assert.deepEqual(printShimmerShift(params({}), TAU - 1e-4, 300), shimmerOffset(0));
+  assert.deepEqual(printShimmerShift(params({ printType: 2 }), TAU, 300), printShimmerShift(params({ printType: 2 }), 0, 300));
+  assert.notDeepEqual(printShimmerShift(params({}), 1 / 300 * TAU, 300), printShimmerShift(params({}), 2 / 300 * TAU, 300));
 });

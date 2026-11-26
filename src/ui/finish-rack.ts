@@ -2,12 +2,13 @@
  * The Finish list: which effects a layer can take, whether each is doing anything, what its row says, and how its
  * switch turns it off and back on without losing the settings. Pure, so the rules are tested apart from the panel.
  */
-import { FEEDBACK_KEYS, GLOW_KEYS, GRADE_KEYS, GRADIENT_KEYS, KEY_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, PRINT_KEYS, SLIT_KEYS, SPLIT_KEYS, TOON_KEYS, WARP_KEYS } from '../core/finishing';
+import { CHAR_KEYS, FEEDBACK_KEYS, LED_KEYS, TILE_KEYS, GLOW_KEYS, GRADE_KEYS, GRADIENT_KEYS, KEY_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, MIRROR_KEYS, POLAR_KEYS, PRINT_KEYS, SLIT_KEYS, SPLIT_KEYS, TOON_KEYS, WARP_KEYS } from '../core/finishing';
 import { supportsGlow } from '../rendering/bloom';
 import { GRADIENT_PALETTES, supportsLens } from '../rendering/colour-lens';
 import { KALEIDOSCOPE_INPUT } from '../core/project';
 import { kaleidoscopeInput, supportsFeedback } from '../rendering/feedback';
 import { supportsPrint } from '../rendering/print-screen';
+import { CHAR_SETS, LED_SHAPES, TILE_STYLES, supportsTiles } from '../rendering/tiles';
 import { SLIT_MODES, supportsSlitScan } from '../rendering/slitscan';
 import { LIQUID_STYLES, LUMA_SOURCES, MIRROR_MODES, POLAR_MODES, WARP_FIELDS, supportsWarp } from '../rendering/warp';
 import type { Layer, ParameterDefinition } from '../shared/types';
@@ -44,7 +45,10 @@ export const FINISH_EFFECTS: FinishEffect[] = [
   { id: 'lumaWarp', label: 'Luma Warp', group: 'Warp', description: 'Melts the picture along its own light, or along the layer below.', keys: LUMA_WARP_KEYS, power: { lumaWarpAmount: .15 }, supported: supportsWarp, summary: p => LUMA_SOURCES[Math.round(p.lumaWarpSource ?? 0)] ?? '' },
   { id: 'polar', label: 'Polar', group: 'Warp', description: 'Wraps the picture into a circle, or unrolls a circle into a strip.', keys: POLAR_KEYS, power: { polarAmount: 1 }, supported: supportsWarp, summary: p => POLAR_MODES[Math.round(p.polarMode ?? 0)] ?? '' },
   { id: 'mirror', label: 'Mirror', group: 'Warp', description: 'Reflects the picture into symmetrical halves, quarters or wedges.', keys: MIRROR_KEYS, power: { mirrorAmount: 1 }, supported: supportsWarp, summary: p => MIRROR_MODES[Math.round(p.mirrorMode ?? 0)] ?? '' },
-  { id: 'print', label: 'Print screen', group: 'Surface', description: 'Halftone dots, line screens and ordered dither, sized in pixels of a 1080-line frame. Loops close exactly.', keys: PRINT_KEYS, power: { printMix: 1 }, supported: supportsPrint, summary: p => ['Dots', 'Lines', 'Dither'][Math.round(p.printType ?? 0)] ?? '' },
+  { id: 'print', label: 'Print screen', group: 'Surface', description: 'Halftone dots, line screens, ordered dither, blue noise and retro palettes, sized in pixels of a 1080-line frame. Loops close exactly.', keys: PRINT_KEYS, power: { printMix: 1 }, supported: supportsPrint, summary: p => ['Dots', 'Lines', 'Dither', 'Blue noise'][Math.round(p.printType ?? 0)] ?? '' },
+  { id: 'led', label: 'LED wall', group: 'Surface', description: 'Rebuilds the picture as a wall of glowing LEDs. Characters and Tiles replace it where stacked.', keys: LED_KEYS, power: { ledAmount: 1 }, supported: supportsTiles, summary: p => LED_SHAPES[Math.round(p.ledShape ?? 0)] ?? '' },
+  { id: 'chars', label: 'Characters', group: 'Surface', description: 'Rebuilds the picture from text characters. Stacks over LED wall by replacing it.', keys: CHAR_KEYS, power: { charAmount: 1 }, supported: supportsTiles, summary: p => CHAR_SETS[Math.round(p.charSet ?? 0)]?.name ?? '' },
+  { id: 'tiles', label: 'Tiles', group: 'Surface', description: 'Rebuilds the picture from mosaic tiles, bricks or beads. Stacks over LED wall and Characters by replacing them.', keys: TILE_KEYS, power: { tileAmount: 1 }, supported: supportsTiles, summary: p => TILE_STYLES[Math.round(p.tileStyle ?? 0)] ?? '' },
   { id: 'flat', label: 'Flat colour & outlines', group: 'Surface', description: "Hard palette bands and contour lines. For the cleanest edges, lower the source's Relief and Softness.", keys: TOON_KEYS, power: { toonMix: 1 }, supported: always, summary: p => `${Math.round(p.toonBands ?? 5)} bands` },
   { id: 'time', label: 'Time displacement', group: 'Time', description: 'Parts of the frame show other moments of the loop. Loops close exactly; each slice renders the source once more.', keys: SLIT_KEYS, power: { slitShift: 1 }, supported: supportsSlitScan, summary: p => SLIT_MODES[Math.round(p.slitMode ?? 0)] ?? '' },
   { id: 'feedback', label: 'Feedback', group: 'Time', description: 'Each frame keeps a faded, moved echo of the last. Loops close exactly; exports warm up before the first frame.', keys: FEEDBACK_KEYS, power: { echo: .8 }, supported: supportsFeedback, summary: p => percent(p.echo ?? 0) },
@@ -132,4 +136,27 @@ export function searchFinishEffects(effects: readonly FinishEffect[], query: str
 /** The picker's cards: the chosen group (or all), narrowed by the search words. */
 export function pickerEffects(effects: readonly FinishEffect[], group: FinishGroup | 'All', query: string): FinishEffect[] {
   return searchFinishEffects(group === 'All' ? effects : effects.filter(effect => effect.group === group), query);
+}
+
+/** Whether a Print screen control applies, given the layer's other print choices. */
+export function printControlShown(layer: Pick<Layer, 'params' | 'modulations'>, key: string): boolean {
+  const p = layer.params, type = Math.round(p.printType ?? 0), colour = Math.round(p.printColour ?? 0), retro = colour === 4;
+  if (key === 'printMix') return true;
+  if (!((p.printMix ?? 0) > 0 || !!layer.modulations.printMix)) return false;
+  if (key === 'printDot') return type === 0;
+  if (key === 'printMatrix') return type === 2;
+  if (key === 'printInk') return colour === 1;
+  if (key === 'printRetro') return retro;
+  if (key === 'printShimmer') return type === 2 || type === 3;
+  // RGB light and CMYK ink screen each channel, which Invert leaves alone; the whole-colour screen and Retro flip.
+  if (key === 'printInvert') return colour < 2 || retro;
+  // Retro spans its whole palette in hard steps and fills every pixel, so these do nothing there.
+  if (key === 'printMax' || key === 'printSoft' || key === 'printPaper') return !retro;
+  if (key.startsWith('printEdge')) return Math.round(p.printArea ?? 0) > 0;
+  return true;
+}
+
+/** Choices of a Print screen control that cannot be picked: Retro palette draws the Classic dot as Round. */
+export function printDisabledOptions(layer: Pick<Layer, 'params'>, key: string): number[] | undefined {
+  return key === 'printDot' && Math.round(layer.params.printColour ?? 0) === 4 ? [1] : undefined;
 }

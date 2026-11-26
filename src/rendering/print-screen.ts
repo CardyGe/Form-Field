@@ -1,11 +1,13 @@
 /**
- * Print screen finish: halftone dots, line screens and ordered dither.
+ * Print screen finish: halftone dots, line screens, ordered dither and blue noise.
  *
  * The screen itself is drawn in the composite shader. This file holds the
  * rules for when it runs and the maths that decides how big each mark is, so
  * they can be tested; the shader mirrors these functions line for line.
  */
 import type { Layer } from '../shared/types';
+import { BLUE_NOISE_BASE64 } from './blue-noise-data';
+import { RETRO_PALETTES } from './tiles';
 
 /** Angle offsets in degrees for the channel screens: RGB uses the first three,
  * CMYK all four (cyan, magenta, yellow, black). */
@@ -82,4 +84,54 @@ export function bayerThreshold(matrix: number, x: number, y: number): number {
     cx >>= 1; cy >>= 1;
   }
   return (index + .5) / (n * n);
+}
+
+/** Side of the blue-noise threshold tile, in texels. One texel is one Print cell. */
+export const BLUE_NOISE_SIZE = 64;
+
+let noise: Uint8Array | null = null;
+/** The blue-noise threshold tile, row by row: each value 0–255 appears 16 times. */
+export function blueNoise(): Uint8Array {
+  noise ??= Uint8Array.from(atob(BLUE_NOISE_BASE64), c => c.charCodeAt(0));
+  return noise.slice();
+}
+
+/** Relative luminance of an sRGB hex colour (linear Rec. 709 weights). */
+export function relativeLuminance(hex: string): number {
+  const linear = (i: number) => { const v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); };
+  return .2126 * linear(1) + .7152 * linear(3) + .0722 * linear(5);
+}
+
+const retroOrder = RETRO_PALETTES.map(p => [...p.colours].sort((a, b) => relativeLuminance(a) - relativeLuminance(b)));
+/** A retro palette's colours from dark to light, so a tone ramp maps to a brightness ramp. */
+export function retroColours(palette: number): string[] {
+  return retroOrder[Math.min(Math.max(Math.round(palette), 0), RETRO_PALETTES.length - 1)].slice();
+}
+
+/** Retro palette colour (sRGB hex) for a tone 0–1: the nearest of the palette's colours, dark to light. */
+export function retroColour(tone: number, palette: number): string {
+  const colours = retroColours(palette);
+  return colours[Math.round(Math.min(Math.max(tone, 0), 1) * (colours.length - 1))];
+}
+
+// R2 low-discrepancy sequence (Roberts): steps by the inverse plastic number
+// and its square, so successive offsets land far apart and cover the tile evenly.
+const PLASTIC = 1.324717957244746, R2 = [1 / PLASTIC, 1 / (PLASTIC * PLASTIC)];
+/** Whole-texel offset of the threshold tile for a loop frame. Frame 0 is no offset. */
+export function shimmerOffset(frame: number): [number, number] {
+  const f = Math.round(frame);
+  return [0, 1].map(axis => Math.floor((((R2[axis] * f) % 1) + 1) % 1 * BLUE_NOISE_SIZE) % BLUE_NOISE_SIZE) as [number, number];
+}
+
+/**
+ * Shimmer offset for a loop phase. Only Dither and Blue noise shimmer, and only
+ * when Shimmer is on. The phase is quantised to the nearest loop frame, as
+ * Characters' swaps are, so exact frame phases land on their own frame, seeking
+ * repeats, and the instant before the loop's end is already frame 0: the seam closes.
+ */
+export function printShimmerShift(layer: Pick<Layer, 'params'>, loopPhase: number, frames: number): [number, number] {
+  const p = layer.params, type = Math.round(p.printType ?? 0);
+  if ((p.printShimmer ?? 0) < .5 || type < 2) return [0, 0];
+  const TAU = Math.PI * 2, total = Math.max(1, Math.round(frames)), wrapped = ((loopPhase % TAU) + TAU) % TAU;
+  return shimmerOffset(Math.floor(wrapped / TAU * total + .5) % total);
 }

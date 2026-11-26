@@ -103,7 +103,7 @@ test('adding turns a switched effect on, keeps one already on, and restores a st
 
 test('search matches names, groups and descriptions, with every word required', () => {
   const ids = (query: string) => searchFinishEffects(FINISH_EFFECTS, query).map(item => item.id);
-  assert.deepEqual(ids('glow'), ['glow']);
+  assert.deepEqual(ids('glow'), ['glow', 'led']); // LED wall's description says "glowing"
   assert.ok(ids('time').includes('feedback'));
   assert.ok(ids('halftone').includes('print'));
   assert.deepEqual(ids('halftone glow'), []);
@@ -160,4 +160,26 @@ test('warp labels and descriptions avoid the technical words', () => {
     const item = effect(id), defs = visibleParameterDefinitions(createLayer('surface')).filter(d => item.keys.includes(d.key));
     for (const text of [item.label, item.description, ...defs.flatMap(d => [d.label, d.description ?? ''])]) assert.doesNotMatch(text, banned, `${id}: ${text}`);
   }
+});
+
+test('Print controls follow the screen and colour choices', async () => {
+  const { printControlShown, printDisabledOptions } = await import('../src/ui/finish-rack');
+  const layer = (params: Record<string, number>) => { const l = createLayer('surface'); Object.assign(l.params, { printMix: 1 }, params); return l; };
+  // Shimmer moves dither and blue-noise cells only.
+  for (const [type, shown] of [[0, false], [1, false], [2, true], [3, true]] as const) assert.equal(printControlShown(layer({ printType: type }), 'printShimmer'), shown, `type ${type}`);
+  // Invert flips the whole-colour screen and the retro palette; RGB light and CMYK ink ignore it.
+  for (const [colour, shown] of [[0, true], [1, true], [2, false], [3, false], [4, true]] as const) assert.equal(printControlShown(layer({ printColour: colour }), 'printInvert'), shown, `colour ${colour}`);
+  // Retro spans the whole palette with hard edges and no paper, so Largest mark, Mark softness and Paper do nothing.
+  for (const key of ['printMax', 'printSoft', 'printPaper']) {
+    assert.equal(printControlShown(layer({ printColour: 4 }), key), false, key);
+    assert.equal(printControlShown(layer({ printColour: 0 }), key), true, key);
+  }
+  assert.equal(printControlShown(layer({ printColour: 4 }), 'printRetro'), true);
+  // Retro draws the Classic dot as Round, so Classic is offered only without it.
+  assert.deepEqual(printDisabledOptions(layer({ printColour: 4 }), 'printDot'), [1]);
+  assert.equal(printDisabledOptions(layer({ printColour: 0 }), 'printDot'), undefined);
+  assert.equal(printDisabledOptions(layer({ printColour: 4 }), 'printType'), undefined);
+  // Everything but the amount hides while Print is off.
+  assert.equal(printControlShown(layer({ printMix: 0 }), 'printType'), false);
+  assert.equal(printControlShown(layer({ printMix: 0 }), 'printMix'), true);
 });

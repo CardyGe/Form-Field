@@ -7,40 +7,30 @@ import { TOON_KEYS, FEEDBACK_KEYS, GLOW_KEYS } from '../core/finishing';
 import { SLIT_MODES, SLIT_SHAPES, slitControlVisible } from '../rendering/slitscan';
 import { KALEIDOSCOPE_INPUT } from '../core/project';
 import { kaleidoscopeInput } from '../rendering/feedback';
-import { FINISH_GROUPS, pickerEffects, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, hasPower, powerLocked, resetFinishEffect, toggleFinishEffect, type FinishEffect, type FinishGroup } from './finish-rack';
+import { FINISH_GROUPS, pickerEffects, addFinishEffect, finishEffectOn, finishEffectsFor, finishRackEffects, finishSummary, hasPower, powerLocked, printControlShown, printDisabledOptions, resetFinishEffect, toggleFinishEffect, type FinishEffect, type FinishGroup } from './finish-rack';
 import { FINISH_THUMBS } from './finish-thumbs';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { ChoiceParameter, Parameter } from './LayerControls';
 import { LiquidSection, LumaWarpSection, MirrorSection, PolarSection, WarpSection } from './WarpSections';
+import { CharactersSection, LedSection, TilesSection } from './TileSections';
 import { ColourSplitSection, GradientMapSection, ColourBalanceSection, KeySection } from './ColourSections';
 
 const SLIT_MODE_HELP = ['Each part of the frame lags by its own delay, set by the delay map.', 'Every slice is layered on top, the newest strongest, so motion leaves fading echoes.', 'Median keeps the middle value of the slices, so moving things drop out and still things stay.', 'Keeps the darkest value of the slices, so dark shapes leave trails.', 'Keeps the brightest value of the slices, so bright shapes leave trails.'];
 
 const PRINT_CHOICES: Record<string, string[]> = {
-  printType: ['Dots', 'Lines', 'Dither'],
+  printType: ['Dots', 'Lines', 'Dither', 'Blue noise'],
   printDot: ['Round', 'Classic', 'Diamond', 'Square'],
   printMatrix: ['2×2', '4×4', '8×8'],
-  printColour: ['Layer colour', 'Palette ink', 'RGB light', 'CMYK ink'],
+  printColour: ['Layer colour', 'Palette ink', 'RGB light', 'CMYK ink', 'Retro palette'],
+  printRetro: ['Game Boy', 'CGA', 'Teletext', 'Green screen'],
   printArea: ['Everywhere', 'Edges only', 'Away from edges'],
 };
 const PRINT_GROUPS: [string, string[]][] = [
-  ['Screen', ['printMix', 'printType', 'printSize', 'printAngle', 'printDot', 'printMatrix', 'printScroll']],
+  ['Screen', ['printMix', 'printType', 'printSize', 'printAngle', 'printDot', 'printMatrix', 'printScroll', 'printShimmer']],
   ['Tone', ['printFloor', 'printCeiling', 'printMax', 'printGain', 'printSoft', 'printInvert']],
-  ['Colour', ['printColour', 'printInk', 'printPaper']],
+  ['Colour', ['printColour', 'printInk', 'printRetro', 'printPaper']],
   ['Where it prints', ['printArea', 'printEdgeWidth', 'printEdgeSense', 'printEdgeFeather']],
 ];
-/** Whether a print control applies, given the layer's other print choices. */
-function printControlShown(layer: Layer, key: string): boolean {
-  const p = layer.params, type = Math.round(p.printType ?? 0), colour = Math.round(p.printColour ?? 0);
-  if (key === 'printMix') return true;
-  if (!((p.printMix ?? 0) > 0 || !!layer.modulations.printMix)) return false;
-  if (key === 'printDot') return type === 0;
-  if (key === 'printMatrix') return type === 2;
-  if (key === 'printInk') return colour === 1;
-  if (key === 'printInvert') return colour < 2;
-  if (key.startsWith('printEdge')) return Math.round(p.printArea ?? 0) > 0;
-  return true;
-}
 export function PrintScreenSection({ layer, definitions, edit, animate, onStart, onEnd, extra, readOnly }: FinishProps) {
   const set = (key: string, n: number) => edit(l => ({ ...l, params: { ...l.params, [key]: n } }));
   const on = (layer.params.printMix ?? 0) > 0 || !!layer.modulations.printMix;
@@ -51,7 +41,8 @@ export function PrintScreenSection({ layer, definitions, edit, animate, onStart,
       return <div key={group}>{on && <h4 className="control-subheading">{group}</h4>}{shown.map(key => {
         const d = definitions.find(item => item.key === key);
         if (!d) return null;
-        if (PRINT_CHOICES[key]) return <ChoiceParameter key={key} label={d.label} name={d.label} options={PRINT_CHOICES[key]} value={layer.params[key] ?? d.default} onChange={n => set(key, n)} />;
+        // Retro palette draws the Classic dot as Round, so that choice is not offered with it.
+        if (PRINT_CHOICES[key]) return <ChoiceParameter key={key} label={d.label} name={d.label} options={PRINT_CHOICES[key]} value={layer.params[key] ?? d.default} disabled={readOnly?.(d) ?? false} disabledOptions={printDisabledOptions(layer, key)} onChange={n => set(key, n)} />;
         return <Parameter key={key} definition={d} value={layer.params[key] ?? d.default} animated={!!layer.modulations[key]} readOnly={readOnly?.(d) ?? false} onChange={n => set(key, n)} onAnimate={animate && d.step !== 1 ? () => animate(key) : undefined} extra={extra?.(d)} onStart={onStart} onEnd={onEnd} />;
       })}</div>;
     })}
@@ -169,6 +160,9 @@ export function FinishSections({ layer, definitions, edit, animate, onStart, onE
       case 'lumaWarp': return <LumaWarpSection {...sectionProps} />;
       case 'polar': return <PolarSection {...sectionProps} />;
       case 'mirror': return <MirrorSection {...sectionProps} />;
+      case 'led': return <LedSection {...sectionProps} />;
+      case 'chars': return <CharactersSection {...sectionProps} />;
+      case 'tiles': return <TilesSection {...sectionProps} />;
       case 'print': return <PrintScreenSection {...sectionProps} />;
       case 'glow': return <>{definitions.filter(d => GLOW_KEYS.includes(d.key) && (d.key === 'glowMix' || (p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((d.key !== 'glowStreakAngle' && d.key !== 'glowStreakShape') || (p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && d.key !== 'glowStreakShape').map(d => row(d, true))}
         {((p.glowMix ?? 0) > 0 || !!mod.glowMix) && ((p.glowStreak ?? 0) > 0 || !!mod.glowStreak) && choice('Streak shape', ['Line', 'Cross'], 'glowStreakShape')}</>;

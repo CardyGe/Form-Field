@@ -98,11 +98,11 @@ export const GLOW_PARAMETERS:ParameterDefinition[]=[
  */
 export const PRINT_PARAMETERS:ParameterDefinition[]=[
  {key:'printMix',label:'Print screen',min:0,max:1,step:.01,default:0,section:'Material',description:'Blends from the plain layer to the screened layer. 0 is off.'},
- {key:'printType',label:'Screen type',min:0,max:2,step:1,default:0,section:'Material',description:'Dots, lines or ordered dither.'},
+ {key:'printType',label:'Screen type',min:0,max:3,step:1,default:0,section:'Material',description:'Dots, lines, ordered dither or blue noise.'},
  {key:'printSize',label:'Screen size',min:1,max:64,step:.25,default:8,section:'Material',description:'Dot pitch, line pitch or the size of one dither cell, in pixels at 1080 lines.'},
  {key:'printAngle',label:'Screen angle',min:-90,max:90,step:.5,default:45,section:'Material',description:'Turns the whole screen about the frame centre, in degrees.'},
  {key:'printDot',label:'Dot shape',min:0,max:3,step:1,default:0,section:'Material',description:'Round, Classic (round dots that join into a checkerboard at mid tone, then round holes), Diamond or Square.'},
- {key:'printMatrix',label:'Dither matrix',min:0,max:2,step:1,default:2,section:'Material',description:'2×2, 4×4 or 8×8 Bayer pattern.'},
+ {key:'printMatrix',label:'Dither pattern',min:0,max:2,step:1,default:2,section:'Material',description:'2×2, 4×4 or 8×8 Bayer pattern.'},
  {key:'printScroll',label:'Screen travel per loop',min:-8,max:8,step:1,default:0,section:'Motion',description:'The screen slides this many whole cells along its angle per loop; the loop closes exactly.'},
  {key:'printFloor',label:'Tone floor',min:0,max:1,step:.01,default:0,section:'Material',description:'Tones below this print nothing.'},
  {key:'printCeiling',label:'Tone ceiling',min:0,max:1,step:.01,default:1,section:'Material',description:'Tones above this print the largest mark.'},
@@ -110,13 +110,15 @@ export const PRINT_PARAMETERS:ParameterDefinition[]=[
  {key:'printGain',label:'Dot gain',min:-1,max:1,step:.01,default:0,section:'Material',description:'Bends the tone curve: positive fattens the marks, negative thins them.'},
  {key:'printSoft',label:'Mark softness',min:0,max:1,step:.01,default:0,section:'Material',description:'0 is a crisp filtered edge; 1 softens each mark across half a cell.'},
  {key:'printInvert',label:'Invert',min:0,max:1,step:1,default:0,section:'Material',description:'Off: bright tone makes big marks, like light on dark. On: dark tone makes big marks, like ink on paper.'},
- {key:'printColour',label:'Screen colour',min:0,max:3,step:1,default:0,section:'Material',description:'Layer colour, one palette ink, three added RGB light screens, or four overprinted CMYK ink screens.'},
+ {key:'printColour',label:'Screen colour',min:0,max:4,step:1,default:0,section:'Material',description:'Layer colour, one palette ink, three added RGB light screens, four overprinted CMYK ink screens, or a retro palette.'},
  {key:'printInk',label:'Ink',min:1,max:6,step:1,default:1,section:'Material',description:'Palette swatch used by Palette ink.'},
  {key:'printPaper',label:'Paper',min:0,max:6,step:1,default:0,section:'Material',description:'0 leaves the gaps transparent; 1–6 fill them with that palette swatch, inside the layer\'s own coverage.'},
  {key:'printArea',label:'Print area',min:0,max:2,step:1,default:0,section:'Material',description:'Everywhere, edges only, or away from edges. Outside the area the layer shows as normal.'},
  {key:'printEdgeWidth',label:'Edge width',min:1,max:64,step:.5,default:12,section:'Material',description:'How far the edge band reaches from an edge, in pixels at 1080 lines.'},
  {key:'printEdgeSense',label:'Edge sensitivity',min:0,max:1,step:.01,default:.5,section:'Material',description:'How small a tone step counts as an edge. Higher finds fainter edges.'},
  {key:'printEdgeFeather',label:'Edge feather',min:0,max:1,step:.01,default:.25,section:'Material',description:'Softness of the boundary between screened and plain.'},
+ {key:'printRetro',label:'Retro palette',min:0,max:3,step:1,default:0,section:'Material',description:'Game Boy, CGA, Teletext or Green screen, used when Screen colour is Retro palette.'},
+ {key:'printShimmer',label:'Shimmer',min:0,max:1,step:1,default:0,section:'Motion',description:'On: the dither or blue-noise pattern changes each frame, so the screen shimmers. Off: it holds still.'},
 ];
 /**
  * Split: the layer's colour channels are pulled apart along a direction, so
@@ -234,6 +236,41 @@ export const MIRROR_PARAMETERS:ParameterDefinition[]=[
  {key:'mirrorAngle',label:'Mirror angle',min:-180,max:180,step:1,default:0,section:'Shape',description:'Turns the mirror lines, in degrees.'},
  {key:'mirrorTurns',label:'Mirror turns per loop',min:-8,max:8,step:1,default:0,section:'Motion',description:'Whole turns the mirror makes per loop; the loop closes exactly.'},
 ];
+/** LED wall: the picture rebuilt as a grid of glowing LEDs. Off by default (LED wall 0). */
+export const LED_PARAMETERS:ParameterDefinition[]=[
+ {key:'ledAmount',label:'LED wall',min:0,max:1,step:.01,default:0,section:'Material',description:'Blends from the plain layer to a wall of LEDs. 0 is off.'},
+ {key:'ledSize',label:'LED pitch',min:2,max:64,step:.25,default:10,section:'Shape',description:'Distance between LEDs, in pixels at 1080 lines.'},
+ {key:'ledDot',label:'LED size',min:.2,max:1,step:.01,default:.75,section:'Shape',description:'How much of each cell the LED fills.'},
+ {key:'ledShape',label:'LED shape',min:0,max:2,step:1,default:0,section:'Shape',description:'Round, square or stripes.'},
+ {key:'ledBrightness',label:'LED brightness',min:.5,max:4,step:.01,default:1.5,section:'Material',description:'How hard the LEDs shine.'},
+ {key:'ledGaps',label:'LED background',min:0,max:7,step:1,default:1,section:'Material',description:'What shows between the LEDs: transparent, black or a palette swatch.'},
+ {key:'ledDead',label:'Dead LEDs',min:0,max:.2,step:.001,default:0,section:'Material',description:'The share of LEDs that stay dark.'},
+ {key:'ledScan',label:'LED scan lines',min:0,max:1,step:.01,default:0,section:'Material',description:'Darkens alternate rows, like a scanned display.'},
+ {key:'ledFlicker',label:'LED flicker',min:0,max:1,step:.01,default:0,section:'Motion',description:'Each LED shimmers a little. Loops close exactly.'},
+];
+/** Characters: the picture rebuilt from text characters. Off by default (Characters 0). */
+export const CHAR_PARAMETERS:ParameterDefinition[]=[
+ {key:'charAmount',label:'Characters',min:0,max:1,step:.01,default:0,section:'Material',description:'Blends from the plain layer to text characters. 0 is off.'},
+ {key:'charSize',label:'Character size',min:4,max:96,step:.25,default:16,section:'Shape',description:'Height of one character cell, in pixels at 1080 lines.'},
+ {key:'charSet',label:'Character set',min:0,max:3,step:1,default:0,section:'Shape',description:'Density, Blocks, Binary or Dots.'},
+ {key:'charColour',label:'Character colour',min:0,max:1,step:1,default:0,section:'Material',description:'Layer colour or one palette ink.'},
+ {key:'charInk',label:'Character ink',min:1,max:6,step:1,default:1,section:'Material',description:'Palette swatch used by Palette ink.'},
+ {key:'charGaps',label:'Character background',min:0,max:7,step:1,default:1,section:'Material',description:'What shows behind the characters: transparent, black or a palette swatch.'},
+ {key:'charContrast',label:'Character contrast',min:.5,max:3,step:.01,default:1,section:'Material',description:'Stretches the tone that picks each character.'},
+ {key:'charSwaps',label:'Character swaps per loop',min:0,max:32,step:1,default:0,section:'Motion',description:'How often characters change to a different one, per loop. Loops close exactly.'},
+ {key:'charSwapChance',label:'Swap chance',min:0,max:1,step:.01,default:.05,section:'Material',description:'The share of cells that swap each time.'},
+];
+/** Tiles: the picture rebuilt from mosaic tiles, bricks or beads. Off by default (Tiles 0). */
+export const TILE_PARAMETERS:ParameterDefinition[]=[
+ {key:'tileAmount',label:'Tiles',min:0,max:1,step:.01,default:0,section:'Material',description:'Blends from the plain layer to tiles. 0 is off.'},
+ {key:'tileStyle',label:'Tile style',min:0,max:2,step:1,default:0,section:'Shape',description:'Mosaic, Brick or Beads.'},
+ {key:'tileSize',label:'Tile size',min:3,max:96,step:.25,default:18,section:'Shape',description:'Height of one tile, in pixels at 1080 lines.'},
+ {key:'tileGrout',label:'Grout width',min:0,max:.5,step:.01,default:.12,section:'Shape',description:'The gap between tiles, as a share of a tile.'},
+ {key:'tileGaps',label:'Grout colour',min:0,max:7,step:1,default:1,section:'Material',description:'What fills the grout: transparent, black or a palette swatch.'},
+ {key:'tileRelief',label:'Tile relief',min:0,max:1,step:.01,default:.5,section:'Material',description:'How much each tile is lit as a raised block.'},
+ {key:'tileLight',label:'Light angle',min:-180,max:180,step:1,default:135,section:'Material',description:'The direction the relief light comes from, in degrees.'},
+ {key:'tileJitter',label:'Irregularity',min:0,max:1,step:.01,default:.3,section:'Material',description:'How far each mosaic tile strays from the grid.'},
+];
 export const FINISH_PARAMETERS:ParameterDefinition[]=[
  {key:'toneContrast',label:'Tonal contrast',min:.5,max:2,step:.01,default:1,section:'Material',description:'Luminance contrast around the pivot, preserving colour ratios.'},
  {key:'tonePivot',label:'Contrast pivot',min:.05,max:.75,step:.01,default:.18,section:'Material',description:'Anchor for Tonal contrast. Neutral contrast leaves the pivot inactive.'},
@@ -246,6 +283,9 @@ export const FINISH_PARAMETERS:ParameterDefinition[]=[
  ...SLIT_PARAMETERS,
  ...GLOW_PARAMETERS,
  ...PRINT_PARAMETERS,
+ ...LED_PARAMETERS,
+ ...CHAR_PARAMETERS,
+ ...TILE_PARAMETERS,
  ...SPLIT_PARAMETERS,
  ...GRADIENT_PARAMETERS,
  ...GRADE_PARAMETERS,
@@ -262,6 +302,9 @@ export const FEEDBACK_KEYS=FEEDBACK_PARAMETERS.map(p=>p.key);
 export const SLIT_KEYS=SLIT_PARAMETERS.map(p=>p.key);
 export const GLOW_KEYS=GLOW_PARAMETERS.map(p=>p.key);
 export const PRINT_KEYS=PRINT_PARAMETERS.map(p=>p.key);
+export const LED_KEYS=LED_PARAMETERS.map(p=>p.key);
+export const CHAR_KEYS=CHAR_PARAMETERS.map(p=>p.key);
+export const TILE_KEYS=TILE_PARAMETERS.map(p=>p.key);
 export const SPLIT_KEYS=SPLIT_PARAMETERS.map(p=>p.key);
 export const GRADIENT_KEYS=GRADIENT_PARAMETERS.map(p=>p.key);
 export const GRADE_KEYS=GRADE_PARAMETERS.map(p=>p.key);
