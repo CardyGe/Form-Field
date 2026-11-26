@@ -5,7 +5,7 @@ import { signalActive } from '../rendering/signal';
 import { slitActive } from '../rendering/slitscan';
 import { tilesActive } from '../rendering/tiles';
 import { warpActive } from '../rendering/warp';
-import { parameterDefinitions } from './project';
+import { parameterDefinitions, SURFACE_FOLD } from './project';
 import { sourceViewMatrix } from '../rendering/source-view';
 
 export const TAU = Math.PI * 2;
@@ -19,6 +19,7 @@ export function layerTileBlocker(layer: Layer): string | null {
   const n = layer.name, p = layer.params;
   if (layer.kind !== 'surface') return `${n}: this instrument can't tile yet.`;
   if (p.style === 1) return `${n}: the Contours style can't tile.`;
+  if (p.style === SURFACE_FOLD) return `${n}: Liquid Fold cannot tile across frame edges.`;
   if (p.style === 3) return `${n}: the Fusion style can't tile.`;
   if (p.style === 2 && p.variant === 0) return `${n}: the Melt style can't tile.`;
   if (layer.mask.kind !== 'none') return `${n} has a mask.`;

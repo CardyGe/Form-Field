@@ -1,6 +1,7 @@
 import { FINISH_KEYS } from './finishing';
 import type { Layer, LayerKind, ParameterDefinition } from '../shared/types';
-import { kaleidoscopeHidden, visibleParameterDefinitions, type VariationLocks } from './project';
+import { kaleidoscopeHidden, SURFACE_FOLD, visibleParameterDefinitions, type VariationLocks } from './project';
+import { sourceViewMatrix } from '../rendering/source-view';
 
 export const TRANSFORM_LIMITS = { position: [-2, 2], scale: [.05, 8] } as const;
 const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
@@ -24,7 +25,8 @@ const preferred: Partial<Record<LayerKind, string[]>> = {
 
 /** Continuous, visible controls only; never rebuild a simulation during a drag. */
 export function canvasAxes(layer: Layer, locks: VariationLocks): ParameterDefinition[] {
-  let keys = preferred[layer.kind] ?? [];
+  const fold = layer.kind === 'surface' && layer.params.style === SURFACE_FOLD;
+  let keys = fold ? ['foldX', 'foldY'] : preferred[layer.kind] ?? [];
   if(layer.kind==='livingink'&&layer.params.inkMode===2)keys=['pigment','relief'];
   // With the press on, dragging moves the dome.
   if(layer.kind==='liquid'&&layer.params.press>0)keys=['pressX','pressY'];
@@ -40,12 +42,23 @@ export function canvasAxes(layer: Layer, locks: VariationLocks): ParameterDefini
   const available = visibleParameterDefinitions(layer).filter(d => !hidden?.has(d.key) && !FINISH_KEYS.includes(d.key) &&
     d.step !== 1 && !d.preparation && !d.structural && !layer.modulations[d.key] &&
     (d.section === 'Shape' && !locks.structure || keys.includes(d.key) && d.section === 'Material' && !locks.material));
-  return [...keys.map(key => available.find(d => d.key === key)), ...available]
+  return [...keys.map(key => available.find(d => d.key === key)), ...(fold ? [] : available)]
     .filter((d, i, all): d is ParameterDefinition => !!d && all.indexOf(d) === i).slice(0, 2);
 }
 
-export function shapeFromDrag(base: Layer, axes: ParameterDefinition[], dx: number, dy: number): Layer {
+export function shapeFromDrag(base: Layer, axes: ParameterDefinition[], dx: number, dy: number, aspect = 1): Layer {
   const params = { ...base.params };
+  if (base.kind === 'surface' && base.params.style === SURFACE_FOLD) {
+    // A UV vector has w = 0, so the layer's translation drops out.
+    const m = sourceViewMatrix(base.transform, aspect).elements;
+    const x = m[0]*dx - m[3]*dy, y = m[1]*dx - m[4]*dy;
+    for (const axis of axes) {
+      const delta = axis.key === 'foldX' ? x : y;
+      const value = base.params[axis.key] + delta;
+      params[axis.key] = clamp(value, axis.min, axis.max);
+    }
+    return { ...base, params };
+  }
   axes.forEach((d, i) => {
     // Most of a viewport gives useful travel while preserving the starting look.
     const delta = i === 0 ? dx : -dy;

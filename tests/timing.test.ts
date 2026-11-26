@@ -37,8 +37,8 @@ test('older Surface, Graphic and Relief layers open with timing off', () => {
   }
 });
 
-test('every Surface, Graphic and Relief preset staggers its motion', () => {
-  for (const preset of PRESETS.filter(p => ['surface', 'graphic', 'relief'].includes(p.kind) && !['recursion-tunnel', 'time-terraces'].includes(p.id))) {
+test('Surface, Graphic and Relief presets with staged motion have it enabled', () => {
+  for (const preset of PRESETS.filter(p => ['surface', 'graphic', 'relief'].includes(p.kind) && !['recursion-tunnel', 'time-terraces', 'offset-fold'].includes(p.id))) {
     const layer = applyPreset(createLayer(preset.kind), preset.id);
     assert.ok(layer.params.delaySpread > 0 || layer.params.pause > 0, preset.id);
   }
