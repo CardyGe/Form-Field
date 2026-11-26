@@ -33,7 +33,7 @@ import { gradientStops, lensActive, lensFragment, safeMidpoint, spectralWeights,
 import { layerWarpView, warpActive, warpFragment, warpPicture, warpPoints } from './warp';
 import { CHAR_SETS, cellColourFragment, fitCellGrid, tileFragment, tilesActive } from './tiles';
 import { crtFragment, dropFragment, loopFrame, signalActive, signalStages, vhsFragment } from './signal';
-import { blockGrid, jpegFragments, jpegSteps } from './jpeg-blocks';
+import { blockGrid, jpegFragments, jpegSamples, jpegSteps } from './jpeg-blocks';
 import { GLYPH_PX, GLYPH_SPREAD, buildGlyphAtlas } from './glyph-atlas';
 import { SURFACE_DEFAULTS, snapQuarterTurn, tileBlockers, tilePeriod } from '../core/tile-edges';
 import { packDroplets, liquidPackKey, LIQUID_BINS, LIQUID_SLOTS } from './liquid-pack';
@@ -140,7 +140,7 @@ function target(depth = false, bytes = false): THREE.WebGLRenderTarget {
 
 /** The uniforms every JPEG damage pass shares (signalCommon's and the block size). */
 function jpegUniforms(): Uniforms {
-  return { uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 }, uBlock: { value: 8 }, uChromaX: { value: 8 } };
+  return { uSource: { value: null }, uSize: { value: new THREE.Vector2(1, 1) }, uLines: { value: 1 }, uSeed: { value: 0 }, uFrame: { value: 0 }, uAmount: { value: 0 }, uBlock: { value: 8 }, uChromaX: { value: 8 }, uN: { value: 8 }, uNc: { value: 8 } };
 }
 
 function number(layer: Layer, key: string, fallback: number): number {
@@ -328,7 +328,8 @@ export class StudioRenderer {
   });
   /**
    * JPEG damage: two grid targets (one texel per sample of every block) and one as wide as the grid and as tall as the
-   * frame. They grow and never shrink while in use, each pass drawing into its own corner, and go with the signal targets.
+   * frame. They grow to fit, shrink when a frame needs under half of them, each pass drawing into its own corner, and
+   * go with the signal targets.
    */
   private jpegTargets: { grid: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget]; columns: THREE.WebGLRenderTarget } | null = null;
   private readonly jpegRows = material(jpegFragments.rowsForward, jpegUniforms());
@@ -1535,21 +1536,26 @@ export class StudioRenderer {
   private jpegStage(layer: Layer, input: THREE.Texture, output: THREE.WebGLRenderTarget, at: { width: number; height: number; seed: number; frame: number; frames: number; mix: number }): void {
     const { width, height } = at;
     const within = (key: string, low: number, high: number, fallback: number) => Math.min(high, Math.max(low, number(layer, key, fallback)));
-    const block = within('jpegBlock', 4, 64, 8), chroma = within('jpegChroma', 0, 1, .5), swaps = Math.round(within('jpegGlitchSwaps', 0, 32, 4));
-    const { cols, rows } = blockGrid(width, height, block);
-    // Brightness blocks 8x8 texels each from the left, then colour blocks (2x2 brightness blocks each) 8x8 texels each.
-    const chromaX = cols * 8, gridW = chromaX + Math.ceil(cols / 2) * 8, gridH = rows * 8;
+    // Changes come in pairs: a closing loop cannot change exactly once.
+    const block = within('jpegBlock', 4, 64, 8), chroma = within('jpegChroma', 0, 1, .5), swaps = 2 * Math.round(within('jpegGlitchSwaps', 0, 32, 4) / 2);
+    const { cols, rows } = blockGrid(width, height, block), { n, nc } = jpegSamples(block, height);
+    // Brightness blocks n x n texels each from the left, then colour blocks (2x2 brightness blocks each) nc x nc each.
+    const chromaX = cols * n, gridW = chromaX + Math.ceil(cols / 2) * nc, gridH = Math.max(rows * n, Math.ceil(rows / 2) * nc);
+    // Grow to fit; shrink to fit when the frame needs under half the target.
     const fit = (rt: THREE.WebGLRenderTarget, w: number, h: number) => {
       if (rt.width < w || rt.height < h) rt.setSize(Math.max(rt.width, w), Math.max(rt.height, h));
+      if (w * h < rt.width * rt.height / 2) rt.setSize(w, h);
       rt.viewport.set(0, 0, w, h);
     };
-    this.jpegTargets ??= { grid: [target(), target()], columns: target() };
+    // Two channels are enough: a brightness term, or two colour terms.
+    const pair = () => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, format: THREE.RGFormat, depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+    this.jpegTargets ??= { grid: [pair(), pair()], columns: pair() };
     const [rowTerms, terms] = this.jpegTargets.grid, columns = this.jpegTargets.columns;
     fit(rowTerms, gridW, gridH); fit(terms, gridW, gridH); fit(columns, gridW, height);
     for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) {
       const u = program.uniforms;
       u.uSource.value = input; (u.uSize.value as THREE.Vector2).set(width, height); u.uLines.value = 1080 / height;
-      u.uSeed.value = at.seed; u.uFrame.value = at.frame; u.uAmount.value = at.mix; u.uBlock.value = block; u.uChromaX.value = chromaX;
+      u.uSeed.value = at.seed; u.uFrame.value = at.frame; u.uAmount.value = at.mix; u.uBlock.value = block; u.uChromaX.value = chromaX; u.uN.value = n; u.uNc.value = nc;
     }
     this.draw(this.jpegRows, rowTerms);
     this.jpegColumns.uniforms.uGrid.value = rowTerms.texture;

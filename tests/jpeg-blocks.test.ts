@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { blockGrid, dct8, idct8, quantStep } from '../src/rendering/jpeg-blocks';
+import { blockGrid, dct8, idct8, jpegSamples, quantStep } from '../src/rendering/jpeg-blocks';
 
 test('the 8-point transform round-trips', () => {
   const row = [0, .1, .5, .9, 1, .3, .2, .7];
@@ -32,4 +32,12 @@ test('block grids are sized in 1080-line pixels', () => {
   assert.deepEqual(blockGrid(960, 540, 12), { cols: 160, rows: 90 });
   // A part block at the right and bottom edges still counts.
   assert.deepEqual(blockGrid(1920, 1080, 7), { cols: 275, rows: 155 });
+});
+test('a block under 8 output pixels takes one sample per output pixel, so the grid follows the frame', () => {
+  assert.deepEqual(jpegSamples(8, 1080), { n: 8, nc: 8 });
+  assert.deepEqual(jpegSamples(8, 540), { n: 4, nc: 8 });
+  assert.deepEqual(jpegSamples(4, 540), { n: 2, nc: 4 });
+  assert.deepEqual(jpegSamples(4, 2160), { n: 8, nc: 8 });
+  assert.deepEqual(jpegSamples(4, 270), { n: 1, nc: 2 });
+  assert.deepEqual(jpegSamples(7, 540), { n: 4, nc: 7 });
 });

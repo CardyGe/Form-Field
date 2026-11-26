@@ -308,7 +308,7 @@ export const JPEG_PARAMETERS:ParameterDefinition[]=[
  {key:'jpegBlock',label:'Block size',min:4,max:64,step:0.25,default:8,section:'Shape',description:'Size of one block, in pixels at 1080 lines.'},
  {key:'jpegChroma',label:'Colour damage',min:0,max:1,step:0.01,default:0.5,section:'Material',description:'How much colour is smeared and lost.'},
  {key:'jpegGlitch',label:'Broken blocks',min:0,max:1,step:0.01,default:0,section:'Material',description:'The share of blocks replaced with other blocks.'},
- {key:'jpegGlitchSwaps',label:'Block changes per loop',min:0,max:32,step:1,default:4,section:'Motion',description:'How often broken blocks change, per loop. Loops close exactly.'},
+ {key:'jpegGlitchSwaps',label:'Block changes per loop',min:0,max:32,step:2,default:4,section:'Motion',description:'How often broken blocks change, per loop, in steps of 2 so loops close exactly.'},
 ];
 /** Databend: treats the picture as sound, with echoes, combs, folds, stutters and corruption. Off by default (Databend 0). */
 export const DATABEND_PARAMETERS:ParameterDefinition[]=[

@@ -373,7 +373,8 @@ const CHECKS = [
     name: 'crt-curve',
     // Screen curve .3, every other CRT control neutral. (1) The shader's barrel matches crtCurve in signal.ts: a source
     // holding its own uv in half float goes through the CRT stage and is read back in float at nine points. (2) A
-    // straight white line across the top third bows outward: its row is nearest the top in the middle. (3) The centre
+    // straight white line across the bottom third bows outward like a barrel: it is farthest from the frame's middle
+    // row in the middle of the screen and comes nearer toward the sides, by at least 5 rows. (3) The centre
     // pixel is unchanged. (4) Outside the curved screen a Transparent bezel is alpha 0, a Black one is opaque black
     // where the layer has coverage and alpha 0 where it has none. (5) The screen edge takes one output pixel: along the
     // middle half of the rows, each crossing of the right edge has one or two partly covered pixels, one on average.
@@ -383,8 +384,10 @@ const CHECKS = [
         const pin = await q.uvPin(curve, W, H, [[.5, .5], [.3, .4], [.7, .62], [.2, .8], [.85, .3], [.6, .15], [.12, .5], [.5, .9], [.42, .66]]);
         const line = await q.px(q.exact(q.project([q.line(curve)])));
         // The line's brightest row in a column, counted from the top (the read-back pixels start at the bottom row).
-        const rowAt = x => { let best = -1, most = 0; for (let y = 0; y < H; y++) { const v = line[(y * W + x) * 4]; if (v > most) { most = v; best = H - 1 - y; } } return best; };
-        const rows = [rowAt(480), rowAt(320), rowAt(200)];
+        // The line's brightest row in a column, counted from the top (exported rows start at the top), and how far it
+        // sits from the frame's middle row.
+        const rowAt = x => { let best = -1, most = 0; for (let y = 0; y < H; y++) { const v = line[(y * W + x) * 4]; if (v > most) { most = v; best = y; } } return best; };
+        const rows = [rowAt(480), rowAt(320), rowAt(200)], apart = rows.map(y => Math.abs(y + .5 - H / 2));
         const plain = await q.px(q.exact(q.project([q.smooth()]))), bent = await q.px(q.exact(q.project([q.smooth(curve)])));
         let centre = 0;
         for (const [x, y] of [[479, 269], [480, 270]]) for (let k = 0; k < 4; k++) centre = Math.max(centre, Math.abs(plain[(y * W + x) * 4 + k] - bent[(y * W + x) * 4 + k]));
@@ -400,15 +403,15 @@ const CHECKS = [
           most = Math.max(most, partial); total += partial; counted++;
         }
         return {
-          pin, rows, centre, clear: at(clear, 0, 0), black: at(black, 0, 0), softLeft: at(softBlack, 0, 0), softRight: at(softBlack, W - 1, 0),
+          pin, rows, apart, centre, clear: at(clear, 0, 0), black: at(black, 0, 0), softLeft: at(softBlack, 0, 0), softRight: at(softBlack, W - 1, 0),
           edgeMost: most, edgeMean: total / counted, change: q.difference(plain, bent),
         };
       }, CRT_ALONE);
-      const bows = r.rows[0] < r.rows[1] && r.rows[1] < r.rows[2] && r.rows[2] - r.rows[0] >= 5;
+      const bows = r.apart[0] > r.apart[1] && r.apart[1] > r.apart[2] && r.apart[0] - r.apart[2] >= 5;
       const bezel = r.clear[3] === 0 && r.black[3] === 255 && r.black[0] + r.black[1] + r.black[2] === 0 && r.softLeft[3] === 255 && r.softLeft[0] + r.softLeft[1] + r.softLeft[2] === 0 && r.softRight[3] === 0;
       const edge = r.edgeMost <= 2 && r.edgeMean >= .7 && r.edgeMean <= 1.5;
       const ok = r.pin.worst < 1.5e-3 && bows && r.centre <= 1 && bezel && edge;
-      return { ok, detail: `${r.change < .1 ? NO_CRT : ''}shader against crtCurve: worst ${r.pin.worst.toExponential(2)} over ${r.pin.points} points (limit 1.5e-3); line rows at x 480/320/200: ${r.rows.join('/')} (rising toward the middle, by at least 5); centre change ${r.centre}/255 (limit 1); corner Transparent ${r.clear.join(',')}, Black ${r.black.join(',')}, soft layer Black left ${r.softLeft.join(',')} right ${r.softRight.join(',')}; partly covered edge pixels per row ${r.edgeMean.toFixed(2)} mean, ${r.edgeMost} most (.7 to 1.5, at most 2)` };
+      return { ok, detail: `${r.change < .1 ? NO_CRT : ''}shader against crtCurve: worst ${r.pin.worst.toExponential(2)} over ${r.pin.points} points (limit 1.5e-3); line rows at x 480/320/200: ${r.rows.join('/')}, ${r.apart.join('/')} from the middle row (farthest in the middle, by at least 5); centre change ${r.centre}/255 (limit 1); corner Transparent ${r.clear.join(',')}, Black ${r.black.join(',')}, soft layer Black left ${r.softLeft.join(',')} right ${r.softRight.join(',')}; partly covered edge pixels per row ${r.edgeMean.toFixed(2)} mean, ${r.edgeMost} most (.7 to 1.5, at most 2)` };
     },
   },
   {
@@ -778,6 +781,54 @@ const CHECKS = [
     },
   },
   {
+    name: 'jpeg-cost',
+    // Report only: for Block 8 (default) and Block 4 at 960x540, 1920x1080 and 3840x2160, GPU ms per frame against
+    // plain and the memory the JPEG targets hold after that size alone (two half-float channels, 4 bytes a texel).
+    run: async ({ page }) => {
+      const rows = await page.evaluate(async () => {
+        const q = window.sq, gl = q.renderer.renderer.getContext(), one = new Uint8Array(4), rows = [];
+        const sync = () => { q.renderer.renderer.setRenderTarget(null); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one); };
+        const time = async (p, W, H) => {
+          await q.renderer.prepare(p);
+          for (let i = 0; i < 3; i++) q.renderer.render(p, .9, W, H);
+          sync(); const start = performance.now();
+          for (let i = 0; i < 10; i++) q.renderer.render(p, .9 + i * .01, W, H);
+          sync(); return (performance.now() - start) / 10;
+        };
+        const held = () => { const t = q.renderer.jpegTargets; return t ? [...t.grid, t.columns].reduce((s, rt) => s + rt.width * rt.height * 4, 0) / 2 ** 20 : 0; };
+        for (const [W, H] of [[960, 540], [1920, 1080], [3840, 2160]]) {
+          const plain = await time(q.project([q.smooth()]), W, H);
+          for (const block of [8, 4]) {
+            q.renderer.releaseJpeg();
+            const ms = await time(q.project([q.smooth({ jpegAmount: 1, jpegBlock: block })]), W, H);
+            rows.push(`${W} Block ${block}: +${(ms - plain).toFixed(1)} ms, ${held().toFixed(0)} MB`);
+          }
+        }
+        return rows;
+      });
+      return { ok: true, detail: `report only: ${rows.join('; ')}` };
+    },
+  },
+  {
+    name: 'jpeg-shrink',
+    // The JPEG targets follow the frame: a 960x540 frame at the defaults right after a 3840x2160 frame at Block 4 must
+    // hold no more than twice what a 960x540 frame at the defaults holds alone.
+    run: async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const q = window.sq;
+        const held = () => { const t = q.renderer.jpegTargets; return t ? [...t.grid, t.columns].reduce((s, rt) => s + rt.width * rt.height * 4, 0) / 2 ** 20 : 0; };
+        const frame = async (params, W, H) => { const p = q.project([q.smooth(params)]); await q.renderer.prepare(p); q.renderer.render(p, .9, W, H); };
+        q.renderer.releaseJpeg();
+        await frame({ jpegAmount: 1 }, 960, 540); const alone = held();
+        await frame({ jpegAmount: 1, jpegBlock: 4 }, 3840, 2160); const big = held();
+        await frame({ jpegAmount: 1 }, 960, 540);
+        return { alone, big, after: held() };
+      });
+      const ok = r.after > 0 && r.after <= 2 * r.alone;
+      return { ok, detail: `960 defaults alone ${r.alone.toFixed(1)} MB; after a 4K Block 4 frame (${r.big.toFixed(1)} MB) ${r.after.toFixed(1)} MB (at most ${(2 * r.alone).toFixed(1)})` };
+    },
+  },
+  {
     name: 'jpeg-engage',
     // An amount of .001 is all but plain; an amount of 1 is not.
     run: async ({ page }) => {
@@ -823,6 +874,8 @@ try {
     const old = hasBaseline ? await import('./baseline.js') : null;
     const renderer = new m.StudioRenderer(document.querySelector('#a'));
     const urlOf = bytes => { const parts = []; for (let i = 0; i < bytes.length; i += 8192) parts.push(String.fromCharCode(...bytes.subarray(i, i + 8192))); return `data:image/png;base64,${btoa(parts.join(''))}`; };
+    // A test picture from pixel(x, y), both in frame heights from the middle. encodePNG takes rows bottom first, as
+    // WebGL reads them back, so y runs up from the bottom: y = -.3 is in the bottom third.
     const dataUrl = async (w, h, pixel) => {
       const bytes = new Uint8Array(w * h * 4);
       for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) bytes.set(pixel((x + .5) / h - w / h / 2, (y + .5) / h - .5), (y * w + x) * 4);
@@ -842,7 +895,7 @@ try {
     const smooth = (params = {}) => image(smoothUrl, params, 'smooth');
     const whiteUrl = await dataUrl(960, 540, () => [255, 255, 255, 255]);
     const white = (params = {}) => image(whiteUrl, params, 'white');
-    // A white line 2% of the frame tall across the top third (rows 103 to 113 of 540), on black.
+    // A white line 2% of the frame tall across the bottom third (rows 427 to 436 of 540 from the top), on black.
     const lineUrl = await dataUrl(960, 540, (x, y) => Math.abs(y + .3) < .01 ? [255, 255, 255, 255] : [0, 0, 0, 255]);
     const line = (params = {}) => image(lineUrl, params, 'line');
     // A white square a fifth of the frame tall in the middle, nothing around it.
@@ -888,7 +941,8 @@ try {
       Math.round(128 + 100 * Math.sin(x * 57 + .3)), Math.round(128 + 100 * Math.sin(y * 48 - .8)), Math.round(128 + 90 * Math.sin((x + y) * 40)), 255,
     ]);
     const waves = (params = {}) => image(wavesUrl, params, 'waves');
-    // Flat blocks of random colour, 8 pixels of a 1080-line frame each from the top-left, at 1920x1080.
+    // Flat blocks of random colour, 8 pixels of a 1080-line frame each (1080 is 135 blocks, so they line up from the
+    // top as from the bottom), at 1920x1080.
     let blockyUrl = null;
     const blocky = async () => {
       blockyUrl ??= await dataUrl(1920, 1080, (x, y) => {
