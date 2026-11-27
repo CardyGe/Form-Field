@@ -6,7 +6,7 @@ const unlocked = {palette:false,structure:false,motion:false,material:false};
 const identity = ['style','variant','form','mode','colorMode','profile','fill','sweep','gateMode','substrate','quality','cycles','turns','backgroundOpacity','phaseOffset'];
 
 test('the curated library keeps distinct presets on saturated palettes with a dark or light ground', () => {
-  assert.equal(PRESETS.length, 111 + 32 + 10 + FRACTAL_PROJECTION_LOOK_IDS.length + MERIDIAN_LOOKS.length);
+  assert.equal(PRESETS.length, 115 + 32 + 10 + FRACTAL_PROJECTION_LOOK_IDS.length + MERIDIAN_LOOKS.length);
   assert.equal(new Set(PRESETS.map(p=>p.id)).size, PRESETS.length);
   for (const preset of PRESETS) {
     const layer=applyPreset(createLayer(preset.kind),preset.id);
@@ -15,7 +15,7 @@ test('the curated library keeps distinct presets on saturated palettes with a da
     assert.equal(preset.palette.length,6,preset.id);
   }
   // Rule: no two presets of a family share both palette and structure.
-  const shape=(p:typeof PRESETS[number])=>JSON.stringify([p.kind,p.palette,p.params.style,p.params.variant,p.params.form,p.params.mode,p.params.inkMode,p.params.flowMode,p.params.reliefMode,p.params.echo,p.params.slitShift]);
+  const shape=(p:typeof PRESETS[number])=>JSON.stringify([p.kind,p.palette,p.params.style,p.params.variant,p.params.form,p.params.mode,p.params.inkMode,p.params.flowMode,p.params.reliefMode,p.params.echo,p.params.slitShift,p.params.foldShape,p.params.foldPath]);
   assert.equal(new Set(PRESETS.map(shape)).size,PRESETS.length,'Palette twins');
 });
 

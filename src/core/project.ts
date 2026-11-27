@@ -1,7 +1,7 @@
 import {FINISH_PARAMETERS, FINISH_KEYS, TOON_KEYS, FEEDBACK_KEYS, SLIT_KEYS, GLOW_KEYS, PRINT_KEYS, LED_KEYS, CHAR_KEYS, TILE_KEYS, VHS_KEYS, DROP_KEYS, CRT_KEYS, JPEG_KEYS, DATABEND_KEYS, SPLIT_KEYS, GRADIENT_KEYS, GRADE_KEYS, KEY_KEYS, WARP_KEYS, LIQUID_KEYS, LUMA_WARP_KEYS, POLAR_KEYS, MIRROR_KEYS} from './finishing';
 import { isSimplePolygon } from './surface-layout';
 import { TIMING_PARAMETERS, TIMING_KEYS } from './timing';
-import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW, LASER_GARDEN, ULTRAVIOLET, VAPOR, SUNSET_RAVE, DEEP_REEF, MOLTEN, PRISM, TOXIC, AURORA, BUBBLEGUM, ICE_FIRE, PSYCH_70S, ELECTRIC_LIME, BLOOD_ORANGE, MINT_MAGENTA, CRIMSON_TEAL } from './palettes';
+import { NEON_STRATA, ACID_DRIP, POP_PORTAL, POUR, HOT_SIGNAL, LIME_VIOLET, ELECTRIC, CANDY, SOLAR, CYAN_YELLOW, LASER_GARDEN, ULTRAVIOLET, VAPOR, SUNSET_RAVE, DEEP_REEF, MOLTEN, PRISM, TOXIC, AURORA, BUBBLEGUM, ICE_FIRE, PSYCH_70S, ELECTRIC_LIME, BLOOD_ORANGE, MINT_MAGENTA, CRIMSON_TEAL, FOLD_PALETTES } from './palettes';
 import { kaleidoscopeInput, supportsFeedback } from '../rendering/feedback';
 import { supportsSlitScan } from '../rendering/slitscan';
 import { supportsGlow } from '../rendering/bloom';
@@ -30,6 +30,25 @@ const DEFAULT_PALETTE = ['#49efd6', '#cbf34a', '#ef62d9', '#7747ef', '#ff826c', 
 const SCULPTURE_PALETTE = CANDY;
 const FRACTAL_PALETTE = ['#5fffe1', '#aff043', '#b77bff', '#f65aa6', '#ffb969', '#09102c'];
 const FRACTAL_EVOLUTION = .82;
+export const SURFACE_FAMILIES = ['Bands', 'Contours', 'Drips', 'Fusion', 'Liquid Fold'];
+export const SURFACE_FOLD = 4;
+export const SURFACE_VARIANTS = [['Flow', 'Braids', 'Ribbons'], ['Terrace', 'Ripples', 'Vortex'],
+  ['Melt', 'Beads', 'Strands'], ['Portal', 'Twin Portals', 'Lens'], ['Offset Fold']];
+export const FOLD_DIRECTIONS = ['Forward', 'Reverse'];
+export const FOLD_SHAPES = ['Offset Fold', 'Twin Fold', 'S-Curve', 'Spiral'];
+export const FOLD_PATHS = ['Fixed', 'Drift', 'Orbit'];
+
+const FOLD_SHAPE_KEYS = ['foldSeparation', 'foldCurve', 'foldPitch'];
+const FOLD_PATH_KEYS = ['foldPathAmount', 'foldPathCycles'];
+
+// The fold controls stay out of the inspector for earlier Surface families.
+const FOLD_KEYS = ['foldX', 'foldY', 'foldSize', 'foldStretch', 'foldTilt', 'foldSpacing', 'foldPinch',
+  'foldPhase', 'foldDirection', 'foldShape', 'foldPath', 'foldBrightness', 'foldRimLight',
+  'foldInnerFlow', 'foldInnerStretch', 'foldSatin', 'foldSatinAngle', 'foldRollOff',
+  'foldMorphTime', 'foldMorphHold', 'foldMorphAngle', 'foldMorphBeat',
+  ...FOLD_SHAPE_KEYS, ...FOLD_PATH_KEYS];
+const FOLD_SHARED_KEYS = ['style', 'variant', 'cycles', 'softness', 'contrast', 'saturation', 'hue', 'exposure'];
+
 export const FRACTAL_FAMILIES = ['Folded Lace', 'Julia Bloom', 'Mandelbox', 'Portal'];
 export const FRACTAL_VARIANTS = [
   ['Lace', 'Petals', 'Weave'],
@@ -175,8 +194,35 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
   smokecloud: SMOKE_CLOUD_PARAMETERS,
   ...INSTRUMENT_PARAMETERS,
   surface: [
-    parameter('style', 'Pattern', 0, 3, 1, 0, 'Shape'),
+    parameter('style', 'Pattern', 0, SURFACE_FAMILIES.length - 1, 1, 0, 'Shape'),
     parameter('variant', 'Variant', 0, 2, 1, 0, 'Shape'),
+    parameter('foldX', 'Opening X', -1, 2, .001, .552, 'Shape'),
+    parameter('foldY', 'Opening Y', -1, 2, .001, .462, 'Shape'),
+    parameter('foldSize', 'Opening size', .2, 2.5, .01, 1, 'Shape'),
+    parameter('foldStretch', 'Opening stretch', .4, 2.5, .01, 1, 'Shape'),
+    parameter('foldTilt', 'Opening tilt', -Math.PI, Math.PI, .001, .439, 'Shape'),
+    parameter('foldShape', 'Fold shape', 0, FOLD_SHAPES.length - 1, 1, 0, 'Shape'),
+    parameter('foldSeparation', 'Twin separation', .3, 2.2, .01, 1.24, 'Shape'),
+    parameter('foldCurve', 'Curve depth', .15, 2, .01, .85, 'Shape'),
+    parameter('foldPitch', 'Spiral pitch', .3, 2.6, .01, 1, 'Shape'),
+    parameter('foldBrightness', 'Brightness (stops)', -2, 2, .01, 0, 'Material'),
+    parameter('foldRimLight', 'Rim light', 0, 1, .01, .18, 'Material'),
+    parameter('foldSatin', 'Satin finish', 0, 1, .01, 0, 'Material'),
+    parameter('foldSatinAngle', 'Satin light direction', -Math.PI, Math.PI, .01, .72, 'Material'),
+    parameter('foldRollOff', 'Highlight roll-off', 0, 1, .01, 0, 'Material'),
+    parameter('foldInnerFlow', 'Inner flow', 0, 1, .01, 0, 'Motion'),
+    parameter('foldInnerStretch', 'Inner stretch', -.7, 1.5, .01, 0, 'Motion'),
+    { ...parameter('foldMorphTime', 'Morph time (s)', 0, 8, .05, .75, 'Motion'), structural: true },
+    { ...parameter('foldMorphHold', 'Hold after morph (s)', 0, 8, .05, 0, 'Motion'), structural: true },
+    { ...parameter('foldMorphAngle', 'Morph direction', -Math.PI, Math.PI, .01, 0, 'Motion'), structural: true },
+    parameter('foldMorphBeat', 'Morph on next beat', 0, 1, 1, 0, 'Motion'),
+    parameter('foldSpacing', 'Band spacing', .35, 3, .01, 1, 'Material'),
+    parameter('foldPinch', 'Pinch', 0, 1, .01, .86, 'Material'),
+    parameter('foldPhase', 'Colour phase', 0, 1, .01, 0, 'Motion'),
+    parameter('foldPath', 'Opening motion', 0, FOLD_PATHS.length - 1, 1, 0, 'Motion'),
+    parameter('foldPathAmount', 'Path size', 0, .65, .01, .22, 'Motion'),
+    parameter('foldPathCycles', 'Path cycles per loop', 1, 8, 1, 1, 'Motion'),
+    parameter('foldDirection', 'Flow direction', 0, 1, 1, 0, 'Motion'),
     parameter('scale', 'Scale', 0.5, 12, 0.01, 4, 'Shape'),
     parameter('warp', 'Flow', 0, 1, 0.01, 0.45, 'Shape'),
     parameter('detail', 'Detail', 0, 1, 0.01, 0.4, 'Shape'),
@@ -511,7 +557,7 @@ const FRACTAL_ADDED_FIELDS = [
 const GRADING_FIELDS = ['saturation', 'hue', 'exposure'];
 const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
   kaleidoscope: ['twist', 'lens', 'melt', 'morphTo', 'morphs'],
-  surface: [...TIMING_KEYS,'anisotropy','sheenAngle','iridescence', 'roundness', 'relief', 'variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', ...GRADING_FIELDS],
+  surface: [...FOLD_KEYS, ...TIMING_KEYS,'anisotropy','sheenAngle','iridescence', 'roundness', 'relief', 'variant', 'density', 'stretch', 'turbulence', 'centerX', 'centerY', 'lightAngle', 'roughness', ...GRADING_FIELDS],
   sculpture: ['spin', 'opening', 'twist', 'form', 'lobes', 'thickness', 'stretch', 'curl', 'foldFrequency', 'asymmetry', 'ridgeScale', 'metallic', 'clearcoat', 'sheen', 'filmScale', 'lightPower', 'shadowStrength', 'shadowSoftness', ...GRADING_FIELDS],
   fractal: [...FRACTAL_ADDED_FIELDS, 'colorMode', 'colorSteps', 'colorMix', 'saturation', 'hue', 'swirl', 'lens', 'melt', 'dance', 'colorRun', 'neon'],
   super8: [...SUPER8_PROJECTOR_KEYS, ...SUPER8_ROLL_KEYS],
@@ -533,6 +579,14 @@ const TILE_ALL_KEYS = [...LED_KEYS, ...CHAR_KEYS, ...TILE_KEYS];
 const SIGNAL_ALL_KEYS = [...VHS_KEYS, ...DROP_KEYS, ...CRT_KEYS, ...JPEG_KEYS, ...DATABEND_KEYS];
 /** Every control of the warp pass: hidden on layers that take no warp. */
 const WARP_ALL_KEYS = [...WARP_KEYS, ...LIQUID_KEYS, ...LUMA_WARP_KEYS, ...POLAR_KEYS, ...MIRROR_KEYS];
+export function surfaceParameterVisible(params: Layer['params'], key: string): boolean {
+  if (params.style !== SURFACE_FOLD) return !FOLD_KEYS.includes(key);
+  const shapeOnly = FOLD_SHAPE_KEYS.indexOf(key);
+  if (shapeOnly >= 0) return params.foldShape === shapeOnly + 1;
+  if (FOLD_PATH_KEYS.includes(key)) return (params.foldPath ?? 0) > 0;
+  return FOLD_KEYS.includes(key) || FOLD_SHARED_KEYS.includes(key) || FINISH_KEYS.includes(key);
+}
+
 export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const visible = familyParameterDefinitions(layer);
   const glow = supportsGlow(layer), print = supportsPrint(layer), lens = supportsLens(layer), warp = supportsWarp(layer), tiles = supportsTiles(layer), signal = supportsSignal(layer);
@@ -543,6 +597,9 @@ export function visibleParameterDefinitions(layer: Layer): ParameterDefinition[]
 }
 function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
   const definitions = parameterDefinitions(layer.kind);
+  if (layer.kind === 'surface') return definitions.filter(d => surfaceParameterVisible(layer.params, d.key))
+    .map(d => layer.params.style === SURFACE_FOLD && d.key === 'softness' ? { ...d, label: 'Rim softness' } :
+      layer.params.style === SURFACE_FOLD && d.key === 'cycles' ? { ...d, label: 'Colour cycles per loop' } : d);
   if (layer.kind === 'graphic') {
     const keys = graphicVisibleKeys(layer.params.style, layer.params.variant, layer.params.fill, layer.params.sweep);
     return definitions.filter(d => keys.has(d.key)||FINISH_KEYS.includes(d.key));
@@ -726,6 +783,18 @@ export const FINISH_SHOWCASE_IDS = ['recursion-tunnel', 'time-terraces'];
 PRESETS.push(
   preset('recursion-tunnel', 'Recursion Tunnel', 'Flat neon frames nest inside each other and turn into the distance.', 'surface', NEON_STRATA, { style: 0, variant: 0, scale: 3.2, warp: 0.55, detail: 0.35, roundness: 0.7, relief: 0, softness: 0, contrast: 0.7, offset: 0.2, reveal: 0, toonMix: 1, toonBands: 6, toonOutline: 3, echo: 0.95, echoZoom: 0.9, echoRotate: 1.5, echoHue: 6, echoFrame: 0.62, echoBlend: 1 }),
   preset('time-terraces', 'Time Terraces', 'Neon strata cut into horizontal terraces, each a moment further in the past.', 'surface', NEON_STRATA, { style: 0, variant: 0, scale: 3.2, warp: 0.55, detail: 0.35, roundness: 0.7, relief: 0, softness: 0, contrast: 0.7, offset: 0.2, reveal: 0, toonMix: 1, toonBands: 6, toonOutline: 3, cycles: 4, slitShift: 1, slitSpan: 60, slitShape: 0, slitSlices: 9 }),
+  preset('offset-fold', 'Offset Fold', 'Coral and magenta bands fold around a tilted opening.', 'surface',
+    FOLD_PALETTES[0].colors,
+    { style: SURFACE_FOLD, cycles: 4, softness: .1, contrast: .35 }),
+  preset('fold-wall-sweep', 'Fold Wall Sweep', 'A bright S-curve sweeps horizontally across a wide wall.', 'surface',
+    FOLD_PALETTES[4].colors, { style: SURFACE_FOLD, foldShape: 2, foldTilt: 1.36, foldSize: 1.85,
+      foldPath: 1, foldPathAmount: .18, foldInnerFlow: .55, foldInnerStretch: .5, foldSatin: .4, foldRollOff: .5, foldBrightness: .48, cycles: 2 }),
+  preset('fold-satin-column', 'Fold Satin Column', 'A tall, slow opening with a soft satin highlight for narrow surfaces.', 'surface',
+    FOLD_PALETTES[2].colors, { style: SURFACE_FOLD, foldTilt: .08, foldStretch: 1.8, foldSize: 1.27,
+      foldInnerFlow: .5, foldInnerStretch: .72, foldSatin: .65, foldRollOff: .6, foldBrightness: .35, cycles: 2 }),
+  preset('fold-edge-entry', 'Fold Edge Entry', 'A folding spiral drifts into the picture from beyond the right edge.', 'surface',
+    FOLD_PALETTES[1].colors, { style: SURFACE_FOLD, foldShape: 3, foldX: 1.13, foldPath: 1, foldPathAmount: .45,
+      foldSize: .96, foldInnerFlow: .6, foldInnerStretch: .42, foldSatin: .42, foldRollOff: .55, foldBrightness: .52, cycles: 3 }),
 );
 
 /**
@@ -850,7 +919,7 @@ export function clampParameter(value: number, definition: ParameterDefinition): 
 }
 
 // Identity, coverage and Julia topology are deliberate composition choices.
-const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'input','group','motif','spiral','spiralA','spiralB','zoomCycles','colorRun','morphTo','morphs','scopeMode','emberPhrases','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
+const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'input','group','motif','spiral','spiralA','spiralB','zoomCycles','colorRun','morphTo','morphs','scopeMode','emberPhrases','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'foldX', 'foldY', 'foldDirection', 'foldShape', 'foldPath', 'foldPathCycles', 'foldMorphBeat', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
 const VARIATION_OFF_VALUES: Record<string, number> = { slitChroma: 0, slitZoom: 0, slitReach: 1, glowSpread: 0, glowStreak: 0 };
 export type VariationLocks = { palette: boolean; structure: boolean; motion: boolean; material: boolean };
 
@@ -1159,6 +1228,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
   keys(params, ['seed', ...DEFINITIONS[kind].map((definition) => definition.key)], `${path}.params`);
   number(params.seed, `${path}.params.seed`, 0, 0xffffffff, true);
   for (const definition of DEFINITIONS[kind]) number(params[definition.key], `${path}.params.${definition.key}`, definition.min, definition.max, definition.step === 1);
+  if (kind === 'surface' && params.style === SURFACE_FOLD && params.variant !== 0) fail(`${path}.params.variant`, 'does not belong to Liquid Fold.');
   if (kind === 'graphic' && (params.variant as number) >= GRAPHIC_VARIANTS[params.style as number].length) fail(`${path}.params.variant`, 'does not belong to this graphic family.');
   if (!Array.isArray(layer.palette) || layer.palette.length !== 6) fail(`${path}.palette`, 'must contain exactly six hex colors.');
   layer.palette.forEach((color, i) => hex(color, `${path}.palette[${i}]`));

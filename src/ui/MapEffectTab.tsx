@@ -46,11 +46,12 @@ export default function MapEffectTab({ map, shape, locked, linked, setNote }: { 
     const changed = Object.keys({ ...layer.params, ...next.params }).filter(k => layer.params[k] !== next.params[k]);
     const { params: _a, ...restBefore } = layer, { params: _b, ...restAfter } = next;
     const onlyNumbers = JSON.stringify(restBefore) === JSON.stringify(restAfter) && changed.every(k => typeof next.params[k] === 'number');
+    if (onlyNumbers && changed.length === 0) return;
     // One key for the whole change: the copy (if any) and the change are one undo step.
     const merge = grouper.current.key(onlyNumbers ? `param-${source.id}-${index}-${changed.join(',')}` : `project-${source.id}-${index}`);
     const id = target(merge);
     if (!id) return;
-    if (onlyNumbers && changed.length) {
+    if (onlyNumbers) {
       map.dispatch({ type: 'setSourceLayer', sourceId: id, layer: index, params: Object.fromEntries(changed.map(k => [k, next.params[k]])) }, merge);
     } else {
       const project = map.currentShow().sources.find(s => s.id === id)?.project ?? source.project;

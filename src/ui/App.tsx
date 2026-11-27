@@ -8,11 +8,11 @@ import { KALEIDOSCOPE_MORPHS, KALEIDOSCOPE_MOTIFS, KALEIDOSCOPE_OWN_KEYS, KALEID
 import { INSTRUMENTS, isInstrument, PROJECTION_LOOK_IDS } from '../core/instruments';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, type ReactNode } from 'react';
 import type { ExportFormat, Supersample, ExportJob, ExportProgress, Layer, LayerKind, Modulation, ParameterDefinition, Project, StudioStatus } from '../shared/types';
-import { KALEIDOSCOPE_INPUT, applyPreset, assertImportableImage, createLayer, MAX_IMPORT_SIDE, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FRACTAL_FAMILIES, FRACTAL_VARIANTS, FRACTAL_PROJECTION_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported } from '../core/project';
+import { KALEIDOSCOPE_INPUT, applyPreset, assertImportableImage, createLayer, MAX_IMPORT_SIDE, createProject, parameterDefinitions, PRESETS, validateProject, varyLayer, visibleParameterDefinitions, SUPER8_MODES, FLAT_LOOK_IDS, FRACTAL_FAMILIES, FRACTAL_VARIANTS, FRACTAL_PROJECTION_LOOK_IDS, FINISH_LOOKS, applyFinish, finishSupported, SURFACE_VARIANTS } from '../core/project';
 import { frameCount, phaseAtFrame, sampleModulation } from '../core/timeline';
 import { isEvolving } from '../core/playback';
 import { SurfaceEditor } from './SurfaceEditor';
-import { LayerShapeControls, Parameter, ChoiceParameter, Icon, patterns, mirrorModes, surfaceVariants, sculptureForms } from './LayerControls';
+import { LayerShapeControls, Parameter, ChoiceParameter, Icon, patterns, mirrorModes, sculptureForms } from './LayerControls';
 import { FinishSections } from './FinishControls';
 import { visibleBelow } from '../rendering/warp';
 import { GRAPHIC_FAMILIES, GRAPHIC_VARIANTS } from '../core/graphics';
@@ -58,7 +58,7 @@ const kindLabels = KIND_LABELS;
 function lookCaption(preset: typeof PRESETS[number]): string {
   const style = Math.round(preset.params.style ?? 0), variant = Math.round(preset.params.variant ?? 0);
   if (isInstrument(preset.kind)) return preset.description;
-  if (preset.kind === 'surface') return `${patterns.surface![style]} · ${surfaceVariants[style][variant]}`;
+  if (preset.kind === 'surface') return `${patterns.surface![style]} · ${SURFACE_VARIANTS[style][variant]}`;
   if (preset.kind === 'super8') return SUPER8_MODES[Math.round(preset.params.mode)];
   if (preset.kind === 'graphic') return `${GRAPHIC_FAMILIES[style]} · ${GRAPHIC_VARIANTS[style][variant] ?? 'Custom'}`;
   if (preset.kind === 'oil') return 'Paint · glass · cellular ink';

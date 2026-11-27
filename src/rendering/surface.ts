@@ -2,6 +2,7 @@ import { projectionOpticsGLSL } from './projection-optics';
 import { sourceViewGLSL } from './source-view';
 import { timingGLSL } from '../core/timing';
 import { tileGLSL } from './tile-glsl';
+import { liquidFoldGLSL } from './liquid-fold';
 /** Chromatic Field. Compiled with `defines: { TILE: '' }` (a second
  * ShaderMaterial) it repeats exactly across the frame, whose size in pattern
  * space is `uTile`; without TILE the source is unchanged. Under TILE only
@@ -20,6 +21,7 @@ uniform float uDelaySpread,uDelayShape,uPause;
 ${projectionOpticsGLSL}
 const float TAU = 6.28318530718;
 ${timingGLSL}
+${liquidFoldGLSL}
 float gPhase;
 vec2 gViewRow0, gViewRow1; float gViewScale;
 // Maps a point of the rotated, stretched pattern domain back to frame coordinates.
@@ -308,7 +310,14 @@ vec3 dripPaint(vec2 p) {
   return mix(vec3(.0007),color,coverage);
 }
 void main() {
-  vec2 world=(sourceUV(vUv)-.5)*vec2(uAspect,1.)-vec2(uCenterX,uCenterY)*.5;
+  vec2 source = (sourceUV(vUv)-.5)*vec2(uAspect,1.);
+  if (uStyle > 3.5) {
+    vec3 colour = liquidFold(source);
+    float contrast = mix(.65, 1.65, uContrast);
+    gl_FragColor = vec4(max((colour - .18)*contrast + .18, vec3(0.)), 1.);
+    return;
+  }
+  vec2 world=source-vec2(uCenterX,uCenterY)*.5;
   gPhase=uDelaySpread>0.||uPause>0.?stagedTime(uPhase,delayOrder(world,uAspect)):uPhase;
   float c=cos(uRotation), s=sin(uRotation);
   vec2 p=mat2(c,-s,s,c)*world*max(uScale,.1);

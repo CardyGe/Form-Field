@@ -6,7 +6,7 @@
  * A target's range comes from the shape's own rules, or from the instrument's parameter definitions.
  */
 import { MERIDIAN_UNLINKED } from '../meridian/parameters';
-import { readParameterDefinitions, scopeParameterVisible, visibleParameterDefinitions } from '../core/project';
+import { readParameterDefinitions, scopeParameterVisible, surfaceParameterVisible, visibleParameterDefinitions } from '../core/project';
 import type { Layer, ParameterDefinition } from '../shared/types';
 import { BRIGHTNESS_MAX, LIVE_SOURCE_ID, SPEED_RANGE, ZOOM_RANGE, isVideoId, type ShowDocument } from './show';
 import type { Link } from '../react/links';
@@ -34,13 +34,15 @@ export function parseTarget(target: string): Target | null {
 }
 
 export function canLinkParameter(layer: Layer, key: string): boolean {
+  if (layer.kind === 'surface' && ['foldDirection', 'foldShape', 'foldPath', 'foldPathCycles', 'foldMorphBeat', 'foldMorphTime', 'foldMorphHold', 'foldMorphAngle'].includes(key)) return false;
   if (layer.kind === 'meridian') return !MERIDIAN_UNLINKED.includes(key);
   return layer.kind !== 'scope' || key !== 'scopeMode' && key !== 'emberPhrases';
 }
 
-/** A saved link for another Scope mode stays in the show until that mode is used again. */
+/** A link for an inactive family stays in the show until that family is used again. */
 export function activeParameterLink(layer: Layer, key: string): boolean {
-  return canLinkParameter(layer, key) && (layer.kind !== 'scope' || scopeParameterVisible(layer.params, key));
+  return canLinkParameter(layer, key) && (layer.kind !== 'scope' || scopeParameterVisible(layer.params, key))
+    && (layer.kind !== 'surface' || surfaceParameterVisible(layer.params, key));
 }
 
 /** The target's range, or null when what it names is not in the show. */

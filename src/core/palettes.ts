@@ -51,3 +51,14 @@ export const PALETTE_LIBRARY: { name: string; colors: string[] }[] = [
 
 /** Flat colour with outlines, used as the starting finish for shaded families. */
 export const FLAT_FINISH = { toonMix: 1, toonBands: 5, toonOutline: 2.5 };
+
+// Liquid Fold alternates two shadow troughs with a body and a highlight on each side.
+export const FOLD_PALETTES: { name: string; colors: string[] }[] = [
+  { name: 'Coral & Magenta', colors: ['#3f0020', '#ed7369', '#ef8ce7', '#390023', '#f07868', '#ee86df'] },
+  { name: 'Glacier', colors: ['#042347', '#147fd2', '#91f4ff', '#15123e', '#446aff', '#e2fdff'] },
+  { name: 'Molten Copper', colors: ['#330a06', '#cd4920', '#ffd078', '#250b12', '#fa8e36', '#fff1bc'] },
+  { name: 'Acid Violet', colors: ['#21083b', '#8740ff', '#d4ff54', '#161c0d', '#8bd91a', '#e8b0ff'] },
+  { name: 'Deep Lagoon', colors: ['#032522', '#007a72', '#7fffc2', '#021528', '#147bab', '#a8f8fa'] },
+  { name: 'Rose & Gold', colors: ['#451232', '#f0699e', '#ffdc88', '#390e28', '#d54873', '#ffe9bb'] },
+  { name: 'Silver', colors: ['#15171c', '#626975', '#e2e7ef', '#22242b', '#8b9099', '#f6f8fb'] },
+];
