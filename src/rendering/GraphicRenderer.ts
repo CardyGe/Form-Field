@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { isCellWave } from '../core/graphics';
+import { cellAudioHighlight, isCellWave } from '../core/graphics';
 import type { Layer } from '../shared/types';
 import { GraphicLayoutCache, sampleGraphicGlyphs, type Glyph } from './graphic-layout';
 import { graphicGridBounds } from './graphic-view';
@@ -8,12 +8,26 @@ const vertex = /* glsl */`
 attribute vec4 aBounds, aStyle, aPaint, aExtra;
 attribute vec2 aCell;
 uniform float uAspect, uPixel, uRotation;
+uniform vec4 uCellField; // Strength, loop phase, still phase, motion depth.
+uniform float uCellFieldLayout;
+varying float vCellField;
 uniform float uPackedSolid,uClipCell;
 uniform vec2 uPatternScale,uTranslation;
 uniform float uLayerScale,uLayerRotation;
 uniform vec2 uLayerTranslation;
 varying vec2 vPoint, vHalf;
 varying vec4 vStyle, vPaint, vExtra;
+float fieldWave(vec2 grid, float phase) {
+  if(uCellFieldLayout>1.5){
+    // A periodic distance field keeps the ripple continuous across tiled edges.
+    float radius=length(sin(grid*.5));
+    return .83*cos(8.2*radius-phase)+.17*cos(grid.x-grid.y+phase);
+  }
+  if(uCellFieldLayout>.5){
+    return .57*cos(grid.x+grid.y-phase)+.43*cos(grid.x-grid.y+phase);
+  }
+  return .76*cos(grid.x+grid.y-phase)+.24*cos(grid.y+phase);
+}
 void main(){
   vHalf=aBounds.zw;
   // Conservative subpixel coverage closes float32 cracks between packed fills
@@ -21,6 +35,14 @@ void main(){
   float padding=mix(5.,.02,uPackedSolid)*uPixel/(min(uPatternScale.x,uPatternScale.y)*uLayerScale);
   vPoint=position.xy*(vHalf+vec2(padding));
   vStyle=aStyle;vPaint=aPaint;vExtra=aExtra;
+  // Whole harmonics make the reflection continuous at the boundaries of a repeated source.
+  vCellField=0.;
+  if(aPaint.y>2.5&&uCellField.x>0.){
+    vec2 grid=6.2831853*vec2(aBounds.x/uAspect,aBounds.y);
+    float stillWave=fieldWave(grid,uCellField.z);
+    float movingWave=fieldWave(grid,uCellField.y);
+    vCellField=uCellField.x*mix(stillWave,movingWave,uCellField.w);
+  }
   float c=cos(aStyle.w),s=sin(aStyle.w);
   vec2 p=aBounds.xy+mat2(c,s,-s,c)*vPoint;
   // Grid glyphs are axis-aligned in pattern space (path segments turn by 90°).
@@ -42,6 +64,10 @@ precision highp float;
 uniform vec3 uPalette[6];
 uniform float uSoftness,uBorder,uBalance,uCellRim,uCellGrain;
 uniform float uPackedSolid;
+uniform vec3 uCellFinish;
+uniform vec2 uCellLight;
+uniform float uCellAudio;
+varying float vCellField;
 varying vec2 vPoint,vHalf;
 varying vec4 vStyle,vPaint,vExtra;
 vec3 palette(float value){
@@ -72,6 +98,31 @@ float grainAt(vec2 p) {
   return mix(mix(grainHash(i),grainHash(i+vec2(1.,0.)),f.x),
     mix(grainHash(i+vec2(0.,1.)),grainHash(i+1.),f.x),f.y)-.5;
 }
+vec3 reflectCell(vec3 ink, vec2 point, float inside, float seed) {
+  float metal=uCellFinish.x, iridescence=uCellFinish.y, roughness=uCellFinish.z;
+  // A broad reflected strip on the face and a tighter highlight along the bevel.
+  // The light moves on the same closed timeline as the rest of the graphic.
+  float crossLight=dot(point,uCellLight);
+  float reflection=crossLight+.15*dot(point,point)+.18*(seed-.5);
+  float width=mix(.17,.49,roughness);
+  float filterWidth=max(width,.75*fwidth(reflection));
+  float band=(1.-smoothstep(0.,filterWidth,abs(reflection-.18-.58*vCellField)))*(width/filterWidth);
+  band*=1.+.36*min(vCellField,0.);
+  float facing=clamp(.54+.34*crossLight,0.,1.);
+  float edge=(1.-smoothstep(.02,.38,inside))*facing;
+  float reflectionAmount=clamp(band*.68+edge*.50,0.,1.);
+  vec3 metalTint=mix(ink,vec3(1.,.975,.92),.58);
+  ink*=1.-metal*(.06+.11*(1.-band));
+  ink=mix(ink,metalTint,metal*reflectionAmount*.63);
+  // Angle-dependent tint concentrated on the highlights keeps the palette readable.
+  float filmAngle=3.25*crossLight+2.2*seed+1.6*uCellLight.x+1.15*vCellField;
+  vec3 film=.60+.36*cos(filmAngle+vec3(0.,2.0944,4.1888));
+  vec3 pearl=mix(ink,film,.58);
+  ink=mix(ink,pearl,iridescence*clamp(band*.64+edge*.72,0.,1.)*.72);
+  // Lift only the strip and bevel, with headroom for pale colours and no change to alpha.
+  vec3 headroom=max(vec3(1.)-ink,vec3(0.));
+  return ink+min(vec3(.12),headroom*.36)*uCellAudio*reflectionAmount;
+}
 void main(){
   float d=distanceToShape();
   float aa=max(fwidth(d)*.7,.0000005)*(1.+uSoftness);
@@ -97,14 +148,17 @@ void main(){
     float inset=(1.-smoothstep(-aa,aa,insetDist))*vExtra.y;
     float body=mix(1.,1.-hole,vExtra.x);
     vec2 grainUv=cellPoint*32.+vec2(vExtra.w*153.,vExtra.w*79.);
-    float resolved=1.-smoothstep(.30,1.1,length(fwidth(grainUv)));
-    float grain=grainAt(grainUv)*resolved+.4*grainAt(grainUv*.27);
+    float grainFootprint=length(fwidth(grainUv));
+    float fine=1.-smoothstep(.30,1.1,grainFootprint);
+    float coarse=1.-smoothstep(.30,1.1,grainFootprint*.27);
+    float grain=grainAt(grainUv)*fine+.4*grainAt(grainUv*.27)*coarse;
     float light=clamp(.5+.30*cellPoint.y-.24*cellPoint.x,0.,1.);
     float highlight=(1.-smoothstep(0.,.095,inside))*light;
     float bevel=smoothstep(.03,.18,inside)*(1.-smoothstep(.18,.45,inside));
     color*=max(.35,1.+uCellGrain*grain-uCellRim*bevel*.38);
     color=mix(color,vec3(1.,.98,.96),uCellRim*highlight*.37);
     color=mix(color,palette(vPaint.x+.11),inset*(1.-body));
+    if(uCellFinish.x>0.||uCellFinish.y>0.||uCellAudio>0.)color=reflectCell(color,cellPoint,inside,vExtra.w);
     coverage*=max(body,inset);
   }
   coverage*=vExtra.z;
@@ -158,6 +212,8 @@ export class GraphicRenderer {
     uLayerScale:{value:1},uLayerRotation:{value:0},uLayerTranslation:{value:new THREE.Vector2()},
     uAspect:{value:1},uPixel:{value:1/540},uSoftness:{value:0},uBorder:{value:0},uBalance:{value:1},
     uPackedSolid:{value:0},uCellRim:{value:0},uCellGrain:{value:0},
+    uCellFinish:{value:new THREE.Vector3()},uCellLight:{value:new THREE.Vector2()},uCellAudio:{value:0},
+    uCellField:{value:new THREE.Vector4()},uCellFieldLayout:{value:0},
     uClipCell:{value:0},
     uPalette:{value:Array.from({length:6},()=>new THREE.Color())},
   };
@@ -174,7 +230,7 @@ export class GraphicRenderer {
     const bg=new THREE.Mesh(this.backgroundGeometry,this.backgroundMaterial);bg.renderOrder=2;bg.frustumCulled=false;
     this.scene.add(this.paint.mesh,this.erase.mesh,bg);
   }
-  draw(renderer:THREE.WebGLRenderer,target:THREE.WebGLRenderTarget,layer:Layer,phase:number,width:number,height:number,inView=false):void {
+  draw(renderer:THREE.WebGLRenderer,target:THREE.WebGLRenderTarget,layer:Layer,phase:number,width:number,height:number,inView=false,signals?:Readonly<Record<string,number>>):void {
     const aspect=width/height;
     const radial = layer.params.style === 1 || layer.params.style === 3;
     // Grid fields repeat a complete cell through a filtered compositor sampler.
@@ -214,6 +270,19 @@ export class GraphicRenderer {
     const cellWave=isCellWave(p.style,p.variant);
     this.uniforms.uCellRim.value=cellWave?p.cellRim:0;
     this.uniforms.uCellGrain.value=cellWave?p.cellGrain:0;
+    if (cellWave) {
+      const lightCycles=p.cellLightCycles||p.cycles;
+      const stillPhase=p.phaseOffset*Math.PI*2;
+      const lightPhase=wrapped*Math.round(lightCycles)+stillPhase;
+      const lightTravel=p.cellLightTravel??.46;
+      const lightAngle=(p.cellLightAngle??.72)+lightTravel*Math.sin(lightPhase)*p.motion;
+      this.uniforms.uCellFinish.value.set(p.cellMetallic??0,p.cellIridescence??0,p.cellRoughness??.5);
+      this.uniforms.uCellLight.value.set(Math.cos(lightAngle),Math.sin(lightAngle));
+      const fieldMotion=p.motion*Math.min(1,lightTravel/.46);
+      this.uniforms.uCellField.value.set(p.cellLightField??0,lightPhase,stillPhase,fieldMotion);
+      this.uniforms.uCellFieldLayout.value=p.cellLightLayout??0;
+      this.uniforms.uCellAudio.value=cellAudioHighlight(p.cellAudioAmount,p.cellAudioSource,signals);
+    }
     this.uniforms.uPackedSolid.value=Number(!cellWave&&p.style===2&&p.fill===0&&p.tileGap===0&&p.roundness===0
       &&(p.sweep===0||p.motion===0||(p.shrink===0&&p.rounding===0)));
     this.uniforms.uClipCell.value=Number(!radial&&inView);

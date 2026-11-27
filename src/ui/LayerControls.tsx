@@ -10,7 +10,7 @@ import { PALETTE_LIBRARY } from '../core/palettes';
 import { kaleidoscopeInput } from '../rendering/feedback';
 import { KALEIDOSCOPE_MORPHS, KALEIDOSCOPE_MOTIFS, KALEIDOSCOPE_OWN_KEYS, KALEIDOSCOPE_SOURCES, KALEIDOSCOPE_SYMMETRIES, kaleidoscopeDrawsMotif, kaleidoscopeHidden } from './kaleidoscope-controls';
 import { INSTRUMENTS, isInstrument } from '../core/instruments';
-import { GRAPHIC_FAMILIES, GRAPHIC_VARIANTS, GRAPHIC_LOOKS, isCellWave } from '../core/graphics';
+import { GRAPHIC_FAMILIES, GRAPHIC_VARIANTS, GRAPHIC_LOOKS, CELL_WAVE_PALETTES, CELL_AUDIO_SOURCES, CELL_LIGHT_LAYOUTS, CELL_LIGHT_CYCLES, isCellWave } from '../core/graphics';
 import { EMBER_SMOKE_ORIGINS, EMBER_SMOKE_STYLES } from '../rendering/ember-fluid-model';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -24,7 +24,7 @@ export const sculptureForms = ['Shell', 'Bloom', 'Ribbon', 'Knot'];
 export const coloringModes = ['Palette', 'Duotone', 'Contours'];
 export const mirrorModes = ['Original', 'Flip horizontal', 'Flip vertical', 'Flip both'];
 export const gradingKeys = ['saturation', 'hue', 'exposure',...FINISH_KEYS];
-export const graphicChoiceKeys = ['profile', 'fill', 'sweep', 'corners'];
+export const graphicChoiceKeys = ['profile', 'fill', 'sweep', 'corners', 'cellAudioSource', 'cellLightLayout', 'cellLightCycles'];
 export const choiceKeys = ['scopeMode','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','style', 'variant', 'form', 'quality', 'radial', 'colorMode', 'mirror', 'substrate', 'mode', 'gateMode', 'autoTravel', 'seed'];
 export const super8ControlGroups: [string, string[]][] = [
   ['Paint geometry', ['scale', 'steps', 'coverage', 'erosion', 'rotation']],
@@ -182,10 +182,10 @@ function KaleidoscopePanel({ layer, isBottom, onParam, onChoose, onRemove, onFit
   </div>;
 }
 
-export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscopeImage, locked = false, layer: selected, edit, onAnimateKey, onStart, onEnd, seed, duration, notify, oilFine, setOilFine, imageSlot, surfaceSlot, scopeAudioSlot, parametersSlot, paramExtra, readOnly }: {
+export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscopeImage, locked = false, layer: selected, edit, onAnimateKey, onStart, onEnd, seed, duration, notify, oilFine, setOilFine, imageSlot, surfaceSlot, scopeAudioSlot, graphicAudioSlot, parametersSlot, paramExtra, readOnly }: {
   layer: Layer; edit: (change: (l: Layer) => Layer) => void; onAnimateKey?: (key: string) => void; onStart: () => void; onEnd: () => void;
   seed: number; duration: number; notify: (message: string) => void; oilFine: boolean; setOilFine: (change: (on: boolean) => boolean) => void;
-  imageSlot?: ReactNode; surfaceSlot?: ReactNode; scopeAudioSlot?: ReactNode;
+  imageSlot?: ReactNode; surfaceSlot?: ReactNode; scopeAudioSlot?: ReactNode; graphicAudioSlot?: ReactNode;
   /** Replaces the setting groups and the seed row with an instrument's own surface. */
   parametersSlot?: ReactNode;
   paramExtra?: (d: ParameterDefinition) => ReactNode; readOnly?: (d: ParameterDefinition) => boolean;
@@ -198,6 +198,10 @@ export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscope
   const scopeLocked = scopeMode && readOnly?.(scopeMode);
   const isEmber = selected.kind === 'scope' && selected.params.scopeMode === 1;
   const emberScheme = isEmber ? EMBER_PALETTES.find(look => look.palette.every((colour, i) => colour === selected.palette[i]))?.id ?? '' : '';
+  const cellWave = selected.kind === 'graphic' && isCellWave(selected.params.style, selected.params.variant);
+  const paletteOptions = cellWave ? [...CELL_WAVE_PALETTES, ...PALETTE_LIBRARY] : PALETTE_LIBRARY;
+  const matchedPalette = paletteOptions.find(choice => choice.colors.every((color, index) => color === selected.palette[index]));
+  const paletteOptionsMarkup = (options: typeof PALETTE_LIBRARY) => options.map(choice => <option key={choice.name} value={choice.name}>{choice.name}</option>);
   const scopeSwatch = (i: number) => isEmber && i === 5 ? 'Smoke tint' : scopePaletteLabels[i];
   const controlGroups = selected.kind === 'super8'
     ? super8ControlGroups.filter(([title]) => title !== 'Film gate' || selected.params.gateMode > 0)
@@ -218,7 +222,7 @@ export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscope
             const look = GRAPHIC_LOOKS.find(look => look.params.style === l.params.style && look.params.variant === variant);
             return look ? applyPreset(l, look.id) : { ...l, params: { ...l.params, variant } };
           })} />
-          {selected.params.style === 2 && !isCellWave(selected.params.style, selected.params.variant) && <>
+          {selected.params.style === 2 && !cellWave && <>
             <ChoiceParameter label="Tile finish" name="Tile finish" options={['Solid', 'Hollow outlines', 'Nested contours']} value={selected.params.fill} onChange={fill => edit(l => ({...l, params:{...l.params,fill}}))} />
             <ChoiceParameter label="Wave layout" name="Tile wave layout" options={['Still', 'Linear sweep', 'Radial ripple']} value={selected.params.sweep} onChange={sweep => edit(l => ({...l, params:{...l.params,sweep}}))} />
           </>}
@@ -235,7 +239,24 @@ export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscope
           onChange={scopeMode => edit(l => ({ ...l, params: { ...l.params, scopeMode } }))} />}
         {isEmber && <ChoiceParameter label="Smoke style" name="Smoke style" options={[...EMBER_SMOKE_STYLES]} value={selected.params.emberSmokeStyle ?? 1} disabled={scopeLocked} onChange={emberSmokeStyle => edit(l => ({ ...l, params: { ...l.params, emberSmokeStyle } }))} />}
         {isEmber && <ChoiceParameter label="Smoke source" name="Smoke source" options={[...EMBER_SMOKE_ORIGINS]} value={selected.params.emberSmokeOrigin ?? 0} disabled={scopeLocked} onChange={emberSmokeOrigin => edit(l => ({ ...l, params: { ...l.params, emberSmokeOrigin } }))} />}
+        {cellWave && <details className="control-section">
+          <summary>Reflection motion</summary>
+          <ChoiceParameter label="Reflection pattern" name="Reflection pattern"
+            options={CELL_LIGHT_LAYOUTS} value={selected.params.cellLightLayout}
+            onChange={cellLightLayout => edit(l => ({...l, params:{...l.params, cellLightLayout}}))} />
+          <ChoiceParameter label="Light cycles per loop" name="Light cycles per loop"
+            options={CELL_LIGHT_CYCLES} value={selected.params.cellLightCycles}
+            onChange={cellLightCycles => edit(l => ({...l, params:{...l.params, cellLightCycles}}))} />
+        </details>}
         {isEmber && scopeAudioSlot}
+        {cellWave && (selected.params.cellAudioAmount > 0 || selected.modulations.cellAudioAmount) &&
+          <details className="control-section" open>
+            <summary>Tile highlight audio</summary>
+            <ChoiceParameter label="Highlight input" name="Tile highlight input"
+              options={CELL_AUDIO_SOURCES.map(source => source.label)} value={selected.params.cellAudioSource}
+              onChange={cellAudioSource => edit(l => ({...l, params:{...l.params, cellAudioSource}}))} />
+            {graphicAudioSlot}
+          </details>}
         {selected.kind === 'super8' && <div className="super8-options"><ChoiceParameter label="Mode" name="Super 8 mode" options={SUPER8_MODES} value={selected.params.mode} onChange={mode => edit(l => ({ ...l, params: { ...l.params, mode } }))} /><ChoiceParameter label="Substrate" name="Super 8 substrate" options={['Transparent cutout', 'Painted paper']} value={selected.params.substrate} onChange={substrate => edit(l => ({ ...l, params: { ...l.params, substrate } }))} /><ChoiceParameter label="Projector view" name="Super 8 projector view" options={['Full canvas', 'Rounded gate', 'Film strip']} value={selected.params.gateMode} onChange={gateMode => edit(l => ({ ...l, params: { ...l.params, gateMode } }))} /><p>Paint holds at the film frame rate. Frame advance and shutter move between exposures. Reel turns scroll the strip; Full canvas fills the output without a border.</p></div>}
         {isInstrument(selected.kind) && selected.params.reliefMode !== 2 && <ChoiceParameter label="Motion phrase" name="Motion phrase" options={['Steady travel','Gather and release','Drift and settle']} value={selected.params.phrase} onChange={phrase=>edit(l=>({...l,params:{...l.params,phrase}}))}/>}
         {selected.kind === 'livingink' && <>{selected.params.inkMode===2&&<ChoiceParameter label="Chemical resolution" name="Chemical resolution" options={['128 × 128','256 × 256','384 × 384']} value={selected.params.simulationQuality} onChange={simulationQuality=>edit(l=>({...l,params:{...l.params,simulationQuality}}))}/>}<ChoiceParameter label="Pigment motion" name="Pigment motion" options={['Prepared growth','Flowing pigment loop','Evolving chemistry']} value={selected.params.inkMode} onChange={inkMode=>{if(inkMode===2&&duration>60){notify('Shorten the clip to 60 seconds before enabling evolving chemistry.');return;}if(inkMode===2&&selected.modulations.scale){notify('Remove Pattern scale animation before enabling evolving chemistry.');return;}edit(l=>({...l,params:{...l.params,inkMode}}));}}/>{selected.params.inkMode===2&&<p className="motion-help">{(selected.params.loopReturn??0)>0?'Evolving chemistry grows through the loop, then recedes back to its seeds over the Loop return share, so it loops seamlessly.':'Evolving chemistry develops through this clip and stops at the end. Raise Loop return to make it loop.'} Growth and transport settings re-prepare its fixed simulation.</p>}</>}
@@ -249,6 +270,6 @@ export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscope
         {selected.kind !== 'image' && <section className="control-section"><h3>Palette</h3>{isEmber && <label className="stacked-label">Colour scheme<select aria-label="Ember colour scheme" value={emberScheme} disabled={scopeLocked}
           onChange={e => { const look = EMBER_PALETTES.find(item => item.id === e.target.value); if (look) edit(l => ({ ...l, palette: [...look.palette] })); }}>
           <option value="" disabled>Custom</option>{EMBER_PALETTES.map(look => <option value={look.id} key={look.id}>{look.name}</option>)}
-        </select></label>}<div className="palette-editor">{selected.palette.map((color, i) => selected.kind === 'sculpture' && i !== 0 && i !== 2 ? null : <label key={i} style={{ background: color }} title={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'scope' ? scopeSwatch(i) : selected.kind === 'super8' ? super8PaletteLabels[i] : `Color ${i + 1}`}><input aria-label={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'scope' ? scopeSwatch(i) : selected.kind === 'super8' ? super8PaletteLabels[i] : `Palette color ${i + 1}`} type="color" value={color} onChange={e => edit(l => ({ ...l, palette: l.palette.map((c, j) => i === j ? e.target.value : c) }))} /></label>)}</div><label className="stacked-label palette-choice">Palette preset<select aria-label="Palette preset" value={PALETTE_LIBRARY.find(choice => choice.colors.every((c, i) => c === selected.palette[i]))?.name ?? ''} onChange={e => { const choice = PALETTE_LIBRARY.find(item => item.name === e.target.value); if (choice) edit(l => ({ ...l, palette: [...choice.colors] })); }}><option value="" disabled>Custom</option>{PALETTE_LIBRARY.map(choice => <option key={choice.name} value={choice.name}>{choice.name}</option>)}</select></label>{!parametersSlot && <div className="seed-row"><label>Seed<input aria-label="Layer seed" type="number" min="0" max="4294967295" value={selected.params.seed ?? seed} onChange={e => edit(l => ({ ...l, params: { ...l.params, seed: clamp(Math.round(Number(e.target.value)), 0, 4294967295) } }))} /></label><button className="icon-button" title="Next seed" onClick={() => edit(l => ({ ...l, params: { ...l.params, seed: ((l.params.seed ?? 1) + 1) >>> 0 } }))}><Icon name="shuffle" size={15} /></button></div>}</section>}
+        </select></label>}<div className="palette-editor">{selected.palette.map((color, i) => selected.kind === 'sculpture' && i !== 0 && i !== 2 ? null : <label key={i} style={{ background: color }} title={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'scope' ? scopeSwatch(i) : selected.kind === 'super8' ? super8PaletteLabels[i] : (cellWave && i === 5 ? 'Background' : `Color ${i + 1}`)}><input aria-label={selected.kind === 'sculpture' ? (i === 0 ? 'Base color' : 'Sheen color') : selected.kind === 'oil' ? oilPaletteLabels[i] : selected.kind === 'liquid' ? liquidPaletteLabels[i] : selected.kind === 'scope' ? scopeSwatch(i) : selected.kind === 'super8' ? super8PaletteLabels[i] : (cellWave && i === 5 ? 'Palette background' : `Palette color ${i + 1}`)} type="color" value={color} onChange={e => edit(l => ({ ...l, palette: l.palette.map((c, j) => i === j ? e.target.value : c) }))} /></label>)}</div><label className="stacked-label palette-choice">Palette preset<select aria-label="Palette preset" value={matchedPalette?.name ?? ''} onChange={e => { const choice = paletteOptions.find(item => item.name === e.target.value); if (choice) edit(l => ({ ...l, palette: [...choice.colors] })); }}><option value="" disabled>Custom</option>{cellWave ? <><optgroup label="Packed Tiles">{paletteOptionsMarkup(CELL_WAVE_PALETTES)}</optgroup><optgroup label="Shared palettes">{paletteOptionsMarkup(PALETTE_LIBRARY)}</optgroup></> : paletteOptionsMarkup(PALETTE_LIBRARY)}</select></label>{!parametersSlot && <div className="seed-row"><label>Seed<input aria-label="Layer seed" type="number" min="0" max="4294967295" value={selected.params.seed ?? seed} onChange={e => edit(l => ({ ...l, params: { ...l.params, seed: clamp(Math.round(Number(e.target.value)), 0, 4294967295) } }))} /></label><button className="icon-button" title="Next seed" onClick={() => edit(l => ({ ...l, params: { ...l.params, seed: ((l.params.seed ?? 1) + 1) >>> 0 } }))}><Icon name="shuffle" size={15} /></button></div>}</section>}
   </fieldset>;
 }

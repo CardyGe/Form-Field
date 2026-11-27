@@ -850,7 +850,7 @@ export function clampParameter(value: number, definition: ParameterDefinition): 
 }
 
 // Identity, coverage and Julia topology are deliberate composition choices.
-const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'input','group','motif','spiral','spiralA','spiralB','zoomCycles','colorRun','morphTo','morphs','scopeMode','emberPhrases','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
+const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'input','group','motif','spiral','spiralA','spiralB','zoomCycles','colorRun','morphTo','morphs','scopeMode','cellAudioAmount','cellAudioSource','cellLightLayout','cellLightCycles','emberPhrases','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
 const VARIATION_OFF_VALUES: Record<string, number> = { slitChroma: 0, slitZoom: 0, slitReach: 1, glowSpread: 0, glowStreak: 0 };
 export type VariationLocks = { palette: boolean; structure: boolean; motion: boolean; material: boolean };
 
