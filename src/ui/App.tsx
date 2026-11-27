@@ -136,7 +136,7 @@ const defaultMod = (kind: Modulation['kind']): Modulation => ({ kind, cycles: 1,
 
 const instrumentThumbnails = import.meta.glob<string>('./assets/instruments/*.png', { eager: true, query: '?url', import: 'default' });
 const projectionThumbnails = import.meta.glob<string>('./assets/projection/*.png', { eager: true, query: '?url', import: 'default' });
-const startingLooks:Partial<Record<LayerKind,string>>={livingink:'tidal-pigment',relief:'breathing-facade',kaleidoscope:'kaleido-neon-bloom'};
+const startingLooks:Partial<Record<LayerKind,string>>={livingink:'tidal-pigment',relief:'breathing-facade',kaleidoscope:'kaleido-neon-bloom',orbital:'orbital-wall-blueprint'};
 const instrumentCatalogue = [
   { kind: 'surface', name: 'Surface', caption: '4 patterns · 12 variants', image: surfaceThumb, label: 'Add surface' },
   { kind: 'sculpture', name: 'Sculpture', caption: 'Shell · bloom · ribbon · knot', image: sculptureThumb, label: 'Add sculpture' },

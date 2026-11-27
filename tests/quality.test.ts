@@ -16,7 +16,7 @@ test('the curated library keeps distinct presets on saturated palettes with a da
     assert.equal(preset.palette.length,6,preset.id);
   }
   // Rule: no two presets of a family share both palette and structure.
-  const shape=(p:typeof PRESETS[number])=>JSON.stringify([p.kind,p.palette,p.params.style,p.params.variant,p.params.form,p.params.mode,p.params.inkMode,p.params.flowMode,p.params.reliefMode,p.params.echo,p.params.slitShift,p.params.foldShape,p.params.foldPath,p.params.orbitLayout,p.params.orbitPiece,p.params.orbitMotion,p.params.orbitBackdrop]);
+  const shape=(p:typeof PRESETS[number])=>JSON.stringify([p.kind,p.palette,p.params.style,p.params.variant,p.params.form,p.params.mode,p.params.inkMode,p.params.flowMode,p.params.reliefMode,p.params.echo,p.params.slitShift,p.params.foldShape,p.params.foldPath,p.params.orbitLayout,p.params.orbitPiece,p.params.orbitMotion,p.params.orbitBackdrop,p.params.orbitArms,p.params.orbitCount]);
   assert.equal(new Set(PRESETS.map(shape)).size,PRESETS.length,'Palette twins');
 });
 

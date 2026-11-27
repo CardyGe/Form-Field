@@ -1,17 +1,18 @@
 import { ORBIT_TAU as TAU } from '../core/orbital';
 
-export interface OrbitPhase { spin: number; wave: number; background: number; colour: number }
+export interface OrbitPhase { spin: number; wave: number; background: number; colour: number; phrase: number }
 export interface OrbitPose { x: number; y: number; z: number; angle: number; tilt: number; roll: number; size: number; band: number }
 export const makeOrbitPose = (): OrbitPose => ({ x: 0, y: 0, z: 0, angle: 0, tilt: 0, roll: 0, size: 0, band: 0 });
 export const wrapOrbit = (phase: number) => phase % TAU;
 export function orbitLoopPhase(p: Record<string, number>, phase: number): OrbitPhase {
-  return { spin: phase * p.orbitTurns, wave: phase * p.orbitCycles, background: phase * p.orbitBackgroundCycles, colour: phase * p.orbitColourCycles };
+  return { spin: phase * p.orbitTurns, wave: phase * p.orbitCycles, background: phase * p.orbitBackgroundCycles, colour: phase * p.orbitColourCycles, phrase: phase };
 }
 export function advanceOrbitPhase(previous: OrbitPhase, p: Record<string, number>, seconds: number): OrbitPhase {
   return {
     spin: wrapOrbit(previous.spin + seconds * p.orbitRate * TAU * .29),
     wave: wrapOrbit(previous.wave + seconds * p.orbitRate * TAU),
     background: wrapOrbit(previous.background + seconds * p.orbitBackgroundRate * TAU),
+    phrase: wrapOrbit(previous.phrase + seconds * Math.sign(p.orbitRate) * TAU / p.orbitPhraseSeconds),
     colour: wrapOrbit(previous.colour + seconds * p.orbitColourRate * TAU),
   };
 }
@@ -39,14 +40,18 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
   const t = step / Math.max(steps, 1);
   const lead = arm / arms, circle = i / count;
   const order = waveOrder(p.orbitOrder, t, circle);
-  const local = (p.orbitMotion === 5 ? 0 : time.wave) - TAU * p.orbitSpread * order + .62 * lead;
+  const phrasing = p.orbitMotion === 5 ? 0 : p.orbitPhrasing;
+  const passage = phrasing * Math.sin(time.phrase);
+  const local = (p.orbitMotion === 5 ? 0 : time.wave + .7 * passage)
+    - TAU * p.orbitSpread * order * (1 + .22 * passage) + .62 * lead;
   const raw = .5 + .5 * Math.cos(local);
   const beat = mix(raw, orbitEase(raw), p.orbitEase);
   const vibration = Math.sin(local);
   const amount = p.orbitMotion === 5 ? 0 : p.orbitAmount;
-  const turn = p.orbitMotion === 5 ? 0 : time.spin;
-  const winding = p.orbitMotion === 0 ? amount * beat : 0;
-  const spread = p.orbitMotion === 4 ? 1 + .4 * amount * vibration : 1;
+  const turn = p.orbitMotion === 5 ? 0 : time.spin + .24 * passage;
+  const winding = p.orbitMotion === 0 ? Math.min(1, amount * beat * (1 + .18 * passage)) : 0;
+  const expansion = 1 + .12 * passage;
+  const spread = expansion * (p.orbitMotion === 4 ? 1 + .4 * amount * vibration : 1);
   let angle = TAU * (lead + t / arms * .92) + turn;
   let radius = mix(p.orbitOpening, 1, t) * p.orbitRadius;
   let depth = .01;
@@ -97,7 +102,7 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
     out.x = Math.cos(angle) * radius * spread;
     out.y = Math.sin(angle) * radius * spread;
   }
-  out.z = .125 + (depth + .068 * amount * vibration) * p.orbitDepth + (wobble - .5) * .025;
+  out.z = .125 + (depth + .068 * amount * vibration + .043 * passage * (t - .5)) * p.orbitDepth + (wobble - .5) * .025;
   out.angle = angle + .32 * Math.sin(local);
   out.tilt = (p.orbitMotion === 3 ? 1.72 : .95) * p.orbitRoll * Math.sin(local + t * 1.4) * amount;
   out.roll = .32 * p.orbitRoll * Math.cos(local - lead * TAU) * amount;

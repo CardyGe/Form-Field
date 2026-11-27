@@ -17,7 +17,7 @@ import { SCORE_STYLE_DENSE } from '../meridian/pulse';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import type { Layer, LayerKind, MeridianLayerState, ParameterDefinition, Preset, Project } from '../shared/types';
 import { SMOKE_CLOUD_SCHEMES } from '../rendering/smoke-cloud-model';
-import { ORBIT_LOOKS, ORBIT_PALETTES, ORBIT_PARAMETERS, orbitVisibleParameter } from './orbital';
+import { ORBIT_INSTALLATION_KEYS, ORBIT_LOOKS, ORBIT_PALETTES, ORBIT_PARAMETERS, orbitVisibleParameter } from './orbital';
 import { GRAPHIC_LOOKS, GRAPHIC_PARAMETERS, GRAPHIC_VARIANTS, graphicVisibleKeys } from './graphics';
 
 const TAU = Math.PI * 2;
@@ -566,6 +566,7 @@ const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
   oil: ['layout','dome','anisotropy','sheenAngle','caustics', 'iridescence', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion'],
   scope: [SCOPE_MODE.key, ...EMBER_KEYS],
   graphic: [...TIMING_KEYS],
+  orbital: ORBIT_INSTALLATION_KEYS,
   meridian: MERIDIAN_PARAMETERS.map(d => d.key),
   image: ['mirror', 'repeat', ...GRADING_FIELDS],
 };
