@@ -75,7 +75,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
         const meridian = state.project.layers.some(l => l.visible && l.kind === 'meridian');
         if (meridian && lastDrawn >= 0) engine.paceMeridian(now - lastDrawn);
         try { engine.render(state.project, phase.current, size.width, size.height,
-          state.playing && state.smokeSound ? { signals: state.smokeSound.signals, now, externalTempo: state.smokeSound.prefs.tempo !== 'beat' } : undefined, state.playing);
+          state.smokeSound ? { signals: state.smokeSound.signals, now, externalTempo: state.smokeSound.prefs.tempo !== 'beat', tempoOnly: !state.playing } : undefined, state.playing);
           const overlay = tileCanvas.current;
           if (state.tiled && overlay) {
             // Drawn in the same frame as the render, while the WebGL buffer is still valid.

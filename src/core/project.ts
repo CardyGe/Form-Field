@@ -44,6 +44,8 @@ const FOLD_PATH_KEYS = ['foldPathAmount', 'foldPathCycles'];
 // The fold controls stay out of the inspector for earlier Surface families.
 const FOLD_KEYS = ['foldX', 'foldY', 'foldSize', 'foldStretch', 'foldTilt', 'foldSpacing', 'foldPinch',
   'foldPhase', 'foldDirection', 'foldShape', 'foldPath', 'foldBrightness', 'foldRimLight',
+  'foldInnerFlow', 'foldInnerStretch', 'foldSatin', 'foldSatinAngle', 'foldRollOff',
+  'foldMorphTime', 'foldMorphHold', 'foldMorphAngle', 'foldMorphBeat',
   ...FOLD_SHAPE_KEYS, ...FOLD_PATH_KEYS];
 const FOLD_SHARED_KEYS = ['style', 'variant', 'cycles', 'softness', 'contrast', 'saturation', 'hue', 'exposure'];
 
@@ -205,6 +207,15 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('foldPitch', 'Spiral pitch', .3, 2.6, .01, 1, 'Shape'),
     parameter('foldBrightness', 'Brightness (stops)', -2, 2, .01, 0, 'Material'),
     parameter('foldRimLight', 'Rim light', 0, 1, .01, .18, 'Material'),
+    parameter('foldSatin', 'Satin finish', 0, 1, .01, 0, 'Material'),
+    parameter('foldSatinAngle', 'Satin light direction', -Math.PI, Math.PI, .01, .72, 'Material'),
+    parameter('foldRollOff', 'Highlight roll-off', 0, 1, .01, 0, 'Material'),
+    parameter('foldInnerFlow', 'Inner flow', 0, 1, .01, 0, 'Motion'),
+    parameter('foldInnerStretch', 'Inner stretch', -.7, 1.5, .01, 0, 'Motion'),
+    { ...parameter('foldMorphTime', 'Morph time (s)', 0, 8, .05, .75, 'Motion'), structural: true },
+    { ...parameter('foldMorphHold', 'Hold after morph (s)', 0, 8, .05, 0, 'Motion'), structural: true },
+    { ...parameter('foldMorphAngle', 'Morph direction', -Math.PI, Math.PI, .01, 0, 'Motion'), structural: true },
+    parameter('foldMorphBeat', 'Morph on next beat', 0, 1, 1, 0, 'Motion'),
     parameter('foldSpacing', 'Band spacing', .35, 3, .01, 1, 'Material'),
     parameter('foldPinch', 'Pinch', 0, 1, .01, .86, 'Material'),
     parameter('foldPhase', 'Colour phase', 0, 1, .01, 0, 'Motion'),
@@ -775,6 +786,15 @@ PRESETS.push(
   preset('offset-fold', 'Offset Fold', 'Coral and magenta bands fold around a tilted opening.', 'surface',
     FOLD_PALETTES[0].colors,
     { style: SURFACE_FOLD, cycles: 4, softness: .1, contrast: .35 }),
+  preset('fold-wall-sweep', 'Fold Wall Sweep', 'A bright S-curve sweeps horizontally across a wide wall.', 'surface',
+    FOLD_PALETTES[4].colors, { style: SURFACE_FOLD, foldShape: 2, foldTilt: 1.36, foldSize: 1.85,
+      foldPath: 1, foldPathAmount: .18, foldInnerFlow: .55, foldInnerStretch: .5, foldSatin: .4, foldRollOff: .5, foldBrightness: .48, cycles: 2 }),
+  preset('fold-satin-column', 'Fold Satin Column', 'A tall, slow opening with a soft satin highlight for narrow surfaces.', 'surface',
+    FOLD_PALETTES[2].colors, { style: SURFACE_FOLD, foldTilt: .08, foldStretch: 1.8, foldSize: 1.27,
+      foldInnerFlow: .5, foldInnerStretch: .72, foldSatin: .65, foldRollOff: .6, foldBrightness: .35, cycles: 2 }),
+  preset('fold-edge-entry', 'Fold Edge Entry', 'A folding spiral drifts into the picture from beyond the right edge.', 'surface',
+    FOLD_PALETTES[1].colors, { style: SURFACE_FOLD, foldShape: 3, foldX: 1.13, foldPath: 1, foldPathAmount: .45,
+      foldSize: .96, foldInnerFlow: .6, foldInnerStretch: .42, foldSatin: .42, foldRollOff: .55, foldBrightness: .52, cycles: 3 }),
 );
 
 /**
@@ -899,7 +919,7 @@ export function clampParameter(value: number, definition: ParameterDefinition): 
 }
 
 // Identity, coverage and Julia topology are deliberate composition choices.
-const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'input','group','motif','spiral','spiralA','spiralB','zoomCycles','colorRun','morphTo','morphs','scopeMode','emberPhrases','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'foldX', 'foldY', 'foldDirection', 'foldShape', 'foldPath', 'foldPathCycles', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
+const VARIATION_FIXED = new Set([...MERIDIAN_FIXED, 'input','group','motif','spiral','spiralA','spiralB','zoomCycles','colorRun','morphTo','morphs','scopeMode','emberPhrases','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','surfaceHole','style', 'variant', 'form', 'mode', 'colorMode', 'mirror', 'repeat', 'substrate', 'profile', 'fill', 'sweep', 'corners', 'quality', 'gateMode', 'gateInset', 'gateRoundness', 'backgroundOpacity', 'centerX', 'centerY', 'foldX', 'foldY', 'foldDirection', 'foldShape', 'foldPath', 'foldPathCycles', 'foldMorphBeat', 'cycles', 'turns', 'reelLoops', 'shutterBlades', 'juliaReal', 'juliaImag', 'pattern', 'axis', 'phaseOffset']);
 const VARIATION_OFF_VALUES: Record<string, number> = { slitChroma: 0, slitZoom: 0, slitReach: 1, glowSpread: 0, glowStreak: 0 };
 export type VariationLocks = { palette: boolean; structure: boolean; motion: boolean; material: boolean };
 

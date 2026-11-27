@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { delayOrder, stagedTime, TIMING_KEYS } from '../src/core/timing';
-import { applyPreset, createLayer, createProject, PRESETS, validateProject } from '../src/core/project';
+import { applyPreset, createLayer, createProject, PRESETS, SURFACE_FOLD, validateProject } from '../src/core/project';
 const TAU = Math.PI * 2;
 
 test('staged time is the loop clock unchanged at neutral settings', () => {
@@ -38,7 +38,7 @@ test('older Surface, Graphic and Relief layers open with timing off', () => {
 });
 
 test('Surface, Graphic and Relief presets with staged motion have it enabled', () => {
-  for (const preset of PRESETS.filter(p => ['surface', 'graphic', 'relief'].includes(p.kind) && !['recursion-tunnel', 'time-terraces', 'offset-fold'].includes(p.id))) {
+  for (const preset of PRESETS.filter(p => ['surface', 'graphic', 'relief'].includes(p.kind) && !(p.kind === 'surface' && p.params.style === SURFACE_FOLD) && !['recursion-tunnel', 'time-terraces'].includes(p.id))) {
     const layer = applyPreset(createLayer(preset.kind), preset.id);
     assert.ok(layer.params.delaySpread > 0 || layer.params.pause > 0, preset.id);
   }

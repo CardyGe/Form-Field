@@ -77,3 +77,12 @@ test('shapes and travel expose only their own controls and round-trip independen
   assert.equal(activeParameterLink(original, 'foldBrightness'), true);
   assert.equal(activeParameterLink(original, 'foldPitch'), false);
 });
+
+test('projection looks retain the new flow and material settings through save and Map load', () => {
+  const ids = ['fold-wall-sweep', 'fold-satin-column', 'fold-edge-entry'];
+  const looks = ids.map(id => validateProject(JSON.parse(JSON.stringify(presetComposition(id, 4)!))).layers[0]);
+  assert.deepEqual(looks.map(look => look.params.foldShape), [2, 0, 3]);
+  assert.ok(looks.every(look => look.params.foldInnerFlow > 0 && look.params.foldSatin > 0 && look.params.foldRollOff > 0));
+  assert.equal(activeParameterLink(looks[0], 'foldInnerFlow'), true);
+  assert.equal(activeParameterLink(looks[0], 'foldMorphTime'), false);
+});

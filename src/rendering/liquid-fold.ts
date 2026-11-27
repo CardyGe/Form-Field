@@ -4,7 +4,9 @@ uniform float uFoldX, uFoldY, uFoldSize, uFoldStretch, uFoldTilt;
 uniform float uFoldSpacing, uFoldPinch, uFoldPhase, uFoldDirection;
 uniform float uFoldShape, uFoldSeparation, uFoldCurve, uFoldPitch;
 uniform float uFoldPath, uFoldPathAmount, uFoldPathCycles, uLoopPhase;
-uniform float uFoldBrightness, uFoldRimLight;
+uniform float uFoldBrightness, uFoldRimLight, uFoldInnerFlow, uFoldInnerStretch;
+uniform float uFoldSatin, uFoldSatinAngle, uFoldRollOff;
+uniform float uFoldMorphFrom, uFoldMorphMix, uFoldMorphDirection;
 
 float foldCarrier(vec2 point) {
   float x = point.x, y = point.y;
@@ -30,8 +32,8 @@ float foldRimProfile(float edge, float width) {
   return exp(-pow(min(abs(edge)/span, 10.), 2.))*min(1., width/span);
 }
 
-// Returns the phase displacement and the local highlight weight.
-vec2 foldEllipse(vec2 p) {
+// Phase displacement, rim highlight, and a soft interior mask.
+vec3 foldEllipse(vec2 p) {
   float radius = sqrt(dot(p,p) + .000001);
   vec2 bulge = p + vec2(.7, -.2);
   float rise = .682*exp(-.48*dot(bulge*bulge, vec2(.75, 1.)));
@@ -45,35 +47,35 @@ vec2 foldEllipse(vec2 p) {
   float edge = distanceToRim/max(width, .6*fwidth(radius));
   float rim = .5 - .5*tanh(clamp(edge, -8., 8.));
   float highlight = nearSide*foldRimProfile(distanceToRim, .015 + .055*uSoftness);
-  return vec2(rise + insideCurve + uFoldPinch*nearSide*rim, highlight);
+  return vec3(rise + insideCurve + uFoldPinch*nearSide*rim, highlight, 1. - smoothstep(.36, .98, radius));
 }
 
-vec2 foldField(vec2 p) {
-  if (uFoldShape < .5) return foldEllipse(p);
-  if (uFoldShape < 1.5) {
+vec3 foldField(vec2 p, float shape) {
+  if (shape < .5) return foldEllipse(p);
+  if (shape < 1.5) {
     vec2 shift = vec2(uFoldSeparation, .32);
-    vec2 first = foldEllipse((p + shift)*vec2(1.12, 1.1));
-    vec2 second = foldEllipse((p - shift)*vec2(-1.22, 1.2));
-    return vec2(first.x + second.x*.88, max(first.y, second.y));
+    vec3 first = foldEllipse((p + shift)*vec2(1.12, 1.1));
+    vec3 second = foldEllipse((p - shift)*vec2(-1.22, 1.2));
+    return vec3(first.x + second.x*.88, max(first.y, second.y), max(first.z, second.z));
   }
-  if (uFoldShape < 2.5) {
+  if (shape < 2.5) {
     float bend = p.x - uFoldCurve*1.8*sin(.92*p.y);
     float envelope = exp(-.17*p.y*p.y);
     float band = exp(-.24*bend*bend);
     float width = .09 + .48*uSoftness;
     float fold = band*tanh(clamp(bend/max(width, .7*fwidth(bend)), -8., 8.));
-    return vec2(envelope*(.26*band + .53*uFoldPinch*fold),
-      envelope*foldRimProfile(bend, .055 + .09*uSoftness));
+    return vec3(envelope*(.26*band + .53*uFoldPinch*fold),
+      envelope*foldRimProfile(bend, .055 + .09*uSoftness), envelope*band*smoothstep(.08, .72, bend));
   }
   float radius = length(p);
-  float angle = atan(p.y, p.x + .00001);
-  float turn = sin(angle - 2.9*uFoldPitch*log(.38 + radius));
+  float winding = 2.9*uFoldPitch*log(.38 + radius);
+  float turn = dot(p, vec2(-sin(winding), cos(winding)))/max(radius, .00001);
   // Suppress the singularity at the centre and fade the winding into the field.
   float envelope = smoothstep(.08, .42, radius)*(1. - smoothstep(1.05, 4.4, radius));
   float width = .12 + .45*uSoftness;
   float fold = tanh(clamp(turn/max(width, .65*fwidth(turn)), -8., 8.));
-  return vec2(envelope*(.54*uFoldPinch*fold + .19*radius),
-    envelope*foldRimProfile(turn, .045 + .08*uSoftness));
+  return vec3(envelope*(.54*uFoldPinch*fold + .19*radius),
+    envelope*foldRimProfile(turn, .045 + .08*uSoftness), envelope*smoothstep(.05, .8, turn));
 }
 
 // The palette's smoothstep segments are integrated for exact box filtering in phase.
@@ -110,9 +112,18 @@ vec3 liquidFold(vec2 world) {
   float stretch = sqrt(uFoldStretch);
   vec2 radii = vec2(.081/stretch, .242*stretch)*uFoldSize;
   vec2 p = mat2(c, s, -s, c)*(world - foldOpening())/radii;
-  vec2 field = foldField(p);
+  vec3 field = foldField(p, uFoldShape);
+  if (uFoldMorphMix < 1.) {
+    vec2 axis = vec2(cos(uFoldMorphDirection), sin(uFoldMorphDirection));
+    float scan = dot(vUv - .5, axis)/(abs(axis.x) + abs(axis.y)) + .5;
+    float mixAmount = smoothstep(0., 1., clamp((uFoldMorphMix - .4*scan)/.6, 0., 1.));
+    field = mix(foldField(p, uFoldMorphFrom), field, mixAmount);
+  }
   float direction = uFoldDirection < .5 ? 1. : -1.;
   float phase = (foldCarrier(world) + field.x)/uFoldSpacing + uFoldPhase + direction*uPhase/TAU;
+  // Periodic slip changes apparent inner speed without a reset at the seam.
+  phase += field.z*(.42*uFoldInnerStretch*tanh(clamp(p.y, -8., 8.))
+    + .115*uFoldInnerFlow*sin(uPhase - .8*field.z));
   float footprint = fwidth(phase);
   vec3 colour = foldPalette(phase);
   if (footprint > .018) {
@@ -126,6 +137,22 @@ vec3 liquidFold(vec2 world) {
       smoothstep(.018, .065, footprint));
   }
   vec3 light = mix(vec3(1.), mix(uPalette[2], uPalette[5], .5), .7);
-  return (max(colour, vec3(0.)) + light*(.54*uFoldRimLight*field.y))*exp2(uFoldBrightness);
+  vec3 shaded = max(colour, vec3(0.)) + light*(.54*uFoldRimLight*field.y);
+  if (uFoldSatin > 0.) {
+    float surfaceHeight = field.x + .24*field.z;
+    vec2 gradient = vec2(dFdx(surfaceHeight)*uResolution.x/uAspect, dFdy(surfaceHeight)*uResolution.y);
+    vec3 normal = normalize(vec3(-.22*gradient, 1.));
+    vec3 key = normalize(vec3(.78*cos(uFoldSatinAngle), .78*sin(uFoldSatinAngle), .88));
+    float sheen = pow(max(0., dot(normal, normalize(key + vec3(0., 0., 1.)))), 9.);
+    shaded += light*(.42*uFoldSatin*sheen*smoothstep(.02, .65, abs(field.x) + field.z));
+  }
+  shaded *= exp2(uFoldBrightness);
+  float peak = max(shaded.r, max(shaded.g, shaded.b));
+  if (peak > .64 && uFoldRollOff > 0.) {
+    // A common scale preserves hue as bright channels enter the shoulder.
+    float shoulder = .64 + .36*(1. - exp(-(peak - .64)/.36));
+    shaded *= mix(1., shoulder/peak, uFoldRollOff);
+  }
+  return shaded;
 }
 `;

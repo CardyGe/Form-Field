@@ -26,7 +26,7 @@ export const coloringModes = ['Palette', 'Duotone', 'Contours'];
 export const mirrorModes = ['Original', 'Flip horizontal', 'Flip vertical', 'Flip both'];
 export const gradingKeys = ['saturation', 'hue', 'exposure',...FINISH_KEYS];
 export const graphicChoiceKeys = ['profile', 'fill', 'sweep', 'corners'];
-export const choiceKeys = ['foldDirection','foldShape','foldPath','scopeMode','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','style', 'variant', 'form', 'quality', 'radial', 'colorMode', 'mirror', 'substrate', 'mode', 'gateMode', 'autoTravel', 'seed'];
+export const choiceKeys = ['foldMorphBeat','foldDirection','foldShape','foldPath','scopeMode','emberSmokeStyle','emberSmokeOrigin','simulationQuality','flowMode','inkMode','reliefMode','phrase','style', 'variant', 'form', 'quality', 'radial', 'colorMode', 'mirror', 'substrate', 'mode', 'gateMode', 'autoTravel', 'seed'];
 export const super8ControlGroups: [string, string[]][] = [
   ['Paint geometry', ['scale', 'steps', 'coverage', 'erosion', 'rotation']],
   ['Paint texture', ['texture', 'textureScale', 'roughness', 'bleed', 'emulsion']],
@@ -220,6 +220,9 @@ export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscope
         {selected.kind === 'surface' && selected.params.style !== SURFACE_FOLD && <ChoiceParameter label="Variant" name="Surface variant" options={SURFACE_VARIANTS[Math.round(selected.params.style ?? 0)]} value={selected.params.variant} onChange={variant => edit(l => ({ ...l, params: { ...l.params, variant } }))} />}
         {isFold && <ChoiceParameter label="Fold shape" name="Fold shape" options={FOLD_SHAPES} value={selected.params.foldShape ?? 0}
           onChange={foldShape => edit(l => ({ ...l, params: { ...l.params, foldShape } }))} />}
+        {isFold && <label className="checkbox-row"><input type="checkbox" checked={!!selected.params.foldMorphBeat}
+          onChange={e => { const foldMorphBeat = Number(e.target.checked); edit(l => ({ ...l, params: { ...l.params, foldMorphBeat } })); }} />
+          Morph on next beat</label>}
         {isFold && <ChoiceParameter label="Opening motion" name="Fold opening motion" options={FOLD_PATHS} value={selected.params.foldPath ?? 0}
           onChange={foldPath => edit(l => ({ ...l, params: { ...l.params, foldPath } }))} />}
         {isFold && <ChoiceParameter label="Flow direction" name="Fold flow direction" options={FOLD_DIRECTIONS} value={selected.params.foldDirection} onChange={foldDirection => edit(l => ({ ...l, params: { ...l.params, foldDirection } }))} />}

@@ -34,7 +34,7 @@ export function parseTarget(target: string): Target | null {
 }
 
 export function canLinkParameter(layer: Layer, key: string): boolean {
-  if (layer.kind === 'surface' && ['foldDirection', 'foldShape', 'foldPath', 'foldPathCycles'].includes(key)) return false;
+  if (layer.kind === 'surface' && ['foldDirection', 'foldShape', 'foldPath', 'foldPathCycles', 'foldMorphBeat', 'foldMorphTime', 'foldMorphHold', 'foldMorphAngle'].includes(key)) return false;
   if (layer.kind === 'meridian') return !MERIDIAN_UNLINKED.includes(key);
   return layer.kind !== 'scope' || key !== 'scopeMode' && key !== 'emberPhrases';
 }

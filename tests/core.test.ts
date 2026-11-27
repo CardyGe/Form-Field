@@ -691,10 +691,10 @@ test('Fractal contour controls appear only for contour coloring without deleting
 });
 
 test('the curated library covers every Surface pattern, four Sculpture forms and three Fractal colorings', () => {
-  assert.equal(PRESETS.filter(p => p.kind !== 'graphic' && p.kind !== 'meridian').length, 95 + 32 + 10 + FRACTAL_PROJECTION_LOOK_IDS.length);
+  assert.equal(PRESETS.filter(p => p.kind !== 'graphic' && p.kind !== 'meridian').length, 98 + 32 + 10 + FRACTAL_PROJECTION_LOOK_IDS.length);
   assert.equal(new Set(PRESETS.map(preset => preset.id)).size, PRESETS.length);
   const surfaces = PRESETS.filter(preset => preset.kind === 'surface');
-  assert.equal(surfaces.length, 15);
+  assert.equal(surfaces.length, 18);
   assert.deepEqual([...new Set(surfaces.map(preset => preset.params.style))].sort(), [0, 1, 2, 3, 4]);
   const sculptures = PRESETS.filter(preset => preset.kind === 'sculpture');
   assert.equal(sculptures.length, 5);
