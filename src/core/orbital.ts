@@ -20,6 +20,7 @@ export const ORBIT_CHOICES = {
   orbitShadowModel: ['Cast', 'Soft contact'],
   orbitFinish: ['Enamel', 'Flat ink', 'Satin', 'Metallic', 'Thin film', 'Pearl'],
   orbitPlayback: ['Endless', 'Seamless loop', 'Fade cue'],
+  orbitSpinMode: ['Follow motion', 'Independent', 'Fixed'],
   orbitOrder: ['Centre outward', 'Outside inward', 'Around the ring'],
   orbitColourMode: ['Per piece', 'By arm', 'Along the path', 'By depth'],
   orbitFadeTarget: ['Whole picture', 'Background', 'Sculpture'],
@@ -45,9 +46,15 @@ const ORBIT_MATERIAL_PARAMETERS = [
   material('orbitFilmStrength', 'Iridescence', 0, 1, .66),
   material('orbitFilmThickness', 'Film thickness', 0, 1, .42),
 ];
+const ORBIT_ORIENTATION_PARAMETERS = [
+  motion('orbitSpinMode', 'Sculpture rotation', 0, ORBIT_CHOICES.orbitSpinMode.length - 1, 0, 1),
+  { ...motion('orbitSpinRate', 'Rotation (turns/sec)', -1, 1, .12), description: 'Set to zero to hold the current angle. Negative values turn the other way.' },
+  { ...p('orbitHeading', 'Orientation (degrees)', -180, 180, 0, 'Camera', .5), description: 'Sets the angle of the sculpture without rotating the background.' },
+  { ...shape('orbitLobeWidth', 'Figure eight width', .28, 1.35, 1), description: 'Compresses the two lobes horizontally before rotation. Use with Fixed rotation for narrow surfaces.' },
+];
 // A counter identifies replays of the same look without becoming a show control.
 const ORBIT_RECALL_PARAMETER = motion('orbitRecall', 'Look recall', 0, 0xffffffff, 0, 1);
-export const ORBIT_ADDED_KEYS = [...ORBIT_INSTALLATION_PARAMETERS, ...ORBIT_MATERIAL_PARAMETERS, ORBIT_RECALL_PARAMETER].map(def => def.key);
+export const ORBIT_ADDED_KEYS = [...ORBIT_INSTALLATION_PARAMETERS, ...ORBIT_MATERIAL_PARAMETERS, ...ORBIT_ORIENTATION_PARAMETERS, ORBIT_RECALL_PARAMETER].map(def => def.key);
 export const ORBIT_PARAMETERS: ParameterDefinition[] = [
   shape('orbitLayout', 'Arrangement', 0, ORBIT_CHOICES.orbitLayout.length - 1, 0, 1), shape('orbitPiece', 'Piece shape', 0, ORBIT_CHOICES.orbitPiece.length - 1, 0, 1),
   shape('orbitCount', 'Piece count', 12, ORBIT_CAPACITY, 68, 1), shape('orbitArms', 'Arms / rows', 1, 12, 3, 1),
@@ -57,7 +64,7 @@ export const ORBIT_PARAMETERS: ParameterDefinition[] = [
   shape('orbitScatter', 'Size variation', 0, 1, .22), shape('orbitAccent', 'Accent pieces', 0, 1, .64),
   shape('orbitAspect', 'Piece stretch', .5, 2, 1),
   motion('orbitMotion', 'Movement', 0, ORBIT_CHOICES.orbitMotion.length - 1, 0, 1), motion('orbitPlayback', 'Playback', 0, 2, 0, 1),
-  motion('orbitRate', 'Motion speed / direction', -2, 2, .62), motion('orbitAmount', 'Movement amount', 0, 1, .85),
+  { ...motion('orbitRate', 'Motion speed / direction', -2, 2, .62), description: 'Controls movement through the form. Follow motion also uses this rate for rotation.' }, motion('orbitAmount', 'Movement amount', 0, 1, .85),
   motion('orbitTurns', 'Turns per loop', -5, 5, 1, 1), motion('orbitCycles', 'Phrases per loop', 1, 12, 3, 1),
   motion('orbitSpread', 'Wave stagger', 0, 1, .54), motion('orbitOrder', 'Wave starts at', 0, 2, 0, 1),
   motion('orbitRoll', 'Piece tumble', 0, 1, .6), motion('orbitMorph', 'Morph duration (seconds)', 0, 8, 1.8),
@@ -84,7 +91,7 @@ export const ORBIT_PARAMETERS: ParameterDefinition[] = [
   material('saturation', 'Saturation', 0, 2, 1), material('hue', 'Hue shift', -Math.PI, Math.PI, 0), material('exposure', 'Exposure', .25, 2, 1),
   p('orbitCamera', 'Camera tilt', -.45, .45, .035, 'Camera'),
   p('orbitFraming', 'Framing', .55, 1.7, 1, 'Camera'),
-  ...ORBIT_INSTALLATION_PARAMETERS, ...ORBIT_MATERIAL_PARAMETERS, ORBIT_RECALL_PARAMETER,
+  ...ORBIT_INSTALLATION_PARAMETERS, ...ORBIT_MATERIAL_PARAMETERS, ...ORBIT_ORIENTATION_PARAMETERS, ORBIT_RECALL_PARAMETER,
 ];
 
 export const ORBIT_SWATCHES = ['Face', 'Cap', 'Ink / rim', 'Ground', 'Pattern light', 'Pattern dark'];
@@ -140,6 +147,11 @@ export const ORBIT_LOOKS: { id: string; name: string; description: string; palet
       orbitAspect: 1.18, orbitAccent: .17, orbitDepth: .92, orbitRate: .24, orbitSpread: .54, orbitAmount: .55, orbitFinish: 4, orbitFilmStrength: .77,
       orbitFilmThickness: .73, orbitColourMode: 2, orbitColourBlend: .88, orbitBackdrop: 7, orbitShadowModel: 1, orbitShadows: .5,
       orbitCamera: .13, orbitFraming: 1.38, orbitSafeMargin: .045, orbitCleanDetail: 1 } },
+  { id: 'orbital-glass-column', name: 'Glass Column', description: 'Iridescent light climbs a narrow, upright figure eight on a transparent ground.', palette: 14,
+    params: { orbitLayout: 8, orbitPiece: 6, orbitMotion: 6, orbitSpinMode: 2, orbitLobeWidth: .46, orbitTurns: 0, orbitArms: 2, orbitCount: 94, orbitRadius: .46,
+      orbitSize: .036, orbitMinimum: .82, orbitAspect: 1.12, orbitAccent: .11, orbitDepth: .79, orbitRate: .2, orbitSpread: .42,
+      orbitAmount: .5, orbitFinish: 4, orbitFilmStrength: .84, orbitFilmThickness: .63, orbitColourMode: 2, orbitColourBlend: .88,
+      orbitBackdrop: 7, orbitShadowModel: 1, orbitShadows: .28, orbitSoftness: .27, orbitLight: 1.57, orbitCamera: .06, orbitFraming: 1.48, orbitSafeMargin: .065, orbitCleanDetail: 1 } },
   { id: 'orbital-ink', name: 'Floating Ink', description: 'Concentric discs on a transparent ground for layering.', palette: 11, params: { orbitLayout: 5, orbitPiece: 0, orbitArms: 3, orbitMotion: 2, orbitBackdrop: 7, orbitFinish: 1, orbitCount: 76, orbitRate: .33 } },
 ];
 
@@ -159,8 +171,11 @@ export function orbitVisibleParameter(layer: Layer, key: string): boolean {
   if (key === 'orbitRecall') return false;
   if (key === 'orbitFilmStrength' || key === 'orbitFilmThickness') return layer.params.orbitFinish >= 4;
   const p = layer.params;
+  if (key === 'orbitSpinRate') return p.orbitPlayback !== 1 && p.orbitSpinMode === 1;
+  if (key === 'orbitTurns') return p.orbitPlayback === 1 && (p.orbitSpinMode === 1 || p.orbitSpinMode === 0 && p.orbitMotion !== 5);
+  if (key === 'orbitLobeWidth') return p.orbitLayout === 8;
   if (key === 'orbitRate' || key === 'orbitBackgroundRate' || key === 'orbitColourRate') return p.orbitPlayback !== 1;
-  if (key === 'orbitTurns' || key === 'orbitCycles' || key === 'orbitBackgroundCycles' || key === 'orbitColourCycles') return p.orbitPlayback === 1;
+  if (key === 'orbitCycles' || key === 'orbitBackgroundCycles' || key === 'orbitColourCycles') return p.orbitPlayback === 1;
   if (key === 'orbitPatternLink') return p.orbitBackdrop === 0 || p.orbitBackdrop >= 8;
   if (key === 'orbitPhraseSeconds') return p.orbitPlayback !== 1 && p.orbitPhrasing > 0;
   if (key === 'orbitPatternFocus') return ![1, 6, 7, 10].includes(p.orbitBackdrop);

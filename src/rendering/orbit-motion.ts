@@ -5,11 +5,12 @@ export interface OrbitPose { x: number; y: number; z: number; angle: number; til
 export const makeOrbitPose = (): OrbitPose => ({ x: 0, y: 0, z: 0, angle: 0, tilt: 0, roll: 0, size: 0, band: 0 });
 export const wrapOrbit = (phase: number) => phase % TAU;
 export function orbitLoopPhase(p: Record<string, number>, phase: number): OrbitPhase {
-  return { spin: phase * p.orbitTurns, wave: phase * p.orbitCycles, background: phase * p.orbitBackgroundCycles, colour: phase * p.orbitColourCycles, phrase: phase };
+  return { spin: p.orbitSpinMode === 2 ? 0 : phase * p.orbitTurns, wave: phase * p.orbitCycles, background: phase * p.orbitBackgroundCycles, colour: phase * p.orbitColourCycles, phrase: phase };
 }
 export function advanceOrbitPhase(previous: OrbitPhase, p: Record<string, number>, seconds: number): OrbitPhase {
+  const spinRate = p.orbitSpinMode === 2 ? 0 : p.orbitSpinMode === 1 ? p.orbitSpinRate : p.orbitRate * .29;
   return {
-    spin: wrapOrbit(previous.spin + seconds * p.orbitRate * TAU * .29),
+    spin: wrapOrbit(previous.spin + seconds * spinRate * TAU),
     wave: wrapOrbit(previous.wave + seconds * p.orbitRate * TAU),
     background: wrapOrbit(previous.background + seconds * p.orbitBackgroundRate * TAU),
     phrase: wrapOrbit(previous.phrase + seconds * Math.sign(p.orbitRate) * TAU / p.orbitPhraseSeconds),
@@ -33,6 +34,10 @@ function random(index: number, seed: number): number {
   n = Math.imul(n ^ (n >>> 15), 0x735a2d97);
   return ((n ^ (n >>> 15)) >>> 0) / 0x100000000;
 }
+export function figureEightWidth(p: Record<string, number>): number {
+  return (.48 + .18 * p.orbitOpening) * p.orbitLobeWidth;
+}
+
 export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>, time: OrbitPhase): void {
   const count = Math.round(p.orbitCount), arms = Math.min(Math.round(p.orbitArms), count);
   const arm = i % arms, step = Math.floor(i / arms);
@@ -48,8 +53,11 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
   const beat = mix(raw, orbitEase(raw), p.orbitEase);
   const vibration = Math.sin(local);
   const amount = p.orbitMotion === 5 ? 0 : p.orbitAmount;
-  const sweep = p.orbitMotion === 6 && p.orbitLayout < 6 ? time.wave : 0;
-  const turn = p.orbitMotion === 5 ? 0 : time.spin + sweep + .24 * passage;
+  const heading = p.orbitHeading * Math.PI / 180;
+  const spin = p.orbitSpinMode === 2 || p.orbitSpinMode === 0 && p.orbitMotion === 5 ? 0 : time.spin;
+  const linked = p.orbitSpinMode === 0 && p.orbitMotion !== 5;
+  const sweep = linked && p.orbitMotion === 6 && p.orbitLayout < 6 ? time.wave : 0;
+  const turn = heading + spin + sweep + (linked ? .24 * passage : 0);
   const winding = p.orbitMotion === 0 ? Math.min(1, amount * beat * (1 + .18 * passage)) : 0;
   const expansion = 1 + .12 * passage;
   const spread = expansion * (p.orbitMotion === 4 ? 1 + .4 * amount * vibration : 1);
@@ -104,7 +112,7 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
     }
     case 8: {
       const along = TAU * circle + flow;
-      const width = .48 + .18 * p.orbitOpening;
+      const width = figureEightWidth(p);
       const wave = 1 + .16 * amount * vibration;
       const x = p.orbitRadius * width * Math.sin(2 * along) * wave;
       const y = p.orbitRadius * Math.sin(along) * wave;
@@ -124,7 +132,7 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
     }
   }
   if (p.orbitMotion === 1) radius *= 1 + .32 * amount * vibration;
-  if (p.orbitMotion === 2) angle += (arm % 2 ? -1 : 1) * time.spin - turn + .4 * amount * vibration;
+  if (p.orbitMotion === 2) angle += (arm % 2 ? -1 : 1) * spin + heading - turn + .4 * amount * vibration;
   const wobble = random(i, p.seed);
   const sizeWave = p.orbitMotion === 5 ? .9 : mix(.85, .22 + .78 * beat, amount);
   const tapered = p.orbitLayout === 7 ? .53 + .47 * Math.sin(Math.PI * (.14 + .78 * t)) : 1;

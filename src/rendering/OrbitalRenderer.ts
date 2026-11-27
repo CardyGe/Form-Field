@@ -336,7 +336,7 @@ export class OrbitalRenderer {
   private animate(layer: Layer, phase: number, view: OrbitView, aspect: number, clock?: OrbitalClock): FrameState | undefined {
     if (!clock) return undefined;
     const { motion: elapsed, transition } = clock;
-    const p = layer.params, signature = [p.orbitLayout, p.orbitMotion, p.orbitCount, p.orbitArms, p.orbitOrder, p.orbitColourMode, p.orbitRecall].join(':');
+    const p = layer.params, signature = [p.orbitLayout, p.orbitMotion, p.orbitCount, p.orbitArms, p.orbitOrder, p.orbitColourMode, p.orbitSpinMode, p.orbitRecall].join(':');
     let state = this.layers.get(layer.id);
     if (!state || elapsed < state.elapsed || transition < state.transition) {
       // A seek reconstructs the phase from a known origin. Subsequent speed changes integrate from here.

@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { ORBIT_CHOICES, ORBIT_ADDED_KEYS, ORBIT_LOOKS, ORBIT_TAU, advanceOrbitalClock, orbitFade, recallOrbitalLook } from '../src/core/orbital';
+import { ORBIT_CHOICES, ORBIT_ADDED_KEYS, ORBIT_LOOKS, ORBIT_TAU, advanceOrbitalClock, orbitFade, orbitVisibleParameter, recallOrbitalLook } from '../src/core/orbital';
 import { applyPreset, createLayer, createProject, finishSupported, validateProject } from '../src/core/project';
 import { needsPrepare } from '../src/map/playout';
 import { canLinkParameter } from '../src/map/targets';
@@ -203,4 +203,49 @@ test('sculpture presets keep inactive identities within the form during a count 
     assert.ok(Math.hypot(inactive.x, inactive.y) <= params.orbitRadius * 1.5);
     assert.ok(Object.values(inactive).every(Number.isFinite));
   }
+});
+
+
+test('independent rotation can hold or reverse without changing flow', () => {
+  const layer = applyPreset(createLayer('orbital'), 'orbital-glass-column');
+  const p = { ...layer.params, orbitSpinMode: 1, orbitSpinRate: .25 };
+  const start = orbitLoopPhase(p, 0);
+  const running = advanceOrbitPhase(start, p, 1);
+  const held = advanceOrbitPhase(running, { ...p, orbitSpinRate: 0 }, .5);
+  const reverse = advanceOrbitPhase(held, { ...p, orbitSpinRate: -.25 }, .5);
+  assert.equal(held.spin, running.spin);
+  assert.ok(held.wave > running.wave);
+  assert.ok(reverse.spin < held.spin && reverse.wave > held.wave);
+  const spinOnly = advanceOrbitPhase(start, { ...p, orbitRate: 0 }, .5);
+  assert.equal(spinOnly.wave, start.wave);
+  assert.ok(spinOnly.spin > start.spin);
+  assert.equal(canLinkParameter(layer, 'orbitSpinRate'), true);
+  assert.equal(orbitVisibleParameter(layer, 'orbitSpinRate'), false);
+  assert.equal(orbitVisibleParameter({ ...layer, params: p }, 'orbitSpinRate'), true);
+});
+
+test('a fixed figure eight follows its heading while pieces flow and the loop closes', () => {
+  const { params } = applyPreset(createLayer('orbital'), 'orbital-glass-column');
+  params.orbitTurns = -3;
+  const first = makeOrbitPose(), last = makeOrbitPose(), moving = makeOrbitPose(), rotated = makeOrbitPose();
+  const start = orbitLoopPhase(params, 0);
+  const later = advanceOrbitPhase(start, params, 1);
+  assert.equal(later.spin, 0);
+  sampleOrbit(first, 13, params, start);
+  sampleOrbit(moving, 13, params, later);
+  assert.notEqual(first.y, moving.y);
+  sampleOrbit(last, 13, params, orbitLoopPhase(params, ORBIT_TAU));
+  sampleOrbit(rotated, 13, { ...params, orbitHeading: 90 }, start);
+  assert.ok(Math.abs(first.y - last.y) < 1e-9);
+  assert.ok(Math.abs(rotated.x + first.y) < 1e-9);
+  assert.ok(Math.abs(rotated.y - first.x) < 1e-9);
+});
+
+test('the narrow fit responds to orientation without tightening free-rotating looks', () => {
+  const { params } = applyPreset(createLayer('orbital'), 'orbital-glass-column');
+  const tall = orbitProjectionDistance(params, .2);
+  const sideways = orbitProjectionDistance({ ...params, orbitHeading: 90 }, .2);
+  const rotating = { ...params, orbitSpinMode: 1 };
+  assert.ok(tall * 2 < sideways);
+  assert.equal(orbitProjectionDistance(rotating, .2), orbitProjectionDistance({ ...rotating, orbitHeading: 90 }, .2));
 });

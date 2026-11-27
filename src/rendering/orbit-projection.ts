@@ -1,19 +1,35 @@
+import { figureEightWidth } from './orbit-motion';
+
 export const ORBIT_FOV = 29;
 export const ORBIT_TAN_HALF_FOV = Math.tan(ORBIT_FOV * Math.PI / 360);
 
 /** A fixed envelope for the entire movement, so automatic fitting never pumps along with the sculpture. */
 export function orbitProjectionDistance(p: Record<string, number>, aspect: number): number {
-  const authored = 2.2 / (p.orbitFraming * Math.min(1, aspect / .82));
+  const fixedFigure = p.orbitLayout === 8 && (p.orbitSpinMode === 2 || p.orbitSpinMode === 0 && p.orbitMotion === 5);
+  const faithfulAspect = fixedFigure && p.orbitSafeMargin > 0 ? 1 : Math.min(1, aspect / .82);
+  const authored = 2.2 / (p.orbitFraming * faithfulAspect);
   if (!p.orbitSafeMargin) return authored;
   const waving = p.orbitMotion === 1 ? 1 + .32 * p.orbitAmount
     : p.orbitMotion === 4 ? 1 + .4 * p.orbitAmount : 1;
+  const figureWidth = figureEightWidth(p);
   const corner = p.orbitLayout === 4 ? Math.SQRT2 : p.orbitLayout === 1 ? 1.16
-    : p.orbitLayout === 8 ? 1.08 * (1 + .16 * p.orbitAmount) : p.orbitLayout === 6 ? 1.07 : 1;
-  const radius = p.orbitRadius * corner * waving * (1 + .12 * p.orbitPhrasing);
+    : p.orbitLayout === 8 ? Math.max(1.08, 1.16 * p.orbitLobeWidth) : p.orbitLayout === 6 ? 1.07 : 1;
+  const figureWave = p.orbitLayout === 8 ? 1 + .16 * p.orbitAmount : 1;
+  const extent = p.orbitRadius * waving * (1 + .12 * p.orbitPhrasing) * figureWave;
   const piece = p.orbitSize * 1.35 * (Math.max(1, p.orbitAspect) * (p.orbitPiece === 6 ? 1.16 : 1) + .45 * p.orbitAccent);
   const depth = (p.orbitLayout >= 6 ? .25 : .15) + p.orbitDepth * .28 + piece;
   const tilt = Math.abs(Math.sin(p.orbitCamera));
-  const projected = (radius + piece + depth * tilt) / ((1 - p.orbitSafeMargin * 2) * ORBIT_TAN_HALF_FOV * Math.min(1, aspect));
+  const usable = (1 - p.orbitSafeMargin * 2) * ORBIT_TAN_HALF_FOV;
+  if (fixedFigure) {
+    // The horizontal and vertical extents can be fitted separately once the heading is fixed.
+    const heading = p.orbitHeading * Math.PI / 180;
+    const c = Math.abs(Math.cos(heading)), s = Math.abs(Math.sin(heading));
+    const horizontal = extent * (c * figureWidth + s), vertical = extent * (s * figureWidth + c);
+    const projected = Math.max((horizontal + piece) / aspect, vertical + piece + depth * tilt) / usable;
+    return Math.max(authored, projected + depth + vertical * tilt);
+  }
+  const radius = extent * corner;
+  const projected = (radius + piece + depth * tilt) / (usable * Math.min(1, aspect));
   return Math.max(authored, projected + depth + radius * tilt);
 }
 
