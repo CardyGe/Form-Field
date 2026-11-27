@@ -1,4 +1,5 @@
 import { EmberSmokeAudio, usesEmberSmokeAudio, type SmokeAudioFrame } from '../react/ember-smoke';
+import { TileLightAudio, usesTileLightAudio } from '../react/tile-light';
 import type { Signals } from '../react/signals';
 import {FINISH_PARAMETERS} from '../core/finishing';
 import { InstrumentRenderer } from './InstrumentRenderer';
@@ -160,6 +161,7 @@ function number(layer: Layer, key: string, fallback: number): number {
 const COMPILE_WAIT_MS = 15000;
 
 export class StudioRenderer {
+  private tileLightAudio?: TileLightAudio;
   private emberAudio?: EmberSmokeAudio;
   /** Reused by render() to read the canvas size without allocating. */
   private readonly canvasSize = new THREE.Vector2();
@@ -963,7 +965,7 @@ export class StudioRenderer {
     return texture;
   }
 
-  private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10, smokeAudio?: SmokeAudioFrame): THREE.Texture {
+  private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10, smokeAudio?: SmokeAudioFrame, signals?: Signals): THREE.Texture {
     const aspect = this.width / this.height;
     const surface = this.tiling ? this.tiledSurface ??= tiledSurfaceMaterial() : this.surface;
     const uniforms=layer.kind==='surface'?surface.uniforms:layer.kind==='fractal'?this.fractal.uniforms:
@@ -986,7 +988,7 @@ export class StudioRenderer {
       }
       const plan=graphicRenderPlan(layer,phase,this.width,this.height,this.maxTargetSize);
       if (this.graphicSource.width !== plan.width || this.graphicSource.height !== plan.height) this.graphicSource.setSize(plan.width,plan.height);
-      this.graphics.draw(this.renderer,this.graphicSource,layer,phase,plan.width,plan.height,plan.inView);
+      this.graphics.draw(this.renderer,this.graphicSource,layer,phase,plan.width,plan.height,plan.inView,signals);
       return this.graphicSource.texture;
     } else if (layer.kind === 'super8') {
       this.drawSuper8(layer, original, phase, duration);
@@ -1140,7 +1142,7 @@ export class StudioRenderer {
     return this.source.texture;
   }
 
-  private renderFrame(project: Project, phase: number, width: number, height: number, smokeAudio?: SmokeAudioFrame): void {
+  private renderFrame(project: Project, phase: number, width: number, height: number, smokeAudio?: SmokeAudioFrame, signals?: Signals): void {
     this.assertUsable();
     if (!Number.isFinite(phase)) throw new Error('Frame phase must be finite.');
     if (project.layers.length > 4) throw new Error('This version supports at most four composition layers.');
@@ -1184,7 +1186,7 @@ export class StudioRenderer {
         ? this.captureBelow(below.texture) : null;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
-        : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
+        : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio, signals);
       const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
       const lensed = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
       const finished = tilesActive(original) ? this.tileSource(original, layer, lensed, wrapped, width, height) : lensed;
@@ -2120,12 +2122,16 @@ export class StudioRenderer {
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
     if (audio && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();
     else this.emberAudio = undefined;
+    const tileSound = playing && audio && project.layers.some(usesTileLightAudio) ? audio : undefined;
+    if (tileSound) this.tileLightAudio ??= new TileLightAudio();
+    else this.tileLightAudio = undefined;
     this.gate.check();
     const state = this.gate.on ? this.drawState() : null;
     try {
       const smoke = audio ? this.emberAudio?.advance(audio.signals, audio.now) : undefined;
       this.beginFoldFrame(project, sound?.now ?? performance.now(), sound?.signals);
-      this.renderFrame(project, phase, w, h, smoke);
+      const tileSignals = tileSound ? this.tileLightAudio?.advance(tileSound.signals, tileSound.now) : undefined;
+      this.renderFrame(project, phase, w, h, smoke, tileSignals);
       // Resizing a canvas, even to the size it already has, resets it and re-allocates its drawing buffer:
       // only when the size changes.
       const canvasSize = this.renderer.getSize(this.canvasSize);

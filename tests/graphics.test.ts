@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPreset,createLayer,createProject,PRESETS,validateProject,visibleParameterDefinitions,varyLayer } from '../src/core/project';
-import { GRAPHIC_VARIANTS } from '../src/core/graphics';
+import { CELL_WAVE_KEYS, CELL_WAVE_PALETTES, GRAPHIC_VARIANTS, cellAudioHighlight } from '../src/core/graphics';
+import { TileLightAudio, usesTileLightAudio } from '../src/react/tile-light';
 import { generateGraphicLayout,graphicLayoutKey,GraphicLayoutCache,sampleGraphicGlyphs,graphicPatternExtent } from '../src/rendering/graphic-layout';
 const looks=PRESETS.filter(p=>p.kind==='graphic');
 const layerFor=(id:string)=>applyPreset(createLayer('graphic'),id);
 
 test('all graphic looks are complete, persisted native layers with substantial family controls',()=>{
-  assert.equal(looks.length,17);
+  assert.equal(looks.length,20);
   for(const look of looks){
     const layer=layerFor(look.id),project={...createProject(),layers:[layer]};
     assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))),project);
@@ -36,6 +37,106 @@ test('seeded tile packing covers the grid exactly once, stays in bounds, and is 
     assert.ok(cells.every(x=>x===1));
     assert.notDeepEqual(layout,generateGraphicLayout({...p,seed:p.seed+1},aspect));
   }
+});
+
+test('cell waves retain their grid, animate material independently, and open old projects',()=>{
+  const aspect=9/16;
+  const ids=['graphic-mint-magenta','graphic-cross-current','graphic-ripple-glass'];
+  const frames=ids.map(id=>{
+    const layer=layerFor(id);
+    layer.params.tileResolution=16;
+    const layout=generateGraphicLayout(layer.params,aspect);
+    assert.equal(layout.columnsCount,9);
+    assert.equal(layout.tiles.length,144);
+    const inGrid=(glyphs:ReturnType<typeof sampleGraphicGlyphs>)=>glyphs.filter(g=>Math.abs(g.x)<aspect/2&&Math.abs(g.y)<.5);
+    const a=inGrid(sampleGraphicGlyphs(layer,.5,aspect,layout));
+    const b=inGrid(sampleGraphicGlyphs(layer,1.1,aspect,layout));
+    assert.equal(a.length,144);
+    const centres=(glyphs:typeof a)=>glyphs.map(({x,y})=>[x,y]);
+    assert.deepEqual(centres(a),centres(b));
+    assert.ok(a.some((g,i)=>g.hx!==b[i].hx&&g.color!==b[i].color));
+    assert.ok(a.some(g=>g.duty>.8&&g.bandPhase>.25));
+    assert.ok(a.some(g=>g.duty===0));
+    const withoutFrames=sampleGraphicGlyphs({...layer,params:{...layer.params,cellFrames:0}},.5,aspect,layout);
+    assert.ok(withoutFrames.every(g=>g.duty===0&&g.bandPhase===0));
+    return a.map(g=>g.hx);
+  });
+  assert.notDeepEqual(frames[0],frames[1]);
+  assert.notDeepEqual(frames[1],frames[2]);
+  const original=layerFor('packed-mosaic'),old=structuredClone(original);
+  for(const key of CELL_WAVE_KEYS)delete old.params[key];
+  assert.deepEqual(validateProject({...createProject(),layers:[old]}).layers[0],original);
+});
+
+test('metallic cell finishes roundtrip and older cell waves retain their original finish',()=>{
+  const layer=layerFor('graphic-mint-magenta'),project={...createProject(),layers:[layer]};
+  const finish=['cellMetallic','cellIridescence','cellRoughness'];
+  assert.ok(layer.params.cellMetallic>0&&layer.params.cellIridescence>0);
+  assert.ok(finish.every(key=>visibleParameterDefinitions(layer).some(d=>d.key===key)));
+  for(const {colors} of CELL_WAVE_PALETTES){
+    layer.palette=colors;
+    assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))),project);
+  }
+  const old=structuredClone(project);
+  for(const key of finish)delete old.layers[0].params[key];
+  const {params}=validateProject(old).layers[0];
+  assert.deepEqual(finish.map(key=>params[key]),[0,0,.5]);
+});
+
+test('tile highlight response is opt-in, follows the chosen band, and is bounded',()=>{
+  const layer=layerFor('graphic-cross-current');
+  const old=structuredClone(layer);
+  for(const key of ['cellLightAngle','cellLightTravel','cellAudioAmount','cellAudioSource'])delete old.params[key];
+  assert.deepEqual(validateProject({...createProject(),layers:[old]}).layers[0],layer);
+  assert.equal(layer.params.cellAudioAmount,0);
+  assert.equal(varyLayer(layer,1,{palette:false,structure:false,motion:false,material:false}).params.cellAudioAmount,0);
+  const signals={'beat.pulse':.4,'audio.bass':.93,'audio.highs':.04};
+  assert.equal(cellAudioHighlight(1,3,signals),0);
+  assert.ok(cellAudioHighlight(1,1,signals)>cellAudioHighlight(1,0,signals));
+  assert.equal(cellAudioHighlight(.4,0,{'beat.pulse':2}),.4);
+  assert.equal(cellAudioHighlight(1,0,{'beat.pulse':NaN}),0);
+  assert.equal(cellAudioHighlight(1,0),0);
+  assert.equal(cellAudioHighlight(0,0,signals),0);
+});
+
+test('installation lighting opens older projects and eases sound in and out',()=>{
+  const layer=layerFor('graphic-ripple-glass');
+  assert.ok(layer.params.cellLightField>0);
+  const old=structuredClone(layer);
+  delete old.params.cellLightField;
+  assert.equal(validateProject({...createProject(),layers:[old]}).layers[0].params.cellLightField,0);
+  assert.equal(usesTileLightAudio(layer),false);
+  layer.params.cellAudioAmount=.6;
+  assert.equal(usesTileLightAudio(layer),true);
+  assert.equal(usesTileLightAudio({...layer,visible:false}),false);
+
+  const audio=new TileLightAudio();
+  const pulse={'beat.pulse':1,'audio.bass':.8};
+  const start=audio.advance(pulse,0)['beat.pulse'];
+  assert.ok(start>0&&start<.25);
+  const peak=audio.advance(pulse,100)['beat.pulse'];
+  assert.ok(peak>start&&peak<1);
+  const release=audio.advance({},200)['beat.pulse'];
+  assert.ok(release<peak&&release>peak*.6);
+  assert.equal(audio.advance({},800)['beat.pulse'],0);
+  assert.equal(audio.advance({'audio.bass':NaN},810)['audio.bass'],0);
+});
+
+test('reflection patterns and independent timing survive save, variation and older projects',()=>{
+  const layer=layerFor('graphic-cross-current');
+  assert.equal(layer.params.cellLightLayout,1);
+  layer.params.cellLightCycles=3;
+  const project={...createProject(),layers:[layer]};
+  assert.deepEqual(validateProject(JSON.parse(JSON.stringify(project))),project);
+  const varied=varyLayer(layer,.8,{palette:false,structure:false,motion:false,material:false});
+  assert.equal(varied.params.cellLightLayout,1);
+  assert.equal(varied.params.cellLightCycles,3);
+  const old=structuredClone(project);
+  delete old.layers[0].params.cellLightLayout;
+  delete old.layers[0].params.cellLightCycles;
+  const saved=validateProject(old).layers[0];
+  assert.equal(saved.params.cellLightLayout,0);
+  assert.equal(saved.params.cellLightCycles,0);
 });
 
 test('grid paths are bounded, adjacent and self-avoiding, including mirrored and ring layouts',()=>{

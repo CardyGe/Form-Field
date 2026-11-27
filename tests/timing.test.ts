@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { delayOrder, stagedTime, TIMING_KEYS } from '../src/core/timing';
 import { applyPreset, createLayer, createProject, PRESETS, SURFACE_FOLD, validateProject } from '../src/core/project';
+import { isCellWave } from '../src/core/graphics';
 const TAU = Math.PI * 2;
 
 test('staged time is the loop clock unchanged at neutral settings', () => {
@@ -40,6 +41,12 @@ test('older Surface, Graphic and Relief layers open with timing off', () => {
 test('Surface, Graphic and Relief presets with staged motion have it enabled', () => {
   for (const preset of PRESETS.filter(p => ['surface', 'graphic', 'relief'].includes(p.kind) && !(p.kind === 'surface' && p.params.style === SURFACE_FOLD) && !['recursion-tunnel', 'time-terraces'].includes(p.id))) {
     const layer = applyPreset(createLayer(preset.kind), preset.id);
+    if (layer.kind === 'graphic' && isCellWave(layer.params.style, layer.params.variant)) {
+      // The wave already travels across the grid using its own spatial phase.
+      assert.equal(layer.params.delaySpread, 0, preset.id);
+      assert.equal(layer.params.pause, 0, preset.id);
+      continue;
+    }
     assert.ok(layer.params.delaySpread > 0 || layer.params.pause > 0, preset.id);
   }
 });

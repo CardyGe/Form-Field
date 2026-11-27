@@ -31,6 +31,7 @@ import { StudioRenderer } from '../rendering/StudioRenderer';
 import { Preview } from './Preview';
 import { ReactDevices } from './ReactControls';
 import { reactivity, type ReactivityEngine } from '../react/engine';
+import { usesTileLightAudio } from '../react/tile-light';
 import { MeterStore } from '../react/meter';
 import { reconcileTile, tileBlockers } from '../core/tile-edges';
 import { useWorkspace } from './useWorkspace';
@@ -186,15 +187,16 @@ export default function App() {
   const emberMeters = useMemo(() => new MeterStore(), []);
   const hasEmber = project.layers.some(l => l.visible && l.kind === 'scope' && l.params.scopeMode === 1);
   const hasMeridian = project.layers.some(listensToMusic);
+  const hasTileAudio = project.layers.some(usesTileLightAudio);
   const flashGuardOff = project.layers.some(l => l.visible && l.kind === 'meridian' && (l.params.safetyFlashGuard ?? 1) < .5);
   useEffect(() => {
-    if (!emberSound || mode !== 'studio' || !(hasEmber || hasMeridian)) return;
+    if (!emberSound || mode !== 'studio' || !(hasEmber || hasMeridian || hasTileAudio)) return;
     let shown = 0;
     return emberSound.subscribe(signals => {
       const now = performance.now();
       if (now - shown > 100) { shown = now; emberMeters.set(signals); }
     });
-  }, [emberSound, emberMeters, mode, hasEmber, hasMeridian]);
+  }, [emberSound, emberMeters, mode, hasEmber, hasMeridian, hasTileAudio]);
   /** A Map shape's composition being edited here. Studio's own project is set aside meanwhile, and saved, not this one. */
   const [shapeEdit, setShapeEdit] = useState<ShapeEdit | null>(null);
   const shapeEditRef = useRef<ShapeEdit | null>(null);
@@ -587,6 +589,10 @@ export default function App() {
       <div className="inspector-content">{tab === 'Shape' ? <>
         {coveredBy && <p className="muted-text" role="status">Covered by {coveredBy.name} above, so changes here won't show. Select that layer, hide it, or set its Source to Layer below.</p>}
         <LayerShapeControls layer={selected} isBottomLayer={project.layers[0]?.id === selected.id} onChooseKaleidoscopeImage={() => kaleidoscopeInputRef.current?.click()} edit={editLayer} onAnimateKey={key => { setModKey(key); setTab('Motion'); }} onStart={beginGesture} onEnd={endGesture} seed={project.seed} duration={project.duration} notify={notify} oilFine={oilFine} setOilFine={setOilFine}
+          graphicAudioSlot={<>
+            <ReactDevices audioOnly engine={emberSound} meter={emberMeters} onStart={() => setEmberSound(reactivity())} />
+            <p className="muted-text">Sound lifts the highlights during playback. The tile motion keeps its loop timing, including on export.</p>
+          </>}
           scopeAudioSlot={<details className="control-section"><summary>Smoke audio input</summary>
             <ReactDevices audioOnly engine={emberSound} meter={emberMeters} onStart={() => setEmberSound(reactivity())} />
             <p className="muted-text">The input drives playback. Exports use the repeating smoke phrase.</p>
