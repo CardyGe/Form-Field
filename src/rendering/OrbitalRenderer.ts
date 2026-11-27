@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { ORBIT_CHOICES, ORBIT_CAPACITY, ORBIT_TAU, orbitFade } from '../core/orbital';
+import { ORBIT_CHOICES, ORBIT_CAPACITY, ORBIT_TAU, orbitFade, type OrbitalClock } from '../core/orbital';
 import type { Layer } from '../shared/types';
 import { advanceOrbitPhase, blendOrbit, makeOrbitPose, orbitEase, orbitLoopPhase, orbitMorphProgress, sampleOrbit, waveOrder, type OrbitPhase, type OrbitPose } from './orbit-motion';
 import { OrbitAppearance } from './orbit-appearance';
@@ -167,6 +167,7 @@ const BACKDROPS = ORBIT_CHOICES.orbitBackdrop.length;
 
 interface FrameState {
   elapsed: number;
+  transition: number;
   phase: OrbitPhase;
   cueStart: number;
   playback: number;
@@ -294,17 +295,18 @@ export class OrbitalRenderer {
     for (const id of this.layers.keys()) if (!ids.has(id)) this.layers.delete(id);
   }
 
-  private animate(layer: Layer, phase: number, view: OrbitView, aspect: number, elapsed?: number): FrameState | undefined {
-    if (elapsed === undefined) return undefined;
-    const p = layer.params, signature = [p.orbitLayout, p.orbitMotion, p.orbitCount, p.orbitArms, p.orbitOrder, p.orbitColourMode].join(':');
+  private animate(layer: Layer, phase: number, view: OrbitView, aspect: number, clock?: OrbitalClock): FrameState | undefined {
+    if (!clock) return undefined;
+    const { motion: elapsed, transition } = clock;
+    const p = layer.params, signature = [p.orbitLayout, p.orbitMotion, p.orbitCount, p.orbitArms, p.orbitOrder, p.orbitColourMode, p.orbitRecall].join(':');
     let state = this.layers.get(layer.id);
-    if (!state || elapsed < state.elapsed) {
+    if (!state || elapsed < state.elapsed || transition < state.transition) {
       // A seek reconstructs the phase from a known origin. Subsequent speed changes integrate from here.
       state = {
-        elapsed, phase: advanceOrbitPhase(orbitLoopPhase(p, 0), p, elapsed), cueStart: 0, playback: p.orbitPlayback,
+        elapsed, transition, phase: advanceOrbitPhase(orbitLoopPhase(p, 0), p, elapsed), cueStart: 0, playback: p.orbitPlayback,
         signature, count: p.orbitCount, poses: Array.from({ length: ORBIT_CAPACITY }, makeOrbitPose),
         from: Array.from({ length: ORBIT_CAPACITY }, makeOrbitPose), morphStart: -Infinity, morphEnd: -Infinity, outgoing: null, previous: p,
-        appearance: new OrbitAppearance(layer.palette, p.orbitFinish, elapsed),
+        appearance: new OrbitAppearance(layer.palette, p.orbitFinish, transition),
         shownView: view, viewFrom: view, viewStart: -Infinity, aspect,
         shapeWeights: weights(6, p.orbitPiece), shapesFrom: weights(6, p.orbitPiece), piece: p.orbitPiece, pieceStart: -Infinity,
         backdropWeights: weights(BACKDROPS, p.orbitBackdrop), backdropFrom: weights(BACKDROPS, p.orbitBackdrop), backdrop: p.orbitBackdrop, backdropStart: -Infinity,
@@ -319,28 +321,29 @@ export class OrbitalRenderer {
     }
     if (signature !== state.signature || state.piece !== p.orbitPiece || state.backdrop !== p.orbitBackdrop) {
       state.viewFrom = state.shownView;
-      state.viewStart = elapsed;
+      state.viewStart = transition;
     }
     if (signature !== state.signature) {
       state.signature = signature;
-      state.outgoing = elapsed >= state.morphEnd ? state.previous : null;
-      state.morphStart = elapsed;
-      state.morphEnd = elapsed + p.orbitMorph;
+      state.outgoing = transition >= state.morphEnd ? state.previous : null;
+      state.morphStart = transition;
+      state.morphEnd = transition + p.orbitMorph;
       for (let i = 0; i < ORBIT_CAPACITY; i++) Object.assign(state.from[i], state.poses[i]);
       state.count = Math.max(state.count, p.orbitCount);
     }
     if (state.piece !== p.orbitPiece) {
       state.piece = p.orbitPiece;
-      state.pieceStart = elapsed;
+      state.pieceStart = transition;
       state.shapesFrom.splice(0, 6, ...state.shapeWeights);
     }
     if (state.backdrop !== p.orbitBackdrop) {
       state.backdrop = p.orbitBackdrop;
-      state.backdropStart = elapsed;
+      state.backdropStart = transition;
       state.backdropFrom.splice(0, BACKDROPS, ...state.backdropWeights);
     }
     state.phase = advanceOrbitPhase(state.phase, p, elapsed - state.elapsed);
     state.elapsed = elapsed;
+    state.transition = transition;
     state.previous = p;
     return state;
   }
@@ -373,18 +376,18 @@ export class OrbitalRenderer {
     this.contactOpacity.setX(this.contact.count++, density * params.orbitShadows * .56);
   }
 
-  draw(renderer: THREE.WebGLRenderer, target: THREE.WebGLRenderTarget, layer: Layer, phase: number, duration: number, width: number, height: number, elapsed?: number, playing = true): void {
+  draw(renderer: THREE.WebGLRenderer, target: THREE.WebGLRenderTarget, layer: Layer, phase: number, duration: number, width: number, height: number, clock?: OrbitalClock, playing = true): void {
     const p = layer.params, aspect = width / height;
     const authoredView = orbitView(p, aspect);
     const softContact = p.orbitShadowModel === 1 && p.orbitShadows > 0;
-    const state = this.animate(layer, phase, authoredView, aspect, elapsed);
+    const state = this.animate(layer, phase, authoredView, aspect, clock);
     const time = p.orbitPlayback === 1 ? orbitLoopPhase(p, phase)
       : state?.phase ?? advanceOrbitPhase(orbitLoopPhase(p, 0), p, phase / ORBIT_TAU * duration);
-    const seconds = elapsed === undefined ? undefined : elapsed - (state?.cueStart ?? 0);
+    const seconds = clock && clock.motion - (state?.cueStart ?? 0);
     const gain = orbitFade(layer, phase, duration, seconds);
     const backgroundGain = p.orbitFadeTarget === 2 ? 1 : gain;
     const pieceGain = p.orbitFadeTarget === 1 ? 1 : gain;
-    const progress = (start: number) => !playing || p.orbitMorph <= 0 ? 1 : ((elapsed ?? 0) - start) / p.orbitMorph;
+    const progress = (start: number) => !playing || p.orbitMorph <= 0 ? 1 : ((clock?.transition ?? 0) - start) / p.orbitMorph;
     const morph = state ? Math.min(1, progress(state.morphStart)) : 1;
     const frame = state && progress(state.viewStart) < 1
       ? blendOrbitView(state.viewFrom, authoredView, orbitEase(progress(state.viewStart)), state.aspect === aspect)
@@ -400,7 +403,7 @@ export class OrbitalRenderer {
       moveWeights(shapeWeights, state.shapesFrom, p.orbitPiece, orbitEase(progress(state.pieceStart)));
       moveWeights(backdropWeights, state.backdropFrom, p.orbitBackdrop, orbitEase(progress(state.backdropStart)));
       if (morph === 1) { state.count = p.orbitCount; state.outgoing = null; }
-      state.appearance.update(layer.palette, p.orbitFinish, elapsed!, playing ? p.orbitPaletteTime : 0);
+      state.appearance.update(layer.palette, p.orbitFinish, state.transition, playing ? p.orbitPaletteTime : 0);
     }
     for (const mesh of this.batches) mesh.count = 0;
     this.contact.count = 0;

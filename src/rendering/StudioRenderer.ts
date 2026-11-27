@@ -1,3 +1,4 @@
+import type { OrbitalClock } from '../core/orbital';
 import { EmberSmokeAudio, usesEmberSmokeAudio, type SmokeAudioFrame } from '../react/ember-smoke';
 import type { Signals } from '../react/signals';
 import {FINISH_PARAMETERS} from '../core/finishing';
@@ -968,7 +969,7 @@ export class StudioRenderer {
     return texture;
   }
 
-  private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10, smokeAudio?: SmokeAudioFrame, liveSeconds?: number): THREE.Texture {
+  private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10, smokeAudio?: SmokeAudioFrame, orbitalClock?: OrbitalClock): THREE.Texture {
     const aspect = this.width / this.height;
     const surface = this.tiling ? this.tiledSurface ??= tiledSurfaceMaterial() : this.surface;
     const uniforms=layer.kind==='surface'?surface.uniforms:layer.kind==='fractal'?this.fractal.uniforms:
@@ -983,7 +984,7 @@ export class StudioRenderer {
       this.instruments.draw(layer,phase,this.width,this.height,this.source,(m,t)=>this.draw(m,t),this.renderer,Math.max(0,Math.min(1,phase/TAU))*duration,duration);
     } else if (layer.kind === 'orbital') {
       this.orbital ??= new OrbitalRenderer();
-      this.orbital.draw(this.renderer, this.source, layer, phase, duration, this.width, this.height, liveSeconds, this.previewPlaying);
+      this.orbital.draw(this.renderer, this.source, layer, phase, duration, this.width, this.height, orbitalClock, this.previewPlaying);
     } else if (layer.kind === 'graphic') {
       if (!this.graphicSource) {
         this.graphicSource = target(true);
@@ -1148,7 +1149,7 @@ export class StudioRenderer {
     return this.source.texture;
   }
 
-  private renderFrame(project: Project, phase: number, width: number, height: number, smokeAudio?: SmokeAudioFrame, liveSeconds?: number): void {
+  private renderFrame(project: Project, phase: number, width: number, height: number, smokeAudio?: SmokeAudioFrame, orbitalClock?: OrbitalClock): void {
     this.assertUsable();
     if (!Number.isFinite(phase)) throw new Error('Frame phase must be finite.');
     if (project.layers.length > 4) throw new Error('This version supports at most four composition layers.');
@@ -1190,11 +1191,11 @@ export class StudioRenderer {
       if (layer.opacity <= 0) continue;
       this.belowInput = hasBelow && layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) === KALEIDOSCOPE_INPUT.below
         ? this.captureBelow(below.texture) : null;
-      const clipClock = finiteEvolving(original) || (original.kind === 'orbital' && original.params.orbitPlayback !== 1 && liveSeconds === undefined);
+      const clipClock = finiteEvolving(original) || (original.kind === 'orbital' && original.params.orbitPlayback !== 1 && orbitalClock === undefined);
       const drawPhase = clipClock ? Math.max(0, Math.min(TAU, phase)) : original.kind === 'super8' ? wrapped : sourcePhase;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
-        : this.drawSource(layer, drawPhase, original, duration, smokeAudio, liveSeconds);
+        : this.drawSource(layer, drawPhase, original, duration, smokeAudio, orbitalClock);
       const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
       const lensed = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
       const finished = tilesActive(original) ? this.tileSource(original, layer, lensed, wrapped, width, height) : lensed;
@@ -2117,7 +2118,7 @@ export class StudioRenderer {
     this.performanceSet = true;
   }
 
-  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean; tempoOnly?: boolean }, playing = true, liveSeconds?: number): void {
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean; tempoOnly?: boolean }, playing = true, orbitalClock?: OrbitalClock): void {
     if (this.exporting) return;
     this.previewPlaying = playing;
     const audio = sound?.tempoOnly ? undefined : sound;
@@ -2137,7 +2138,7 @@ export class StudioRenderer {
     try {
       const smoke = audio ? this.emberAudio?.advance(audio.signals, audio.now) : undefined;
       this.beginFoldFrame(project, sound?.now ?? performance.now(), sound?.signals);
-      this.renderFrame(project, phase, w, h, smoke, liveSeconds);
+      this.renderFrame(project, phase, w, h, smoke, orbitalClock);
       // Resizing a canvas, even to the size it already has, resets it and re-allocates its drawing buffer:
       // only when the size changes.
       const canvasSize = this.renderer.getSize(this.canvasSize);

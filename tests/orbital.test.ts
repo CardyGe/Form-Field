@@ -1,7 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { ORBIT_CHOICES, ORBIT_INSTALLATION_KEYS, ORBIT_LOOKS, ORBIT_TAU, orbitFade } from '../src/core/orbital';
+import { ORBIT_CHOICES, ORBIT_ADDED_KEYS, ORBIT_LOOKS, ORBIT_TAU, advanceOrbitalClock, orbitFade, recallOrbitalLook } from '../src/core/orbital';
 import { applyPreset, createLayer, createProject, finishSupported, validateProject } from '../src/core/project';
+import { needsPrepare } from '../src/map/playout';
 import { canLinkParameter } from '../src/map/targets';
 import { OrbitAppearance } from '../src/rendering/orbit-appearance';
 import { blendOrbitView, orbitDetailGain, orbitProjectionDistance } from '../src/rendering/orbit-projection';
@@ -72,7 +73,7 @@ test('earlier Orbital projects reopen with neutral installation defaults', () =>
   const layer = createLayer('orbital');
   const expected = { ...createProject(), layers: [layer] };
   const previous = JSON.parse(JSON.stringify(expected));
-  for (const key of ORBIT_INSTALLATION_KEYS) delete previous.layers[0].params[key];
+  for (const key of ORBIT_ADDED_KEYS) delete previous.layers[0].params[key];
   assert.deepEqual(validateProject(previous), expected);
   assert.equal(expected.layers[0].params.orbitSafeMargin, 0);
   assert.equal(expected.layers[0].params.orbitShadowModel, 0);
@@ -137,4 +138,46 @@ test('the independent clocks stay bounded over a multi-hour installation', () =>
   assert.notEqual(next.background, beforeReverse.background);
   const direct = advanceOrbitPhase(orbitLoopPhase(params, 0), params, 28_800);
   assert.ok(Math.abs(Math.cos(phase.phrase) - Math.cos(direct.phrase)) < 1e-6);
+});
+
+
+test('Map recalls edit the playing Orbital layer, with optional locks and its routes intact', () => {
+  const layer = applyPreset(createLayer('orbital'), 'orbital-wall-blueprint');
+  layer.transform.x = .2;
+  layer.params.orbitMorph = 3;
+  layer.params.orbitFade = .12;
+  layer.params.orbitPlayback = 2;
+  layer.params.echo = .6;
+  layer.modulations.orbitOpening = { kind: 'sine', cycles: 1, phase: 0, amount: .1, points: [] };
+  const before = { ...createProject(), layers: [layer] };
+  const unlocked = recallOrbitalLook(layer, 'orbital-glacier', { layout: false, motion: false, colour: false });
+  const after = { ...before, layers: [unlocked] };
+  assert.deepEqual(validateProject(after), after);
+  assert.equal(needsPrepare(before, after), false);
+  for (const key of ['id', 'name', 'transform', 'modulations'] as const) assert.deepEqual(unlocked[key], layer[key]);
+  for (const key of ['orbitMorph', 'orbitFade', 'orbitPlayback', 'echo']) assert.equal(unlocked.params[key], layer.params[key]);
+  assert.notEqual(unlocked.params.orbitLayout, layer.params.orbitLayout);
+  assert.notEqual(unlocked.params.orbitRate, layer.params.orbitRate);
+  assert.notDeepEqual(unlocked.palette, layer.palette);
+
+  const locks = { layout: true, motion: true, colour: true };
+  const locked = recallOrbitalLook(layer, 'orbital-glacier', locks);
+  assert.deepEqual(locked.palette, layer.palette);
+  for (const key of ['orbitLayout', 'orbitPiece', 'orbitFraming', 'orbitRate', 'orbitColourMode']) assert.equal(locked.params[key], layer.params[key]);
+  assert.equal(locked.params.orbitRecall, 1);
+  assert.equal(recallOrbitalLook(locked, 'orbital-glacier', locks).params.orbitRecall, 2);
+  assert.equal(canLinkParameter(locked, 'orbitRecall'), false);
+  assert.equal(needsPrepare(before, { ...after, layers: [{ ...unlocked, transform: { ...unlocked.transform, x: 0 } }] }), true);
+});
+
+test('Perform speed holds motion with the recall clock still running in real seconds', () => {
+  const clock = { motion: 0, transition: 0 };
+  advanceOrbitalClock(clock, .05, 2);
+  assert.deepEqual(clock, { motion: .1, transition: .05 });
+  advanceOrbitalClock(clock, 2, 0);
+  assert.equal(clock.motion, .1);
+  assert.ok(Math.abs(clock.transition - 2.05) < 1e-9);
+  advanceOrbitalClock(clock, .05, .5);
+  assert.equal(clock.motion, .125);
+  assert.ok(Math.abs(clock.transition - 2.1) < 1e-9);
 });

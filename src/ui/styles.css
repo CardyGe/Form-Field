@@ -573,3 +573,6 @@ a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .orbital-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
 .orbital-choice-grid .stacked-label { min-width: 0; }
 .orbital-choice-grid select { width: 100%; }
+
+.orbital-look-controls { margin-bottom: 10px; }
+.orbital-look-locks { display: flex; flex-wrap: wrap; column-gap: 12px; }

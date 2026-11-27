@@ -6,7 +6,7 @@
  *
  * The rules (sizing, clock, governor, fades, placement) are in playout.ts and placement.ts and tested there.
  */
-import { hasOrbital } from '../core/orbital';
+import { advanceOrbitalClock, hasOrbital, type OrbitalClock } from '../core/orbital';
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import { ProgramsCompiling } from '../rendering/program-gate';
 import type { Project } from '../shared/types';
@@ -80,7 +80,7 @@ interface Slot {
   project: Project | null;
   pending: Project | null;
   phase: number;
-  orbitalSeconds: number;
+  orbitalClock: OrbitalClock;
   /** The last drawn picture, on the stage's graphics card: it holds while frames are skipped or frozen. */
   texture: Texture | null;
   failed: string | null;
@@ -726,7 +726,7 @@ export class MapCompositor {
       // Fading or gliding out does not make it the show's: that is how Map's looks leave the wall as a show starts.
       if (!this.perform) slot.showLook = false; else if (waiting || users.some(s => shownOnWall(show, s, this.options.solo))) slot.showLook = true;
       // Back from being kept: it starts again from the top, as a newly made renderer would.
-      if (slot.keptWarm) { slot.keptWarm = false; slot.phase = 0; slot.orbitalSeconds = 0; slot.shown = null; }
+      if (slot.keptWarm) { slot.keptWarm = false; slot.phase = 0; slot.orbitalClock = { motion: 0, transition: 0 }; slot.shown = null; }
       // A setting that can follow sound changed (Map's Effect tab): the playing effect is adjusted in place, never restarted.
       // The old look sent back after a draft could not start: it never stopped playing, so it is not started again.
       if (slot.keptOver && project !== slot.keptOver && slot.project && !slot.pending && !needsPrepare(slot.project, project)) { slot.project = project; slot.keptOver = null; slot.failedProject = null; slot.failed = null; }
@@ -761,7 +761,7 @@ export class MapCompositor {
         const synced = !source.tempoSync ? null : pace > 0 ? tempoPhase(performClock(this.signals, this.offsetOf(source.id), 1), source.tempoSync / pace) : slot.phase;
         const speed = (this.drawn.speed.get(source.id) ?? source.speed) * pace;
         slot.phase = synced ?? advancePhase(slot.phase, seconds, slot.project, speed);
-        if (orbital) slot.orbitalSeconds += Math.min(Math.max(seconds, 0), .1) * speed;
+        if (orbital) advanceOrbitalClock(slot.orbitalClock, seconds, speed);
         // Meridian's Conductor keeps real show time: Perform's speed moves its loop, never its own motion limits.
         slot.performanceDt += seconds;
       }
@@ -776,7 +776,7 @@ export class MapCompositor {
       const size = sourceSizeFor(places.map(s => landing(this.show.shapes.find(x => x.id === s.id) ?? s, this.show)), meridian ? 1 : scale);
       try {
         if (meridian) { slot.renderer.setPerformanceSignals(this.signals, slot.performanceDt); slot.performanceDt = 0; }
-        slot.renderer.render(withParams(slot.project, this.structureHold.apply(source.id, slot.project, this.drawn.params.get(source.id), slot.phase)), slot.phase, size.width, size.height, { signals: this.signals, now }, true, orbital ? slot.orbitalSeconds : undefined);
+        slot.renderer.render(withParams(slot.project, this.structureHold.apply(source.id, slot.project, this.drawn.params.get(source.id), slot.phase)), slot.phase, size.width, size.height, { signals: this.signals, now }, true, orbital ? slot.orbitalClock : undefined);
         if (swapAfterDraw) { this.settleSwap(source.id, 'started'); if (slot.texture) this.startSwap(source.id, slot.texture); }
         slot.texture = this.gpu.upload(slot.canvas, slot.texture);
         slot.shown = slot.project;
@@ -1050,7 +1050,7 @@ export class MapCompositor {
     }
     this.restartAt.delete(id);
     const canvas = document.createElement('canvas');
-    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, orbitalSeconds: 0, texture: null, failed: null, failedProject: null, prepares: 0, shown: null, rank, lastUsed: now, keptWarm: false, showLook: false, performanceDt: 0, lost: false, restoring: false, lostTimer: 0 };
+    const slot: Slot = { canvas, renderer: null, project: null, pending: null, phase: 0, orbitalClock: { motion: 0, transition: 0 }, texture: null, failed: null, failedProject: null, prepares: 0, shown: null, rank, lastUsed: now, keptWarm: false, showLook: false, performanceDt: 0, lost: false, restoring: false, lostTimer: 0 };
     // A lost context: after a graphics card reset it usually comes back within a moment, and the instrument carries on where
     // it was (its clocks and Meridian's phrase live outside the graphics card) while its shape holds the last picture. One that
     // does not come back (too many contexts) drops the source: its shape plays its own fill, and the source starts again later.

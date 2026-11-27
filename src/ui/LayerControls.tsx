@@ -10,7 +10,7 @@ import { FOLD_PALETTES, PALETTE_LIBRARY } from '../core/palettes';
 import { kaleidoscopeInput } from '../rendering/feedback';
 import { KALEIDOSCOPE_MORPHS, KALEIDOSCOPE_MOTIFS, KALEIDOSCOPE_OWN_KEYS, KALEIDOSCOPE_SOURCES, KALEIDOSCOPE_SYMMETRIES, kaleidoscopeDrawsMotif, kaleidoscopeHidden } from './kaleidoscope-controls';
 import { INSTRUMENTS, isInstrument } from '../core/instruments';
-import { ORBIT_CHOICES, ORBIT_PALETTES, ORBIT_SWATCHES } from '../core/orbital';
+import { ORBIT_CHOICES, ORBIT_LOOKS, ORBIT_PALETTES, ORBIT_SWATCHES, recallOrbitalLook, type OrbitalLookLocks } from '../core/orbital';
 import { GRAPHIC_FAMILIES, GRAPHIC_VARIANTS, GRAPHIC_LOOKS } from '../core/graphics';
 import { EMBER_SMOKE_ORIGINS, EMBER_SMOKE_STYLES } from '../rendering/ember-fluid-model';
 
@@ -185,6 +185,27 @@ function KaleidoscopePanel({ layer, isBottom, onParam, onChoose, onRemove, onFit
   </div>;
 }
 
+function OrbitalLookControls({ onRecall }: { onRecall: (id: string, locks: OrbitalLookLocks) => void }) {
+  const [look, setLook] = useState('');
+  const [locks, setLocks] = useState<OrbitalLookLocks>({ layout: false, motion: false, colour: false });
+  return <details className="control-section orbital-look-controls">
+    <summary>Look cues</summary>
+    <label className="stacked-label">Look
+      <select aria-label="Orbital Chroma look" value={look} onChange={event => setLook(event.target.value)}>
+        <option value="" disabled>Choose a look</option>
+        {ORBIT_LOOKS.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+      </select>
+    </label>
+    <div className="orbital-look-locks">
+      {(['layout', 'motion', 'colour'] as const).map(key => <label className="checkbox-row" key={key}>
+        <input type="checkbox" checked={locks[key]} onChange={event => setLocks({ ...locks, [key]: event.target.checked })} />
+        Keep {key}
+      </label>)}
+    </div>
+    <button className="text-button" type="button" disabled={!look} onClick={() => onRecall(look, locks)}>Recall look</button>
+  </details>;
+}
+
 export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscopeImage, locked = false, layer: selected, edit, onAnimateKey, onStart, onEnd, seed, duration, notify, oilFine, setOilFine, imageSlot, surfaceSlot, scopeAudioSlot, parametersSlot, paramExtra, readOnly }: {
   layer: Layer; edit: (change: (l: Layer) => Layer) => void; onAnimateKey?: (key: string) => void; onStart: () => void; onEnd: () => void;
   seed: number; duration: number; notify: (message: string) => void; oilFine: boolean; setOilFine: (change: (on: boolean) => boolean) => void;
@@ -215,6 +236,7 @@ export function LayerShapeControls({ isBottomLayer = false, onChooseKaleidoscope
         {patterns[selected.kind] && <div className="field-group"><label>{selected.kind === 'fractal' ? 'Fractal family' : 'Pattern'}</label><div className="pattern-picker">{patterns[selected.kind]!.map((label, i) => <button key={i} aria-pressed={Math.round(selected.params.style ?? 0) === i} className={Math.round(selected.params.style ?? 0) === i ? 'active' : ''} onClick={() => edit(l => ({ ...l, params: { ...l.params, style: i, ...(l.kind === 'surface' && i === SURFACE_FOLD ? { variant: 0 } : {}) } }))}>{label}</button>)}</div></div>}
         {isInstrument(selected.kind) && <div className="projection-help"><p>{INSTRUMENTS.find(i=>i.kind===selected.kind)!.description}. Pattern scale reveals more of the field. Field background controls transparent gaps.</p>{selected.kind==='livingink' && <p>Growth family and Branching prepare a seeded chemical pattern. Playback animates its flow and pigment without simulation warm-up.</p>}</div>}
         {isOrbital && <div className="orbital-choices">
+          <OrbitalLookControls key={selected.id} onRecall={(look, locks) => edit(layer => recallOrbitalLook(layer, look, locks))} />
           <div className="orbital-choice-grid">{definitions.filter(d => d.key in ORBIT_CHOICES).map(d => (
             <ChoiceParameter key={d.key} label={d.label} name={d.label} options={[...ORBIT_CHOICES[d.key as keyof typeof ORBIT_CHOICES]]}
               value={selected.params[d.key]} disabled={readOnly?.(d)} onChange={value => edit(layer => ({ ...layer, params: { ...layer.params, [d.key]: value } }))} />

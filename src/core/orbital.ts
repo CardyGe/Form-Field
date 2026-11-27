@@ -2,6 +2,16 @@ import type { Layer, ParameterDefinition, Project } from '../shared/types';
 
 export const ORBIT_TAU = 2 * Math.PI;
 export const ORBIT_CAPACITY = 160;
+export interface OrbitalClock {
+  motion: number;
+  transition: number;
+}
+
+export function advanceOrbitalClock(clock: OrbitalClock, seconds: number, speed: number): void {
+  const elapsed = Math.max(seconds, 0);
+  clock.motion += Math.min(elapsed, .1) * speed;
+  clock.transition += elapsed;
+}
 export const ORBIT_CHOICES = {
   orbitLayout: ['Ring to spiral', 'Rosette', 'Helix', 'Knot', 'Lattice', 'Concentric rings'],
   orbitPiece: ['Enamel disc', 'Dome', 'Sphere', 'Ring', 'Rounded tile', 'Capsule'],
@@ -31,7 +41,9 @@ const ORBIT_INSTALLATION_PARAMETERS = [
   { ...material('orbitCleanDetail', 'Fine-detail filtering', 0, 1, 0), description: 'Softens fine pattern edges and reduces tiny accents as the mapped image gets smaller.' },
   { ...p('orbitSafeMargin', 'Safe frame margin', 0, .23, 0, 'Camera'), description: 'Keeps room for the whole movement using a fixed camera fit. 0 uses the Framing control directly.' },
 ];
-export const ORBIT_INSTALLATION_KEYS = ORBIT_INSTALLATION_PARAMETERS.map(def => def.key);
+// A counter identifies replays of the same look without becoming a show control.
+const ORBIT_RECALL_PARAMETER = motion('orbitRecall', 'Look recall', 0, 0xffffffff, 0, 1);
+export const ORBIT_ADDED_KEYS = [...ORBIT_INSTALLATION_PARAMETERS, ORBIT_RECALL_PARAMETER].map(def => def.key);
 export const ORBIT_PARAMETERS: ParameterDefinition[] = [
   shape('orbitLayout', 'Arrangement', 0, 5, 0, 1), shape('orbitPiece', 'Piece shape', 0, 5, 0, 1),
   shape('orbitCount', 'Piece count', 12, ORBIT_CAPACITY, 68, 1), shape('orbitArms', 'Arms / rows', 1, 12, 3, 1),
@@ -68,7 +80,7 @@ export const ORBIT_PARAMETERS: ParameterDefinition[] = [
   material('saturation', 'Saturation', 0, 2, 1), material('hue', 'Hue shift', -Math.PI, Math.PI, 0), material('exposure', 'Exposure', .25, 2, 1),
   p('orbitCamera', 'Camera tilt', -.45, .45, .035, 'Camera'),
   p('orbitFraming', 'Framing', .55, 1.7, 1, 'Camera'),
-  ...ORBIT_INSTALLATION_PARAMETERS,
+  ...ORBIT_INSTALLATION_PARAMETERS, ORBIT_RECALL_PARAMETER,
 ];
 
 export const ORBIT_SWATCHES = ['Face', 'Cap', 'Ink / rim', 'Ground', 'Pattern light', 'Pattern dark'];
@@ -120,6 +132,7 @@ export function orbitFade(layer: Layer, phase: number, duration: number, liveSec
 }
 
 export function orbitVisibleParameter(layer: Layer, key: string): boolean {
+  if (key === 'orbitRecall') return false;
   const p = layer.params;
   if (key === 'orbitRate' || key === 'orbitBackgroundRate' || key === 'orbitColourRate') return p.orbitPlayback !== 1;
   if (key === 'orbitTurns' || key === 'orbitCycles' || key === 'orbitBackgroundCycles' || key === 'orbitColourCycles') return p.orbitPlayback === 1;
@@ -128,4 +141,28 @@ export function orbitVisibleParameter(layer: Layer, key: string): boolean {
   if (key === 'orbitPatternFocus') return ![1, 6, 7].includes(p.orbitBackdrop);
   if (key === 'orbitFadeTime' || key === 'orbitFadeIn') return p.orbitPlayback === 2;
   return true;
+}
+
+
+export type OrbitalLookLocks = { layout: boolean; motion: boolean; colour: boolean };
+const PLAYBACK_KEYS = new Set([
+  'orbitPlayback', 'orbitMorph', 'orbitMorphStagger', 'orbitPaletteTime',
+  'orbitFade', 'orbitFadeIn', 'orbitFadeTime', 'orbitFadeTarget', 'orbitRecall',
+]);
+const COLOUR_KEYS = new Set(['saturation', 'hue', 'exposure', 'orbitPaletteLink', 'orbitColourMode',
+  'orbitColourOffset', 'orbitColourBlend', 'orbitColourRate', 'orbitColourCycles']);
+
+/** Recall edits the playing layer. It preserves its identity, show timing, routes and shared finish rack. */
+export function recallOrbitalLook(layer: Layer, lookId: string, locks: OrbitalLookLocks): Layer {
+  const look = ORBIT_LOOKS.find(candidate => candidate.id === lookId);
+  if (layer.kind !== 'orbital' || !look) return layer;
+  const params: Record<string, number> = { ...layer.params, orbitRecall: ((layer.params.orbitRecall ?? 0) + 1) >>> 0 };
+  for (const def of ORBIT_PARAMETERS) {
+    if (PLAYBACK_KEYS.has(def.key)
+      || locks.layout && (def.section === 'Shape' || def.section === 'Camera')
+      || locks.motion && def.section === 'Motion'
+      || locks.colour && COLOUR_KEYS.has(def.key)) continue;
+    params[def.key] = look.params[def.key] ?? def.default;
+  }
+  return { ...layer, params, palette: locks.colour ? layer.palette : [...ORBIT_PALETTES[look.palette].colors] };
 }
