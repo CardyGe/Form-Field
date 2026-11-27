@@ -15,7 +15,7 @@ import { evaluateLayer, frameCount, phaseAtFrame } from '../core/timeline';
 import { echoAppliedInSource, echoFade, echoSettings, feedbackActive, feedbackFragment, frameAtPhase, historyFrames, kaleidoscopeInput } from './feedback';
 import { channelSliceCounts, echoWeights, previewSliceScale, slicePhase, sliceWarpScale, slitActive, slitFragment, sliceDelays, sliceSourceRenders } from './slitscan';
 import { TIME_ECHO, TIME_MEDIAN, medianFramePlan, type MedianPlan, timeGatherFragment, timeMedianFragment, timeMode, timeTargetNeeds } from './time-stats';
-import { KALEIDOSCOPE_INPUT, parameterDefinitions } from '../core/project';
+import { KALEIDOSCOPE_INPUT, parameterDefinitions, SURFACE_FOLD } from '../core/project';
 import type { Layer, Project } from '../shared/types';
 import { encodePNG } from './png';
 import { fractalFragment } from './fractal';
@@ -23,6 +23,7 @@ import { oilFieldsFragment, oilPaintFragment, oilLensFragment } from './oil';
 import { oilMotion, OIL_WAKE_SAMPLES } from './oil-motion';
 import { OilPatternBaker } from './oil-pattern';
 import { liquidFragment } from './liquid';
+import { FoldTransition, type FoldTransitionFrame } from './fold-transition';
 import { ScopeRenderer } from './ScopeRenderer';
 import { SmokeCloudRenderer } from './SmokeCloud';
 import { compositesPlainly, plainOverFragment } from './smoke-cloud-composite';
@@ -122,7 +123,8 @@ function surfaceUniforms(): Uniforms {
   return {
     ...viewUniforms(),
     uPalette: { value: DEFAULT_PALETTE.map((hex) => new THREE.Color(hex)) },
-    uAspect: { value: 1 }, uPhase: { value: 0 }, uSeed: { value: 0 },
+    uAspect: { value: 1 }, uPhase: { value: 0 }, uLoopPhase: { value: 0 }, uSeed: { value: 0 },
+    uFoldMorphFrom: { value: 0 }, uFoldMorphMix: { value: 1 }, uFoldMorphDirection: { value: 0 },
     uResolution:{value:new THREE.Vector2(1,1)},
     ...Object.fromEntries(Object.entries(SURFACE_DEFAULTS).map(([key,value])=>[`u${key[0].toUpperCase()}${key.slice(1)}`,{value}])),
   };
@@ -205,6 +207,9 @@ export class StudioRenderer {
   private plainOver: THREE.ShaderMaterial | null = null;
   /** For checks: draws every layer through the full compositor. */
   fullCompositorOnly = false;
+  private readonly foldTransitions = new Map<string, FoldTransition>();
+  private readonly foldFrames = new Map<string, FoldTransitionFrame>();
+  private foldProject: string | null = null;
   private previewPlaying = true;
   private meridian: MeridianRenderer | null = null;
   private readonly meridianRuntime: MeridianRuntime = {};
@@ -1009,10 +1014,17 @@ export class StudioRenderer {
     } else if (layer.kind === 'surface') {
       const u = surface.uniforms;
       (u.uResolution.value as THREE.Vector2).set(this.width,this.height);
-      u.uAspect.value = aspect; u.uPhase.value = localPhase;
+      u.uAspect.value = aspect; u.uPhase.value = localPhase; u.uLoopPhase.value = phase;
       u.uSeed.value = number(layer, 'seed', 0) % 1_000_003;
       for (const [key, fallback] of Object.entries(SURFACE_DEFAULTS)) {
         u[`u${key[0].toUpperCase()}${key.slice(1)}`].value = number(layer, key, fallback);
+      }
+      const morph = this.foldFrames.get(original.id);
+      if (layer.params.style === SURFACE_FOLD) {
+        u.uFoldShape.value = morph?.to ?? u.uFoldShape.value;
+        u.uFoldMorphFrom.value = morph?.from ?? u.uFoldShape.value;
+        u.uFoldMorphMix.value = morph?.mix ?? 1;
+        u.uFoldMorphDirection.value = morph?.angle ?? 0;
       }
       const colors = u.uPalette.value as THREE.Color[];
       for (let i = 0; i < 6; i++) colors[i].set(layer.palette[i] ?? DEFAULT_PALETTE[i]);
@@ -1989,8 +2001,32 @@ export class StudioRenderer {
     state.previousValid = true; state.exact = true; state.settle = null;
   }
 
-  /** True while a paused preview is still refining a feedback history. */
+  private beginFoldFrame(project: Project, now: number, signals?: Signals): void {
+    if (this.foldProject !== project.id) {
+      this.foldTransitions.clear();
+      this.foldProject = project.id;
+    }
+    const beat = signals?.['tempo.beat'], phase = signals?.['tempo.phase'];
+    const tempo = beat === undefined || phase === undefined ? null : beat + phase;
+    for (const layer of project.layers) {
+      if (!layer.visible || layer.opacity <= 0 || layer.kind !== 'surface' || layer.params.style !== SURFACE_FOLD) continue;
+      const p = layer.params, shape = p.foldShape ?? 0;
+      let transition = this.foldTransitions.get(layer.id);
+      if (!transition) {
+        transition = new FoldTransition(shape);
+        this.foldTransitions.set(layer.id, transition);
+      }
+      this.foldFrames.set(layer.id, transition.update({
+        shape, duration: p.foldMorphTime ?? .75, hold: p.foldMorphHold ?? 0,
+        angle: p.foldMorphAngle ?? 0, nextBeat: !!p.foldMorphBeat,
+      }, now, tempo));
+    }
+    for (const id of this.foldTransitions.keys()) if (!this.foldFrames.has(id)) this.foldTransitions.delete(id);
+  }
+
+  /** Keep a paused preview drawing while a morph or effect history is settling. */
   needsRefresh(): boolean {
+    for (const transition of this.foldTransitions.values()) if (transition.pending) return true;
     for (const state of this.feedbackStates.values()) if (state.settle) return true;
     return (this.scope?.needsRefresh() ?? false) || (this.smokeClouds?.needsRefresh() ?? false);
   }
@@ -2071,27 +2107,29 @@ export class StudioRenderer {
     this.performanceSet = true;
   }
 
-  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean }, playing = true): void {
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean; tempoOnly?: boolean }, playing = true): void {
     if (this.exporting) return;
     this.previewPlaying = playing;
+    const audio = sound?.tempoOnly ? undefined : sound;
     // With the tempo source on the detected beat and no sound, the tempo clock is only a default: Meridian stays on its own.
     if (this.performanceSet) this.performanceSet = false;
     else {
-      this.meridianRuntime.signals = sound && (sound.externalTempo || sound.signals['audio.level'] !== undefined) ? sound.signals : undefined;
-      this.meridianRuntime.externalTempo = sound?.externalTempo === true;
+      this.meridianRuntime.signals = audio && (audio.externalTempo || audio.signals['audio.level'] !== undefined) ? audio.signals : undefined;
+      this.meridianRuntime.externalTempo = audio?.externalTempo === true;
       this.meridianRuntime.dt = undefined;
     }
     const w = width ?? Math.max(1, Math.round(this.canvas.clientWidth || this.canvas.width || 960));
     const h = height ?? Math.max(1, Math.round(this.canvas.clientHeight || this.canvas.height || 540));
-    if (sound && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();
+    if (audio && project.layers.some(usesEmberSmokeAudio)) this.emberAudio ??= new EmberSmokeAudio();
     else this.emberAudio = undefined;
-    const tileSound = playing && sound && project.layers.some(usesTileLightAudio) ? sound : undefined;
+    const tileSound = playing && audio && project.layers.some(usesTileLightAudio) ? audio : undefined;
     if (tileSound) this.tileLightAudio ??= new TileLightAudio();
     else this.tileLightAudio = undefined;
     this.gate.check();
     const state = this.gate.on ? this.drawState() : null;
     try {
-      const smoke = sound ? this.emberAudio?.advance(sound.signals, sound.now) : undefined;
+      const smoke = audio ? this.emberAudio?.advance(audio.signals, audio.now) : undefined;
+      this.beginFoldFrame(project, sound?.now ?? performance.now(), sound?.signals);
       const tileSignals = tileSound ? this.tileLightAudio?.advance(tileSound.signals, tileSound.now) : undefined;
       this.renderFrame(project, phase, w, h, smoke, tileSignals);
       // Resizing a canvas, even to the size it already has, resets it and re-allocates its drawing buffer:
@@ -2105,6 +2143,8 @@ export class StudioRenderer {
     } catch (error) {
       if (state && error instanceof ProgramsCompiling) this.abandon(state);
       throw error;
+    } finally {
+      this.foldFrames.clear();
     }
   }
 

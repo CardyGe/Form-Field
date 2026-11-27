@@ -50,7 +50,7 @@ export function useCanvasInteraction(options: Options) {
       g.dx += (point.x - g.lastX) / g.width * speed;
       g.dy += (point.y - g.lastY) / g.height * speed;
       g.lastX = point.x; g.lastY = point.y;
-      const next = g.mode === 'pan' ? { ...g.base, transform: panFromDrag(g.base.transform, g.dx, g.dy) } : shapeFromDrag(g.base, g.axes, g.dx, g.dy);
+      const next = g.mode === 'pan' ? { ...g.base, transform: panFromDrag(g.base.transform, g.dx, g.dy) } : shapeFromDrag(g.base, g.axes, g.dx, g.dy, g.width/g.height);
       if (update(next, !g.changed)) g.changed = true;
       const rect = element.parentElement!.getBoundingClientRect();
       setFeedback({ mode: g.mode, x: point.x - rect.left, y: point.y - rect.top });
@@ -142,7 +142,7 @@ export function useCanvasInteraction(options: Options) {
         if (event.ctrlKey) {
           if (transformAnimated(layer)) { latest.current.onNotice('Remove position or size animation routes in Motion to pan or zoom this layer.'); return; }
           update({ ...layer, transform: panFromDrag(layer.transform, x * amount, y * amount) }, true);
-        } else update(shapeFromDrag(layer, canvasAxes(layer, latest.current.locks), x * amount, y * amount), true);
+        } else update(shapeFromDrag(layer, canvasAxes(layer, latest.current.locks), x * amount, y * amount, element.clientWidth/Math.max(1, element.clientHeight)), true);
       }
     };
     const keyup = (event: KeyboardEvent) => setControl(event.ctrlKey);
