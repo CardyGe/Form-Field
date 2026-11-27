@@ -17,6 +17,7 @@ import { SCORE_STYLE_DENSE } from '../meridian/pulse';
 import { INSTRUMENTS, INSTRUMENT_KINDS, INSTRUMENT_PARAMETERS, INSTRUMENT_UPGRADE_KEYS, isInstrument } from './instruments';
 import type { Layer, LayerKind, MeridianLayerState, ParameterDefinition, Preset, Project } from '../shared/types';
 import { SMOKE_CLOUD_SCHEMES } from '../rendering/smoke-cloud-model';
+import { ORBIT_ADDED_KEYS, ORBIT_LOOKS, ORBIT_PALETTES, ORBIT_PARAMETERS, orbitVisibleParameter } from './orbital';
 import { CELL_WAVE_KEYS, GRAPHIC_LOOKS, GRAPHIC_PARAMETERS, GRAPHIC_VARIANTS, graphicVisibleKeys } from './graphics';
 
 const TAU = Math.PI * 2;
@@ -495,6 +496,7 @@ const DEFINITIONS: Record<LayerKind, ParameterDefinition[]> = {
     parameter('exposure', 'Exposure', 0.25, 2, 0.01, 1, 'Material'),
   ],
   graphic: GRAPHIC_PARAMETERS,
+  orbital: ORBIT_PARAMETERS,
   meridian: MERIDIAN_PARAMETERS.map(d => ({ ...d })),
   kaleidoscope: [
     parameter('input', 'Source', 0, 3, 1, 0, 'Shape'),
@@ -564,6 +566,7 @@ const ADDED_FIELDS: Partial<Record<LayerKind, string[]>> = {
   oil: ['layout','dome','anisotropy','sheenAngle','caustics', 'iridescence', 'deformation', 'lensDepth', 'cellComplexity', 'dispersion'],
   scope: [SCOPE_MODE.key, ...EMBER_KEYS],
   graphic: [...TIMING_KEYS, ...CELL_WAVE_KEYS],
+  orbital: ORBIT_ADDED_KEYS,
   meridian: MERIDIAN_PARAMETERS.map(d => d.key),
   image: ['mirror', 'repeat', ...GRADING_FIELDS],
 };
@@ -600,6 +603,7 @@ function familyParameterDefinitions(layer: Layer): ParameterDefinition[] {
   if (layer.kind === 'surface') return definitions.filter(d => surfaceParameterVisible(layer.params, d.key))
     .map(d => layer.params.style === SURFACE_FOLD && d.key === 'softness' ? { ...d, label: 'Rim softness' } :
       layer.params.style === SURFACE_FOLD && d.key === 'cycles' ? { ...d, label: 'Colour cycles per loop' } : d);
+  if (layer.kind === 'orbital') return definitions.filter(d => orbitVisibleParameter(layer, d.key));
   if (layer.kind === 'graphic') {
     const keys = graphicVisibleKeys(layer.params.style, layer.params.variant, layer.params.fill, layer.params.sweep);
     return definitions.filter(d => keys.has(d.key)||FINISH_KEYS.includes(d.key));
@@ -663,6 +667,7 @@ export const SUPER8_MODES = ['Chromatic Staircase', 'Paint Destruction', 'Scratc
 
 export const PRESETS: Preset[] = [
   ...INSTRUMENTS.flatMap(info => info.looks.map(look => preset(look.id, look.name, info.description, info.kind, look.palette ?? info.palette, look.params))),
+  ...ORBIT_LOOKS.map(look => preset(look.id, look.name, look.description, 'orbital', ORBIT_PALETTES[look.palette].colors, look.params)),
   ...GRAPHIC_LOOKS.map(look => preset(look.id, look.name, look.description, 'graphic', look.palette, look.params)),
   preset('kaleido-neon-bloom', 'Neon Bloom', 'Glowing curves racing through an eight-way rosette.', 'kaleidoscope', LASER_GARDEN, { motif: 3, sectors: 8, motifScale: 1.6, lineWidth: 1.6, warpOut: .35, warpIn: .25, sourceDrift: .25 }),
   preset('kaleido-laser-lattice', 'Laser Lattice', 'A hexagonal wall of neon line work.', 'kaleidoscope', ULTRAVIOLET, { motif: 3, group: 4, cell: 1.1, motifScale: 1.4, lineWidth: 1.2, warpOut: .5, sourceDrift: .4 }),
@@ -837,8 +842,10 @@ const FINISH_LOOK_KEYS = [...FEEDBACK_KEYS, ...SLIT_KEYS, ...GLOW_KEYS, ...PRINT
 /** Whether the layer takes finishes at all or, with an id, that finish: glow
  * and print looks need a layer that supports them. */
 export function finishSupported(layer: Pick<Layer, 'kind' | 'params'>, finishId?: string): boolean {
-  if (!supportsFeedback(layer) || !supportsSlitScan(layer) || !supportsWarp(layer) || !supportsTiles(layer) || !supportsSignal(layer)) return false;
   const look = FINISH_LOOKS.find(item => item.id === finishId);
+  if (layer.kind === 'orbital') {
+    if (look && ((!supportsFeedback(layer) && 'echo' in look.params) || (!supportsSlitScan(layer) && 'slitShift' in look.params))) return false;
+  } else if (!supportsFeedback(layer) || !supportsSlitScan(layer) || !supportsWarp(layer) || !supportsTiles(layer) || !supportsSignal(layer)) return false;
   if (!look) return true;
   if ('echo' in look.params && kaleidoscopeOwnsEcho(layer)) return false;
   return (supportsGlow(layer) || !GLOW_KEYS.some(key => key in look.params)) && (supportsPrint(layer) || !PRINT_KEYS.some(key => key in look.params)) &&
@@ -861,12 +868,12 @@ export function createLayer(kind: LayerKind): Layer {
   if (!(kind in DEFINITIONS)) throw new Error(`Unknown layer kind: ${String(kind)}`);
   return {
     id: crypto.randomUUID(),
-    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'smokecloud' ? 'Smoke Cloud' : kind === 'scope' ? 'Oscilloscope' : kind === 'meridian' ? 'Meridian' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : kind === 'kaleidoscope' ? 'Kaleidoscope' : 'Image'),
+    name: INSTRUMENTS.find(i=>i.kind===kind)?.name ?? (kind === 'surface' ? 'Chromatic Field' : kind === 'sculpture' ? 'Pearl Sculpture' : kind === 'fractal' ? 'Prismatic Fractal' : kind === 'oil' ? 'Oil Slides' : kind === 'liquid' ? 'Liquid Light' : kind === 'smokecloud' ? 'Smoke Cloud' : kind === 'scope' ? 'Oscilloscope' : kind === 'meridian' ? 'Meridian' : kind === 'super8' ? 'Super 8 Paint' : kind === 'graphic' ? 'Graphic Patterns' : kind === 'orbital' ? 'Orbital Chroma' : kind === 'kaleidoscope' ? 'Kaleidoscope' : 'Image'),
     kind, visible: true, opacity: 1, blend: 'normal',
     transform: { x: 0, y: 0, scale: 1, rotation: 0 },
     mask: { kind: 'none', softness: 0.15, invert: false, size: 0.8 },
     params: { ...defaultParams(kind), ...(isInstrument(kind) ? INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].params : kind === 'graphic' ? GRAPHIC_LOOKS[0].params : kind === 'super8' ? SUPER8_PROJECTOR_LOOK : kind === 'fractal' ? { evolution: FRACTAL_EVOLUTION } : {}), seed: 1729 },
-    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'smokecloud' ? SMOKE_CLOUD_SCHEMES[0].palette : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'meridian' ? MERIDIAN_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : DEFAULT_PALETTE)], modulations: {},
+    palette: [...(isInstrument(kind) ? (INSTRUMENTS.find(i=>i.kind===kind)!.looks[0].palette ?? INSTRUMENTS.find(i=>i.kind===kind)!.palette) : kind === 'smokecloud' ? SMOKE_CLOUD_SCHEMES[0].palette : kind === 'sculpture' ? SCULPTURE_PALETTE : kind === 'fractal' ? FRACTAL_PALETTE : kind === 'oil' ? OIL_PALETTE : kind === 'liquid' ? LIQUID_PALETTE : kind === 'scope' ? SCOPE_PALETTE : kind === 'meridian' ? MERIDIAN_PALETTE : kind === 'super8' ? SUPER8_PALETTE : kind === 'graphic' ? GRAPHIC_LOOKS[0].palette : kind === 'orbital' ? ORBIT_PALETTES[0].colors : DEFAULT_PALETTE)], modulations: {},
   };
 }
 
@@ -950,7 +957,7 @@ export function varyLayer(layer: Layer, strength: number, locks: VariationLocks,
   for (const d of definitions) {
     const key = d.key, original = layer.params[key];
     const locked = d.section === 'Motion' ? locks.motion : d.section === 'Material' ? locks.material : locks.structure;
-    if (locked || VARIATION_FIXED.has(key) || d.momentary || d.structural || layer.kind === 'fractal' && ['focalX', 'focalY', 'cutout', 'autoTravel', 'position', 'passage', 'reveal'].includes(key) || (locks.palette && ['hue','saturation','vibrance'].includes(key))) continue;
+    if (locked || VARIATION_FIXED.has(key) || d.momentary || d.structural || layer.kind === 'orbital' && key.startsWith('orbit') && d.step === 1 || layer.kind === 'fractal' && ['focalX', 'focalY', 'cutout', 'autoTravel', 'position', 'passage', 'reveal'].includes(key) || (locks.palette && ['hue','saturation','vibrance','orbitColourOffset','orbitColourBlend','orbitColourRate'].includes(key))) continue;
     // A Kaleidoscope control with no effect right now keeps its value for when it returns.
     if (inactive?.has(key) || (ownEcho && FEEDBACK_KEYS.includes(key))) continue;
     // Preserve artist-authored routes and their baseline values as a unit.
@@ -1202,7 +1209,7 @@ function validateLayer(input: unknown, index: number, version:1|2=1): Layer {
     if(!isSimplePolygon(surface.points as {x:number;y:number}[]))fail(`${path}.surface.points`,'must form a simple polygon with a useful area.');
     if(surface.source==='mask'&&(layer.mask as Record<string,unknown>)?.kind!=='image')fail(`${path}.surface.source`,'requires an imported image mask.');
   }
-  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', 'smokecloud', 'meridian', 'kaleidoscope', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
+  const kind = choice(layer.kind, ['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'orbital', 'image', 'smokecloud', 'meridian', 'kaleidoscope', ...INSTRUMENT_KINDS] as const, `${path}.kind`);
   text(layer.id, `${path}.id`, 100); text(layer.name, `${path}.name`);
   boolean(layer.visible, `${path}.visible`); number(layer.opacity, `${path}.opacity`, 0, 1);
   choice(layer.blend, ['normal', 'screen', 'multiply', 'add', 'source'] as const, `${path}.blend`);

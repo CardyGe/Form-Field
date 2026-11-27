@@ -2,6 +2,7 @@
  * The pure rules of playing instruments on the wall: how big each source is drawn, how its clock moves,
  * when the frame-rate governor steps, and how a change fades. The compositor (compositor.ts) applies them.
  */
+import { ORBIT_PARAMETERS } from '../core/orbital';
 import { playbackPhase } from '../core/playback';
 import { frameCount } from '../core/timeline';
 import type { Project } from '../shared/types';
@@ -145,21 +146,23 @@ export function freezeLeaving<T>(fades: Iterable<{ from: T | string; fromSource?
   }
 }
 
-/**
- * Whether a changed composition must be prepared again before it plays. Not when only settings that can follow sound
- * changed (the same as links change them for drawing): the effect is adjusted in place, never restarted.
- */
+const ORBIT_LIVE_KEYS = new Set(ORBIT_PARAMETERS.map(definition => definition.key));
+
+/** Live numeric settings and Orbital's look cues update the existing renderer. */
 export function needsPrepare(before: Project, after: Project): boolean {
   if (before === after) return false;
   const { layers: a, ...restA } = before, { layers: b, ...restB } = after;
   if (JSON.stringify(restA) !== JSON.stringify(restB) || a.length !== b.length) return true;
   for (let i = 0; i < a.length; i++) {
     // Opacity is read each frame when the effect is drawn, as its settings are.
-    const { params: pa, opacity: _oa, ...la } = a[i], { params: pb, opacity: _ob, ...lb } = b[i];
+    const { params: pa, opacity: _oa, palette: paletteA, ...la } = a[i];
+    const { params: pb, opacity: _ob, palette: paletteB, ...lb } = b[i];
     if (JSON.stringify(la) !== JSON.stringify(lb)) return true;
+    const orbital = lb.kind === 'orbital';
+    if (!orbital && JSON.stringify(paletteA) !== JSON.stringify(paletteB)) return true;
     const visible = visibleParameterDefinitions(b[i]);
     for (const key of new Set([...Object.keys(pa), ...Object.keys(pb)])) {
-      if (pa[key] === pb[key]) continue;
+      if (pa[key] === pb[key] || orbital && ORBIT_LIVE_KEYS.has(key) && Number.isFinite(pb[key])) continue;
       // The definition as shown for this layer: some settings restart the effect only in some modes.
       const d = visible.find(x => x.key === key);
       if (!d || typeof pb[key] !== 'number' || !reactable(d).ok) return true;

@@ -1,0 +1,208 @@
+import type { Layer, ParameterDefinition, Project } from '../shared/types';
+
+export const ORBIT_TAU = 2 * Math.PI;
+export const ORBIT_CAPACITY = 160;
+export interface OrbitalClock {
+  motion: number;
+  transition: number;
+}
+
+export function advanceOrbitalClock(clock: OrbitalClock, seconds: number, speed: number): void {
+  const elapsed = Math.max(seconds, 0);
+  clock.motion += Math.min(elapsed, .1) * speed;
+  clock.transition += elapsed;
+}
+export const ORBIT_CHOICES = {
+  orbitLayout: ['Ring to spiral', 'Rosette', 'Helix', 'Knot', 'Lattice', 'Concentric rings', 'Braided torus', 'Iris', 'Figure eight'],
+  orbitPiece: ['Enamel disc', 'Dome', 'Sphere', 'Ring', 'Rounded tile', 'Capsule', 'Carved petal', 'Bevelled pebble'],
+  orbitMotion: ['Wind and unwind', 'Travelling wave', 'Counter-rotation', 'Tumble', 'Breathe', 'Still', 'Flow along form'],
+  orbitBackdrop: ['Morphing print', 'Solid', 'Bullseyes', 'Dots', 'Diamonds', 'Checker', 'Gradient', 'Clear', 'Contour lines', 'Woven lines', 'Studio light'],
+  orbitShadowModel: ['Cast', 'Soft contact'],
+  orbitFinish: ['Enamel', 'Flat ink', 'Satin', 'Metallic', 'Thin film', 'Pearl'],
+  orbitPlayback: ['Endless', 'Seamless loop', 'Fade cue'],
+  orbitSpinMode: ['Follow motion', 'Independent', 'Fixed'],
+  orbitOrder: ['Centre outward', 'Outside inward', 'Around the ring'],
+  orbitColourMode: ['Per piece', 'By arm', 'Along the path', 'By depth'],
+  orbitFadeTarget: ['Whole picture', 'Background', 'Sculpture'],
+} as const;
+
+type Section = ParameterDefinition['section'];
+function p(key: string, label: string, min: number, max: number, value: number, section: Section, step = .01, advanced = false): ParameterDefinition {
+  return { key, label, min, max, default: value, section, step, advanced };
+}
+const shape = (key: string, label: string, min: number, max: number, value: number, step?: number) => p(key, label, min, max, value, 'Shape', step);
+const motion = (key: string, label: string, min: number, max: number, value: number, step?: number, advanced?: boolean) => p(key, label, min, max, value, 'Motion', step, advanced);
+const material = (key: string, label: string, min: number, max: number, value: number, step?: number, advanced?: boolean) => p(key, label, min, max, value, 'Material', step, advanced);
+const ORBIT_INSTALLATION_PARAMETERS = [
+  motion('orbitPhrasing', 'Long-form movement', 0, 1, 0),
+  motion('orbitPhraseSeconds', 'Long-form cycle (seconds)', 8, 120, 36, 1, true),
+  motion('orbitPaletteTime', 'Palette / finish blend (seconds)', 0, 8, 1.6),
+  material('orbitShadowModel', 'Shadows', 0, 1, 0, 1),
+  material('orbitPatternFocus', 'Quiet centre', 0, 1, 0),
+  { ...material('orbitCleanDetail', 'Fine-detail filtering', 0, 1, 0), description: 'Softens fine pattern edges and reduces tiny accents as the mapped image gets smaller.' },
+  { ...p('orbitSafeMargin', 'Safe frame margin', 0, .23, 0, 'Camera'), description: 'Keeps room for the whole movement using a fixed camera fit. 0 uses the Framing control directly.' },
+];
+const ORBIT_MATERIAL_PARAMETERS = [
+  material('orbitFilmStrength', 'Iridescence', 0, 1, .66),
+  material('orbitFilmThickness', 'Film thickness', 0, 1, .42),
+];
+const ORBIT_ORIENTATION_PARAMETERS = [
+  motion('orbitSpinMode', 'Sculpture rotation', 0, ORBIT_CHOICES.orbitSpinMode.length - 1, 0, 1),
+  { ...motion('orbitSpinRate', 'Rotation (turns/sec)', -1, 1, .12), description: 'Set to zero to hold the current angle. Negative values turn the other way.' },
+  { ...p('orbitHeading', 'Orientation (degrees)', -180, 180, 0, 'Camera', .5), description: 'Sets the angle of the sculpture without rotating the background.' },
+  { ...shape('orbitLobeWidth', 'Figure eight width', .28, 1.35, 1), description: 'Compresses the two lobes horizontally before rotation. Use with Fixed rotation for narrow surfaces.' },
+];
+// A counter identifies replays of the same look without becoming a show control.
+const ORBIT_RECALL_PARAMETER = motion('orbitRecall', 'Look recall', 0, 0xffffffff, 0, 1);
+export const ORBIT_ADDED_KEYS = [...ORBIT_INSTALLATION_PARAMETERS, ...ORBIT_MATERIAL_PARAMETERS, ...ORBIT_ORIENTATION_PARAMETERS, ORBIT_RECALL_PARAMETER].map(def => def.key);
+export const ORBIT_PARAMETERS: ParameterDefinition[] = [
+  shape('orbitLayout', 'Arrangement', 0, ORBIT_CHOICES.orbitLayout.length - 1, 0, 1), shape('orbitPiece', 'Piece shape', 0, ORBIT_CHOICES.orbitPiece.length - 1, 0, 1),
+  shape('orbitCount', 'Piece count', 12, ORBIT_CAPACITY, 68, 1), shape('orbitArms', 'Arms / rows', 1, 12, 3, 1),
+  shape('orbitRadius', 'Overall radius', .12, .66, .32), shape('orbitOpening', 'Centre opening', 0, .9, .57),
+  shape('orbitTwist', 'Coiling', -2, 2, .88), shape('orbitDepth', 'Depth', 0, 1, .64),
+  shape('orbitSize', 'Piece size', .012, .13, .059), shape('orbitMinimum', 'Minimum piece size', .06, 1, .31),
+  shape('orbitScatter', 'Size variation', 0, 1, .22), shape('orbitAccent', 'Accent pieces', 0, 1, .64),
+  shape('orbitAspect', 'Piece stretch', .5, 2, 1),
+  motion('orbitMotion', 'Movement', 0, ORBIT_CHOICES.orbitMotion.length - 1, 0, 1), motion('orbitPlayback', 'Playback', 0, 2, 0, 1),
+  { ...motion('orbitRate', 'Motion speed / direction', -2, 2, .62), description: 'Controls movement through the form. Follow motion also uses this rate for rotation.' }, motion('orbitAmount', 'Movement amount', 0, 1, .85),
+  motion('orbitTurns', 'Turns per loop', -5, 5, 1, 1), motion('orbitCycles', 'Phrases per loop', 1, 12, 3, 1),
+  motion('orbitSpread', 'Wave stagger', 0, 1, .54), motion('orbitOrder', 'Wave starts at', 0, 2, 0, 1),
+  motion('orbitRoll', 'Piece tumble', 0, 1, .6), motion('orbitMorph', 'Morph duration (seconds)', 0, 8, 1.8),
+  motion('orbitMorphStagger', 'Morph stagger', 0, .9, .31, .01, true),
+  motion('orbitEase', 'Hold at the ends', 0, 1, .37, .01, true),
+  motion('orbitBackgroundRate', 'Background speed / direction', -2, 2, .51),
+  motion('orbitBackgroundCycles', 'Background cycles per loop', 0, 12, 4, 1),
+  motion('orbitColourRate', 'Colour drift', -2, 2, 0),
+  motion('orbitColourCycles', 'Colour turns per loop', -6, 6, 0, 1, true),
+  motion('orbitFadeIn', 'Fade-in duration (seconds)', 0, 12, 0),
+  motion('orbitFadeTime', 'Fade duration (seconds)', .1, 12, 1.5),
+  motion('orbitFadeTarget', 'Fade affects', 0, 2, 0, 1),
+  material('orbitBackdrop', 'Background', 0, ORBIT_CHOICES.orbitBackdrop.length - 1, 0, 1), material('orbitBackgroundMix', 'Background opacity', 0, 1, 1),
+  material('orbitPatternSize', 'Pattern density', 4, 75, 21), material('orbitPatternContrast', 'Pattern contrast', 0, 1, .78),
+  material('orbitPatternAngle', 'Pattern rotation', -Math.PI, Math.PI, 0, .01, true),
+  material('orbitPaletteLink', 'Use sculpture colours in pattern', 0, 1, 0, .01, true),
+  material('orbitPatternLink', 'Follow sculpture rhythm', 0, 1, 0, .01, true),
+  material('orbitColourMode', 'Colour placement', 0, 3, 0, 1),
+  material('orbitColourOffset', 'Colour position', 0, 1, 0), material('orbitColourBlend', 'Blend colour bands', 0, 1, .08),
+  material('orbitCap', 'Colour cap size', .04, .9, .42), material('orbitRim', 'Ink rim', 0, .4, .11),
+  material('orbitFinish', 'Piece finish', 0, ORBIT_CHOICES.orbitFinish.length - 1, 0, 1), material('orbitLight', 'Light direction', -Math.PI, Math.PI, 2.1),
+  material('orbitShadows', 'Shadow strength', 0, 1, .56), material('orbitSoftness', 'Shadow softness', 0, 1, .65),
+  material('orbitFade', 'Manual fade', 0, 1, 0),
+  material('saturation', 'Saturation', 0, 2, 1), material('hue', 'Hue shift', -Math.PI, Math.PI, 0), material('exposure', 'Exposure', .25, 2, 1),
+  p('orbitCamera', 'Camera tilt', -.45, .45, .035, 'Camera'),
+  p('orbitFraming', 'Framing', .55, 1.7, 1, 'Camera'),
+  ...ORBIT_INSTALLATION_PARAMETERS, ...ORBIT_MATERIAL_PARAMETERS, ...ORBIT_ORIENTATION_PARAMETERS, ORBIT_RECALL_PARAMETER,
+];
+
+export const ORBIT_SWATCHES = ['Face', 'Cap', 'Ink / rim', 'Ground', 'Pattern light', 'Pattern dark'];
+export const ORBIT_PALETTES = [
+  { name: 'Electric Blueprint', colors: ['#32a7f3', '#f5ff21', '#111421', '#42a7ea', '#ecfd3c', '#101926'] },
+  { name: 'Porcelain and Cobalt', colors: ['#fcf3e2', '#5a8bfa', '#182b71', '#e4e0d7', '#fcf3e2', '#6c8bd0'] },
+  { name: 'Traffic Heat', colors: ['#ff5d30', '#ffcb3c', '#481235', '#2b1236', '#f54963', '#711d45'] },
+  { name: 'Violet and Lime', colors: ['#b5ff37', '#b057fd', '#151029', '#221744', '#7ddd57', '#0c141e'] },
+  { name: 'Mercury and Peach', colors: ['#8ea7c3', '#ffc493', '#27324d', '#313545', '#a7b6c8', '#181e30'] },
+  { name: 'Blacklight Coral', colors: ['#fc54a3', '#37f5eb', '#17133b', '#2a235c', '#8229ae', '#120e2c'] },
+  { name: 'Ultramarine and Brass', colors: ['#365fff', '#ffd178', '#251610', '#181b55', '#c48745', '#0c0e26'] },
+  { name: 'Acid Print', colors: ['#ebfb3c', '#f6f2e7', '#151914', '#e1e6a9', '#f6f2e7', '#465423'] },
+  { name: 'Red Shift', colors: ['#fa3226', '#fba5a9', '#270b20', '#45152c', '#ed3853', '#220e19'] },
+  { name: 'Copper on Aubergine', colors: ['#ff8361', '#ffd799', '#321123', '#34172c', '#a35b76', '#261120'] },
+  { name: 'Glacier Light', colors: ['#66d4ff', '#a7ffdf', '#193e66', '#132849', '#466d8f', '#0e1d35'] },
+  { name: 'Newsprint', colors: ['#f4f2e9', '#a3a199', '#171717', '#b7b6ad', '#f4f2e9', '#292928'] },
+  { name: 'Amethyst and Teal', colors: ['#625cdc', '#60f3d8', '#2b153e', '#150e2a', '#774a9c', '#070818'] },
+  { name: 'Coral and Moonstone', colors: ['#ff806d', '#ffe3bd', '#602c46', '#391f33', '#c76b78', '#190f27'] },
+  { name: 'Arctic Glass', colors: ['#34c5ea', '#d1fffb', '#195486', '#112744', '#4377ba', '#07192b'] },
+];
+
+export const ORBIT_LOOKS: { id: string; name: string; description: string; palette: number; params: Record<string, number> }[] = [
+  { id: 'orbital-blueprint', name: 'Electric Blueprint', description: 'Cyan and acid yellow enamel coils above a changing printed grid.', palette: 0, params: {} },
+  { id: 'orbital-porcelain', name: 'Porcelain Rosette', description: 'A slow petal wave across a quiet cobalt print.', palette: 1, params: { orbitLayout: 1, orbitPiece: 1, orbitCount: 84, orbitArms: 7, orbitMotion: 1, orbitRate: .26, orbitBackdrop: 4, orbitPatternContrast: .34, orbitFinish: 2, orbitSpread: .82 } },
+  { id: 'orbital-traffic', name: 'Traffic Spiral', description: 'Hot discs fold in opposing directions over a dark dotted field.', palette: 2, params: { orbitMotion: 2, orbitArms: 4, orbitTwist: 1.4, orbitBackdrop: 3, orbitRate: .95, orbitBackgroundRate: -.34, orbitColourRate: .14 } },
+  { id: 'orbital-mercury', name: 'Mercury Helix', description: 'Metallic links wind in depth over a soft gradient.', palette: 4, params: { orbitLayout: 2, orbitPiece: 3, orbitFinish: 3, orbitMotion: 3, orbitBackdrop: 6, orbitDepth: .94, orbitCount: 48, orbitShadows: .65 } },
+  { id: 'orbital-lattice', name: 'Blacklight Lattice', description: 'A staggered grid of tiles tumbles over a fine checker.', palette: 5, params: { orbitLayout: 4, orbitPiece: 4, orbitArms: 8, orbitCount: 64, orbitMotion: 1, orbitBackdrop: 5, orbitPatternContrast: .4, orbitFinish: 1, orbitSize: .062 } },
+  { id: 'orbital-knot', name: 'Brass Knot', description: 'Capsules trace a deep knot against a solid ultramarine ground.', palette: 6, params: { orbitLayout: 3, orbitPiece: 5, orbitArms: 2, orbitCount: 70, orbitMotion: 4, orbitBackdrop: 1, orbitFinish: 3, orbitSize: .05, orbitDepth: .8 } },
+  { id: 'orbital-wall-blueprint', name: 'Wall Blueprint', description: 'A blue and yellow spiral with a quiet centre and a slow second rhythm.', palette: 0,
+    params: { orbitCount: 76, orbitSize: .063, orbitOpening: .63, orbitRate: .44, orbitBackgroundRate: .23, orbitPatternSize: 18, orbitPatternFocus: .8,
+      orbitPatternContrast: .72, orbitPhrasing: .68, orbitPhraseSeconds: 32, orbitCleanDetail: .8, orbitSafeMargin: .06, orbitShadowModel: 1, orbitShadows: .66 } },
+  { id: 'orbital-amber-aperture', name: 'Amber Aperture', description: 'Warm satin discs on clear, with soft shadows for layering over a mapped surface.', palette: 9,
+    params: { orbitLayout: 5, orbitPiece: 1, orbitArms: 3, orbitCount: 56, orbitRate: .22, orbitSize: .072, orbitMotion: 2, orbitBackdrop: 7, orbitFinish: 2,
+      orbitPhrasing: .84, orbitPhraseSeconds: 49, orbitSafeMargin: .12, orbitCleanDetail: 1, orbitShadowModel: 1, orbitShadows: .62 } },
+  { id: 'orbital-glacier', name: 'Glacier Relief', description: 'A slow aqua rosette above contour lines, opening from the outside inward.', palette: 10,
+    params: { orbitLayout: 1, orbitPiece: 1, orbitArms: 6, orbitCount: 66, orbitMotion: 1, orbitOrder: 1, orbitSpread: .83, orbitAmount: .46, orbitRate: .27, orbitBackgroundRate: .12,
+      orbitBackdrop: 8, orbitPatternSize: 13, orbitPatternFocus: .63, orbitPatternContrast: .62, orbitFinish: 2, orbitPhrasing: .91, orbitPhraseSeconds: 52,
+      orbitSize: .068, orbitMinimum: .47, orbitSafeMargin: .035, orbitCleanDetail: 1, orbitShadowModel: 1, orbitShadows: .72 } },
+  { id: 'orbital-prism-braid', name: 'Prism Braid', description: 'Iridescent pebbles weave through a three-lobed knot under a violet pool of light.', palette: 12,
+    params: { orbitLayout: 6, orbitPiece: 7, orbitMotion: 6, orbitArms: 3, orbitCount: 123, orbitRadius: .39, orbitSize: .038, orbitMinimum: .79,
+      orbitAspect: 1.28, orbitAccent: .13, orbitDepth: .9, orbitRate: .26, orbitPhrasing: .64, orbitPhraseSeconds: 31, orbitSpread: .35,
+      orbitFinish: 4, orbitFilmStrength: .9, orbitFilmThickness: .37, orbitColourMode: 1, orbitColourBlend: .58, orbitColourRate: .025,
+      orbitBackdrop: 10, orbitPatternContrast: .88, orbitBackgroundRate: .12, orbitShadowModel: 1, orbitShadows: .69, orbitLight: 2.05,
+      orbitCamera: .29, orbitFraming: 1.42, orbitSafeMargin: .018, orbitCleanDetail: 1 } },
+  { id: 'orbital-coral-iris', name: 'Coral Iris', description: 'Pearl-glazed petals open and curl in staggered waves on a warm stage.', palette: 13,
+    params: { orbitLayout: 7, orbitPiece: 6, orbitMotion: 1, orbitArms: 9, orbitCount: 72, orbitRadius: .39, orbitOpening: .42, orbitSize: .058,
+      orbitMinimum: .78, orbitAspect: 1.18, orbitAccent: .15, orbitTwist: .92, orbitDepth: .82, orbitRate: .21, orbitAmount: .48, orbitSpread: .78,
+      orbitPhrasing: .55, orbitPhraseSeconds: 39, orbitFinish: 5, orbitFilmStrength: .43, orbitColourMode: 2, orbitColourOffset: .48, orbitColourBlend: .78,
+      orbitBackdrop: 10, orbitBackgroundRate: -.085, orbitPatternContrast: .68, orbitShadowModel: 1, orbitShadows: .72, orbitCamera: -.16,
+      orbitFraming: 1.48, orbitSafeMargin: .02, orbitCleanDetail: 1 } },
+  { id: 'orbital-glass-current', name: 'Glass Current', description: 'An aqua figure eight flows across its own depth on a clear ground for mapping.', palette: 14,
+    params: { orbitLayout: 8, orbitPiece: 6, orbitMotion: 6, orbitArms: 2, orbitCount: 76, orbitRadius: .45, orbitSize: .044, orbitMinimum: .77,
+      orbitAspect: 1.18, orbitAccent: .17, orbitDepth: .92, orbitRate: .24, orbitSpread: .54, orbitAmount: .55, orbitFinish: 4, orbitFilmStrength: .77,
+      orbitFilmThickness: .73, orbitColourMode: 2, orbitColourBlend: .88, orbitBackdrop: 7, orbitShadowModel: 1, orbitShadows: .5,
+      orbitCamera: .13, orbitFraming: 1.38, orbitSafeMargin: .045, orbitCleanDetail: 1 } },
+  { id: 'orbital-glass-column', name: 'Glass Column', description: 'Iridescent light climbs a narrow, upright figure eight on a transparent ground.', palette: 14,
+    params: { orbitLayout: 8, orbitPiece: 6, orbitMotion: 6, orbitSpinMode: 2, orbitLobeWidth: .46, orbitTurns: 0, orbitArms: 2, orbitCount: 94, orbitRadius: .46,
+      orbitSize: .036, orbitMinimum: .82, orbitAspect: 1.12, orbitAccent: .11, orbitDepth: .79, orbitRate: .2, orbitSpread: .42,
+      orbitAmount: .5, orbitFinish: 4, orbitFilmStrength: .84, orbitFilmThickness: .63, orbitColourMode: 2, orbitColourBlend: .88,
+      orbitBackdrop: 7, orbitShadowModel: 1, orbitShadows: .28, orbitSoftness: .27, orbitLight: 1.57, orbitCamera: .06, orbitFraming: 1.48, orbitSafeMargin: .065, orbitCleanDetail: 1 } },
+  { id: 'orbital-ink', name: 'Floating Ink', description: 'Concentric discs on a transparent ground for layering.', palette: 11, params: { orbitLayout: 5, orbitPiece: 0, orbitArms: 3, orbitMotion: 2, orbitBackdrop: 7, orbitFinish: 1, orbitCount: 76, orbitRate: .33 } },
+];
+
+export const hasOrbital = (project: Project) => project.layers.some(layer => layer.visible && layer.kind === 'orbital');
+
+export function orbitFade(layer: Layer, phase: number, duration: number, liveSeconds?: number): number {
+  const p = layer.params;
+  const seconds = liveSeconds ?? Math.max(0, Math.min(1, phase / ORBIT_TAU)) * duration;
+  const fadeTime = Math.min(duration, p.orbitFadeTime);
+  const amount = p.orbitPlayback === 2 ? Math.max(0, Math.min(1, (seconds - duration + fadeTime) / fadeTime)) : 0;
+  const cue = amount * amount * (3 - 2 * amount);
+  const fadeIn = p.orbitPlayback === 2 && p.orbitFadeIn > 0 ? Math.min(1, seconds / p.orbitFadeIn) : 1;
+  return (1 - p.orbitFade) * (1 - cue) * fadeIn * fadeIn * (3 - 2 * fadeIn);
+}
+
+export function orbitVisibleParameter(layer: Layer, key: string): boolean {
+  if (key === 'orbitRecall') return false;
+  if (key === 'orbitFilmStrength' || key === 'orbitFilmThickness') return layer.params.orbitFinish >= 4;
+  const p = layer.params;
+  if (key === 'orbitSpinRate') return p.orbitPlayback !== 1 && p.orbitSpinMode === 1;
+  if (key === 'orbitTurns') return p.orbitPlayback === 1 && (p.orbitSpinMode === 1 || p.orbitSpinMode === 0 && p.orbitMotion !== 5);
+  if (key === 'orbitLobeWidth') return p.orbitLayout === 8;
+  if (key === 'orbitRate' || key === 'orbitBackgroundRate' || key === 'orbitColourRate') return p.orbitPlayback !== 1;
+  if (key === 'orbitCycles' || key === 'orbitBackgroundCycles' || key === 'orbitColourCycles') return p.orbitPlayback === 1;
+  if (key === 'orbitPatternLink') return p.orbitBackdrop === 0 || p.orbitBackdrop >= 8;
+  if (key === 'orbitPhraseSeconds') return p.orbitPlayback !== 1 && p.orbitPhrasing > 0;
+  if (key === 'orbitPatternFocus') return ![1, 6, 7, 10].includes(p.orbitBackdrop);
+  if (key === 'orbitFadeTime' || key === 'orbitFadeIn') return p.orbitPlayback === 2;
+  return true;
+}
+
+
+export type OrbitalLookLocks = { layout: boolean; motion: boolean; colour: boolean };
+const PLAYBACK_KEYS = new Set([
+  'orbitPlayback', 'orbitMorph', 'orbitMorphStagger', 'orbitPaletteTime',
+  'orbitFade', 'orbitFadeIn', 'orbitFadeTime', 'orbitFadeTarget', 'orbitRecall',
+]);
+const COLOUR_KEYS = new Set(['saturation', 'hue', 'exposure', 'orbitPaletteLink', 'orbitColourMode',
+  'orbitColourOffset', 'orbitColourBlend', 'orbitColourRate', 'orbitColourCycles', 'orbitFilmStrength', 'orbitFilmThickness']);
+
+/** Recall edits the playing layer. It preserves its identity, show timing, routes and shared finish rack. */
+export function recallOrbitalLook(layer: Layer, lookId: string, locks: OrbitalLookLocks): Layer {
+  const look = ORBIT_LOOKS.find(candidate => candidate.id === lookId);
+  if (layer.kind !== 'orbital' || !look) return layer;
+  const params: Record<string, number> = { ...layer.params, orbitRecall: ((layer.params.orbitRecall ?? 0) + 1) >>> 0 };
+  for (const def of ORBIT_PARAMETERS) {
+    if (PLAYBACK_KEYS.has(def.key)
+      || locks.layout && (def.section === 'Shape' || def.section === 'Camera')
+      || locks.motion && def.section === 'Motion'
+      || locks.colour && COLOUR_KEYS.has(def.key)) continue;
+    params[def.key] = look.params[def.key] ?? def.default;
+  }
+  return { ...layer, params, palette: locks.colour ? layer.palette : [...ORBIT_PALETTES[look.palette].colors] };
+}

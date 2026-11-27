@@ -55,7 +55,7 @@ function validateProject(project) {
   if (project.tileEdges !== undefined && typeof project.tileEdges !== 'boolean') throw new Error('Invalid tile edges setting.');
   if (JSON.stringify(project).length > 256 * 1024 * 1024) throw new Error('Project exceeds the 256 MB local document limit.');
   for (const layer of project.layers) {
-    if (!layer || !['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'image', 'kaleidoscope', 'smokecloud', 'livingink', 'relief', 'resonance', 'texturecuts', 'glitchtunnel', 'meridian'].includes(layer.kind) || typeof layer.id !== 'string' ||
+    if (!layer || !['surface', 'sculpture', 'fractal', 'oil', 'liquid', 'scope', 'super8', 'graphic', 'orbital', 'image', 'kaleidoscope', 'smokecloud', 'livingink', 'relief', 'resonance', 'texturecuts', 'glitchtunnel', 'meridian'].includes(layer.kind) || typeof layer.id !== 'string' ||
         !layer.params || !Array.isArray(layer.palette) || !layer.transform || !layer.mask) throw new Error('Project contains an invalid layer.');
     for (const value of Object.values(layer.params)) if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('Layer parameters must be finite numbers.');
     if(layer.surface){

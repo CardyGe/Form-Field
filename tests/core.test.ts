@@ -1,3 +1,4 @@
+import { ORBIT_LOOKS } from '../src/core/orbital';
 import {FINISH_KEYS} from '../src/core/finishing';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -691,7 +692,7 @@ test('Fractal contour controls appear only for contour coloring without deleting
 });
 
 test('the curated library covers every Surface pattern, four Sculpture forms and three Fractal colorings', () => {
-  assert.equal(PRESETS.filter(p => p.kind !== 'graphic' && p.kind !== 'meridian').length, 98 + 32 + 10 + FRACTAL_PROJECTION_LOOK_IDS.length);
+  assert.equal(PRESETS.filter(p => p.kind !== 'graphic' && p.kind !== 'meridian').length, 98 + 32 + 10 + ORBIT_LOOKS.length + FRACTAL_PROJECTION_LOOK_IDS.length);
   assert.equal(new Set(PRESETS.map(preset => preset.id)).size, PRESETS.length);
   const surfaces = PRESETS.filter(preset => preset.kind === 'surface');
   assert.equal(surfaces.length, 18);

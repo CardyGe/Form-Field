@@ -3,7 +3,7 @@ import type { LiveSettings } from '../live/settings';
 import type { SourceState } from '../live/source';
 import type { PeopleStatus } from '../live/MaskProvider';
 import type { MapMessage } from '../map/messages';
-export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'image' | 'smokecloud' | 'meridian' | 'kaleidoscope' | InstrumentKind;
+export type LayerKind = 'surface' | 'sculpture' | 'fractal' | 'oil' | 'liquid' | 'scope' | 'super8' | 'graphic' | 'orbital' | 'image' | 'smokecloud' | 'meridian' | 'kaleidoscope' | InstrumentKind;
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'add' | 'source';
 export type ModulationKind = 'sine' | 'pulse' | 'noise' | 'keyframes';
 export interface KeyPoint { time: number; value: number }
