@@ -89,13 +89,13 @@ test('palette and finish recalls retarget from the displayed blend', () => {
   assert.equal(appearance.palette[0].r, 0);
   appearance.update(palette('#ffffff'), 3, 2, 2);
   assert.equal(appearance.palette[0].r, .5);
-  assert.deepEqual(appearance.weights, [.5, 0, 0, .5]);
+  assert.deepEqual(appearance.weights, [.5, 0, 0, .5, 0, 0]);
   appearance.update(palette('#ff0000'), 1, 2, 2);
   assert.equal(appearance.palette[0].g, .5);
-  assert.deepEqual(appearance.weights, [.5, 0, 0, .5]);
+  assert.deepEqual(appearance.weights, [.5, 0, 0, .5, 0, 0]);
   appearance.update(palette('#ff0000'), 1, 4, 2);
   assert.equal(appearance.palette[0].g, 0);
-  assert.deepEqual(appearance.weights, [0, 1, 0, 0]);
+  assert.deepEqual(appearance.weights, [0, 1, 0, 0, 0, 0]);
 });
 
 test('the projection envelope keeps more room on thin surfaces and degrades accents gradually', () => {
@@ -180,4 +180,27 @@ test('Perform speed holds motion with the recall clock still running in real sec
   advanceOrbitalClock(clock, .05, .5);
   assert.equal(clock.motion, .125);
   assert.ok(Math.abs(clock.transition - 2.1) < 1e-9);
+});
+
+
+test('a finish cue blends thin film into pearl and preserves total shader weight', () => {
+  const layer = createLayer('orbital');
+  const appearance = new OrbitAppearance(layer.palette, 4, 0);
+  appearance.update(layer.palette, 5, 1, 2);
+  appearance.update(layer.palette, 5, 2, 2);
+  assert.deepEqual(appearance.weights, [0, 0, 0, 0, .5, .5]);
+  appearance.update(layer.palette, 5, 3, 2);
+  assert.deepEqual(appearance.weights, [0, 0, 0, 0, 0, 1]);
+});
+
+test('sculpture presets keep inactive identities within the form during a count change', () => {
+  for (const lookId of ['orbital-prism-braid', 'orbital-coral-iris', 'orbital-glass-current']) {
+    const { params } = applyPreset(createLayer('orbital'), lookId);
+    params.orbitCount = 12;
+    const inactive = makeOrbitPose();
+    sampleOrbit(inactive, 158, params, orbitLoopPhase(params, .7));
+    assert.equal(inactive.size, 0);
+    assert.ok(Math.hypot(inactive.x, inactive.y) <= params.orbitRadius * 1.5);
+    assert.ok(Object.values(inactive).every(Number.isFinite));
+  }
 });

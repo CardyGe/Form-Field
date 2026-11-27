@@ -7,6 +7,10 @@ import { OrbitAppearance } from './orbit-appearance';
 import { blendOrbitView, orbitDetailGain, orbitView, ORBIT_FOV, ORBIT_TAN_HALF_FOV, type OrbitView } from './orbit-projection';
 import { sourceViewMatrix } from './source-view';
 
+const BACKDROPS = ORBIT_CHOICES.orbitBackdrop.length;
+const PIECES = ORBIT_CHOICES.orbitPiece.length;
+const FINISHES = ORBIT_CHOICES.orbitFinish.length;
+
 const fullscreen = /* glsl */ `
 varying vec2 vUv;
 void main() { vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }
@@ -16,7 +20,7 @@ varying vec2 vUv;
 uniform mat3 uView;
 uniform vec3 uGround, uLight, uDark, uFace;
 uniform float uAspect, uDensity, uContrast, uRotation, uPhase, uLinkedPhase, uLink, uOpacity;
-uniform float uModes[10];
+uniform float uModes[${BACKDROPS}];
 uniform float uFocus, uFocusRadius, uDetail;
 
 float mark(float d, float radius, float aa) {
@@ -54,6 +58,14 @@ vec3 pattern(int mode, vec2 cell, float aa, float phase) {
     float threads = mix(mark(strand.x, .14, aa), mark(strand.y, .14, aa), crossing);
     return mix(uGround, mix(uDark,uLight,crossing), threads*.78);
   }
+  if (mode == 10) {
+    vec2 screen = (vUv - .5) * vec2(uAspect, 1.);
+    vec2 light = screen - vec2(.13 * cos(phase), .1 + .06 * sin(phase));
+    float pool = exp(-5.4 * dot(light, light * vec2(.73, 1.6)));
+    float band = screen.y + .29 * screen.x + .29;
+    float stripe = exp(-18. * band * band);
+    return mix(mix(uDark, uGround, .65), uLight, clamp(.7*pool + .08*stripe, 0., .81));
+  }
   float stage = fract(phase / 6.28318530718) * 4.;
   float travel = stage + .42 * sin(cell.x*.3 + cell.y*.25 + phase) * sin(phase);
   float cycle = mod(travel, 4.);
@@ -79,15 +91,20 @@ void main() {
   float spacing = max(footprint.x, footprint.y);
   float aa = clamp(spacing * mix(.7, 1.18, uDetail), .002, .24);
   vec3 ink = vec3(0.);
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < ${BACKDROPS}; i++) {
     if (i != 7 && uModes[i] > .00001) {
       vec3 free = pattern(i, cell, aa, uPhase);
       if ((i == 0 || i >= 8) && uLink > .00001) free = mix(free, pattern(i, cell, aa, uLinkedPhase), uLink);
-      ink += free * uModes[i];
+      float contrast = uContrast;
+      if (i != 1 && i != 6 && i != 10) {
+        float detail = 1. - smoothstep(mix(.13,.075,uDetail), mix(.38,.24,uDetail), spacing);
+        float mask = 1. - uFocus * (1. - smoothstep(uFocusRadius*.63, uFocusRadius*1.42, length(p)));
+        contrast *= detail * mask;
+      }
+      ink += mix(uGround, free, contrast) * uModes[i];
     }
   }
   float opaque = 1. - uModes[7];
-  ink = mix(uGround * opaque, ink, uContrast * (1. - smoothstep(.13, .38, spacing)));
   gl_FragColor = vec4(ink*uOpacity, opaque*uOpacity);
 }
 `;
@@ -111,7 +128,8 @@ varying vec3 vLocal, vNormal, vEye;
 varying float vBand;
 uniform vec3 uFace, uCap, uInk, uLightDirection;
 uniform float uCapSize, uRim, uPhase, uBlend, uDetail;
-uniform float uFinish[4];
+uniform float uFinish[${FINISHES}];
+uniform float uFilmStrength, uFilmThickness;
 vec3 colour(float offset) {
   float value = mod(vBand + offset + uPhase, 3.);
   vec3 a = value < 1. ? uFace : value < 2. ? uCap : uInk;
@@ -128,7 +146,7 @@ void main() {
   vec3 pigment = mix(colour(0.), colour(1.), smoothstep(cap-capEdge, cap+capEdge, plane));
   float spot = smoothstep(.94-fwidth(plane),.94+fwidth(plane),plane);
   pigment = mix(pigment, colour(2.), spot * .9);
-  float facing = max(0., dot(n, eye));
+  float facing = clamp(dot(n, eye), 0., 1.);
   float rimWidth = uRim * 2.;
   float edge = fwidth(facing) * uDetail;
   float rim = (1. - smoothstep(rimWidth*.65-edge, rimWidth+.015+edge, facing)) * smoothstep(0., .03, uRim);
@@ -139,7 +157,20 @@ void main() {
   float base = (uFinish[0]+uFinish[2])*diffuse + uFinish[1]*(.81+.19*smoothstep(.81,.85,diffuse))
     + uFinish[3]*(.48+.5*diffuse+.24*longSpec);
   float shine = specular * (.25*uFinish[0]+.48*uFinish[3]) + longSpec*(.045*uFinish[0]+.16*uFinish[2]+.27*uFinish[3]);
-  gl_FragColor = vec4(pigment*base+shine*(1.-rim), 1.);
+  vec3 result = pigment*base+shine*(1.-rim);
+  if (uFinish[4]+uFinish[5] > .00001) {
+    float fresnel = pow(1.-facing, 1.65);
+    float optical = 6.2831853 * (.79*facing + uFilmThickness + .15*dot(local,vec3(.35,-.28,.55)));
+    vec3 spectrum = .5+.5*cos(optical+vec3(.19,2.284,4.378));
+    vec3 film = mix(pigment * (.64+.33*diffuse), spectrum * (.48+.42*diffuse),
+      uFilmStrength * (.32+.64*fresnel));
+    film += vec3(.68,.81,1.) * (.36*specular+.18*longSpec) * (1.-rim);
+    vec3 pearl = mix(pigment * (.60+.40*diffuse), mix(uFace,uCap,.27) * .62,
+      (.13+.39*fresnel)*uFilmStrength);
+    pearl += mix(vec3(1.,.88,.74), spectrum, .18*uFilmStrength) * (.39*pow(specular,.37)+.08*longSpec) * (1.-rim);
+    result += uFinish[4]*mix(film,uInk,rim*.86)+uFinish[5]*mix(pearl,uInk,rim*.62);
+  }
+  gl_FragColor = vec4(result, 1.);
 }
 `;
 
@@ -163,8 +194,6 @@ void main() {
   gl_FragColor = vec4(uTint*a,a);
 }
 `;
-const BACKDROPS = ORBIT_CHOICES.orbitBackdrop.length;
-
 interface FrameState {
   elapsed: number;
   transition: number;
@@ -248,7 +277,8 @@ export class OrbitalRenderer {
     uniforms: {
       uFace: { value: new THREE.Color() }, uCap: { value: new THREE.Color() }, uInk: { value: new THREE.Color() },
       uLightDirection: { value: new THREE.Vector3() }, uCapSize: { value: .42 }, uRim: { value: .11 },
-      uPhase: { value: 0 }, uBlend: { value: .08 }, uFinish: { value: weights(4, 0) }, uDetail: { value: 0 },
+      uPhase: { value: 0 }, uBlend: { value: .08 }, uFinish: { value: weights(FINISHES, 0) }, uDetail: { value: 0 },
+      uFilmStrength: { value: .66 }, uFilmThickness: { value: .42 },
     },
   });
   private readonly batches: THREE.InstancedMesh[];
@@ -260,8 +290,16 @@ export class OrbitalRenderer {
     const ring = new THREE.TorusGeometry(.73, .24, 12, 32);
     const tile = new RoundedBoxGeometry(1.7, 1.7, .66, 3, .29);
     const capsule = new THREE.CapsuleGeometry(.56, .84, 8, 24).scale(1, 1, .85);
+    const petal = new THREE.SphereGeometry(1, 32, 18);
+    const positions = petal.attributes.position;
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i), y = positions.getY(i), z = positions.getZ(i);
+      positions.setXYZ(i, x * 1.12, y * (.60 - .24 * x), z * .31 + .29 * x * x + .06 * y);
+    }
+    petal.computeVertexNormals();
+    const pebble = new RoundedBoxGeometry(1.58, 1.46, .94, 4, .43).rotateZ(Math.PI / 7);
     const satellite = new THREE.SphereGeometry(1, 16, 10);
-    this.batches = [disc, dome, ball, ring, tile, capsule, satellite].map(geometry => {
+    this.batches = [disc, dome, ball, ring, tile, capsule, petal, pebble, satellite].map(geometry => {
       const attribute = new THREE.InstancedBufferAttribute(new Float32Array(ORBIT_CAPACITY), 1);
       attribute.setUsage(THREE.DynamicDrawUsage);
       geometry.setAttribute('orbitBand', attribute);
@@ -308,7 +346,7 @@ export class OrbitalRenderer {
         from: Array.from({ length: ORBIT_CAPACITY }, makeOrbitPose), morphStart: -Infinity, morphEnd: -Infinity, outgoing: null, previous: p,
         appearance: new OrbitAppearance(layer.palette, p.orbitFinish, transition),
         shownView: view, viewFrom: view, viewStart: -Infinity, aspect,
-        shapeWeights: weights(6, p.orbitPiece), shapesFrom: weights(6, p.orbitPiece), piece: p.orbitPiece, pieceStart: -Infinity,
+        shapeWeights: weights(PIECES, p.orbitPiece), shapesFrom: weights(PIECES, p.orbitPiece), piece: p.orbitPiece, pieceStart: -Infinity,
         backdropWeights: weights(BACKDROPS, p.orbitBackdrop), backdropFrom: weights(BACKDROPS, p.orbitBackdrop), backdrop: p.orbitBackdrop, backdropStart: -Infinity,
       };
       this.layers.set(layer.id, state);
@@ -334,7 +372,7 @@ export class OrbitalRenderer {
     if (state.piece !== p.orbitPiece) {
       state.piece = p.orbitPiece;
       state.pieceStart = transition;
-      state.shapesFrom.splice(0, 6, ...state.shapeWeights);
+      state.shapesFrom.splice(0, PIECES, ...state.shapeWeights);
     }
     if (state.backdrop !== p.orbitBackdrop) {
       state.backdrop = p.orbitBackdrop;
@@ -394,7 +432,7 @@ export class OrbitalRenderer {
       : authoredView;
     const { distance, tilt } = frame;
     const pixelsPerUnit = height / (2 * distance * ORBIT_TAN_HALF_FOV);
-    const shapeWeights = state?.shapeWeights ?? weights(6, p.orbitPiece);
+    const shapeWeights = state?.shapeWeights ?? weights(PIECES, p.orbitPiece);
     const backdropWeights = state?.backdropWeights ?? weights(BACKDROPS, p.orbitBackdrop);
     if (state) {
       if (state.aspect !== aspect) state.viewFrom = {...state.viewFrom, distance: authoredView.distance};
@@ -423,7 +461,7 @@ export class OrbitalRenderer {
       }
       if (i % 3 !== 1) {
         const accent = pose.size * .37 * p.orbitAccent;
-        this.stamp(this.batches[6], pose, accent * orbitDetailGain(accent * pixelsPerUnit, p.orbitCleanDetail), 1, true);
+        this.stamp(this.batches[PIECES], pose, accent * orbitDetailGain(accent * pixelsPerUnit, p.orbitCleanDetail), 1, true);
       }
       if (softContact) this.stampContact(pose, p);
     }
@@ -457,8 +495,9 @@ export class OrbitalRenderer {
     const u = this.material.uniforms, b = this.backdropMaterial.uniforms;
     const swatch = (index: number) => state?.appearance.palette[index] ?? this.swatch.set(layer.palette[index]);
     u.uFace.value.copy(swatch(0)); u.uCap.value.copy(swatch(1)); u.uInk.value.copy(swatch(2));
-    u.uCapSize.value = p.orbitCap; u.uRim.value = p.orbitRim; u.uFinish.value = state?.appearance.weights ?? weights(4, p.orbitFinish);
+    u.uCapSize.value = p.orbitCap; u.uRim.value = p.orbitRim; u.uFinish.value = state?.appearance.weights ?? weights(FINISHES, p.orbitFinish);
     u.uDetail.value = p.orbitCleanDetail;
+    u.uFilmStrength.value = p.orbitFilmStrength; u.uFilmThickness.value = p.orbitFilmThickness;
     u.uPhase.value = p.orbitColourOffset * 3 + time.colour / ORBIT_TAU * 3;
     u.uBlend.value = p.orbitColourBlend;
     u.uLightDirection.value.copy(this.light.position).transformDirection(this.camera.matrixWorldInverse);

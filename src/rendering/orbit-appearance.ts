@@ -1,8 +1,9 @@
 import { Color } from 'three';
+import { ORBIT_CHOICES } from '../core/orbital';
 import { orbitEase } from './orbit-motion';
 
 const colours = () => Array.from({ length: 6 }, () => new Color());
-const finishes = (finish: number) => Array.from({ length: 4 }, (_, index) => Number(index === finish));
+const finishes = (finish: number) => Array.from({ length: ORBIT_CHOICES.orbitFinish.length }, (_, index) => Number(index === finish));
 
 /** Retarget from the colours and finish currently on screen. The snapshot survives rapid preset recall. */
 export class OrbitAppearance {

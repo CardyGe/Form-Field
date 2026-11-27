@@ -7,10 +7,11 @@ export function orbitProjectionDistance(p: Record<string, number>, aspect: numbe
   if (!p.orbitSafeMargin) return authored;
   const waving = p.orbitMotion === 1 ? 1 + .32 * p.orbitAmount
     : p.orbitMotion === 4 ? 1 + .4 * p.orbitAmount : 1;
-  const corner = p.orbitLayout === 4 ? Math.SQRT2 : p.orbitLayout === 1 ? 1.16 : 1;
+  const corner = p.orbitLayout === 4 ? Math.SQRT2 : p.orbitLayout === 1 ? 1.16
+    : p.orbitLayout === 8 ? 1.08 * (1 + .16 * p.orbitAmount) : p.orbitLayout === 6 ? 1.07 : 1;
   const radius = p.orbitRadius * corner * waving * (1 + .12 * p.orbitPhrasing);
-  const piece = p.orbitSize * 1.35 * (Math.max(1, p.orbitAspect) + .45 * p.orbitAccent);
-  const depth = .15 + p.orbitDepth * .28 + piece;
+  const piece = p.orbitSize * 1.35 * (Math.max(1, p.orbitAspect) * (p.orbitPiece === 6 ? 1.16 : 1) + .45 * p.orbitAccent);
+  const depth = (p.orbitLayout >= 6 ? .25 : .15) + p.orbitDepth * .28 + piece;
   const tilt = Math.abs(Math.sin(p.orbitCamera));
   const projected = (radius + piece + depth * tilt) / ((1 - p.orbitSafeMargin * 2) * ORBIT_TAN_HALF_FOV * Math.min(1, aspect));
   return Math.max(authored, projected + depth + radius * tilt);

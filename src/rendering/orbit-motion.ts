@@ -37,8 +37,8 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
   const count = Math.round(p.orbitCount), arms = Math.min(Math.round(p.orbitArms), count);
   const arm = i % arms, step = Math.floor(i / arms);
   const steps = Math.floor((count - 1 - arm) / arms);
-  const t = step / Math.max(steps, 1);
-  const lead = arm / arms, circle = i / count;
+  const t = Math.min(1, step / Math.max(steps, 1));
+  const lead = arm / arms, circle = (i % count) / count;
   const order = waveOrder(p.orbitOrder, t, circle);
   const phrasing = p.orbitMotion === 5 ? 0 : p.orbitPhrasing;
   const passage = phrasing * Math.sin(time.phrase);
@@ -48,13 +48,16 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
   const beat = mix(raw, orbitEase(raw), p.orbitEase);
   const vibration = Math.sin(local);
   const amount = p.orbitMotion === 5 ? 0 : p.orbitAmount;
-  const turn = p.orbitMotion === 5 ? 0 : time.spin + .24 * passage;
+  const sweep = p.orbitMotion === 6 && p.orbitLayout < 6 ? time.wave : 0;
+  const turn = p.orbitMotion === 5 ? 0 : time.spin + sweep + .24 * passage;
   const winding = p.orbitMotion === 0 ? Math.min(1, amount * beat * (1 + .18 * passage)) : 0;
   const expansion = 1 + .12 * passage;
   const spread = expansion * (p.orbitMotion === 4 ? 1 + .4 * amount * vibration : 1);
   let angle = TAU * (lead + t / arms * .92) + turn;
   let radius = mix(p.orbitOpening, 1, t) * p.orbitRadius;
   let depth = .01;
+  let pathX: number | undefined, pathY = 0, tangent: number | undefined;
+  const flow = p.orbitMotion === 6 ? time.wave : 0;
   switch (p.orbitLayout) {
     case 1:
       angle = TAU * (lead + t * .22 * p.orbitTwist) + turn;
@@ -78,6 +81,39 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
       radius = p.orbitRadius * mix(.32, 1, (arm + 1) / arms);
       depth = .08 * lead;
       break;
+    case 6: {
+      const along = TAU * circle + flow;
+      const winding = 3 * along + TAU * lead + .33 * passage;
+      const tube = .16 + .095 * Math.abs(p.orbitTwist);
+      angle = 2 * along + turn;
+      radius = p.orbitRadius * (.72 + tube * Math.cos(winding));
+      const radialSpeed = -3 * p.orbitRadius * tube * Math.sin(winding);
+      tangent = angle + Math.atan2(2 * radius, radialSpeed);
+      depth = .17 * Math.sin(winding) + .044 * Math.cos(2 * along + TAU * lead);
+      break;
+    }
+    case 7: {
+      const petal = Math.sin(Math.PI * t);
+      const open = .77 + .23 * beat;
+      angle = TAU * lead + turn + p.orbitTwist * (.16 * t + .51 * petal * open);
+      const aperture = .07 + p.orbitOpening * .34;
+      radius = p.orbitRadius * mix(aperture, 1, t) * open;
+      tangent = angle + .37 * petal * p.orbitTwist;
+      depth = petal * (.07 + .105 * beat) + .07 * t * vibration;
+      break;
+    }
+    case 8: {
+      const along = TAU * circle + flow;
+      const width = .48 + .18 * p.orbitOpening;
+      const wave = 1 + .16 * amount * vibration;
+      const x = p.orbitRadius * width * Math.sin(2 * along) * wave;
+      const y = p.orbitRadius * Math.sin(along) * wave;
+      pathX = x * Math.cos(turn) - y * Math.sin(turn);
+      pathY = x * Math.sin(turn) + y * Math.cos(turn);
+      tangent = turn + Math.atan2(Math.cos(along), 2 * width * Math.cos(2 * along));
+      depth = .15 * Math.cos(along) + .038 * Math.sin(3 * along + lead * TAU);
+      break;
+    }
     default: {
       const coil = .16 + .7 * winding;
       angle += t * TAU * coil * p.orbitTwist;
@@ -91,8 +127,12 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
   if (p.orbitMotion === 2) angle += (arm % 2 ? -1 : 1) * time.spin - turn + .4 * amount * vibration;
   const wobble = random(i, p.seed);
   const sizeWave = p.orbitMotion === 5 ? .9 : mix(.85, .22 + .78 * beat, amount);
-  out.size = i < count ? p.orbitSize * Math.max(p.orbitMinimum, sizeWave * (.72 + .4 * t) * mix(1, .66 + .68 * wobble, p.orbitScatter)) : 0;
-  if (p.orbitLayout === 4) {
+  const tapered = p.orbitLayout === 7 ? .53 + .47 * Math.sin(Math.PI * (.14 + .78 * t)) : 1;
+  out.size = i < count ? p.orbitSize * tapered * Math.max(p.orbitMinimum, sizeWave * (.72 + .4 * t) * mix(1, .66 + .68 * wobble, p.orbitScatter)) : 0;
+  if (pathX !== undefined) {
+    out.x = pathX * spread;
+    out.y = pathY * spread;
+  } else if (p.orbitLayout === 4) {
     const cols = Math.ceil(count / arms);
     const x = ((cols > 1 ? step / (cols - 1) : .5) - .5) * p.orbitRadius * 2;
     const y = ((arms > 1 ? arm / (arms - 1) : .5) - .5) * p.orbitRadius * 2;
@@ -102,8 +142,9 @@ export function sampleOrbit(out: OrbitPose, i: number, p: Record<string, number>
     out.x = Math.cos(angle) * radius * spread;
     out.y = Math.sin(angle) * radius * spread;
   }
-  out.z = .125 + (depth + .068 * amount * vibration + .043 * passage * (t - .5)) * p.orbitDepth + (wobble - .5) * .025;
-  out.angle = angle + .32 * Math.sin(local);
+  const centreHeight = p.orbitLayout >= 6 ? .25 : .125;
+  out.z = centreHeight + (depth + .068 * amount * vibration + .043 * passage * (t - .5)) * p.orbitDepth + (wobble - .5) * .025;
+  out.angle = (tangent ?? angle) + (tangent === undefined ? .32 : .15) * Math.sin(local);
   out.tilt = (p.orbitMotion === 3 ? 1.72 : .95) * p.orbitRoll * Math.sin(local + t * 1.4) * amount;
   out.roll = .32 * p.orbitRoll * Math.cos(local - lead * TAU) * amount;
   out.band = p.orbitColourMode === 1 ? lead * 3 : p.orbitColourMode === 2 ? t * 3
