@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import type { Layer, Project } from '../shared/types';
 import type { VariationLocks } from '../core/project';
 import { frameCount } from '../core/timeline';
+import { hasOrbital } from '../core/orbital';
 import { playbackPhase } from '../core/playback';
 import { StudioRenderer } from '../rendering/StudioRenderer';
 import { useCanvasInteraction } from './useCanvasInteraction';
@@ -33,6 +34,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
     try { engine = new StudioRenderer(canvas.current); rendererRef.current = engine; }
     catch (error) { onError(String(error)); return; }
     let alive = true, raf = 0, previous = performance.now(), lastPhase = -1, lastDrawn = -1, reduced = false;
+    let orbitalSeconds = 0, orbitalProject: string | null = null, ownPhase = phase.current;
     let box = { width: 960, height: 540 }, density = window.devicePixelRatio;
     const resize = new ResizeObserver(([entry]) => {
       box = { width: entry.contentRect.width, height: entry.contentRect.height };
@@ -64,7 +66,19 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
       if (!alive) return;
       const state = current.current;
       if(density!==window.devicePixelRatio){density=window.devicePixelRatio;invalidate.current=true;}
-      if (state.playing) {phase.current=playbackPhase(phase.current,Math.min((now-previous)/1000,.1)/actualDuration(state.project)*TAU,state.project);if(phase.current>=TAU)state.onEnded?.();}
+      const duration = actualDuration(state.project), step = Math.min((now - previous) / 1000, .1);
+      const orbital = hasOrbital(state.project);
+      if (orbitalProject !== state.project.id || phase.current !== ownPhase) {
+        orbitalSeconds = phase.current / TAU * duration;
+        if (orbital) engine.resetOrbitalPlayback();
+      }
+      orbitalProject = state.project.id;
+      if (state.playing) {
+        phase.current = playbackPhase(phase.current, step / duration * TAU, state.project);
+        if (orbital) orbitalSeconds += step;
+        if (phase.current >= TAU) state.onEnded?.();
+      }
+      ownPhase = phase.current;
       previous = now;
       // A paused feedback layer keeps refining its history for a few frames after an edit.
       if (prepared.current === state.project && (invalidate.current || phase.current !== lastPhase || engine.needsRefresh())) {
@@ -75,7 +89,7 @@ export function Preview({ tiled, project, playing, phase, rendererRef, smokeSoun
         const meridian = state.project.layers.some(l => l.visible && l.kind === 'meridian');
         if (meridian && lastDrawn >= 0) engine.paceMeridian(now - lastDrawn);
         try { engine.render(state.project, phase.current, size.width, size.height,
-          state.smokeSound ? { signals: state.smokeSound.signals, now, externalTempo: state.smokeSound.prefs.tempo !== 'beat', tempoOnly: !state.playing } : undefined, state.playing);
+          state.smokeSound ? { signals: state.smokeSound.signals, now, externalTempo: state.smokeSound.prefs.tempo !== 'beat', tempoOnly: !state.playing } : undefined, state.playing, orbital ? orbitalSeconds : undefined);
           const overlay = tileCanvas.current;
           if (state.tiled && overlay) {
             // Drawn in the same frame as the render, while the WebGL buffer is still valid.

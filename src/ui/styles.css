@@ -569,3 +569,7 @@ a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .finish-picker-group small { position: absolute; top: 3px; right: 3px; padding: 1px 4px; border-radius: 3px; color: #19200f; background: var(--accent); font-size: 9px; font-weight: 600; }
 .live-starts.meridian-moves { flex-direction: row; flex-wrap: wrap; }
 .live-starts.meridian-moves .text-button { flex: 1 1 30%; justify-content: center; }
+
+.orbital-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
+.orbital-choice-grid .stacked-label { min-width: 0; }
+.orbital-choice-grid select { width: 100%; }

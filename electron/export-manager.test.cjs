@@ -106,7 +106,7 @@ test('native document boundary accepts a Kaleidoscope layer with its image', () 
 });
 
 test('native export accepts every projection instrument and preserves its saved controls', () => {
-  for(const kind of ['livingink','relief','resonance','texturecuts','glitchtunnel']) {
+  for(const kind of ['livingink','relief','resonance','texturecuts','glitchtunnel','orbital']) {
     const layer={kind,id:'instrument',params:{seed:1729,scale:2,branching:.3},palette:['#112233','#223344','#334455','#445566','#556677','#667788'],transform:{x:0,y:0,scale:1,rotation:0},mask:{kind:'none'}};
     const request={project:{...project,layers:[layer]},format:'prores4444',width:16,height:16,fps:{num:30,den:1},frameCount:3,transparent:true,background:'#000000'};
     const accepted=validateRequest(request,root);assert.deepEqual(accepted.project.layers[0],layer);

@@ -17,7 +17,7 @@ export const SLIT_SHAPES = ['Rows', 'Columns', 'Rings', 'Diagonal', 'Blocks', 'B
 export const SLIT_MODES = ['Delay map', 'Echo', 'Median', 'Darkest', 'Brightest'];
 
 export function supportsSlitScan(layer: Pick<Layer, 'kind' | 'params'>): boolean {
-  return layer.kind !== 'graphic' && !(layer.kind === 'livingink' && layer.params.inkMode === 2);
+  return (layer.kind !== 'orbital' || layer.params.orbitPlayback === 1) && layer.kind !== 'graphic' && !(layer.kind === 'livingink' && layer.params.inkMode === 2);
 }
 
 export function slitActive(layer: Pick<Layer, 'kind' | 'params' | 'modulations'>): boolean {

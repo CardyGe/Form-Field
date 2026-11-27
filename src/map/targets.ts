@@ -5,6 +5,7 @@
  *   source.<id>.param.<layer>.<setting>
  * A target's range comes from the shape's own rules, or from the instrument's parameter definitions.
  */
+import { ORBIT_CHOICES, orbitVisibleParameter } from '../core/orbital';
 import { MERIDIAN_UNLINKED } from '../meridian/parameters';
 import { readParameterDefinitions, scopeParameterVisible, surfaceParameterVisible, visibleParameterDefinitions } from '../core/project';
 import type { Layer, ParameterDefinition } from '../shared/types';
@@ -34,6 +35,7 @@ export function parseTarget(target: string): Target | null {
 }
 
 export function canLinkParameter(layer: Layer, key: string): boolean {
+  if (layer.kind === 'orbital') return !(key in ORBIT_CHOICES) && !['orbitCount', 'orbitArms', 'orbitTurns', 'orbitCycles', 'orbitBackgroundCycles', 'orbitColourCycles'].includes(key);
   if (layer.kind === 'surface' && ['foldDirection', 'foldShape', 'foldPath', 'foldPathCycles', 'foldMorphBeat', 'foldMorphTime', 'foldMorphHold', 'foldMorphAngle'].includes(key)) return false;
   if (layer.kind === 'meridian') return !MERIDIAN_UNLINKED.includes(key);
   return layer.kind !== 'scope' || key !== 'scopeMode' && key !== 'emberPhrases';
@@ -99,7 +101,8 @@ export function reactionLinks(show: Pick<ShowDocument, 'shapes' | 'sources'>, re
     if (!source) return 'needs-instrument';
     const layer = source.project.layers[0];
     const defs = readParameterDefinitions(layer.kind).filter(d => activeParameterLink(layer, d.key) && typeof layer.params[d.key] === 'number' && d.max > d.min && d.key !== 'seed' && !d.preparation);
-    const preferred = layer.kind === 'scope' && layer.params.scopeMode === 1 ? 'emberOpening' : null;
+    const preferred = layer.kind === 'orbital' ? 'orbitOpening'
+      : layer.kind === 'scope' && layer.params.scopeMode === 1 ? 'emberOpening' : null;
     const def = defs.find(d => preferred ? d.key === preferred : d.section === 'Motion') ?? defs[0];
     if (!def) return 'needs-instrument';
     target = `source.${source.id}.param.0.${def.key}`;

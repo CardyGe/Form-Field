@@ -6,6 +6,7 @@ import { ProgramGate, ProgramsCompiling, retryWhenLinked, type LinkingProgram } 
 import { isInstrument } from '../core/instruments';
 import * as THREE from 'three';
 import { GraphicRenderer } from './GraphicRenderer';
+import { OrbitalRenderer } from './OrbitalRenderer';
 import { KaleidoscopeRenderer, kaleidoscopeInputMode } from './KaleidoscopeRenderer';
 import { graphicRenderPlan } from './graphic-view';
 import { imageFit, sourceViewMatrix } from './source-view';
@@ -197,6 +198,7 @@ export class StudioRenderer {
   private readonly super8: THREE.ShaderMaterial;
   private readonly super8Projector: THREE.ShaderMaterial;
   private super8Source: THREE.WebGLRenderTarget | null = null;
+  private orbital: OrbitalRenderer | null = null;
   private graphicSource: THREE.WebGLRenderTarget | null = null;
   private readonly liquid: THREE.ShaderMaterial;
   private readonly liquidLayouts = new Map<string, THREE.DataTexture>();
@@ -759,6 +761,9 @@ export class StudioRenderer {
       if (!project.layers.some(layer => layer.kind === 'oil' && layer.visible)) this.releaseOilTargets();
       this.scope?.keepEmberLayers(new Set(project.layers.filter(layer => layer.kind === 'scope' && layer.visible && layer.params.scopeMode === 1).map(layer => layer.id)));
       this.smokeClouds?.keep(new Set(project.layers.filter(layer => layer.kind === 'smokecloud' && layer.visible).map(layer => layer.id)));
+      const orbitalIds = new Set(project.layers.filter(layer => layer.visible && layer.kind === 'orbital').map(layer => layer.id));
+      if (orbitalIds.size) this.orbital?.keep(orbitalIds);
+      else if (this.orbital) { this.orbital.dispose(); this.orbital = null; }
       if (!project.layers.some(layer => layer.kind === 'graphic' && layer.visible)) {
         this.graphicSource?.dispose(); this.graphicSource = null;
       }
@@ -963,7 +968,7 @@ export class StudioRenderer {
     return texture;
   }
 
-  private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10, smokeAudio?: SmokeAudioFrame): THREE.Texture {
+  private drawSource(layer: Layer, phase: number, original: Layer = layer, duration = 10, smokeAudio?: SmokeAudioFrame, liveSeconds?: number): THREE.Texture {
     const aspect = this.width / this.height;
     const surface = this.tiling ? this.tiledSurface ??= tiledSurfaceMaterial() : this.surface;
     const uniforms=layer.kind==='surface'?surface.uniforms:layer.kind==='fractal'?this.fractal.uniforms:
@@ -976,6 +981,9 @@ export class StudioRenderer {
     const localPhase = phase * cycles;
     if (isInstrument(layer.kind)) {
       this.instruments.draw(layer,phase,this.width,this.height,this.source,(m,t)=>this.draw(m,t),this.renderer,Math.max(0,Math.min(1,phase/TAU))*duration,duration);
+    } else if (layer.kind === 'orbital') {
+      this.orbital ??= new OrbitalRenderer();
+      this.orbital.draw(this.renderer, this.source, layer, phase, duration, this.width, this.height, liveSeconds, this.previewPlaying);
     } else if (layer.kind === 'graphic') {
       if (!this.graphicSource) {
         this.graphicSource = target(true);
@@ -1140,7 +1148,7 @@ export class StudioRenderer {
     return this.source.texture;
   }
 
-  private renderFrame(project: Project, phase: number, width: number, height: number, smokeAudio?: SmokeAudioFrame): void {
+  private renderFrame(project: Project, phase: number, width: number, height: number, smokeAudio?: SmokeAudioFrame, liveSeconds?: number): void {
     this.assertUsable();
     if (!Number.isFinite(phase)) throw new Error('Frame phase must be finite.');
     if (project.layers.length > 4) throw new Error('This version supports at most four composition layers.');
@@ -1182,9 +1190,11 @@ export class StudioRenderer {
       if (layer.opacity <= 0) continue;
       this.belowInput = hasBelow && layer.kind === 'kaleidoscope' && kaleidoscopeInput(layer.params) === KALEIDOSCOPE_INPUT.below
         ? this.captureBelow(below.texture) : null;
+      const clipClock = finiteEvolving(original) || (original.kind === 'orbital' && original.params.orbitPlayback !== 1 && liveSeconds === undefined);
+      const drawPhase = clipClock ? Math.max(0, Math.min(TAU, phase)) : original.kind === 'super8' ? wrapped : sourcePhase;
       const sourceTexture = feedback ? this.feedbackSource(original, framePhase, total, duration)
         : slitActive(original) ? this.slitSource(original, wrapped, total, duration)
-        : this.drawSource(layer, finiteEvolving(original) ? Math.max(0,Math.min(TAU,phase)) : original.kind === 'super8' ? wrapped : sourcePhase, original, duration, smokeAudio);
+        : this.drawSource(layer, drawPhase, original, duration, smokeAudio, liveSeconds);
       const warped = warpActive(original) ? this.warpSource(original, layer, sourceTexture, below.texture, wrapped, width, height) : sourceTexture;
       const lensed = lensActive(original) ? this.lensSource(original, layer, warped, wrapped, width, height) : warped;
       const finished = tilesActive(original) ? this.tileSource(original, layer, lensed, wrapped, width, height) : lensed;
@@ -2091,6 +2101,8 @@ export class StudioRenderer {
   meridianReport(): ReturnType<MeridianRenderer['performanceReport']> | null { return this.meridian?.performanceReport() ?? null; }
 
   /** A project was loaded: linked Meridian moves from the last one end here. */
+  resetOrbitalPlayback(): void { this.orbital?.reset(); }
+
   resetMeridianPerformance(): void { this.meridian?.resetPerformance(); }
 
   /**
@@ -2105,7 +2117,7 @@ export class StudioRenderer {
     this.performanceSet = true;
   }
 
-  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean; tempoOnly?: boolean }, playing = true): void {
+  render(project: Project, phase: number, width?: number, height?: number, sound?: { signals: Signals; now: number; externalTempo?: boolean; tempoOnly?: boolean }, playing = true, liveSeconds?: number): void {
     if (this.exporting) return;
     this.previewPlaying = playing;
     const audio = sound?.tempoOnly ? undefined : sound;
@@ -2125,7 +2137,7 @@ export class StudioRenderer {
     try {
       const smoke = audio ? this.emberAudio?.advance(audio.signals, audio.now) : undefined;
       this.beginFoldFrame(project, sound?.now ?? performance.now(), sound?.signals);
-      this.renderFrame(project, phase, w, h, smoke);
+      this.renderFrame(project, phase, w, h, smoke, liveSeconds);
       // Resizing a canvas, even to the size it already has, resets it and re-allocates its drawing buffer:
       // only when the size changes.
       const canvasSize = this.renderer.getSize(this.canvasSize);
@@ -2233,6 +2245,7 @@ export class StudioRenderer {
     this.releaseJpeg();
     for (const program of [this.jpegRows, this.jpegColumns, this.jpegColumnsInverse, this.jpegRowsInverse]) program.dispose();
     this.graphics.dispose(); this.instruments.dispose();
+    this.orbital?.dispose(); this.orbital = null;
     for (const mat of [this.super8, this.super8Projector, this.oilFields, this.oilPaint, this.oilLens, this.liquid, this.surface, this.fractal, this.copy, this.image, this.composite, this.finish, this.display, this.downsample, this.feedback, this.slit, this.slitBound, this.slitLag, this.timeGather, this.timeBound, this.timeLight, this.timeMedian, this.sculptureMaterial, this.sculptureDepthMaterial]) mat.dispose();
     this.oilPattern.dispose();
     this.scope?.dispose(); this.scope = null;
